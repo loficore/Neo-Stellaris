@@ -1,3 +1,6 @@
+
 .playwright-mcp/
 .omo/
 .jj*.json
+.zig-cache/
+zig-out/
