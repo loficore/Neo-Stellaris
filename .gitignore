@@ -4,6 +4,7 @@
 *.pdb
 zig-out/
 .zig-cache/
+**/__pycache__/
 
 # === QuickJS build artifacts ===
 libs/quickjs/.obj/
