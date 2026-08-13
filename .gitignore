@@ -1,6 +1,33 @@
-
-.playwright-mcp/
-.omo/
-.jj*.json
-.zig-cache/
+# === Build outputs ===
+*.dll
+*.lib
+*.pdb
 zig-out/
+.zig-cache/
+
+# === QuickJS build artifacts ===
+libs/quickjs/.obj/
+libs/quickjs/libquickjs.a
+
+# === VCS tools (local state) ===
+.jj/
+
+# === Agent / tool state ===
+.omo/
+.playwright-mcp/
+
+# === IDA Pro local artifacts ===
+evidence/session_id.txt
+evidence/binary_survey.json
+
+# === OS generated files ===
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# === Editor / IDE ===
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
