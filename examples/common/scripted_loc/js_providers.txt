@@ -1,0 +1,109 @@
+# scripted_loc/js_providers.txt — Example of JS-based scripted loc registration.
+#
+# This file shows how to set up scripted locs that call JavaScript functions
+# for dynamic text generation. The JS functions are registered via the
+# QuickJS bridge and called when the engine resolves the scripted loc.
+#
+# Placement: common/scripted_loc/js_providers.txt
+#
+# The JS functions should be defined in your mod's JavaScript files and
+# registered via Stellaris.registerTextProvider().
+
+# Example 1: Dynamic resource count display
+# JS function: getResourceCount(resource_name)
+# Returns: Formatted string like "Minerals: 15,234"
+defined_text = {
+    name = get_resource_count_display
+    
+    # This will call the JS function getMineralCount()
+    # when resolved. The JS function can access game state
+    # via the scope and return formatted text.
+    text = {
+        trigger = { always = yes }
+        localisation_key = "JS_GET_MINERAL_COUNT"
+    }
+}
+
+# Example 2: Time-based dynamic text
+# JS function: getCurrentDate()
+# Returns: Formatted game date
+defined_text = {
+    name = get_current_date_display
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "JS_GET_CURRENT_DATE"
+    }
+}
+
+# Example 3: Conditional JS text with fallback
+# If the JS function fails, falls back to static localisation
+defined_text = {
+    name = get_fleet_composition
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "JS_GET_FLEET_INFO"
+    }
+}
+
+# Example 4: Multi-condition JS text
+# Different JS functions called based on scope conditions
+defined_text = {
+    name = get_contextual_help
+    
+    text = {
+        trigger = {
+            is_at_war = yes
+        }
+        localisation_key = "JS_GET_WAR_HELP"
+    }
+    
+    text = {
+        trigger = {
+            has_country_flag = flag_new_player
+        }
+        localisation_key = "JS_GET_NEWBIE_HELP"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "JS_GET_DEFAULT_HELP"
+    }
+}
+
+# JavaScript Example Code (place in your mod's js/ directory):
+#
+# // Register text providers when the mod loads
+# Stellaris.registerTextProvider("get_resource_count_display", "getResourceCountDisplay");
+# Stellaris.registerTextProvider("get_current_date_display", "getCurrentDateDisplay");
+# Stellaris.registerTextProvider("get_fleet_composition", "getFleetComposition");
+# Stellaris.registerTextProvider("get_contextual_help", "getContextualHelp");
+#
+# // Example JS function implementations
+# function getResourceCountDisplay() {
+#     const minerals = Stellaris.getCountryResource("minerals");
+#     const energy = Stellaris.getCountryResource("energy");
+#     return `Minerals: ${minerals.toLocaleString()} | Energy: ${energy.toLocaleString()}`;
+# }
+#
+# function getCurrentDateDisplay() {
+#     const date = Stellaris.getGameDate();
+#     return `Date: ${date}`;
+# }
+#
+# function getFleetComposition() {
+#     const fleetCount = Stellaris.getOwnedFleetCount();
+#     const shipCount = Stellaris.getOwnedShipCount();
+#     return `Fleets: ${fleetCount} | Ships: ${shipCount}`;
+# }
+#
+# function getContextualHelp() {
+#     if (Stellaris.isAtWar()) {
+#         return "War is upon us! Manage your fleets wisely.";
+#     }
+#     if (Stellaris.hasFlag("flag_new_player")) {
+#         return "Welcome to Stellaris! Check the tutorial for help.";
+#     }
+#     return "Explore the galaxy and expand your empire!";
+# }

@@ -1,0 +1,80 @@
+# Test events for QuickJS integration testing.
+#
+# These events exercise the effect and trigger hooks.
+
+# Main integration test event
+country_event = {
+	id = test_quickjs.1
+	title = l_TEST_EVENT_TITLE
+	desc = l_TEST_EVENT_DESC
+	
+	# Trigger: Only fire for player country
+	trigger = {
+		is_country_type = default
+		test_custom_trigger = yes
+	}
+	
+	# Fire on game start for testing
+	fire_only_once = yes
+	
+	immediate = {
+		log = "test_quickjs.1: Integration test event fired"
+		set_country_flag = test_quickjs_flag
+		
+		# Execute test effects
+		test_custom_effect = yes
+		test_logging_effect = yes
+	}
+	
+	option = {
+		name = "Excellent"
+		log = "test_quickjs.1: Player acknowledged test event"
+	}
+}
+
+# Trigger test event
+country_event = {
+	id = test_quickjs.2
+	title = "Trigger Test Event"
+	desc = "This event tests custom trigger evaluation"
+	
+	trigger = {
+		test_scope_check = yes
+		test_flag_check = yes
+	}
+	
+	fire_only_once = yes
+	
+	immediate = {
+		log = "test_quickjs.2: Trigger test event fired"
+	}
+	
+	option = {
+		name = "OK"
+		log = "test_quickjs.2: Trigger test acknowledged"
+	}
+}
+
+# Effect test event (fires yearly)
+country_event = {
+	id = test_quickjs.3
+	title = "Yearly Effect Test"
+	desc = "This event fires yearly to test effect execution"
+	
+	trigger = {
+		is_country_type = default
+	}
+	
+	mean_time_to_happen = {
+		months = 12
+	}
+	
+	immediate = {
+		log = "test_quickjs.3: Yearly effect test fired"
+		test_counter_effect = yes
+	}
+	
+	option = {
+		name = "OK"
+	}
+}

@@ -1,0 +1,203 @@
+# scripted_loc/ui_text.txt — UI-focused scripted localisation examples.
+#
+# These scripted locs are designed for use in .gui elements that need
+# dynamic text based on complex game state conditions.
+#
+# Placement: common/scripted_loc/ui_text.txt
+
+# Window title based on current situation
+defined_text = {
+    name = get_window_title
+    
+    text = {
+        trigger = {
+            is_at_war = yes
+        }
+        localisation_key = "WINDOW_TITLE_WARTIME"
+    }
+    
+    text = {
+        trigger = {
+            has_country_flag = flag_crisis_active
+        }
+        localisation_key = "WINDOW_TITLE_CRISIS"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "WINDOW_TITLE_PEACE"
+    }
+}
+
+# Button label based on current action availability
+defined_text = {
+    name = get_build_button_label
+    
+    text = {
+        trigger = {
+            has_country_resource = {
+                resource = energy
+                amount > 1000
+            }
+            has_country_resource = {
+                resource = minerals
+                amount > 500
+            }
+        }
+        localisation_key = "BUILD_BUTTON_AVAILABLE"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "BUILD_BUTTON_UNAVAILABLE"
+    }
+}
+
+# Population status summary
+defined_text = {
+    name = get_pop_summary
+    
+    text = {
+        trigger = {
+            count_pops = {
+                limit = { is_unemployed = yes }
+                count > 10
+            }
+        }
+        localisation_key = "POP_SUMMARY_HIGH_UNEMPLOYMENT"
+    }
+    
+    text = {
+        trigger = {
+            count_pops = {
+                limit = { is_unemployed = yes }
+                count > 5
+            }
+        }
+        localisation_key = "POP_SUMMARY_MODERATE_UNEMPLOYMENT"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "POP_SUMMARY_LOW_UNEMPLOYMENT"
+    }
+}
+
+# Empire size indicator
+defined_text = {
+    name = get_empire_size_indicator
+    
+    text = {
+        trigger = {
+            empire_size > 1000
+        }
+        localisation_key = "EMPIRE_SIZE_MASSIVE"
+    }
+    
+    text = {
+        trigger = {
+            empire_size > 500
+        }
+        localisation_key = "EMPIRE_SIZE_LARGE"
+    }
+    
+    text = {
+        trigger = {
+            empire_size > 200
+        }
+        localisation_key = "EMPIRE_SIZE_MEDIUM"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "EMPIRE_SIZE_SMALL"
+    }
+}
+
+# Research progress indicator
+defined_text = {
+    name = get_research_status
+    
+    text = {
+        trigger = {
+            has_research_project = {
+                category = engineering
+                is_active = yes
+            }
+        }
+        localisation_key = "RESEARCH_STATUS_ENGINEERING"
+    }
+    
+    text = {
+        trigger = {
+            has_research_project = {
+                category = society
+                is_active = yes
+            }
+        }
+        localisation_key = "RESEARCH_STATUS_SOCIETY"
+    }
+    
+    text = {
+        trigger = {
+            has_research_project = {
+                category = physics
+                is_active = yes
+            }
+        }
+        localisation_key = "RESEARCH_STATUS_PHYSICS"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "RESEARCH_STATUS_NONE"
+    }
+}
+
+# Strategic resource indicator
+defined_text = {
+    name = get_strategic_resource_status
+    
+    text = {
+        trigger = {
+            has_country_resource = {
+                resource = rare_crystals
+                amount > 100
+            }
+            has_country_resource = {
+                resource = volatile_motes
+                amount > 100
+            }
+            has_country_resource = {
+                resource = exotic_gases
+                amount > 100
+            }
+        }
+        localisation_key = "STRATEGIC_RESOURCE_ABUNDANT"
+    }
+    
+    text = {
+        trigger = {
+            has_country_resource = {
+                resource = rare_crystals
+                amount < 20
+            }
+        }
+        localisation_key = "STRATEGIC_RESOURCE_CRYSTALS_LOW"
+    }
+    
+    text = {
+        trigger = {
+            has_country_resource = {
+                resource = volatile_motes
+                amount < 20
+            }
+        }
+        localisation_key = "STRATEGIC_RESOURCE_MOTES_LOW"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "STRATEGIC_RESOURCE_NORMAL"
+    }
+}

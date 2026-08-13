@@ -1,0 +1,20 @@
+# Test button effects for QuickJS integration testing.
+#
+# These button effects are referenced by .gui files and routed to
+# JavaScript callbacks via the stellaris_quickjs DLL.
+
+test_button_click = {
+	tooltip = "Click to test QuickJS integration"
+}
+
+close_test_window = {
+	tooltip = "Close the test window"
+}
+
+test_toggle_status = {
+	tooltip = "Toggle window status"
+}
+
+test_open_second = {
+	tooltip = "Open second test window"
+}

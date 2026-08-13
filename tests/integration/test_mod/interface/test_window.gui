@@ -1,0 +1,65 @@
+# Test UI window for QuickJS integration testing.
+#
+# This .gui file defines a custom window that tests the UI integration
+# of the stellaris_quickjs DLL.
+
+containerWindowType = {
+	name = "test_quickjs_window"
+	size = { width = 400 height = 300 }
+	draggable = yes
+	movable = yes
+	
+	# Title
+	instantTextBoxType = {
+		name = "title"
+		text = "QuickJS Test Window"
+		font = "cg_20"
+		position = { x = 10 y = 10 }
+		format = left
+	}
+	
+	# Status display
+	instantTextBoxType = {
+		name = "status"
+		text = "Status: Ready"
+		font = "cg_16"
+		position = { x = 10 y = 40 }
+		format = left
+	}
+	
+	# Counter display
+	instantTextBoxType = {
+		name = "counter"
+		text = "Counter: 0"
+		font = "cg_16"
+		position = { x = 10 y = 60 }
+		format = left
+	}
+	
+	# Test button
+	effectButtonType = {
+		name = "test_button"
+		effect = "test_button_click"
+		position = { x = 10 y = 250 }
+		size = { width = 120 height = 30 }
+		tooltip = "Click to test QuickJS integration"
+	}
+	
+	# Toggle status button
+	effectButtonType = {
+		name = "toggle_button"
+		effect = "test_toggle_status"
+		position = { x = 140 y = 250 }
+		size = { width = 120 height = 30 }
+		tooltip = "Toggle window status"
+	}
+	
+	# Close button
+	effectButtonType = {
+		name = "close_button"
+		effect = "close_test_window"
+		position = { x = 350 y = 250 }
+		size = { width = 40 height = 25 }
+		tooltip = "Close"
+	}
+}

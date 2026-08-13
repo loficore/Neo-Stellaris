@@ -1,0 +1,36 @@
+# button_effects/dynamic_text_effects.txt — Button effects for dynamic text demo windows.
+#
+# These effects are triggered when buttons in the dynamic_text_demo.gui
+# and js_text_demo.gui windows are clicked.
+#
+# Placement: common/button_effects/dynamic_text_effects.txt
+
+close_dynamic_text_window = {
+    tooltip = "Close the dynamic text demo window"
+    # The DLL intercepts this effect name
+    # and calls the window management API
+}
+
+close_js_text_window = {
+    tooltip = "Close the JS text demo window"
+}
+
+my_dynamic_action = {
+    tooltip = "Perform a dynamic action based on game state"
+}
+
+show_info = {
+    tooltip = "Show information about the current display"
+}
+
+start_construction = {
+    tooltip = "Start construction of a new building"
+}
+
+open_research = {
+    tooltip = "Open the research screen"
+}
+
+open_fleet_manager = {
+    tooltip = "Open the fleet manager"
+}

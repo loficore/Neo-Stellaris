@@ -1,0 +1,138 @@
+# interface/js_text_demo.gui — Example .gui file using JS-based scripted_loc.
+#
+# This file demonstrates how to use scripted locs that call JavaScript
+# functions for dynamic text generation.
+#
+# Placement: interface/js_text_demo.gui
+
+containerWindowType = {
+    name = "js_text_window"
+    size = { width = 600 height = 500 }
+    position = { x = 150 y = 150 }
+    draggable = yes
+    movable = yes
+    
+    # Window title
+    instantTextBoxType = {
+        name = "window_title"
+        text = "Dynamic Text Demo"
+        font = "cg_24"
+        position = { x = 10 y = 10 }
+        maxWidth = 580
+        format = center
+    }
+    
+    # JS-based resource count display
+    instantTextBoxType = {
+        name = "resource_display"
+        text = "$GET_RESOURCE_COUNT_DISPLAY$"
+        font = "cg_20"
+        position = { x = 10 y = 50 }
+        maxWidth = 580
+        format = left
+    }
+    
+    # JS-based date display
+    instantTextBoxType = {
+        name = "date_display"
+        text = "Current Date: $GET_CURRENT_DATE_DISPLAY$"
+        font = "cg_20"
+        position = { x = 10 y = 80 }
+        maxWidth = 580
+        format = left
+    }
+    
+    # JS-based fleet composition
+    instantTextBoxType = {
+        name = "fleet_info"
+        text = "Military: $GET_FLEET_COMPOSITION$"
+        font = "cg_20"
+        position = { x = 10 y = 110 }
+        maxWidth = 580
+        format = left
+    }
+    
+    # JS-based contextual help
+    instantTextBoxType = {
+        name = "help_text"
+        text = "Help: $GET_CONTEXTUAL_HELP$"
+        font = "cg_16"
+        position = { x = 10 y = 140 }
+        maxWidth = 580
+        format = left
+    }
+    
+    # Divider line
+    instantTextBoxType = {
+        name = "divider"
+        text = "----------------------------------------"
+        font = "cg_16"
+        position = { x = 10 y = 170 }
+        maxWidth = 580
+        format = center
+    }
+    
+    # Empire size indicator using scripted_loc
+    instantTextBoxType = {
+        name = "empire_size"
+        text = "Empire Size: $GET_EMPIRE_SIZE_INDICATOR$"
+        font = "cg_20"
+        position = { x = 10 y = 200 }
+        maxWidth = 580
+        format = left
+    }
+    
+    # Research status using scripted_loc
+    instantTextBoxType = {
+        name = "research_status"
+        text = "Research: $GET_RESEARCH_STATUS$"
+        font = "cg_20"
+        position = { x = 10 y = 230 }
+        maxWidth = 580
+        format = left
+    }
+    
+    # Strategic resource status using scripted_loc
+    instantTextBoxType = {
+        name = "strategic_status"
+        text = "Strategic Resources: $GET_STRATEGIC_RESOURCE_STATUS$"
+        font = "cg_20"
+        position = { x = 10 y = 260 }
+        maxWidth = 580
+        format = left
+    }
+    
+    # Buttons with dynamic labels
+    effectButtonType = {
+        name = "build_button"
+        effect = "start_construction"
+        position = { x = 10 y = 300 }
+        size = { width = 180 height = 30 }
+        tooltip = "$GET_BUILD_BUTTON_LABEL$"
+    }
+    
+    effectButtonType = {
+        name = "research_button"
+        effect = "open_research"
+        position = { x = 200 y = 300 }
+        size = { width = 180 height = 30 }
+        tooltip = "Open Research Screen"
+    }
+    
+    effectButtonType = {
+        name = "fleet_button"
+        effect = "open_fleet_manager"
+        position = { x = 390 y = 300 }
+        size = { width = 180 height = 30 }
+        tooltip = "Open Fleet Manager"
+    }
+    
+    # Close button
+    effectButtonType = {
+        name = "close_button"
+        effect = "close_js_text_window"
+        position = { x = 550 y = 470 }
+        size = { width = 40 height = 25 }
+        tooltip = "Close"
+    }
+}

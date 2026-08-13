@@ -1,0 +1,69 @@
+# custom_effects.txt — Button effects for example .gui windows.
+#
+# Place in: <mod>/common/button_effects/custom_effects.txt
+#
+# Button effects define what happens when the user clicks a button
+# in a .gui window. Each effect is a scripted effect that can
+# trigger events, modify game state, or update UI elements.
+
+# Close the test window
+close_test_window = {
+	tooltip = "Close this window"
+	# In a real implementation, this would hide the window
+	# via the DLL's window management API
+}
+
+# Close the settings window
+close_settings_window = {
+	tooltip = "Close settings"
+}
+
+# Toggle debug mode
+toggle_debug_mode = {
+	tooltip = "Toggle debug logging"
+	# This would set a game variable that mods can check
+}
+
+# Set auto-save intervals
+set_autosave_interval_5 = {
+	tooltip = "Auto-save every 5 minutes"
+}
+
+set_autosave_interval_10 = {
+	tooltip = "Auto-save every 10 minutes"
+}
+
+set_autosave_interval_15 = {
+	tooltip = "Auto-save every 15 minutes"
+}
+
+# UI scale options
+set_ui_scale_75 = {
+	tooltip = "Set UI scale to 75%"
+}
+
+set_ui_scale_100 = {
+	tooltip = "Set UI scale to 100%"
+}
+
+set_ui_scale_125 = {
+	tooltip = "Set UI scale to 125%"
+}
+
+# Settings management
+apply_settings = {
+	tooltip = "Apply all changes"
+}
+
+reset_settings = {
+	tooltip = "Reset to default values"
+}
+
+# Info panel controls
+refresh_info_panel = {
+	tooltip = "Refresh panel data"
+}
+
+close_info_panel = {
+	tooltip = "Close info panel"
+}

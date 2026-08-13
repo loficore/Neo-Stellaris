@@ -1,0 +1,145 @@
+# scripted_loc/custom_text.txt — Example scripted localisation definitions.
+#
+# This file demonstrates how to define scripted localisation (scripted_loc)
+# for dynamic text in .gui elements. Scripted locs are evaluated at runtime
+# based on game state conditions.
+#
+# Placement: common/scripted_loc/custom_text.txt
+#
+# The defined_text block creates a text resolver that evaluates conditions
+# in order and returns the localisation_key for the first matching condition.
+#
+# Usage in .gui files:
+#   effectButtonType = {
+#       name = "my_button"
+#       buttonText = "$GET_CUSTOM_TEXT$"
+#       effect = "my_effect"
+#   }
+#
+# The engine resolves $GET_CUSTOM_TEXT$ by calling the scripted loc resolver
+# which evaluates the conditions below in order.
+
+defined_text = {
+    name = get_custom_text
+    
+    text = {
+        trigger = { has_country_flag = flag_debug_mode }
+        localisation_key = "CUSTOM_TEXT_DEBUG"
+    }
+    
+    text = {
+        trigger = { has_country_flag = flag_advanced_mode }
+        localisation_key = "CUSTOM_TEXT_ADVANCED"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "CUSTOM_TEXT_DEFAULT"
+    }
+}
+
+# Another example: resource display text
+defined_text = {
+    name = get_resource_display
+    
+    text = {
+        trigger = {
+            has_country_resource = {
+                resource = minerals
+                amount > 10000
+            }
+        }
+        localisation_key = "RESOURCE_MINERALS_ABUNDANT"
+    }
+    
+    text = {
+        trigger = {
+            has_country_resource = {
+                resource = minerals
+                amount > 5000
+            }
+        }
+        localisation_key = "RESOURCE_MINERALS_MODERATE"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "RESOURCE_MINERALS_LOW"
+    }
+}
+
+# Fleet status text
+defined_text = {
+    name = get_fleet_status
+    
+    text = {
+        trigger = {
+            any_owned_fleet = {
+                is_in_combat = yes
+            }
+        }
+        localisation_key = "FLEET_STATUS_COMBAT"
+    }
+    
+    text = {
+        trigger = {
+            any_owned_fleet = {
+                is_moving = yes
+            }
+        }
+        localisation_key = "FLEET_STATUS_MOVING"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "FLEET_STATUS_IDLE"
+    }
+}
+
+# Technology progress text
+defined_text = {
+    name = get_tech_progress
+    
+    text = {
+        trigger = {
+            has_active_tradition = tradition_tech_boost
+        }
+        localisation_key = "TECH_PROGRESS_BOOSTED"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "TECH_PROGRESS_NORMAL"
+    }
+}
+
+# Diplomatic status text
+defined_text = {
+    name = get_diplo_status
+    
+    text = {
+        trigger = {
+            is_rival = target
+        }
+        localisation_key = "DIPLO_STATUS_RIVAL"
+    }
+    
+    text = {
+        trigger = {
+            is_ally = target
+        }
+        localisation_key = "DIPLO_STATUS_ALLY"
+    }
+    
+    text = {
+        trigger = {
+            is_FRIEND = target
+        }
+        localisation_key = "DIPLO_STATUS_FRIEND"
+    }
+    
+    text = {
+        trigger = { always = yes }
+        localisation_key = "DIPLO_STATUS_NEUTRAL"
+    }
+}

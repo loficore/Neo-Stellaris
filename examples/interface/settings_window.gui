@@ -1,0 +1,141 @@
+# settings_window.gui — Example settings window with multiple controls.
+#
+# Demonstrates a more complex .gui layout with tabs, sliders, and buttons.
+# Place in: <mod>/interface/settings_window.gui
+
+containerWindowType = {
+	name = "settings_window"
+	size = { width = 500 height = 400 }
+	draggable = yes
+	movable = yes
+
+	# Window title
+	instantTextBoxType = {
+		name = "title"
+		text = "Mod Settings"
+		font = "cg_24"
+		position = { x = 10 y = 10 }
+	}
+
+	# Section: General
+	instantTextBoxType = {
+		name = "section_general"
+		text = "General Settings"
+		font = "cg_20"
+		position = { x = 10 y = 50 }
+	}
+
+	# Option 1: Enable debug mode
+	instantTextBoxType = {
+		name = "opt_debug_label"
+		text = "Debug Mode:"
+		font = "cg_16"
+		position = { x = 20 y = 80 }
+	}
+
+	effectButtonType = {
+		name = "toggle_debug"
+		effect = "toggle_debug_mode"
+		position = { x = 200 y = 75 }
+		size = { width = 100 height = 25 }
+		tooltip = "Toggle debug logging"
+	}
+
+	# Option 2: Auto-save interval
+	instantTextBoxType = {
+		name = "opt_autosave_label"
+		text = "Auto-save Interval:"
+		font = "cg_16"
+		position = { x = 20 y = 110 }
+	}
+
+	effectButtonType = {
+		name = "set_autosave_5"
+		effect = "set_autosave_interval_5"
+		position = { x = 200 y = 105 }
+		size = { width = 50 height = 25 }
+		tooltip = "Every 5 minutes"
+	}
+
+	effectButtonType = {
+		name = "set_autosave_10"
+		effect = "set_autosave_interval_10"
+		position = { x = 260 y = 105 }
+		size = { width = 50 height = 25 }
+		tooltip = "Every 10 minutes"
+	}
+
+	effectButtonType = {
+		name = "set_autosave_15"
+		effect = "set_autosave_interval_15"
+		position = { x = 320 y = 105 }
+		size = { width = 50 height = 25 }
+		tooltip = "Every 15 minutes"
+	}
+
+	# Section: Display
+	instantTextBoxType = {
+		name = "section_display"
+		text = "Display Settings"
+		font = "cg_20"
+		position = { x = 10 y = 150 }
+	}
+
+	instantTextBoxType = {
+		name = "opt_ui_scale_label"
+		text = "UI Scale:"
+		font = "cg_16"
+		position = { x = 20 y = 180 }
+	}
+
+	effectButtonType = {
+		name = "ui_scale_small"
+		effect = "set_ui_scale_75"
+		position = { x = 200 y = 175 }
+		size = { width = 50 height = 25 }
+		tooltip = "75%"
+	}
+
+	effectButtonType = {
+		name = "ui_scale_normal"
+		effect = "set_ui_scale_100"
+		position = { x = 260 y = 175 }
+		size = { width = 50 height = 25 }
+		tooltip = "100%"
+	}
+
+	effectButtonType = {
+		name = "ui_scale_large"
+		effect = "set_ui_scale_125"
+		position = { x = 320 y = 175 }
+		size = { width = 50 height = 25 }
+		tooltip = "125%"
+	}
+
+	# Apply button
+	effectButtonType = {
+		name = "apply_button"
+		effect = "apply_settings"
+		position = { x = 280 y = 355 }
+		size = { width = 100 height = 30 }
+		tooltip = "Apply changes"
+	}
+
+	# Reset button
+	effectButtonType = {
+		name = "reset_button"
+		effect = "reset_settings"
+		position = { x = 390 y = 355 }
+		size = { width = 100 height = 30 }
+		tooltip = "Reset to defaults"
+	}
+
+	# Close button
+	effectButtonType = {
+		name = "close_button"
+		effect = "close_settings_window"
+		position = { x = 455 y = 5 }
+		size = { width = 30 height = 25 }
+		tooltip = "Close"
+	}
+}

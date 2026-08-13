@@ -1,0 +1,113 @@
+# info_panel.gui — Example information panel with dynamic text.
+#
+# Demonstrates a read-only info panel that can be updated via effects.
+# Place in: <mod>/interface/info_panel.gui
+
+containerWindowType = {
+	name = "info_panel"
+	size = { width = 350 height = 250 }
+	draggable = yes
+	movable = yes
+
+	# Panel title
+	instantTextBoxType = {
+		name = "title"
+		text = "Information Panel"
+		font = "cg_20"
+		position = { x = 10 y = 10 }
+	}
+
+	# Status line
+	instantTextBoxType = {
+		name = "status_text"
+		text = "Status: Ready"
+		font = "cg_16"
+		position = { x = 10 y = 45 }
+		maxWidth = 330
+		format = left
+	}
+
+	# Data field 1
+	instantTextBoxType = {
+		name = "data_label_1"
+		text = "Population:"
+		font = "cg_16"
+		position = { x = 10 y = 75 }
+	}
+
+	instantTextBoxType = {
+		name = "data_value_1"
+		text = "---"
+		font = "cg_16"
+		position = { x = 150 y = 75 }
+		format = right
+	}
+
+	# Data field 2
+	instantTextBoxType = {
+		name = "data_label_2"
+		text = "Economy:"
+		font = "cg_16"
+		position = { x = 10 y = 100 }
+	}
+
+	instantTextBoxType = {
+		name = "data_value_2"
+		text = "---"
+		font = "cg_16"
+		position = { x = 150 y = 100 }
+		format = right
+	}
+
+	# Data field 3
+	instantTextBoxType = {
+		name = "data_label_3"
+		text = "Military:"
+		font = "cg_16"
+		position = { x = 10 y = 125 }
+	}
+
+	instantTextBoxType = {
+		name = "data_value_3"
+		text = "---"
+		font = "cg_16"
+		position = { x = 150 y = 125 }
+		format = right
+	}
+
+	# Divider (using textbox as separator)
+	instantTextBoxType = {
+		name = "divider"
+		text = "----------------------------------------"
+		font = "cg_16"
+		position = { x = 10 y = 155 }
+		format = left
+	}
+
+	# Footer text
+	instantTextBoxType = {
+		name = "footer"
+		text = "Last updated: Never"
+		font = "cg_16"
+		position = { x = 10 y = 210 }
+		format = left
+	}
+
+	# Refresh button
+	effectButtonType = {
+		name = "refresh_button"
+		effect = "refresh_info_panel"
+		position = { x = 10 y = 175 }
+		size = { width = 100 height = 25 }
+		tooltip = "Refresh data"
+	}
+
+	# Close button
+	effectButtonType = {
+		name = "close_button"
+		effect = "close_info_panel"
+		position = { x = 310 y = 215 }
+		size = { width = 30 height = 25 }
+		tooltip = "Close"
+	}
+}

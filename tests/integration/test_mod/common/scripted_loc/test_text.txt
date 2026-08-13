@@ -1,0 +1,14 @@
+# Test scripted localization for QuickJS integration testing.
+#
+# These localization keys are used by test UI elements and events.
+
+l_TEST_WINDOW_TITLE:0 "QuickJS Test Window"
+l_TEST_STATUS_READY:0 "Status: Ready"
+l_TEST_STATUS_RUNNING:0 "Status: Running..."
+l_TEST_STATUS_COMPLETE:0 "Status: Complete!"
+l_TEST_BUTTON_CLICK:0 "Click Me"
+l_TEST_BUTTON_CLOSE:0 "Close"
+l_TEST_EVENT_TITLE:0 "QuickJS Integration Test"
+l_TEST_EVENT_DESC:0 "This event tests the QuickJS integration. If you see this, the mod is working correctly."
+l_TEST_TRIGGER_PASSED:0 "Trigger Passed"
+l_TEST_TRIGGER_FAILED:0 "Trigger Failed"

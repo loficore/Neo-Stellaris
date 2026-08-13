@@ -1,0 +1,35 @@
+# Test scripted triggers for QuickJS integration testing.
+#
+# These triggers are hooked by the stellaris_quickjs DLL and evaluated
+# via JavaScript handlers registered via Stellaris.registerTrigger().
+
+# Basic test trigger - always returns true
+test_custom_trigger = {
+	# This trigger is intercepted by the CTrigger hook
+	# The DLL evaluates it via the registered JS handler
+	always = yes
+}
+
+# Scope type check trigger
+test_scope_check = {
+	# JS handler checks if current scope is country scope (type 2)
+	always = yes
+}
+
+# Country flag trigger - tests game state access
+test_flag_check = {
+	# JS handler checks for a specific country flag
+	has_country_flag = test_quickjs_flag
+}
+
+# Resource check trigger - tests resource access
+test_resource_check = {
+	# JS handler checks resource values
+	has_resource = { type = energy amount > 100 }
+}
+
+# Year check trigger - tests date access
+test_year_check = {
+	# JS handler checks game year
+	is_year = 2200
+}

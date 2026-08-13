@@ -1,0 +1,101 @@
+# interface/dynamic_text_demo.gui — Example .gui file using scripted_loc text.
+#
+# This file demonstrates how to use $SCRIPTED_LOC$ references in .gui
+# elements to display dynamic text based on game state.
+#
+# Placement: interface/dynamic_text_demo.gui
+
+containerWindowType = {
+    name = "dynamic_text_window"
+    size = { width = 500 height = 400 }
+    position = { x = 100 y = 100 }
+    draggable = yes
+    movable = yes
+    
+    # Window title using scripted_loc
+    instantTextBoxType = {
+        name = "window_title"
+        text = "$GET_WINDOW_TITLE$"
+        font = "cg_24"
+        position = { x = 10 y = 10 }
+        maxWidth = 480
+        format = center
+    }
+    
+    # Status display using scripted_loc
+    instantTextBoxType = {
+        name = "status_display"
+        text = "Status: $GET_CUSTOM_TEXT$"
+        font = "cg_20"
+        position = { x = 10 y = 50 }
+        maxWidth = 480
+        format = left
+    }
+    
+    # Resource display using scripted_loc
+    instantTextBoxType = {
+        name = "resource_display"
+        text = "Resources: $GET_RESOURCE_DISPLAY$"
+        font = "cg_20"
+        position = { x = 10 y = 80 }
+        maxWidth = 480
+        format = left
+    }
+    
+    # Fleet status using scripted_loc
+    instantTextBoxType = {
+        name = "fleet_status"
+        text = "Fleet: $GET_FLEET_STATUS$"
+        font = "cg_20"
+        position = { x = 10 y = 110 }
+        maxWidth = 480
+        format = left
+    }
+    
+    # Tech progress using scripted_loc
+    instantTextBoxType = {
+        name = "tech_progress"
+        text = "Research: $GET_TECH_PROGRESS$"
+        font = "cg_20"
+        position = { x = 10 y = 140 }
+        maxWidth = 480
+        format = left
+    }
+    
+    # Diplomatic status using scripted_loc
+    instantTextBoxType = {
+        name = "diplo_status"
+        text = "Diplomacy: $GET_DIPLO_STATUS$"
+        font = "cg_20"
+        position = { x = 10 y = 170 }
+        maxWidth = 480
+        format = left
+    }
+    
+    # Button with dynamic label
+    effectButtonType = {
+        name = "action_button"
+        effect = "my_dynamic_action"
+        position = { x = 10 y = 220 }
+        size = { width = 200 height = 30 }
+        tooltip = "$GET_BUILD_BUTTON_LABEL$"
+    }
+    
+    # Button with static label but dynamic tooltip
+    effectButtonType = {
+        name = "info_button"
+        effect = "show_info"
+        position = { x = 220 y = 220 }
+        size = { width = 100 height = 30 }
+        tooltip = "Click for more information"
+    }
+    
+    # Close button
+    effectButtonType = {
+        name = "close_button"
+        effect = "close_dynamic_text_window"
+        position = { x = 450 y = 370 }
+        size = { width = 40 height = 25 }
+        tooltip = "Close"
+    }
+}

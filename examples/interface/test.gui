@@ -1,0 +1,41 @@
+# test.gui — Example custom UI window for Stellaris mod.
+#
+# This file demonstrates the basic .gui file format for creating
+# custom windows in the Clausewitz engine GUI system.
+#
+# Place this file in: <mod>/interface/test.gui
+# The engine will load it automatically when the mod is active.
+
+containerWindowType = {
+	name = "test_window"
+	size = { width = 400 height = 300 }
+	draggable = yes
+	movable = yes
+
+	# Title text
+	instantTextBoxType = {
+		name = "title"
+		text = "Test Window"
+		font = "cg_20"
+		position = { x = 10 y = 10 }
+	}
+
+	# Description text
+	instantTextBoxType = {
+		name = "description"
+		text = "This is a custom window created by a mod."
+		font = "cg_16"
+		position = { x = 10 y = 50 }
+		maxWidth = 380
+		format = left
+	}
+
+	# Close button
+	effectButtonType = {
+		name = "close_button"
+		effect = "close_test_window"
+		position = { x = 350 y = 260 }
+		size = { width = 40 height = 25 }
+		tooltip = "Close"
+	}
+}

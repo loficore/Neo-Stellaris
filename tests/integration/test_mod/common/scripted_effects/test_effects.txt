@@ -1,0 +1,33 @@
+# Test scripted effects for QuickJS integration testing.
+#
+# These effects are hooked by the stellaris_quickjs DLL and routed to
+# JavaScript handlers registered via Stellaris.registerEffect().
+
+# Basic test effect - logs when executed
+test_custom_effect = {
+	# This effect is intercepted by the CEffect hook
+	# The DLL routes execution to the registered JS handler
+	log = "test_custom_effect executed (engine fallback)"
+}
+
+# Logging effect - demonstrates scope access
+test_logging_effect = {
+	log = "test_logging_effect executed (engine fallback)"
+}
+
+# Counter effect - tests state modification
+test_counter_effect = {
+	# JS handler should increment a counter
+	log = "test_counter_effect executed (engine fallback)"
+}
+
+# Conditional effect - tests return value handling
+test_conditional_effect = {
+	# JS handler returns true/false based on conditions
+	log = "test_conditional_effect executed (engine fallback)"
+}
+
+# Scope test effect - verifies scope type access
+test_scope_effect = {
+	log = "test_scope_effect executed (engine fallback)"
+}
