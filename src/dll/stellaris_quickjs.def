@@ -1,0 +1,4 @@
+LIBRARY stellaris_quickjs
+EXPORTS
+    PushCApplicationPtr
+    DllMain

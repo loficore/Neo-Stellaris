@@ -250,19 +250,19 @@ pub const Runtime = struct {
 
     test "Value tag checks" {
         // Pure Zig — no C linkage needed.
-        const undef = c.JSValue{ .u = .{ .i32 = 0 }, .tag = 1 };
+        const undef = c.JSValue{ .u = .{ .i32 = 0 }, .tag = 3 }; // JS_TAG_UNDEFINED
         try std.testing.expect(undef.isUndefined());
         try std.testing.expect(!undef.isNull());
         try std.testing.expect(!undef.isInt32());
 
-        const num = c.JSValue{ .u = .{ .i32 = 42 }, .tag = 4 };
+        const num = c.JSValue{ .u = .{ .i32 = 42 }, .tag = 0 }; // JS_TAG_INT32
         try std.testing.expect(num.isInt32());
         try std.testing.expectEqual(@as(i32, 42), num.u.i32);
 
-        const bval = c.JSValue{ .u = .{ .i32 = 1 }, .tag = 3 };
+        const bval = c.JSValue{ .u = .{ .i32 = 1 }, .tag = 1 }; // JS_TAG_BOOL
         try std.testing.expect(bval.isBool());
 
-        const fval = c.JSValue{ .u = .{ .f64 = 3.14 }, .tag = 11 };
+        const fval = c.JSValue{ .u = .{ .f64 = 3.14 }, .tag = 8 }; // JS_TAG_FLOAT64
         try std.testing.expect(fval.isFloat64());
         try std.testing.expectApproxEqAbs(@as(f64, 3.14), fval.u.f64, 1e-10);
     }
@@ -345,19 +345,22 @@ test "FunctionBinding layout" {
 }
 
 test "JSValueTag fromRaw" {
-    const tag = c.JSValueTag.fromRaw(4);
+    const tag = c.JSValueTag.fromRaw(0);
     try std.testing.expectEqual(c.JSValueTag.int32, tag);
 }
 
 test "JSValueTag: all known tags" {
-    try std.testing.expectEqual(c.JSValueTag.none, c.JSValueTag.fromRaw(0));
-    try std.testing.expectEqual(c.JSValueTag.undefined, c.JSValueTag.fromRaw(1));
+    try std.testing.expectEqual(c.JSValueTag.int32, c.JSValueTag.fromRaw(0));
+    try std.testing.expectEqual(c.JSValueTag.bool, c.JSValueTag.fromRaw(1));
     try std.testing.expectEqual(c.JSValueTag.null, c.JSValueTag.fromRaw(2));
-    try std.testing.expectEqual(c.JSValueTag.bool, c.JSValueTag.fromRaw(3));
-    try std.testing.expectEqual(c.JSValueTag.int32, c.JSValueTag.fromRaw(4));
-    try std.testing.expectEqual(c.JSValueTag.object, c.JSValueTag.fromRaw(5));
-    try std.testing.expectEqual(c.JSValueTag.string, c.JSValueTag.fromRaw(6));
-    try std.testing.expectEqual(c.JSValueTag.float64, c.JSValueTag.fromRaw(11));
+    try std.testing.expectEqual(c.JSValueTag.undefined, c.JSValueTag.fromRaw(3));
+    try std.testing.expectEqual(c.JSValueTag.uninitialized, c.JSValueTag.fromRaw(4));
+    try std.testing.expectEqual(c.JSValueTag.catch_offset, c.JSValueTag.fromRaw(5));
+    try std.testing.expectEqual(c.JSValueTag.exception, c.JSValueTag.fromRaw(6));
+    try std.testing.expectEqual(c.JSValueTag.short_big_int, c.JSValueTag.fromRaw(7));
+    try std.testing.expectEqual(c.JSValueTag.float64, c.JSValueTag.fromRaw(8));
+    try std.testing.expectEqual(c.JSValueTag.object, c.JSValueTag.fromRaw(-1));
+    try std.testing.expectEqual(c.JSValueTag.string, c.JSValueTag.fromRaw(-7));
 }
 
 test "JSValue: isString for string tag" {
@@ -377,10 +380,10 @@ test "JSValue: isObject for object tag" {
 }
 
 test "JSValue: isException for exception tag" {
-    const exc_tag: i64 = @intFromEnum(c.JSValueTag.object) | 0x80;
-    const exc_val = c.JSValue{ .u = .{ .ptr = null }, .tag = exc_tag };
+    // exception tag = 6 in the real QuickJS bindings
+    const exc_val = c.JSValue{ .u = .{ .ptr = null }, .tag = @intFromEnum(c.JSValueTag.exception) };
     try std.testing.expect(exc_val.isException());
-    try std.testing.expect(!exc_val.isObject()); // Exception has special tag
+    try std.testing.expect(!exc_val.isObject()); // Exception has its own tag, not object
 }
 
 test "JSValue: default value" {

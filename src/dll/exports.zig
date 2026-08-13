@@ -5,19 +5,37 @@
 // use C calling convention by default and are visible to the linker.
 
 const std = @import("std");
+const main = @import("main.zig");
 
 // ---------------------------------------------------------------------------
 // Engine pointer storage
 // ---------------------------------------------------------------------------
+
+/// PushArgs matches the C++ struct in inject.cpp.
+/// C++ loader packs applicationPtr and baseAddress into this struct
+/// and passes a pointer to it via CreateRemoteThread.
+const PushArgs = extern struct {
+    appPtr: ?*anyopaque,
+    base: usize,
+};
 
 /// Opaque pointer to the Stellaris CApplication instance.
 /// Set once by the loader via PushCApplicationPtr, then read by the
 /// QuickJS extension host whenever it needs engine access.
 var engine_ptr: ?*anyopaque = null;
 
+/// DLL module base address, set by PushCApplicationPtr.
+/// Used by the extension host to resolve version-specific offsets.
+var base_address: usize = 0;
+
 /// Retrieve the stored engine pointer. Returns null if not yet set.
 pub fn getEnginePtr() ?*anyopaque {
     return engine_ptr;
+}
+
+/// Retrieve the stored DLL base address.
+pub fn getBaseAddress() usize {
+    return base_address;
 }
 
 // ---------------------------------------------------------------------------
@@ -26,9 +44,11 @@ pub fn getEnginePtr() ?*anyopaque {
 
 /// Called by the C++ loader immediately after DLL injection.
 /// Stores the CApplication* for later use by the extension host.
-export fn PushCApplicationPtr(ptr: ?*anyopaque) callconv(.c) void {
-    engine_ptr = ptr;
-    std.log.info("stellaris_quickjs: CApplication ptr received @ {any}", .{ptr});
+export fn PushCApplicationPtr(args: *PushArgs) callconv(.c) void {
+    engine_ptr = args.appPtr;
+    base_address = args.base;
+    std.log.info("stellaris_quickjs: CApplication ptr received @ {any}", .{args.appPtr});
+    std.log.info("stellaris_quickjs: DLL base address @ {any}", .{args.base});
 }
 
 /// Standard Windows DLL entry point.
@@ -48,10 +68,13 @@ export fn DllMain(
     switch (fdwReason) {
         DLL_PROCESS_ATTACH => {
             std.log.info("stellaris_quickjs: DLL_PROCESS_ATTACH", .{});
+            main.initializeQuickJS();
         },
         DLL_PROCESS_DETACH => {
             std.log.info("stellaris_quickjs: DLL_PROCESS_DETACH", .{});
+            main.deinitializeQuickJS();
             engine_ptr = null;
+            base_address = 0;
         },
         else => {},
     }
@@ -65,11 +88,15 @@ export fn DllMain(
 // ---------------------------------------------------------------------------
 
 test "PushCApplicationPtr stores pointer" {
-    const dummy: *anyopaque = @ptrFromInt(0xDEAD);
-    PushCApplicationPtr(dummy);
-    try std.testing.expectEqual(@as(?*anyopaque, dummy), getEnginePtr());
+    var args = PushArgs{
+        .appPtr = @ptrFromInt(0xDEAD),
+        .base = 0x140000000,
+    };
+    PushCApplicationPtr(&args);
+    try std.testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0xDEAD)), getEnginePtr());
     // Cleanup
-    PushCApplicationPtr(null);
+    args.appPtr = null;
+    PushCApplicationPtr(&args);
 }
 
 test "DllMain returns TRUE" {
@@ -81,8 +108,11 @@ test "DllMain returns TRUE" {
 
 test "DllMain: DLL_PROCESS_DETACH clears engine_ptr" {
     // Set engine pointer
-    const dummy: *anyopaque = @ptrFromInt(0xDEAD);
-    PushCApplicationPtr(dummy);
+    var args = PushArgs{
+        .appPtr = @ptrFromInt(0xDEAD),
+        .base = 0x140000000,
+    };
+    PushCApplicationPtr(&args);
     try std.testing.expect(getEnginePtr() != null);
 
     // Detach should clear it
@@ -91,55 +121,78 @@ test "DllMain: DLL_PROCESS_DETACH clears engine_ptr" {
 }
 
 test "DllMain: DLL_THREAD_ATTACH does not clear engine_ptr" {
-    const dummy: *anyopaque = @ptrFromInt(0xBEEF);
-    PushCApplicationPtr(dummy);
+    var args = PushArgs{
+        .appPtr = @ptrFromInt(0xBEEF),
+        .base = 0x140000000,
+    };
+    PushCApplicationPtr(&args);
 
     // Thread attach (reason=2) should not clear the pointer
     _ = DllMain(null, 2, null);
     try std.testing.expect(getEnginePtr() != null);
 
     // Cleanup
-    PushCApplicationPtr(null);
+    args.appPtr = null;
+    PushCApplicationPtr(&args);
 }
 
 test "DllMain: DLL_THREAD_DETACH does not clear engine_ptr" {
-    const dummy: *anyopaque = @ptrFromInt(0xCAFE);
-    PushCApplicationPtr(dummy);
+    var args = PushArgs{
+        .appPtr = @ptrFromInt(0xCAFE),
+        .base = 0x140000000,
+    };
+    PushCApplicationPtr(&args);
 
     // Thread detach (reason=3) should not clear the pointer
     _ = DllMain(null, 3, null);
     try std.testing.expect(getEnginePtr() != null);
 
     // Cleanup
-    PushCApplicationPtr(null);
+    args.appPtr = null;
+    PushCApplicationPtr(&args);
 }
 
 test "getEnginePtr: returns null initially" {
     // Save and restore state
-    const saved = getEnginePtr();
+    const saved_ptr = getEnginePtr();
+    const saved_base = getBaseAddress();
     defer {
-        if (saved) |ptr| {
-            PushCApplicationPtr(ptr);
-        } else {
-            PushCApplicationPtr(null);
-        }
+        var restore_args = PushArgs{
+            .appPtr = saved_ptr,
+            .base = saved_base,
+        };
+        PushCApplicationPtr(&restore_args);
     }
 
-    PushCApplicationPtr(null);
+    var args = PushArgs{
+        .appPtr = null,
+        .base = 0,
+    };
+    PushCApplicationPtr(&args);
     try std.testing.expectEqual(@as(?*anyopaque, null), getEnginePtr());
 }
 
 test "PushCApplicationPtr: can set and clear" {
-    const ptr1: *anyopaque = @ptrFromInt(0x1000);
-    const ptr2: *anyopaque = @ptrFromInt(0x2000);
+    var args1 = PushArgs{
+        .appPtr = @ptrFromInt(0x1000),
+        .base = 0x140000000,
+    };
+    var args2 = PushArgs{
+        .appPtr = @ptrFromInt(0x2000),
+        .base = 0x150000000,
+    };
 
-    PushCApplicationPtr(ptr1);
-    try std.testing.expectEqual(@as(?*anyopaque, ptr1), getEnginePtr());
+    PushCApplicationPtr(&args1);
+    try std.testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0x1000)), getEnginePtr());
 
-    PushCApplicationPtr(ptr2);
-    try std.testing.expectEqual(@as(?*anyopaque, ptr2), getEnginePtr());
+    PushCApplicationPtr(&args2);
+    try std.testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0x2000)), getEnginePtr());
 
-    PushCApplicationPtr(null);
+    var null_args = PushArgs{
+        .appPtr = null,
+        .base = 0,
+    };
+    PushCApplicationPtr(&null_args);
     try std.testing.expectEqual(@as(?*anyopaque, null), getEnginePtr());
 }
 
@@ -159,16 +212,35 @@ test "DllMain: all reason codes return TRUE" {
 
 test "engine_ptr: multiple PushCApplicationPtr calls" {
     // Save initial state
-    const saved = getEnginePtr();
-    defer PushCApplicationPtr(saved);
+    const saved_ptr = getEnginePtr();
+    const saved_base = getBaseAddress();
+    defer {
+        var restore_args = PushArgs{
+            .appPtr = saved_ptr,
+            .base = saved_base,
+        };
+        PushCApplicationPtr(&restore_args);
+    }
 
     // Each call should overwrite the previous value
-    PushCApplicationPtr(@ptrFromInt(0x100));
+    var args1 = PushArgs{
+        .appPtr = @ptrFromInt(0x100),
+        .base = 0x140000000,
+    };
+    PushCApplicationPtr(&args1);
     try std.testing.expectEqual(@as(usize, 0x100), @intFromPtr(getEnginePtr().?));
 
-    PushCApplicationPtr(@ptrFromInt(0x200));
+    var args2 = PushArgs{
+        .appPtr = @ptrFromInt(0x200),
+        .base = 0x150000000,
+    };
+    PushCApplicationPtr(&args2);
     try std.testing.expectEqual(@as(usize, 0x200), @intFromPtr(getEnginePtr().?));
 
-    PushCApplicationPtr(@ptrFromInt(0x300));
+    var args3 = PushArgs{
+        .appPtr = @ptrFromInt(0x300),
+        .base = 0x160000000,
+    };
+    PushCApplicationPtr(&args3);
     try std.testing.expectEqual(@as(usize, 0x300), @intFromPtr(getEnginePtr().?));
 }

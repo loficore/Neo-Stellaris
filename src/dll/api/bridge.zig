@@ -27,10 +27,10 @@
 //   Stellaris.hasScopeType(scope, flag) -> boolean
 
 const std = @import("std");
-const c = @import("quickjs/bindings");
-const gamestate = @import("api/gamestate");
-const scope = @import("api/scope");
-const offsets = @import("offsets");
+const c = @import("../quickjs/bindings.zig");
+const gamestate = @import("gamestate.zig");
+const scope = @import("scope.zig");
+const offsets = @import("../shared/offsets.zig");
 
 // ---------------------------------------------------------------------------
 // JS helper: argument extraction
@@ -43,7 +43,7 @@ fn jsToInt64(val: c.JSValue) i64 {
         return @intCast(val.u.i32);
     }
     if (val.isFloat64()) {
-        return @intFromFloat(val.u.f64);
+        return @intFromFloat(val.u.float64);
     }
     return 0;
 }

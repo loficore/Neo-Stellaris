@@ -16,7 +16,7 @@
 // scope pointers. No shared state is accessed.
 
 const std = @import("std");
-const offsets = @import("offsets");
+const offsets = @import("../shared/offsets.zig");
 
 // ---------------------------------------------------------------------------
 // Constants (from verified offsets)
