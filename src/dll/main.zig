@@ -23,6 +23,19 @@ pub const quickjs = @import("quickjs/runtime.zig");
 // API Bridge - registers Stellaris.* functions in JS
 pub const bridge = @import("api/bridge.zig");
 
+// Scripted lookup detour (Stellaris 4.4.4) — referenced from the compilation
+// root so its export fns (LookupHookInstall/Uninstall/Drain) land in the DLL.
+pub const scripted = @import("scripted/lookup_hook.zig");
+
+// Runtime base-Execute detour — the real 4.4.4 execution surface. Its export fns
+// (ExecHookInstall/Uninstall/Drain/Histogram/Stats/Reset) are injector-facing.
+pub const exec_hook = @import("scripted/exec_hook.zig");
+
+comptime {
+    _ = scripted;
+    _ = exec_hook;
+}
+
 // ---------------------------------------------------------------------------
 // QuickJS lifecycle management
 // ---------------------------------------------------------------------------

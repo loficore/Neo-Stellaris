@@ -1,26 +1,63 @@
-// build.zig — Build system for stellaris_quickjs DLL.
+// build.zig — Build system for stellaris_quickjs DLL + injector.
 //
-// Targets x86_64-windows to produce stellaris_quickjs.dll.
-// The DLL is injected into the Stellaris process by the C++ loader (T1).
+// Targets x86_64-windows to produce stellaris_quickjs.dll and inject.exe.
+// QuickJS is compiled from vendored sources in libs/quickjs (no prebuilt lib).
 
 const std = @import("std");
 
+const quickjs_c_sources = [_][]const u8{
+    "libs/quickjs/quickjs.c",
+    "libs/quickjs/libregexp.c",
+    "libs/quickjs/libunicode.c",
+    "libs/quickjs/cutils.c",
+    "libs/quickjs/dtoa.c",
+};
+
+const quickjs_c_flags = [_][]const u8{
+    "-DCONFIG_VERSION=\"2025-09-13\"",
+    "-Wno-gnu-zero-variadic-macro-arguments",
+};
+
+/// Adds the vendored QuickJS sources (plus the wrapper exporting static-inline
+/// symbols for Zig) to a module, so no prebuilt static library is required.
+fn linkQuickjs(b: *std.Build, module: *std.Build.Module) void {
+    module.addIncludePath(b.path("libs/quickjs"));
+    module.addCSourceFiles(.{
+        .root = b.path("."),
+        .files = &quickjs_c_sources,
+        .flags = &quickjs_c_flags,
+    });
+    module.addCSourceFile(.{
+        .file = b.path("src/dll/quickjs/quickjs_wrapper.c"),
+        .flags = &.{},
+    });
+    module.link_libc = true;
+}
+
 pub fn build(b: *std.Build) void {
-    // Default target: x86_64-windows (Windows DLL).
-    // Override with -Dtarget=<triple> for cross-compilation.
+    // Artifacts (DLL, injector) target x86_64-windows.
     const target = b.standardTargetOptions(.{
         .default_target = .{
             .os_tag = .windows,
             .cpu_arch = .x86_64,
         },
     });
+    // Tests run on the build machine. QuickJS's bundled allocator misbehaves
+    // under Zig's musl static libc, so link the host glibc dynamically instead
+    // (zig's glibc sysroot is newer than this host's, hence .dynamic).
+    const test_target_str = b.option([]const u8, "test-target", "target triple for unit tests");
+    const native = if (test_target_str) |t|
+        b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = t }) catch
+            @panic("invalid -Dtest-target"))
+    else
+        b.resolveTargetQuery(.{});
 
     const optimize = b.standardOptimizeOption(.{});
 
     // Offsets module — shared by DLL build and multiple test targets.
     const offsets_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/shared/offsets.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
 
@@ -41,51 +78,50 @@ pub fn build(b: *std.Build) void {
     // injector can discover symbols by name.
     dll.dll_export_fns = true;
 
-    // QuickJS JavaScript engine library
-    dll.root_module.addIncludePath(b.path("libs/quickjs"));
-    dll.root_module.addLibraryPath(b.path("libs/quickjs"));
-    dll.root_module.addCSourceFile(.{
-        .file = b.path("src/dll/quickjs/quickjs_wrapper.c"),
-        .flags = &.{},
-    });
-    dll.root_module.linkSystemLibrary("quickjs", .{
-        .preferred_link_mode = .static,
-    });
-    dll.root_module.link_libc = true;
+    linkQuickjs(b, dll.root_module);
+
 
     b.installArtifact(dll);
 
-    // --- Run tests ---
+    // --- Injector exe: loads the DLL into the running stellaris process ---
+    const inject = b.addExecutable(.{
+        .name = "inject",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/inject/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(inject);
+
+    const inject_step = b.step("inject", "Build only inject.exe");
+    inject_step.dependOn(&b.addInstallArtifact(inject, .{}).step);
+
+    // --- Run tests (native target so they execute on this machine) ---
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/dll/exports.zig"),
-            .target = target,
+            .target = native,
             .optimize = optimize,
         }),
     });
+    linkQuickjs(b, tests.root_module);
 
-    // Link QuickJS for tests that pull in C bindings (exports → main → quickjs modules).
-    tests.root_module.addIncludePath(b.path("libs/quickjs"));
-    tests.root_module.addLibraryPath(b.path("libs/quickjs"));
-    tests.root_module.linkSystemLibrary("quickjs", .{
-        .preferred_link_mode = .static,
-    });
-    tests.root_module.link_libc = true;
-
-    // QuickJS runtime tests (pure Zig logic — no QuickJS library linked).
+    // QuickJS runtime tests (link the real engine, not stubs).
     const qjs_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/dll/quickjs/runtime.zig"),
-            .target = target,
+            .target = native,
             .optimize = optimize,
         }),
     });
+    linkQuickjs(b, qjs_tests.root_module);
 
     // Effect ID mapper tests (hash map, ID lookup).
     // Pass offsets as a module dependency so relative imports from effects/ work.
     const id_mapper_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/effects/id_mapper.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     id_mapper_mod.addImport("offsets", offsets_mod);
@@ -97,7 +133,7 @@ pub fn build(b: *std.Build) void {
     const offsets_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/dll/shared/offsets.zig"),
-            .target = target,
+            .target = native,
             .optimize = optimize,
         }),
     });
@@ -105,12 +141,12 @@ pub fn build(b: *std.Build) void {
     // Hooking framework tests (detour + windows wrappers).
     const windows_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/hooking/windows.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     const detour_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/hooking/detour.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     detour_mod.addImport("windows", windows_mod);
@@ -121,7 +157,7 @@ pub fn build(b: *std.Build) void {
     // API module tests.
     const api_gamestate_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/api/gamestate.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     api_gamestate_mod.addImport("offsets", offsets_mod);
@@ -131,7 +167,7 @@ pub fn build(b: *std.Build) void {
 
     const api_scope_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/api/scope.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     api_scope_mod.addImport("offsets", offsets_mod);
@@ -148,7 +184,7 @@ pub fn build(b: *std.Build) void {
     // UI module tests.
     const ui_window_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/ui/window.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     const ui_window_tests = b.addTest(.{
@@ -157,7 +193,7 @@ pub fn build(b: *std.Build) void {
 
     const ui_callbacks_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/ui/callbacks.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     const ui_callbacks_tests = b.addTest(.{
@@ -166,7 +202,7 @@ pub fn build(b: *std.Build) void {
 
     const ui_dynamic_text_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/ui/dynamic_text.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     const ui_dynamic_text_tests = b.addTest(.{
@@ -175,7 +211,7 @@ pub fn build(b: *std.Build) void {
 
     const ui_gui_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/ui/gui.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     ui_gui_mod.addImport("window.zig", ui_window_mod);
@@ -185,7 +221,7 @@ pub fn build(b: *std.Build) void {
 
     const ui_button_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/ui/button.zig"),
-        .target = target,
+        .target = native,
         .optimize = optimize,
     });
     ui_button_mod.addImport("callbacks.zig", ui_callbacks_mod);
@@ -195,6 +231,18 @@ pub fn build(b: *std.Build) void {
 
     // Note: bridge.zig tests require QuickJS C linkage and cannot run standalone.
     // They are tested as part of the full DLL build.
+
+    // Scripted detour tests (lookup_hook, exec_hook) through a root inside src/dll so
+    // their ../hooking imports resolve, without QuickJS C linkage.
+    const scripted_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dll/scripted_tests.zig"),
+            .target = native,
+            .optimize = optimize,
+        }),
+    });
+    const run_scripted_tests = b.addRunArtifact(scripted_tests);
+    run_scripted_tests.skip_foreign_checks = true;
 
     const run_tests = b.addRunArtifact(tests);
     run_tests.skip_foreign_checks = true;
@@ -248,4 +296,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_dynamic_text_tests.step);
     test_step.dependOn(&run_ui_gui_tests.step);
     test_step.dependOn(&run_ui_button_tests.step);
+    test_step.dependOn(&run_scripted_tests.step);
 }

@@ -27,6 +27,15 @@ extern "kernel32" fn VirtualAlloc(lpAddress: LPVOID, dwSize: SIZE_T, flAllocatio
 extern "kernel32" fn VirtualFree(lpAddress: LPVOID, dwSize: SIZE_T, dwFreeType: DWORD) BOOL;
 extern "kernel32" fn FlushInstructionCache(hProcess: ?*anyopaque, lpBaseAddress: LPVOID, dwSize: SIZE_T) BOOL;
 extern "kernel32" fn GetCurrentProcess() ?*anyopaque;
+extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callconv(.c) ?*anyopaque;
+
+/// Resolve an RVA inside stellaris.exe to its live absolute address.
+/// The HMODULE returned by GetModuleHandleW *is* the image base.
+pub fn moduleFunction(rva: usize) !*anyopaque {
+    const name_w: [*:0]const u16 = &[_:0]u16{ 's', 't', 'e', 'l', 'l', 'a', 'r', 'i', 's', '.', 'e', 'x', 'e', 0 };
+    const h = GetModuleHandleW(name_w) orelse return error.ModuleNotFound;
+    return @ptrFromInt(@intFromPtr(h) + rva);
+}
 
 // ---------------------------------------------------------------------------
 // Memory protection helpers
@@ -98,7 +107,7 @@ pub fn allocNear(target: *anyopaque, size: usize) !*anyopaque {
     else
         0;
 
-    const limit: usize = std.math.min(base +| 2 * search_range, std.math.maxInt(usize));
+    const limit: usize = @min(base +| 2 * search_range, std.math.maxInt(usize));
 
     // Try candidate addresses within the 2GB window.
     var addr: usize = base;

@@ -77,6 +77,22 @@ fn decodeInstructionLength(code: [*]const u8) u8 {
     const opcode = code[i];
     i += 1;
 
+    // Two-byte escape 0F: only the multi-byte NOP (0F 1F /0) is decoded;
+    // everything else returns 0 so callers can bail out instead of hooking
+    // a mis-measured instruction.
+    if (opcode == 0x0F) {
+        const op2 = code[i];
+        i += 1;
+        if (op2 != 0x1F) return 0;
+        const modrm = code[i];
+        const mod: u8 = (modrm >> 6) & 0x03;
+        const rm: u8 = modrm & 0x07;
+        i += 1;
+        if (mod != 3 and rm == 4) i += 1;
+        if (mod == 1) i += 1 else if (mod == 2) i += 4;
+        return i;
+    }
+
     // Helper: determine ModR/M byte register vs memory addressing
     const modrm_needed = needsModRM(opcode, has_rex);
 
@@ -105,64 +121,37 @@ fn decodeInstructionLength(code: [*]const u8) u8 {
     return i;
 }
 
-/// Returns true if this opcode has a ModR/M byte.
+/// Returns true if this one-byte opcode has a ModR/M byte.
+/// Two-byte escapes (0x0F) are unsupported here and decode as length 1.
 fn needsModRM(opcode: u8, has_rex: bool) bool {
     _ = has_rex;
     return switch (opcode) {
-        // Group 1: AL/AX/EAX/RAX, imm
-        0x04, 0x05, 0x0C, 0x0D, 0x14, 0x15, 0x1C, 0x1D,
-        0x24, 0x25, 0x2C, 0x2D, 0x34, 0x35, 0x3C, 0x3D,
-        => false,
-
-        // Group 1: r/m, imm (8-bit and 32/64-bit)
-        0x80, 0x81, 0x83 => true,
-
+        // ADD/OR/ADC/SUB/XOR/CMP/MOV, r/m,r and r,r/m (xx+0..3 patterns)
+        0x00...0x03,
+        0x08...0x0B,
+        0x10...0x13,
+        0x18...0x1B,
+        0x20...0x23,
+        0x28...0x2B,
+        0x30...0x33,
+        // MOV r/m8/16/32/64, r8/... and S reg forms
+        0x88...0x8C,
+        0x8E,
+        // TEST r/m, r / XCHG r/m, r
+        0x84, 0x85, 0x86, 0x87,
+        // Group 1: r/m, imm
+        0x80, 0x81, 0x83,
         // Group 2: shift/rotate
-        0xC0, 0xC1, 0xD0, 0xD1, 0xD2, 0xD3 => true,
+        0xC0, 0xC1, 0xD0, 0xD1, 0xD2, 0xD3,
+        // Group 3 / Group 4 / Group 5
+        0xF6, 0xF7, 0xFE, 0xFF,
+        // LEA / MOV sx / TEST / XCHG / BSWAP / CMOV / MOVBE
+        0x8D,
+        // SETcc / PUSH/POP r/m
+        0xC6, 0xC7,
+        // CMPXCHG, XADD (bare, no lock prefix needed here)
+        => true,
 
-        // Group 3: TEST r/m, imm; NOT; NEG; MUL; DIV
-        0xF6, 0xF7 => true,
-
-        // Group 5: INC/DEC/CALL/JMP/PUSH r/m
-        0xFF => true,
-
-        // MOV r/m8, r8 / MOV r/m64, r64 / MOV r8, r/m8 / MOV r64, r/m64
-        0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8E => true,
-
-        // LEA r64, m
-        0x8D => true,
-
-        // MOV r/m, imm (reg-encoded in opcode, no ModR/M)
-        0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7 => false, // MOV r8, imm8
-        0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF => false, // MOV r64, imm64
-
-        // NOP, RET, INT3, etc.
-        0x90, 0xC3, 0xCC => false,
-
-        // PUSH/POP reg
-        0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
-        0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,
-        => false,
-
-        // Conditional jumps (short and near)
-        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
-        0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F,
-        => false, // rel8 only
-
-        // JMP rel32
-        0xE9 => false,
-
-        // CALL rel32
-        0xE8 => false,
-
-        // MOV AL/AX/EAX/RAX, moffs / MOV moffs, AL/AX/EAX/RAX
-        0xA0, 0xA1, 0xA2, 0xA3 => false,
-
-        // CMP AL/AX/EAX/RAX, imm
-        0x38, 0x39, 0x3A, 0x3B => true,
-
-        // Two-byte opcode escape (0x0F xx)
-        // We handle the most common ones below
         else => false,
     };
 }
@@ -172,9 +161,19 @@ fn immediateSize(opcode: u8, rex: u8) u8 {
     _ = rex;
     return switch (opcode) {
         // Group 1: r/m, imm8
-        0x80, 0x83 => 1,
+        0x80, 0x83, 0xC6 => 1,
         // Group 1: r/m, imm32 (or imm16 with 0x66 prefix)
-        0x81 => 4,
+        0x81, 0xC7 => 4,
+        // Group 5: PUSH/POP/CALL/JMP/JMP FAR/PUSH FAR r/m
+        0xFF => 0,
+        // PUSH imm8 / PUSH imm32
+        0x6A => 1,
+        0x68 => 4,
+        // TEST AL, imm8 / TEST eAX, imm32
+        0xA8 => 1,
+        0xA9 => 4,
+        // MOV moffs, imm32 absolute address operand
+        0xA0, 0xA1, 0xA2, 0xA3 => 4,
         // MOV r64, imm64 (REX.W + B8+rd)
         0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF => 8,
         // MOV r8, imm8
@@ -252,8 +251,18 @@ pub const Hook = struct {
 // Global state
 // ---------------------------------------------------------------------------
 
-/// Mutex protecting all hook state (install/remove/query).
-var hook_mutex = std.Thread.Mutex{};
+/// Spinlock guarding all hook state (install/remove/query). std.Io.Mutex
+/// would need an Io context that DLL hook code does not have; the guarded
+/// regions are tiny (VirtualProtect + byte copies), so spinning is safe.
+var hook_lock: u32 = 0;
+
+fn lockHooks() void {
+    while (@atomicRmw(u32, &hook_lock, .Xchg, 1, .acquire) != 0) {}
+}
+
+fn unlockHooks() void {
+    _ = @atomicRmw(u32, &hook_lock, .Xchg, 0, .release);
+}
 
 /// List of installed hooks (simple fixed-capacity array for now).
 const MAX_HOOKS = 64;
@@ -264,22 +273,30 @@ var hooks: [MAX_HOOKS]Hook = undefined;
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Install a detour hook.
+/// Install a detour hook without an armed forward pointer (the caller assigns the trampoline
+/// itself after this returns). See installHookArmed for the race-free variant.
+pub fn installHook(target: *anyopaque, detour: *anyopaque) !Hook {
+    var unused: ?*anyopaque = null;
+    return installHookArmed(target, detour, &unused);
+}
+
+/// Install a detour hook, publishing the trampoline to `prearm` before the target is patched.
 ///
 /// - `target`: Address of the function to hook.
 /// - `detour`: Address of the replacement function.
+/// - `prearm`: Receives the trampoline pointer *before* the patch goes live. A detour that
+///   forwards through it would otherwise only learn the address after this returns, leaving
+///   a window where the patch is live but the forward pointer is not — a call landing there
+///   would be silently dropped.
 ///
 /// Returns a `Hook` whose `trampoline` field points to executable memory
 /// that, when called, executes the original function's prologue and jumps
 /// back to continue normal execution.
 ///
 /// Thread-safe: acquires global mutex.
-pub fn installHook(target: *anyopaque, detour: *anyopaque) !Hook {
-    _ = detour; // Will be used when we write the JMP to the detour.
-    _ = &target;
-
-    hook_mutex.lock();
-    defer hook_mutex.unlock();
+pub fn installHookArmed(target: *anyopaque, detour: *anyopaque, prearm: *?*anyopaque) !Hook {
+    lockHooks();
+    defer unlockHooks();
 
     if (hook_count >= MAX_HOOKS) return error.TooManyHooks;
 
@@ -318,8 +335,11 @@ pub fn installHook(target: *anyopaque, detour: *anyopaque) !Hook {
         defer guard.deinit();
     }
 
-    // 6. Patch the target function: overwrite prologue with JMP to detour.
-    //    For now, we write a NOP sled (placeholder until detour dispatch is wired).
+    // 6. Publish the trampoline to the caller before the patch goes live, then patch the
+    //    target function: overwrite prologue with a jump to detour.
+    //    Layout: FF 25 00 00 00 00 [8-byte absolute addr of detour] (14 bytes),
+    //    padded with NOPs if the decoded prologue is longer.
+    prearm.* = trampoline_mem;
     {
         var guard = try windows.ProtectGuard.change(
             @ptrCast(target),
@@ -328,9 +348,17 @@ pub fn installHook(target: *anyopaque, detour: *anyopaque) !Hook {
         );
         defer guard.deinit();
 
+        std.debug.assert(patch_size >= JMP_PATCH_SIZE);
         var target_mut: [*]u8 = @ptrCast(target);
-        for (0..patch_size) |i| {
-            target_mut[i] = 0x90; // NOP (placeholder — real detour JMP wired in T7)
+        target_mut[0] = 0xFF;
+        target_mut[1] = 0x25;
+        target_mut[2] = 0x00;
+        target_mut[3] = 0x00;
+        target_mut[4] = 0x00;
+        target_mut[5] = 0x00;
+        std.mem.writeInt(u64, target_mut[6..14][0..8], @intFromPtr(detour), .little);
+        for (JMP_PATCH_SIZE..patch_size) |i| {
+            target_mut[i] = 0x90;
         }
     }
 
@@ -355,8 +383,8 @@ pub fn installHook(target: *anyopaque, detour: *anyopaque) !Hook {
 ///
 /// Thread-safe: acquires global mutex.
 pub fn removeHook(hook: *const Hook) !void {
-    hook_mutex.lock();
-    defer hook_mutex.unlock();
+    lockHooks();
+    defer unlockHooks();
 
     // 1. Restore original bytes.
     const trampoline_bytes: [*]const u8 = @ptrCast(hook.trampoline);
@@ -398,8 +426,8 @@ pub fn removeHook(hook: *const Hook) !void {
 
 /// Check if a hook is installed for the given target address.
 pub fn isHooked(target: *anyopaque) bool {
-    hook_mutex.lock();
-    defer hook_mutex.unlock();
+    lockHooks();
+    defer unlockHooks();
 
     for (0..hook_count) |i| {
         if (hooks[i].target == target) return true;
@@ -409,8 +437,8 @@ pub fn isHooked(target: *anyopaque) bool {
 
 /// Get the number of currently installed hooks.
 pub fn hookCount() usize {
-    hook_mutex.lock();
-    defer hook_mutex.unlock();
+    lockHooks();
+    defer unlockHooks();
     return hook_count;
 }
 
@@ -701,7 +729,7 @@ test "decodeInstructionLength: NOP (multi-byte 0F 1F)" {
     // 0F 1F 00 — NOP dword [RAX] (3-byte NOP)
     const code = [_]u8{ 0x0F, 0x1F, 0x00 };
     const len = decodeInstructionLength(&code);
-    try std.testing.expectEqual(@as(u8, 0), len); // 0F prefix not handled, returns 0
+    try std.testing.expectEqual(@as(u8, 3), len); // 0F 1F /0 multi-byte NOP decodes fully
 }
 
 test "decodePrologueLength: exactly 14 bytes" {
