@@ -1,0 +1,77 @@
+pid=16768  observe=60s
+LoadLibraryW -> 0x7ffcb4c10000
+module: {'loaded': True, 'base': '0x7ffcb4c10000'}
+layout: {'entry': 88, 'hist': 16, 'stats': 48, 'ring': 1024, 'hist_len': 1024}
+probe: Frida Interceptor saw 31 calls at base+0x1d08520 in 1.5s
+  game is RUNNING. Pause it — polling for silence up to 180s...
+  still active: 36 calls/1.5s
+  still active: 20 calls/1.5s
+  still active: 33 calls/1.5s
+  still active: 30 calls/1.5s
+  still active: 20 calls/1.5s
+  still active: 32 calls/1.5s
+  still active: 37 calls/1.5s
+  still active: 28 calls/1.5s
+  still active: 33 calls/1.5s
+  still active: 55 calls/1.5s
+  still active: 26 calls/1.5s
+  still active: 29 calls/1.5s
+  still active: 50 calls/1.5s
+  quiescent -> installing
+ExecHookInstall -> 0
+while installed -> verify: -1 (expect -1), stats: {'calls': '0', 'samples': '0', 'invalid': '0', 'hist_overflow': '0', 'img_base': '140700081651712', 'patch_size': '16'}
+RESUME THE GAME NOW — waiting for the counter to actually move (300s max)...
+  live: calls 0 -> 35, observing 60s
+stats: {'calls': '316468', 'samples': '618', 'invalid': '473', 'hist_overflow': '0', 'img_base': '140700081651712', 'patch_size': '16'}
+histogram: 291 distinct shims, counted over every call
+  shim   0x33d410  vtable  0x24b3050  x54003
+  shim   0x33c940  vtable  0x24c69e8  x36581
+  shim   0x34dad0  vtable  0x24b3690  x32438
+  shim   0x230990  vtable  0x24b1c88  x28676
+  shim   0xbd4120  vtable  0x2541268  x23342
+  shim   0xde0050  vtable  0x250e4b0  x21396
+  shim   0xa67200  vtable  0x24ec7c8  x11405
+  shim   0x6ec640  vtable  0x25097c0  x10068
+  shim   0x7fbe60  vtable  0x24b8468  x8762
+  shim   0xe6c230  vtable  0x2552788  x8334
+  shim   0x3caef0  vtable  0x24ec788  x7530
+  shim   0x6c04b0  vtable  0x2508678  x4052
+  shim   0xde0430  vtable  0x254f720  x3968
+  shim   0xd05820  vtable  0x2546c98  x3875
+  shim   0xb62130  vtable  0x2517180  x2446
+  shim   0x8d3150  vtable  0x24b5480  x2442
+  shim   0xe99c10  vtable  0x254a190  x2165
+  shim   0xe586d0  vtable  0x24c52b0  x2096
+  shim   0xcc4220  vtable  0x25460f0  x2090
+  shim   0x974840  vtable  0x250e188  x2090
+  shim   0xde40c0  vtable  0x254fa18  x2090
+  shim   0xe98720  vtable  0x25531e8  x2090
+  shim   0xe58d80  vtable  0x2551620  x2090
+  shim   0xe9b580  vtable  0x2553178  x2090
+  shim   0xe96e90  vtable  0x2553140  x2090
+drained 64 records (entry 88 bytes)
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 1, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162696014, "ctx_counter": 8, "self_ptr": "0x1d27fee80", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 4802889, "ctx_counter": 9, "self_ptr": "0x1d27d65b0", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 1, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162696014, "ctx_counter": 5, "self_ptr": "0x1d2805d50", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162690894, "ctx_counter": 5, "self_ptr": "0x18a276ee0", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 97, "ctx_counter": 6, "self_ptr": "0x1d27e1710", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 18774, "ctx_counter": 6, "self_ptr": "0x1d27e54f0", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3690", "shim_rva": "0x34dad0", "token_id": 10465035, "second_token": 0, "flag_12": 65518, "flag_14": 255, "flag_16": 255, "arg_token": 0, "ctx_counter": 3, "self_ptr": "0x185792410", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 3487937216, "ctx_counter": 3, "self_ptr": "0x1857c7b08", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 97, "ctx_counter": 6, "self_ptr": "0x1d27eecd0", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1919640399, "ctx_counter": 6, "self_ptr": "0x1e5909230", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 1, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162696014, "ctx_counter": 5, "self_ptr": "0x1d27b96a0", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3690", "shim_rva": "0x34dad0", "token_id": 11970240, "second_token": 0, "flag_12": 65517, "flag_14": 255, "flag_16": 255, "arg_token": 0, "ctx_counter": 3, "self_ptr": "0x185896ed0", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1163018576, "ctx_counter": 5, "self_ptr": "0x1d27bee20", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 1, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162696014, "ctx_counter": 5, "self_ptr": "0x1d27c0f00", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1953064278, "ctx_counter": 6, "self_ptr": "0x1e591be90", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 2036429397, "ctx_counter": 6, "self_ptr": "0x1e591d990", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x2552788", "shim_rva": "0xe6c230", "token_id": 4294967295, "second_token": 2402, "flag_12": 19630, "flag_14": 247, "flag_16": 0, "arg_token": 0, "ctx_counter": 2, "self_ptr": "0x1ec3c27d8", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 1, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162696014, "ctx_counter": 5, "self_ptr": "0x1d27cc300", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 1, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162696014, "ctx_counter": 8, "self_ptr": "0x1d27cee50", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 73, "ctx_counter": 9, "self_ptr": "0x1e5a54380", "ctx_ptr": "0xffcfd00", "ctx_10": "8813261104", "ctx_18": "0", "ctx_30": "0"}
+Waiting for base Execute to go silent before "uninstall" (300s max)...
+  idle at calls=319048
+ExecHookUninstall -> 0
+ExecHookVerify -> 0 (engine bytes intact at the target)
+post-uninstall probe: 0 calls at base Execute in 1.5s (engine silent — resume to confirm)

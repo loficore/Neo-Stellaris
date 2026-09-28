@@ -4,6 +4,7 @@
 
 Reverse engineering `stellaris.exe` (Clausewitz engine, codename "augustus") to map the mod system's registration pipeline and identify extension points for new effects/triggers.
 
+**Game version**: **4.4.4** (as of 2026-09). Address tables below marked 3.x are legacy; use the 4.4.4 RVA table.
 **Binary**: `/mnt/drive_d/SteamLibrary/steamapps/common/Stellaris/stellaris.exe`
 **IDA session**: Use `ida-pro_idb_open` with `mode=force_headless`. The `.i64` database exists alongside the exe.
 **Game data**: `/mnt/drive_d/SteamLibrary/steamapps/common/Stellaris/common/` — scripted_effects, scripted_triggers, on_actions, events, defines, etc.
@@ -47,6 +48,33 @@ ida-pro_analyze_function(addr="0x...", database=session_id)
 **Gotcha**: If `ida-pro_idb_open` fails, check if another IDA GUI instance has the file locked. Close it first.
 
 ## Key Addresses (Confirmed)
+
+### Stellaris 4.4.4 (CURRENT) — RVA table (add to runtime module base, ASLR on)
+
+Re-anchored via Frida scan. Full detail in `evidence/xrefs/anchors_4_4_4.md`.
+
+| RVA | Function / Data | Source anchor | Notes |
+|-----|-----------------|---------------|-------|
+| `0x89F960` | GetScriptedEffect(name) lookup | `scriptedeffect.cpp:33` | Walks BST at global below; unique string xref |
+| `0x8A0450` | GetScriptedTrigger(name) lookup | `scriptedtrigger.cpp:18` | Twin of the effect lookup |
+| `0x33746E8` | ScriptedEffectDB global | (loaded by lookup) | BST root at `[global+0x18]` |
+| `0x32611C8` | ScriptedTriggerDB global | (loaded by lookup) | BST root at `[global+0x88]` |
+| `0x24B1990` | CScriptedEffectTemplate vtable | xrefs (no RTTI, see note below) | Referenced by all template subclasses |
+| `0x1D08520` | `CEffect::Execute` (base) — THE hot path | live Frida detour + 32-byte code fingerprint | ~5,300 calls/s; dispatches `call [rax+0x10]` = the instance's slot[2] `ExecuteActual` |
+| `0x1B5B10` | CScriptedEffectTemplateDatabase ctor | class-name string | Med confidence |
+| ~~effect dispatch switch~~ | **does not exist in 4.4.x** | §3/§14 of `runtime_444_structures.md` | 3.x RVA 0x180B050 is void; per-class vtable dispatch instead |
+| `0x9F5750`/`0x9F6420`/`0x9F65E0` | Event command handlers | `eventcommands.cpp` | Pick via deeper trace |
+
+**No RTTI on the CEffect family**: `vtable[-8]` is another code slot, never a
+CompleteObjectLocator (measured across all 1,805 of them). Class names cannot come from RTTI —
+use string refs inside `ExecuteActual` or the §8 keyword registration table.
+**Full static class map**: `evidence/xrefs/ceffect_vtable_map_4_4_4.txt` (1,805 vtables whose
+slot[1] is base Execute → 543 distinct `ExecuteActual` bodies), produced by
+`scripts/rttibatch.py --effects`.
+
+**Caveat**: DB globals must be re-read in a live in-game session (main-menu values looked like arena/relative pointers or uninitialized).
+
+### Stellaris 3.4.5–3.7.4 (LEGACY — do not use for 4.4.4)
 
 ### Effect System
 | Address | Function | Source File | Notes |
