@@ -152,7 +152,7 @@ pub fn hasScopeType(scope: ScopeHandle, type_flag: i64) bool {
 
 test "getScopeType: reads from memory" {
     // Create a mock CEventScope in memory
-    var mock_scope: [64]u8 = [_]u8{0} ** 64;
+    var mock_scope: [64]u8 align(8) = [_]u8{0} ** 64;
 
     // Set scope type at offset 8 (COUNTRY = 4)
     const type_val: i64 = offsets.scope_types.COUNTRY;
@@ -164,7 +164,7 @@ test "getScopeType: reads from memory" {
 }
 
 test "getScopeObjectId: reads from memory" {
-    var mock_scope: [64]u8 = [_]u8{0} ** 64;
+    var mock_scope: [64]u8 align(8) = [_]u8{0} ** 64;
 
     // Set object ID at offset 16
     const id_val: i64 = 42;
@@ -176,7 +176,7 @@ test "getScopeObjectId: reads from memory" {
 }
 
 test "getScopeTypeName: correct mapping" {
-    var mock_scope: [64]u8 = [_]u8{0} ** 64;
+    var mock_scope: [64]u8 align(8) = [_]u8{0} ** 64;
 
     // Test PLANET
     const planet_bytes = std.mem.toBytes(@as(i64, offsets.scope_types.PLANET));
@@ -195,7 +195,7 @@ test "getScopeTypeName: correct mapping" {
 }
 
 test "hasScopeType: bit flag check" {
-    var mock_scope: [64]u8 = [_]u8{0} ** 64;
+    var mock_scope: [64]u8 align(8) = [_]u8{0} ** 64;
 
     // Set scope type to COUNTRY (4)
     const type_bytes = std.mem.toBytes(@as(i64, offsets.scope_types.COUNTRY));
@@ -207,7 +207,7 @@ test "hasScopeType: bit flag check" {
 }
 
 test "hasScopeType: multiple flags" {
-    var mock_scope: [64]u8 = [_]u8{0} ** 64;
+    var mock_scope: [64]u8 align(8) = [_]u8{0} ** 64;
 
     // Set scope type to COUNTRY | PLANET (4 | 2 = 6)
     const combined: i64 = offsets.scope_types.COUNTRY | offsets.scope_types.PLANET;

@@ -28,21 +28,23 @@ const handler = @import("handler.zig");
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Address of CTrigger::Evaluate in stellaris.exe (version 3.x).
-/// TODO: Verify address from IDA — CTrigger::Evaluate is virtual, dispatch
-/// via vtable at CTrigger+1704. This is the direct address for hooking.
+/// Address of CTrigger::Evaluate in stellaris.exe.
+/// [UNVERIFIED 3.x placeholder] Evaluate is virtual — like effects, 4.4.4 has no
+/// fixed dispatch address; the real 4.4.4 trigger extension surface is
+/// offsets.scripted_db.RVA_GET_SCRIPTED_TRIGGER. Do not hook this placeholder.
 const EVALUATE_ADDR: usize = 0x1408A6F20; // Placeholder — verify from IDA
 
 /// CTrigger+4080: trigger ID field (i32).
-/// Matches CEffect layout for the ID field.
+/// [UNVERIFIED 3.x] Matches the (also unverified) CEffect ID layout.
 const OFFSET_TRIGGER_ID: usize = 4080; // +0xFF0
 
 /// CTrigger+56: trigger name SSO string.
-/// Matches CEffect layout for the name field.
+/// [UNVERIFIED 3.x] Matches the (also unverified) CEffect name layout.
 const OFFSET_TRIGGER_NAME: usize = 56; // +0x38
 
 /// Threshold: triggers with ID > SCRIPTED_TRIGGER_BASE are custom/scripted.
-/// This is the same threshold as scripted effects (4081).
+/// Derived from offsets.known_effect_ids.SCRIPTED_EFFECT_BASE (see its note:
+/// live 4.4.4 keys are not a clean range — collision-check the live BST).
 const SCRIPTED_TRIGGER_BASE: i32 = offsets.known_effect_ids.SCRIPTED_EFFECT_BASE;
 
 /// Maximum length for SSO string (inline buffer size).

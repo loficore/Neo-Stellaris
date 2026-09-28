@@ -1,49 +1,77 @@
-// offsets.zig — Verified object offsets from IDA reverse engineering.
+// offsets.zig — Engine constants for Stellaris 4.4.4 (x86_64-windows).
 //
-// These offsets are derived from the Clausewitz engine binary analysis
-// (stellaris.exe, version 3.x, codename "augustus"). Each offset represents
-// the byte offset from the start of the corresponding object to a specific
-// field, verified against IDA decompilation and runtime memory inspection.
+// Values fall into two tiers, marked on each item:
+//   [VERIFIED 4.4.4] — confirmed by live Frida scan + disasm (see
+//                      evidence/xrefs/anchors_4_4_4.md and
+//                      evidence/analysis/runtime_444_structures.md).
+//   [UNVERIFIED 3.x] — inherited from 3.x analysis, not reconfirmed for 4.4.4.
+//                      Do NOT use for patching until runtime-verified.
 //
-// All offsets are in bytes. The naming convention follows:
-//   OFFSET_<OBJECT>_<FIELD>: <byte offset> (+hex) — <field description>
+// All addresses are module-relative RVAs: absolute = runtime base + RVA.
+// The engine stores DB root pointers as ABSOLUTE addresses into its own
+// low-address arena — never add the module base to a dereferenced global.
 
 const std = @import("std");
 
+/// Scripted effect/trigger lookup entry points and BST layout.
+/// This is the real 4.4.4 extension surface (there is no central dispatch switch).
+pub const scripted_db = struct {
+    /// GetScriptedEffect(name): walks the effect BST, logs misses via scriptedeffect.cpp:33.
+    pub const RVA_GET_SCRIPTED_EFFECT: usize = 0x89F960; // [VERIFIED 4.4.4]
+    /// GetScriptedTrigger(name): twin of the effect lookup (scriptedtrigger.cpp:18).
+    pub const RVA_GET_SCRIPTED_TRIGGER: usize = 0x8A0450; // [VERIFIED 4.4.4]
+
+    /// Globals holding ABSOLUTE arena pointers to the DB objects.
+    pub const RVA_EFFECT_DB_GLOBAL: usize = 0x33746E8; // [VERIFIED 4.4.4]
+    pub const RVA_TRIGGER_DB_GLOBAL: usize = 0x32611C8; // [VERIFIED 4.4.4]
+
+    /// Offset of the std::map head-sentinel pointer inside the DB object.
+    pub const EFFECT_DB_HEAD_PTR: usize = 0x18; // [VERIFIED 4.4.4]
+    pub const TRIGGER_DB_HEAD_PTR: usize = 0x88; // [VERIFIED 4.4.4]
+
+    /// MSVC std::map _Tree_node layout. Confirmed by in-order walk yielding
+    /// ascending keys (146, 227, 10000, 10001, ...) on the live effect DB.
+    pub const NODE_LEFT: usize = 0x00;
+    pub const NODE_PARENT: usize = 0x08; // the head's PARENT field is the tree root
+    pub const NODE_RIGHT: usize = 0x10;
+    pub const NODE_COLOR: usize = 0x18;
+    pub const NODE_ISNIL: usize = 0x19;
+    pub const NODE_KEY: usize = 0x20; // uint32 id/hash
+    pub const NODE_VALUE: usize = 0x28; // pointer to the entry descriptor
+
+    /// Effect DB object: u64 entry count at +0x20 (observed 1056 at 4.4.4 menu).
+    pub const EFFECT_DB_SIZE: usize = 0x20;
+
+    /// Scripted-effect template descriptor built by the lookup ctor path.
+    pub const RVA_EFFECT_TEMPLATE_VTABLE: usize = 0x24B1990; // [VERIFIED 4.4.4]
+    pub const TEMPLATE_VTABLE: usize = 0x00;
+    pub const TEMPLATE_ID: usize = 0x08; // u32
+    // std::string (SSO): ptr union at +0x10, size +0x20, capacity +0x28.
+    // Exact base still [TBD] — string fragments confirmed present near this
+    // offset but not yet cleanly decoded.
+    pub const TEMPLATE_NAME: usize = 0x10;
+};
+
 /// CEffect object offsets.
-/// CEffect is the base class for all effect implementations in the engine.
-/// The effect ID is used in the dispatch switch-case at 0x14180B050.
+/// [UNVERIFIED 3.x] 4.4.4 has NO central dispatch switch — effects are polymorphic
+/// CEffect::Execute via vtable call (evidence/analysis/runtime_444_structures.md).
+/// These offsets were never runtime-confirmed and must not be trusted for patching.
 pub const c_effect = struct {
-    /// Effect ID field (int32). Used for dispatch in the main effect switch.
-    /// Value range: 0–4080+ for vanilla, higher for scripted effects.
-    pub const OFFSET_EFFECT_ID: usize = 4080; // +0xFF0
-
-    /// Effect name as SSO (Small String Optimization) string.
-    /// When length <= 22 bytes, the string data is inline in the object.
-    /// The SSO string struct is: { union { char inline[24]; char* ptr; }; u8 length; }
-    pub const OFFSET_EFFECT_NAME: usize = 56; // +0x38
-
-    /// Virtual function table pointer.
-    /// Each CEffect subclass has its own vtable with Execute/Serialize methods.
-    pub const OFFSET_VTABLE: usize = 1704; // +0x6A8
+    pub const OFFSET_EFFECT_ID: usize = 4080; // +0xFF0 [UNVERIFIED 3.x]
+    pub const OFFSET_EFFECT_NAME: usize = 56; // +0x38 [UNVERIFIED 3.x]
+    pub const OFFSET_VTABLE: usize = 1704; // +0x6A8 [UNVERIFIED 3.x]
 };
 
 /// CEventScope object offsets.
-/// CEventScope is passed to effect/trigger execution functions.
-/// It provides context about what game object the effect operates on.
+/// [UNVERIFIED 3.x] AGENTS.md 3.x notes say objectid at +12 while code used +16.
+/// Unresolved discrepancy — reconfirm against a live CEventScope before use.
 pub const c_event_scope = struct {
-    /// Scope type as int64_t. Determines which object ID field to use.
-    /// See scope_types for known values.
-    pub const OFFSET_SCOPE_TYPE: usize = 8; // +8
-
-    /// Object ID field (int64_t). The actual game object identifier.
-    /// Only valid when scope_type matches a known type.
-    pub const OFFSET_OBJECT_ID: usize = 16; // +16
+    pub const OFFSET_SCOPE_TYPE: usize = 8; // +8 [UNVERIFIED 3.x]
+    pub const OFFSET_OBJECT_ID: usize = 16; // +16 [UNVERIFIED 3.x]
 };
 
-/// Known scope type values for CEventScope.
-/// These are bit-flag values representing different game object types.
-/// A scope can have multiple types set (e.g., a fleet member is both SHIP and FLEET).
+/// Known scope type values for CEventScope (power-of-2 bit flags).
+/// [UNVERIFIED 3.x] from stellarstellaris-win; not reconfirmed on 4.4.4.
 pub const scope_types = struct {
     pub const PLANET: i64 = 2;
     pub const COUNTRY: i64 = 4;
@@ -58,27 +86,26 @@ pub const scope_types = struct {
     pub const NO_SCOPE: i64 = 1048576;
 };
 
-/// Known effect IDs for hardcoded effects.
-/// These are the numeric IDs assigned to built-in effects in the engine.
-/// Scripted effects get IDs starting from a higher base (typically 4081+).
+/// Base for scripted-entry id allocation.
+/// [UNVERIFIED] observed live keys are NOT a clean range: the effect DB contains
+/// both small ids (146, 227) and 10000+ entries. New registrations must
+/// collision-check against the live BST rather than assume this base is a
+/// contiguous free space.
 pub const known_effect_ids = struct {
-    // Built-in effect IDs (examples from the dispatch switch at 0x14180B050)
-    pub const ADD_MONTHLY_INCOME: i32 = 0;
-    pub const SET_NAME: i32 = 1;
-    pub const ADD_OPINION: i32 = 2;
-    pub const SET_COUNTRY_FLAG: i32 = 10;
-    pub const CREATE_FLEET: i32 = 45;
-    pub const SET_PLANET_SIZE: i32 = 89;
-    pub const ADD_TRAIT: i32 = 156;
-    pub const SET_TECHNOLOGY: i32 = 200;
-
-    /// Base ID for scripted effects (first unused hardcoded ID).
-    /// Scripted effect IDs are assigned sequentially from this base.
-    pub const SCRIPTED_EFFECT_BASE: i32 = 4081;
+    pub const SCRIPTED_EFFECT_BASE: i32 = 10000;
 };
 
-test "offsets are consistent" {
-    // Verify that known offsets are within reasonable bounds
+test "scripted_db layout: 4.4.4 verified bounds" {
+    try std.testing.expect(scripted_db.NODE_VALUE > scripted_db.NODE_KEY);
+    try std.testing.expect(scripted_db.RVA_GET_SCRIPTED_EFFECT < 0x2392000); // inside .text
+    try std.testing.expect(scripted_db.RVA_GET_SCRIPTED_TRIGGER < 0x2392000);
+    try std.testing.expect(scripted_db.RVA_EFFECT_DB_GLOBAL > 0x2954000); // inside .data/.rdata
+    try std.testing.expect(scripted_db.RVA_TRIGGER_DB_GLOBAL > 0x2954000);
+    try std.testing.expectEqual(@as(usize, 0x89F960), scripted_db.RVA_GET_SCRIPTED_EFFECT);
+    try std.testing.expectEqual(@as(usize, 0x8A0450), scripted_db.RVA_GET_SCRIPTED_TRIGGER);
+}
+
+test "offsets are within reasonable bounds" {
     try std.testing.expect(c_effect.OFFSET_EFFECT_ID < 8192);
     try std.testing.expect(c_effect.OFFSET_EFFECT_NAME < 256);
     try std.testing.expect(c_effect.OFFSET_VTABLE < 8192);
@@ -88,7 +115,6 @@ test "offsets are consistent" {
 }
 
 test "scope types are power of 2" {
-    // All scope types should be powers of 2 (bit flags)
     const types = [_]i64{
         scope_types.PLANET,
         scope_types.COUNTRY,
@@ -104,19 +130,8 @@ test "scope types are power of 2" {
 
     for (types) |t| {
         try std.testing.expect(t > 0);
-        try std.testing.expect((t & (t - 1)) == 0); // power of 2 check
+        try std.testing.expect((t & (t - 1)) == 0);
     }
-}
-
-test "offset values: specific constants" {
-    // CEffect offsets
-    try std.testing.expectEqual(@as(usize, 4080), c_effect.OFFSET_EFFECT_ID);
-    try std.testing.expectEqual(@as(usize, 56), c_effect.OFFSET_EFFECT_NAME);
-    try std.testing.expectEqual(@as(usize, 1704), c_effect.OFFSET_VTABLE);
-
-    // CEventScope offsets
-    try std.testing.expectEqual(@as(usize, 8), c_event_scope.OFFSET_SCOPE_TYPE);
-    try std.testing.expectEqual(@as(usize, 16), c_event_scope.OFFSET_OBJECT_ID);
 }
 
 test "scope type values: specific constants" {
@@ -133,18 +148,6 @@ test "scope type values: specific constants" {
     try std.testing.expectEqual(@as(i64, 1048576), scope_types.NO_SCOPE);
 }
 
-test "known effect IDs: specific constants" {
-    try std.testing.expectEqual(@as(i32, 0), known_effect_ids.ADD_MONTHLY_INCOME);
-    try std.testing.expectEqual(@as(i32, 1), known_effect_ids.SET_NAME);
-    try std.testing.expectEqual(@as(i32, 2), known_effect_ids.ADD_OPINION);
-    try std.testing.expectEqual(@as(i32, 10), known_effect_ids.SET_COUNTRY_FLAG);
-    try std.testing.expectEqual(@as(i32, 45), known_effect_ids.CREATE_FLEET);
-    try std.testing.expectEqual(@as(i32, 89), known_effect_ids.SET_PLANET_SIZE);
-    try std.testing.expectEqual(@as(i32, 156), known_effect_ids.ADD_TRAIT);
-    try std.testing.expectEqual(@as(i32, 200), known_effect_ids.SET_TECHNOLOGY);
-    try std.testing.expectEqual(@as(i32, 4081), known_effect_ids.SCRIPTED_EFFECT_BASE);
-}
-
 test "scope types: no scope is much larger than game object types" {
     try std.testing.expect(scope_types.NO_SCOPE > scope_types.SPECIES);
     try std.testing.expect(scope_types.NO_SCOPE > scope_types.AMBIENT_OBJECT);
@@ -152,13 +155,6 @@ test "scope types: no scope is much larger than game object types" {
 }
 
 test "scope types: can be combined with bitwise OR" {
-    // A fleet member is both SHIP and FLEET
     const combined = scope_types.SHIP | scope_types.FLEET;
-    try std.testing.expectEqual(@as(i64, 40), combined); // 8 | 32 = 40
-}
-
-test "effect IDs: SCRIPTED_EFFECT_BASE is larger than all built-in IDs" {
-    try std.testing.expect(known_effect_ids.SCRIPTED_EFFECT_BASE > known_effect_ids.SET_TECHNOLOGY);
-    try std.testing.expect(known_effect_ids.SCRIPTED_EFFECT_BASE > known_effect_ids.ADD_TRAIT);
-    try std.testing.expect(known_effect_ids.SCRIPTED_EFFECT_BASE > known_effect_ids.SET_PLANET_SIZE);
+    try std.testing.expectEqual(@as(i64, 40), combined); // 8 | 32
 }

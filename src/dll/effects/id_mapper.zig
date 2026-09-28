@@ -1,13 +1,11 @@
 // id_mapper.zig — Effect ID-to-name mapping system.
 //
-// Maps numeric effect IDs (as found in CEffect objects at offset +0xFF0)
-// to human-readable effect names. The mapping is loaded from game data
-// files (common/scripted_effects/*.txt) and supplemented with hardcoded
-// IDs for built-in effects.
-//
-// The engine uses a dispatch switch at 0x14180B050 that reads the effect
-// ID and jumps to the corresponding handler. This mapper provides the
-// reverse lookup: given an ID, what effect does it represent?
+// NOTE (4.4.4): the 3.x premise "dispatch switch at 0x14180B050 reading an id
+// at CEffect+0xFF0" was DISPROVEN for 4.4.4 — effects are polymorphic virtual
+// Execute calls; there is no id→case table (see
+// evidence/analysis/runtime_444_structures.md). The built-in id list below is
+// therefore illustrative only, not a live engine table. The real extension
+// surface is offsets.scripted_db (GetScriptedEffect/Trigger + their BSTs).
 
 const std = @import("std");
 const offsets = @import("offsets");
@@ -154,11 +152,13 @@ pub const EffectIdMapper = struct {
     /// Load hardcoded built-in effect names.
     /// These are the effects handled by the switch-case at 0x14180B050.
     fn loadBuiltInEffects(self: *EffectIdMapper) !void {
-        // Register known built-in effects with their IDs.
-        // The IDs are derived from the case values in the dispatch switch.
+        // ILLUSTRATIVE ONLY — these id→name pairs are NOT read from the engine.
+        // The 3.x "dispatch switch case values" they were said to come from do
+        // not exist in 4.4.4 (see file header). Kept only to exercise the map
+        // data structure in tests; must be replaced by real names parsed from
+        // common/scripted_effects or recovered from the live BST descriptors.
         //
-        // This list is not exhaustive — the full list has 254+159+166 cases.
-        // These are the most commonly used effects for initial testing.
+        // This list is not exhaustive and contains placeholder/corrupt entries.
 
         const built_in_effects = [_]struct { id: i32, name: []const u8 }{
             .{ .id = 0, .name = "add_monthly_income" },

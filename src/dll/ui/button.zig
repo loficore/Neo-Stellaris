@@ -311,10 +311,6 @@ pub fn processClick(event: ButtonClickEvent) callbacks.CallbackResult {
 
     // Look up the effect
     const effect = lookupEffect(event.effect_name) orelse {
-        std.log.warn(
-            "Button effect '{s}' not found, ignoring click",
-            .{event.effect_name},
-        );
         system_state.failed_callbacks += 1;
         return .{
             .success = false,
@@ -324,10 +320,6 @@ pub fn processClick(event: ButtonClickEvent) callbacks.CallbackResult {
 
     // Check if effect is enabled
     if (!effect.enabled) {
-        std.log.warn(
-            "Button effect '{s}' is disabled, ignoring click",
-            .{event.effect_name},
-        );
         system_state.failed_callbacks += 1;
         return .{
             .success = false,
@@ -761,17 +753,8 @@ test "registerEffectsFromNames: registers multiple effects" {
 }
 
 test "getState: returns current state" {
-    effect_allocator = std.testing.allocator;
-    defer {
-        var i: usize = 0;
-        while (i < effect_count) : (i += 1) {
-            std.testing.allocator.free(registered_effect_names[i]);
-            std.testing.allocator.free(registered_js_handlers[i]);
-        }
-        effect_count = 0;
-        effect_allocator = null;
-    }
-    effect_count = 0;
+    init(std.testing.allocator);
+    defer deinit();
 
     const state = getState();
     try std.testing.expect(state.initialized);

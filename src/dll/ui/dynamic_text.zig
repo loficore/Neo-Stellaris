@@ -1366,6 +1366,7 @@ test "resolveGuiText: with dollar references" {
 
     var context = TextContext{};
     const result = try resolveGuiText("Status: $STATUS$", &context);
+    defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("Status: READY", result);
 }
 
@@ -1387,6 +1388,7 @@ test "resolveGuiText: unresolved reference kept as-is" {
 
     var context = TextContext{};
     const result = try resolveGuiText("Value: $UNKNOWN$", &context);
+    defer std.testing.allocator.free(result);
     // Unresolved references are kept as-is
     try std.testing.expectEqualStrings("Value: $UNKNOWN$", result);
 }

@@ -243,10 +243,6 @@ pub fn handleButtonClick(
 ) CallbackResult {
     // Look up the callback
     const js_func_name = lookupCallback(effect_name) orelse {
-        std.log.warn(
-            "No callback registered for button effect '{s}', skipping",
-            .{effect_name},
-        );
         return .{
             .success = false,
             .error_message = "No callback registered",
@@ -255,7 +251,6 @@ pub fn handleButtonClick(
 
     // Get the QuickJS context
     const ctx = js_context orelse {
-        std.log.err("QuickJS context not initialized when handling button '{s}'", .{effect_name});
         return .{
             .success = false,
             .error_message = "Runtime not initialized",
