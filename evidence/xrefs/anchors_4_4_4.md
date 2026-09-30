@@ -31,8 +31,8 @@ All addresses below are **module-relative offsets (RVA)** — add to runtime bas
 
 | Purpose | 3.x VA (RVA) | **4.4.4 RVA** | Confidence |
 |---------|--------------|---------------|------------|
-| ScriptedEffect **lookup** (`GetScriptedEffect(name)`) | `0x1408A6EB0` (0x8A6EB0) | **`0x89F960`** | High (unique string xref + disasm confirms BST walk + not-found assert at scriptedeffect.cpp:33) |
-| ScriptedTrigger **lookup** (`GetScriptedTrigger(name)`) | `0x1408A79A0` (0x8A79A0) | **`0x8A0450`** | High (same shape; assert at scriptedtrigger.cpp:18) |
+| ScriptedEffect **ref builder** (`GetScriptedEffect`) | `0x1408A6EB0` (0x8A6EB0) | **`0x89F960`** | High — but **not a getter** (§27, 2026-09-30): it builds a 0x118-byte ref with constant vtables and the BST walk only emits `"scripted effect %s is overwriting an existing effect, rename it"` (scriptedeffect.cpp:33). Hit/miss is not observable from `out`. |
+| ScriptedTrigger **ref builder** (`GetScriptedTrigger`) | `0x1408A79A0` (0x8A79A0) | **`0x8A0450`** | High (exact twin; message `"scripted trigger %s is overwriting an existing trigger, rename it"` at scriptedtrigger.cpp:18) |
 | ScriptedEffectDB global (BST head ptr) | `qword_14339AEA8` | **`0x33746E8`** | High (loaded by `mov rbp,[rip+..]` in the lookup, tested null, walked at `+0x18`) |
 | ScriptedTriggerDB global (BST head ptr) | `qword_143287968` | **`0x32611C8`** | High (same; walked at `+0x88`) |
 | CScriptedEffectTemplate vtable | — | **`0x24B1990`** | High (referenced by all template subclasses at 0x3a4xxx/0x3a8xxx) |

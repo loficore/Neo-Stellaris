@@ -1,0 +1,10 @@
+# Produced 2026-09-30 against /var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
+# (sha256 9242c40a...b1a56), offline, `scripts/disrva.py` + raw .rdata qword reads.
+# Commands:
+#   python3 scripts/disrva.py 0x89f960 120   # GetScriptedEffect, ctor half
+#   python3 scripts/disrva.py 0x89fa7c 110   # GetScriptedEffect, walk + log + ret
+#   python3 scripts/disrva.py 0x8a0450 60    # GetScriptedTrigger, ctor half
+#   python3 scripts/disrva.py 0x8a0567 60    # GetScriptedTrigger, walk + log + ret
+#   python3 scripts/disrva.py 0x1d7ce0 90    # the sentinel caller (0x118-byte object)
+#   python3 scripts/fastcalls.py 0x89f960 --top 8
+# Key extracted lines are inlined in §27 of evidence/analysis/runtime_444_structures.md.

@@ -1,0 +1,227 @@
+stellaris.exe  targets: 0xccceb0, 0xd150a0, 0xe88500, 0x89f960, 0x1d08520, 0x24b1990, 0x337a844, 0x325d750, 0x33746e8, 0x32611c8, 0x33799c0, 0x2490000, 0x325f390
+scanning .text (0x2390800 bytes) ...
+
+== 0xccceb0: 1 references ==
+  .text 0x266d3d: call 0x140ccceb0
+
+== 0xd150a0: 3 references ==
+  .text 0xccd09e: call 0x140d150a0
+  .text 0xd15308: call 0x140d150a0
+  .text 0xd1b0cb: call 0x140d150a0
+
+== 0xe88500: 1 references ==
+  .text 0xd15269: call 0x140e88500
+
+== 0x89f960: 4 references ==
+  .text 0x1d7d5c: call 0x14089f960
+  .text 0x89fe76: call 0x14089f960
+  .text 0x8a005c: call 0x14089f960
+  .text 0x8a0231: call 0x14089f960
+
+== 0x1d08520: 141 references ==
+  .text 0x22cb39: lea rax, [rip + 0x1adb9e0]
+  .text 0x22cc69: lea rax, [rip + 0x1adb8b0]
+  .text 0x22cd99: lea rax, [rip + 0x1adb780]
+  .text 0x22cfa9: lea rax, [rip + 0x1adb570]
+  .text 0x24bd0c: lea r12, [rip + 0x1abc80d]
+  .text 0x24bd20: call 0x141d08520
+  .text 0x24bd99: call 0x141d08520
+  .text 0x24bdea: call 0x141d08520
+  .text 0x24be3b: call 0x141d08520
+  .text 0x24c094: call 0x141d08520
+  .text 0x24c54c: call 0x141d08520
+  .text 0x24cc71: call 0x141d08520
+  .text 0x24ccc2: call 0x141d08520
+  .text 0x24cd13: call 0x141d08520
+  .text 0x24cd8f: call 0x141d08520
+  .text 0x24d1f9: call 0x141d08520
+  .text 0x24d24a: call 0x141d08520
+  .text 0x24d29b: call 0x141d08520
+  .text 0x24d344: call 0x141d08520
+  .text 0x24d395: call 0x141d08520
+  .text 0x24d490: call 0x141d08520
+  .text 0x31cdec: lea rax, [rip + 0x19eb72d]
+  .text 0x31ce00: call 0x141d08520
+  .text 0x3d16b1: lea rax, [rip + 0x1936e68]
+  .text 0x3f21a9: lea rax, [rip + 0x1916370]
+  ... 116 more
+
+== 0x24b1990: 45 references ==
+  .text 0x1b5323: lea rax, [rip + 0x22fc666]
+  .text 0x228464: lea r13, [rip + 0x2289525]
+  .text 0x229a1d: lea rax, [rip + 0x2287f6c]
+  .text 0x3a4583: lea rax, [rip + 0x210d406]
+  .text 0x3a4753: lea rax, [rip + 0x210d236]
+  .text 0x3a48b3: lea rax, [rip + 0x210d0d6]
+  .text 0x3a49b3: lea rax, [rip + 0x210cfd6]
+  .text 0x3a4ad3: lea rax, [rip + 0x210ceb6]
+  .text 0x3a4ba3: lea rax, [rip + 0x210cde6]
+  .text 0x3a4cc4: lea rax, [rip + 0x210ccc5]
+  .text 0x3a4fd3: lea rax, [rip + 0x210c9b6]
+  .text 0x3a5283: lea rax, [rip + 0x210c706]
+  .text 0x3a8ebc: lea r12, [rip + 0x2108acd]
+  .text 0x3a9015: lea r12, [rip + 0x2108974]
+  .text 0x3a9160: lea r12, [rip + 0x2108829]
+  .text 0x3aab4c: lea r12, [rip + 0x2106e3d]
+  .text 0x3aaca5: lea r12, [rip + 0x2106ce4]
+  .text 0x3aadf0: lea r12, [rip + 0x2106b99]
+  .text 0x3ab59c: lea r12, [rip + 0x21063ed]
+  .text 0x3ab6f5: lea r12, [rip + 0x2106294]
+  .text 0x3ab839: lea r12, [rip + 0x2106150]
+  .text 0x3abfec: lea r12, [rip + 0x210599d]
+  .text 0x3ac145: lea r12, [rip + 0x2105844]
+  .text 0x3ac290: lea r12, [rip + 0x21056f9]
+  .text 0x3aca3c: lea r12, [rip + 0x2104f4d]
+  ... 20 more
+
+== 0x337a844: 19 references ==
+  .text 0x2580cc: movzx edi, byte ptr [rip + 0x3122771]
+  .text 0x2580da: mov byte ptr [rip + 0x3122763], 0
+  .text 0x25813e: mov byte ptr [rip + 0x31226ff], dil
+  .text 0x265e0c: movzx edi, byte ptr [rip + 0x3114a31]
+  .text 0x265e1a: mov byte ptr [rip + 0x3114a23], 0
+  .text 0x265e69: mov byte ptr [rip + 0x31149d4], dil
+  .text 0x265ea4: cmp byte ptr [rip + 0x3114999], 0
+  .text 0x30b3dd: mov byte ptr [rip + 0x306f461], al
+  .text 0x30b43f: movzx eax, byte ptr [rip + 0x306f3fe]
+  .text 0x30b44b: mov byte ptr [rip + 0x306f3f2], 0
+  .text 0x9afb07: movzx eax, byte ptr [rip + 0x29cad36]
+  .text 0x9afb4e: movzx eax, byte ptr [rip + 0x29cacef]
+  .text 0xafab0c: cmp byte ptr [rip + 0x287fd32], bl
+  .text 0x1bcc5f9: cmp byte ptr [rip + 0x17ae244], 0
+  .text 0x1bcc907: cmp byte ptr [rip + 0x17adf36], 0
+  .text 0x1bcc987: cmp byte ptr [rip + 0x17adeb6], 0
+  .text 0x1bcfd83: mov byte ptr [rip + 0x17aaaba], 1
+  .text 0x1bcfdb0: movzx edx, byte ptr [rip + 0x17aaa8d]
+  .text 0x1bcfdda: mov byte ptr [rip + 0x17aaa64], al
+
+== 0x325d750: 15 references ==
+  .text 0x1533c4: mov byte ptr [rip + 0x310a385], 1
+  .text 0x1bf2e3: cmp byte ptr [rip + 0x309e466], r12b
+  .text 0x261882: cmp byte ptr [rip + 0x2ffbec7], 0
+  .text 0x265044: cmp byte ptr [rip + 0x2ff8705], 0
+  .text 0x265dff: cmp byte ptr [rip + 0x2ff794a], 0
+  .text 0x61f834: cmp byte ptr [rip + 0x2c3df15], 0
+  .text 0x61f8af: cmp byte ptr [rip + 0x2c3de9a], 0
+  .text 0xc20396: cmp byte ptr [rip + 0x263d3b3], 0
+  .text 0xc20717: cmp byte ptr [rip + 0x263d032], 0
+  .text 0xc20ad1: cmp byte ptr [rip + 0x263cc78], 0
+  .text 0xc215ff: cmp byte ptr [rip + 0x263c14a], 0
+  .text 0xcd4d88: cmp byte ptr [rip + 0x25889c1], 0
+  .text 0xcd4fd5: cmp byte ptr [rip + 0x2588774], 0
+  .text 0xcd50ae: cmp byte ptr [rip + 0x258869b], 0
+  .text 0xcd51ed: cmp byte ptr [rip + 0x258855c], 0
+
+== 0x33746e8: 2138 references ==
+  .text 0x27aa6: mov rbx, qword ptr [rip + 0x334cc3b]
+  .text 0x27aca: mov qword ptr [rip + 0x334cc17], rax
+  .text 0x27b16: mov rbx, qword ptr [rip + 0x334cbcb]
+  .text 0x27b3a: mov qword ptr [rip + 0x334cba7], rax
+  .text 0x27b86: mov rbx, qword ptr [rip + 0x334cb5b]
+  .text 0x27baa: mov qword ptr [rip + 0x334cb37], rax
+  .text 0xf3b16: mov rbx, qword ptr [rip + 0x3280bcb]
+  .text 0xf3b3a: mov qword ptr [rip + 0x3280ba7], rax
+  .text 0xf3b86: mov rbx, qword ptr [rip + 0x3280b5b]
+  .text 0xf3baa: mov qword ptr [rip + 0x3280b37], rax
+  .text 0xf3bf6: mov rbx, qword ptr [rip + 0x3280aeb]
+  .text 0xf3c1a: mov qword ptr [rip + 0x3280ac7], rax
+  .text 0xf3c66: mov rbx, qword ptr [rip + 0x3280a7b]
+  .text 0xf3c8a: mov qword ptr [rip + 0x3280a57], rax
+  .text 0xf3d16: mov rbx, qword ptr [rip + 0x32809cb]
+  .text 0xf3d3a: mov qword ptr [rip + 0x32809a7], rax
+  .text 0xf3d86: mov rbx, qword ptr [rip + 0x328095b]
+  .text 0xf3daa: mov qword ptr [rip + 0x3280937], rax
+  .text 0xf3df6: mov rbx, qword ptr [rip + 0x32808eb]
+  .text 0xf3e1a: mov qword ptr [rip + 0x32808c7], rax
+  .text 0xf3e66: mov rbx, qword ptr [rip + 0x328087b]
+  .text 0xf3e8a: mov qword ptr [rip + 0x3280857], rax
+  .text 0xf3ed6: mov rbx, qword ptr [rip + 0x328080b]
+  .text 0xf3efa: mov qword ptr [rip + 0x32807e7], rax
+  .text 0xf3f46: mov rbx, qword ptr [rip + 0x328079b]
+  ... 2113 more
+
+== 0x32611c8: 2232 references ==
+  .text 0x7ec6: mov rbx, qword ptr [rip + 0x32592fb]
+  .text 0x7ed7: mov rbx, qword ptr [rip + 0x32592ea]
+  .text 0x7f26: mov rbx, qword ptr [rip + 0x325929b]
+  .text 0x7f37: mov rbx, qword ptr [rip + 0x325928a]
+  .text 0x7f86: mov rbx, qword ptr [rip + 0x325923b]
+  .text 0x7f97: mov rbx, qword ptr [rip + 0x325922a]
+  .text 0x7fe6: mov rbx, qword ptr [rip + 0x32591db]
+  .text 0x7ff7: mov rbx, qword ptr [rip + 0x32591ca]
+  .text 0x100266: mov rbx, qword ptr [rip + 0x3160f5b]
+  .text 0x100277: mov rbx, qword ptr [rip + 0x3160f4a]
+  .text 0x115dd4: mov rbx, qword ptr [rip + 0x314b3ed]
+  .text 0x115de5: mov rbx, qword ptr [rip + 0x314b3dc]
+  .text 0x1162be: mov rbx, qword ptr [rip + 0x314af03]
+  .text 0x1162cf: mov rbx, qword ptr [rip + 0x314aef2]
+  .text 0x116d66: mov rbx, qword ptr [rip + 0x314a45b]
+  .text 0x116d77: mov rbx, qword ptr [rip + 0x314a44a]
+  .text 0x116dc6: mov rbx, qword ptr [rip + 0x314a3fb]
+  .text 0x116dd7: mov rbx, qword ptr [rip + 0x314a3ea]
+  .text 0x116e26: mov rbx, qword ptr [rip + 0x314a39b]
+  .text 0x116e37: mov rbx, qword ptr [rip + 0x314a38a]
+  .text 0x116e86: mov rbx, qword ptr [rip + 0x314a33b]
+  .text 0x116e97: mov rbx, qword ptr [rip + 0x314a32a]
+  .text 0x116f26: mov rbx, qword ptr [rip + 0x314a29b]
+  .text 0x116f37: mov rbx, qword ptr [rip + 0x314a28a]
+  .text 0x116f86: mov rbx, qword ptr [rip + 0x314a23b]
+  ... 2207 more
+
+== 0x33799c0: 37 references ==
+  .text 0x417c02: mov rax, qword ptr [rip + 0x2f61db7]
+  .text 0x41913a: mov rax, qword ptr [rip + 0x2f6087f]
+  .text 0x41d7ab: mov rax, qword ptr [rip + 0x2f5c20e]
+  .text 0x46edb0: mov rax, qword ptr [rip + 0x2f0ac09]
+  .text 0x4a7393: mov rax, qword ptr [rip + 0x2ed2626]
+  .text 0x51de39: mov rax, qword ptr [rip + 0x2e5bb80]
+  .text 0x557066: mov rax, qword ptr [rip + 0x2e22953]
+  .text 0x55e251: mov rax, qword ptr [rip + 0x2e1b768]
+  .text 0x7e6abe: mov r14, qword ptr [rip + 0x2b92efb]
+  .text 0x8fed02: mov rdi, qword ptr [rip + 0x2a7acb7]
+  .text 0xf15181: mov qword ptr [rip + 0x2464838], rdi
+  .text 0xf1531c: mov qword ptr [rip + 0x2464699], 0
+  .text 0xf18864: mov rdx, qword ptr [rip + 0x2461155]
+  .text 0xf2d2f7: mov r10, qword ptr [rip + 0x244c6c2]
+  .text 0xf2d4d4: mov r10, qword ptr [rip + 0x244c4e5]
+  .text 0xf9b5c7: mov rdi, qword ptr [rip + 0x23de3f2]
+  .text 0xf9b653: mov rdi, qword ptr [rip + 0x23de366]
+  .text 0x106e424: mov rsi, qword ptr [rip + 0x230b595]
+  .text 0x106e4aa: mov rsi, qword ptr [rip + 0x230b50f]
+  .text 0x109e66c: mov rax, qword ptr [rip + 0x22db34d]
+  .text 0x11148d7: mov rax, qword ptr [rip + 0x22650e2]
+  .text 0x1174fd9: mov rdi, qword ptr [rip + 0x22049e0]
+  .text 0x1175062: mov rdi, qword ptr [rip + 0x2204957]
+  .text 0x117712f: mov rbx, qword ptr [rip + 0x220288a]
+  .text 0x11771c2: mov rbx, qword ptr [rip + 0x22027f7]
+  ... 12 more
+
+== 0x2490000: 0 references ==
+
+== 0x325f390: 6616 references ==
+  .text 0x1c749d: mov rdx, qword ptr [rip + 0x3097eec]
+  .text 0x1ccba2: mov rax, qword ptr [rip + 0x30927e7]
+  .text 0x1ccf8a: mov rax, qword ptr [rip + 0x30923ff]
+  .text 0x1cd534: mov rax, qword ptr [rip + 0x3091e55]
+  .text 0x1cd694: mov rax, qword ptr [rip + 0x3091cf5]
+  .text 0x1cda82: mov rax, qword ptr [rip + 0x3091907]
+  .text 0x1d2aa4: mov rax, qword ptr [rip + 0x308c8e5]
+  .text 0x1d70a2: mov rax, qword ptr [rip + 0x30882e7]
+  .text 0x1d7332: mov rax, qword ptr [rip + 0x3088057]
+  .text 0x1dc216: mov rbx, qword ptr [rip + 0x3083173]
+  .text 0x1dc266: mov rbx, qword ptr [rip + 0x3083123]
+  .text 0x1dc2f4: cmp qword ptr [rip + 0x3083094], 0
+  .text 0x1dc326: mov qword ptr [rip + 0x3083063], rcx
+  .text 0x1fbd98: mov qword ptr [rip + 0x30635ed], 0
+  .text 0x243526: mov rax, qword ptr [rip + 0x301be63]
+  .text 0x24b1f7: mov rbx, qword ptr [rip + 0x3014192]
+  .text 0x24b5ee: mov rbx, qword ptr [rip + 0x3013d9b]
+  .text 0x24b657: mov rbx, qword ptr [rip + 0x3013d32]
+  .text 0x24b823: mov rbx, qword ptr [rip + 0x3013b66]
+  .text 0x24fe4e: mov rcx, qword ptr [rip + 0x300f53b]
+  .text 0x25050d: mov rcx, qword ptr [rip + 0x300ee7c]
+  .text 0x2505aa: mov rdx, qword ptr [rip + 0x300eddf]
+  .text 0x25186d: mov rcx, qword ptr [rip + 0x300db1c]
+  .text 0x251d97: mov r8, qword ptr [rip + 0x300d5f2]
+  .text 0x251e67: mov rdx, qword ptr [rip + 0x300d522]
+  ... 6591 more

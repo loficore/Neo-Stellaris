@@ -1,6 +1,11 @@
-# 4.4.4 Runtime Structure Verification & Architecture Correction
+# 4.4.4 Runtime Structure Verification & Architecture Correction (§1–§15)
 
 Verified against live `stellaris.exe` 4.4.4 (pid 5172, base `0x7ff74a630000`).
+
+> **Volume 1 of 3.** This evidence log is split across three files; the `§` numbers are unique across them.
+> §1–§15 — `runtime_444_structures.md` (live hot path, detours, CEffect class map, the falsified registration chain).
+> §16–§23 — `runtime_444_keyword_pipeline.md` (the static registration pipeline: driver, descriptors, thunk arrays, token allocator, class_info, consumers).
+> §24–§29 — `runtime_444_c1_validation.md` (the alias/donor decision, A5 cross-validation, ABI corrections, backlog).
 
 ## 1. DB globals are live even at main menu (CONFIRMED)
 
@@ -60,6 +65,9 @@ Consequences for this project:
 2. Pin the name std::string member offset by walking value ptr (read a few known effect names).
 3. Detour `GetScriptedEffect`/`GetScriptedTrigger`: on not-found, consult the QuickJS registry.
    OR insert nodes into the live BST at init (id key >= 10000 space).
+   *(Superseded: §27.2 shows there is no "not-found" to branch on at these two — the detour
+   cannot supply a template there. The BST-insert half of this advice is what Phase C1 is now
+   built on, and the consumer that actually branches is `0x3B01A0`/`0x349AE0`, §23.)*
 
 ## 5. Calling convention of the scripted lookups (confirmed 2026-09-28, Frida live)
 
@@ -76,6 +84,17 @@ hidden-pointer (sret) convention:
 ;     0x24b46e0 / 0x24b9e80 paths) — hit/miss is judged from `out`, not a flag
 ;   prologue (both): 48 89 5c 24 10 / 48 89 4c 24 08 / 55 56 57 41 56 41 57 / 48 83 ec 60
 ```
+
+**Corrected in place by §27 (2026-09-30, offline)** — the prologue and the
+`wrapper+0x10` string offset hold up; three other things in this block do not.
+The key is a **`std::string`, one byte per char**, not a wstring (§27.1: a byte-wise
+strlen loop, and the empty `.data` holder carries cap 15 rather than wstring's 7).
+`out+0x40` is an **embedded CEffect's vptr** (0x2518128, slot[1] = base Execute), not a
+second name string (§27.2). And "hit/miss is judged from `out`" is **false**: both
+functions write the same four words on every call and return `out` unconditionally; the
+walk's only effect is the `"is overwriting an existing effect/trigger, rename it"`
+warning (§27.3). The Frida note below this block — zero calls at main-menu idle — is
+consistent with that: these are load-time ref builders, not per-frame getters.
 
 Implications implemented in `src/dll/scripted/lookup_hook.zig`:
 - No RIP-relative instruction within the first 14 bytes → `detour.installHook`'s
@@ -107,7 +126,7 @@ addresses in this section re-expressed as RVAs:
 |---|---|---|
 | `0x7ff74c338520` | `0x1D08520` | vtable 0x24B1990 slot[3] — hot (2.24M calls / 5 min active play) |
 | `0x7ff74ab65070` | `0x535070` | slot[5] — 49k / 5 min; wrapper: reads `[arg2+0x30]→+8→dword`, calls `0x7ff74C3385B0` (RVA `0x2D085B0`), calls slot[6], then **tail-jmp slot[5] = the switch below** |
-| `0x7ff74ab650d0` | `0x5350D0` | **The effect/trigger dispatch switch** — keyed on a stored numeric type code (`r8d`), binary-search chain (0x3b9a, 0x3656, 0x2e42, 0x2c65, 0x2a68, 0x2cd, 0x1b …). Case 0x2cd: loads string key from template+0x288, looks it up in global DB at RVA `0x325EBA0`, calls `[td+0x38]`, error-logs with source string RVA `0x24F8F70` + line 0x16a → the `trigger:` keyword evaluator |
+| `0x7ff74ab650d0` | `0x5350D0` | **~~The effect/trigger dispatch switch~~ → a virtual named-member getter, §26.1/§28** — keyed on a stored numeric type code (`r8d`), binary-search chain (0x3b9a, 0x3656, 0x2e42, 0x2c65, 0x2a68, 0x2cd, 0x1b …). Case 0x2cd: loads string key from template+0x288, looks it up in global DB at RVA `0x325EBA0`, calls `[td+0x38]`, error-logs with source string RVA `0x24F8F70` + line 0x16a. ~~→ the `trigger:` keyword evaluator~~ (refuted: 0 direct call sites, 1 `.rdata` ref, default branch tails to the generic `0x1D092C0`) |
 | `0x7ff74ae3d500` | `0x80D500` | slot[6] — tiny getter: type 0xb5 → view of `this+0x38`, 0x1b → view of `this+8`, else tail `0x7ff74C3392C0` (RVA `0x2D092C0`) — per-type field accessor, **not** Execute |
 | `0x7ff74b215750` | `0xBE5750` | callee inside slot2-inner: build 0x20-byte ref + `call BE5750(self, scope, key, out, scope+0x6c8 / +0x740)` |
 
@@ -124,6 +143,9 @@ wrapper into the big function at RVA `0x7E5280`, the per-effect execute shim).
 2. The **real runtime extension surface** is the vtable-`0x24B1990` family:
    slot[3] `0x1D08520` (execute entry, hot), slot[5] `0x535070` → switch
    `0x5350D0` (keyword dispatch on stored type code).
+   *(Void — corrected in place by §26.1 and closed by §28.5: the "switch" is one class's virtual
+   named-member getter with a generic fallback, it has zero direct call sites, and the executor is
+   §23/§24's `create()` + per-class virtuals. The slot indices in this line are also unreliable, §28.4.)*
 3. **RTTI probe status**: spy armed at slot3/slot5/switch during a *paused*
    window saw zero events → simulation must be running for these to fire;
    the 4.4.4 runtime is fully quiescent when paused (no idle effect ticks).
@@ -140,118 +162,83 @@ wrapper into the big function at RVA `0x7E5280`, the per-effect execute shim).
   from our registry — this preserves the original "new keyword" goal without
   touching per-type dispatch.
 
-## 8. Keyword registration pipeline (2026-09-28, confirmed — the extension point)
+## 8. Keyword registration pipeline (2026-09-28) — **FALSIFIED; read §15–§17 for the real thing**
 
-Chains below are **RVA** (image base this session: `0x7ff74a630000`).
+> Condensed 2026-09-29 to keep this file inside its line budget. Kept as the historical record of what
+> was claimed from the Frida call-site reads, so later corrections stay checkable. RVAs, base of that
+> session `0x7ff74a630000`.
 
-### Load-time registration
-```
-script load (0x89F960 region calls 0xA78C70)
-  → 0xA78C70            (called from 0x724F00 / 0x78DEEC / 0xDDDACA / 0x1142DA3 …)
-  → 0x256730
-  → 0x265DD0            init driver, one-shot guard byte at RVA 0x337A844
-  → 0xCCCEB0            MASTER keyword registration (~13,000 entries)
-  → 0xD150A0            register fn:  rcx = buffer obj, edx = token id, r8 = name ptr
-                          (call site 0xD15308 sits inside the 13k-entry block;
-                           observed token ids 0x33E2..0x33F7+)
-Keyword name pool:      RVA 0x2490000-0x2491000 ("ringworld", "army_maintenance",
-                        "pop_faction_support_increase_mul", "has_triggered_message",
-                        "pre_communications_name_format", "on_built", "on_queued" …)
-Keyword table global:   RVA 0x33799C0 →  [g] = heap array, [g+8] = count
-Token descriptor:       [array + idx*0x18]; .type = [d+0x20], .packed = [d+0x24]
-                        (low 24 bits = index into [g+0x10] array, high 8 = generation)
-```
+**Claimed** load-time chain: script load (the `0x89F960` region calls `0xA78C70`, itself called from
+`0x724F00` / `0x78DEEC` / `0xDDDACA` / `0x1142DA3`) → `0xA78C70` → `0x256730` → `0x265DD0` (init driver,
+"one-shot guard byte" `0x337A844`) → `0xCCCEB0` ("MASTER keyword registration, ~13,000 entries") →
+`0xD150A0` ("register fn") → tail callee `0xE88500`. Around it: name pool `0x2490000`–`0x2491000`, keyword table
+global `0x33799C0`, "token descriptor `[array + idx*0x18]`, `.type = [d+0x20]`, `.packed = [d+0x24]`
+(low 24 = index, high 8 = generation)", observed registration ids `0x33E2..0x33F7+`.
 
-### Runtime execution (active simulation only; zero calls when paused)
-```
-0x1D08520  = generic virtual Execute(this=effect obj, arg2=&scope ctx on stack)
-             observed 1.5M calls / 40 s across 40+ distinct effect vtables
-             (2532758, 26D04C8, 2522C40, 2521170, 250A4E0, 25435D8, 24B2530 …)
-  └→ calls [this+0x10] → 0x22FB40 (thunk: sub rcx,0x40; jmp 0x1B52C0 real body)
-0x535070   = sibling Execute variant; tail-jmp [vt+0x28]; 3rd arg = scope type
-             8-byte code, observed literal ASCII: 0x6d61676573756170 = "pausage"
-0x5350D0   = dispatcher switch, keyed on stored numeric type code
-             case 0x2cd: wstring key at [obj+0x288] → wstr ctor 0x16BF770
-                         → lookup 0xB6B3E0(rcx=[0x325EBA0]+8, rdx=key)
-                         → call [result+0x38]; miss logs
-                         "invalid template "%s"" (RVA 0x24F8FB8) from
-                         galaxy_configuration.cpp:0x16a (RVA 0x24F8F70)
-NOTE: 0x24F9900 is the vtable containing both 0x535070 (+0x38) and 0x5350D0 (+0x40).
-RTTI: this binary has NO MSVC RTTI/COL headers on these vtables (verified statically)
-      — class identification must use behavior + string pools, not RTTI.
-```
+**Still holds** (each re-confirmed independently later):
+- The register **signature** `rcx = descriptor slot, edx = token id, r8 = name ptr` — exactly right; §16
+  re-confirmed it on the real registrar `0x1D15270`, so §8 only *mis-addressed* it.
+- The chain `0x265DD0 → 0xCCCEB0 → 0xD150A0 → 0xE88500`, with `0xCCCEB0` reached from **exactly one**
+  site — §15.
+- The name pool range is real data, but it is a point *inside* §16's block `0x247F480..0x2494070`, not a
+  separate pool; and the low-24/high-8 token packing is real — for **runtime lexer handles**, 3 sightings
+  in §15.
+- Runtime side, unaffected by the falsification and the reason §10 exists: base Execute `0x1D08520`
+  observed 1.5M calls/40 s across 40+ effect vtables (`0x26D04C8`, `0x2532758`, `0x2522C40`, `0x2521170`,
+  `0x250A4E0`, `0x25435D8`, `0x24B2530` …) and dispatches `call [this+0x10]` → slot[2] via the thin thunk
+  `0x22FB40` (`sub rcx,0x40; jmp 0x1B52C0` = the real body); `0x535070`/`0x5350D0` (both in vtable
+  `0x24F9900`, at +0x38/+0x40) are the scope-gated Execute variant — its 3rd arg is an 8-byte code observed
+  as literal ASCII `0x6d61676573756170` = "pausage" — and the binary-search type-code switch, whose case
+  `0x2cd` reads a wstring key at `[obj+0x288]` (wstr ctor `0x16BF770`), looks it up with
+  `0xB6B3E0(rcx = [0x325EBA0]+8, rdx = key)` in the global DB `0x325EBA0`, and calls `[result+0x38]`;
+  and on a miss logs `invalid template "%s"` (RVA `0x24F8FB8`) from `galaxy_configuration.cpp:0x16a`
+  (`0x24F8F70`); these fire **only while the sim runs**. No MSVC RTTI/COL on any of it — naming must come
+  from strings, not RTTI (quantified in §14).
+- The name pool examples recorded then: `ringworld`, `army_maintenance`, `pop_faction_support_increase_mul`,
+  `has_triggered_message`, `pre_communications_name_format`, `on_built`, `on_queued`.
 
-### Stage-2 conclusion
-New *hardcoded* keywords are reachable by registering into the same table the engine
-uses at load: call `0xD150A0` (or replicate its descriptor write) after `0xCCCEB0`
-runs, with a free token id + a name from/added to the string pool, and a descriptor
-whose type slots route execution into our own handler. Next step: hook `0xD150A0` at
-process start (before init) to dump `rcx` buffer layout + per-field writes.
+**Falsified**: `0xCCCEB0` = master registrar (§15: entered once, with an already-resolved object as `a1`);
+the ~13k entries = keywords (§15); `0xD150A0`/`0xE88500` as the registration writer (§15: they emit
+`BIOSHIP_NO_GROWTH_UPGRADE` / operate on `BIOSHIP_GROWTH_PROGRESS`, item ids 543–544); "call site `0xD15308`
+sits inside the 13k-entry block" (`0xD150A0` ends at `0xD1528F`); `0x337A844` as a registration guard (§16:
+a trace-enable flag); the `[array+idx*0x18]` descriptor table and `0x33799C0` as the keyword table (§16
+finds the real array: driver `0x172E50`, base `0x337B400`, stride `0x120`, 9,863 entries); and `gen<<24|index`
+as anything to do with registration ids (§17: those are compile-time immediates like `mov edx, 0x2778`).
+The stage-2 plan derived from it ("hook `0xD150A0` at process start, replicate its descriptor write") is
+void; the live recipe is §17 + §18 + §19.
 
-## 9. Keyword descriptor layout — the actual extension contract (2026-09-28)
+## 9. Keyword descriptor layout, the alleged extension contract (2026-09-28) — **contract void, slot shape kept**
 
-Per-keyword implementation object vtable (observed rels `0x26D04C8`, `0x2532758`,
-`0x2522C40`, … all share this shape):
+> Same condensation note as §8. One claim here is load-bearing and independently confirmed twice
+> (§10 disasm, §11 live capture): per-keyword implementation objects share a vtable shape —
 
 ```
-[0] +0x00  per-keyword ctor/clone              (e.g. 0x158950, 0x6FD180, 0x645490)
-[1] +0x08  0x1D08520  = shared base Execute    ← the 1.5M/40s hot function
-[2] +0x10  per-keyword Execute shim           (0x1BCD120 / 0x1BCCF30 / …)
-[3] +0x18  0x535070   = scope-gated Execute variant
-[4] +0x20  per-keyword helper                 (0x1BCD020 / 0x1BCD230)
-[5] +0x28  0x15DB30   (ret 0 stub)
-[6] +0x30  0x15DB30
+[0] +0x00 per-keyword ctor/clone          (0x158950 / 0x6FD180 / 0x645490)
+[1] +0x08 0x1D08520  shared base Execute  (the 1.5M/40 s hot function)
+[2] +0x10 per-keyword Execute shim        (0x1BCD120 / 0x1BCCF30 / …)
+[3] +0x18 0x535070   scope-gated Execute variant
+[4] +0x20 per-keyword helper (0x1BCD020 / 0x1BCD230)   [5] +0x28, [6] +0x30 = 0x15DB30 (ret 0)
 ```
 
-Instance field map (from shim `0x1BCD120`) — **SUPERSEDED, see §11: live records from other
-keyword classes do not fit this map**, so treat these offsets as per-class hypotheses:
-```
-+0x08 dword  script token id / keyword id   (0x1f3 = 499 in observed sample)
-+0x0c word   second token id                (0xc7 in 0x1BCCF30 sample)
-+0x12 word, +0x14 byte, +0x16 byte         flags
-+0x18 dword  argument / parameter token
-```
+`0x1D08520` reads `this->vtable[2]` and calls it with the same (rcx, rdx): **base Execute dispatches into
+the keyword's own slot[2]**, so a keyword is defined by that one slot and everything above it (scope guard
+`0x16FDC0`, recursion counter, ctx marshalling) is provided by the engine.
 
-Shim contract (verified by disasm of `0x1BCD120`):
-```c
-void shim_execute(EffectObj* self /*rcx*/, ExecCtx* ctx /*rdx*/) {
-    ctx->vtbl   = &descriptor_vtable;        // [rsp+0x20]
-    ctx->field8 = self->+0x08;               // token id
-    ctx->fieldC = self->+0x0c; ctx->field12/14/16/18 = ...
-    ctx->self   = self;
-    ctx->slot1  = &0x1D08520;                // vtable[1]
-    base_execute(ctx /*as this*/, self);     // = 0x1D08520, which does:
-                                             //   call [ctx->vtbl + 0x10] → THIS shim (recurse)
-    // or, if slot1 != 0x1D08520: call [vtbl] slot directly
-}
-```
-`0x1D08520` reads `this->vtable[2]` and calls it with the same two args — i.e. **the
-base Execute dispatches into the keyword's own vtable[2] shim**. Therefore a new
-keyword only needs a descriptor whose vtable[2] (and optionally [0]/[4]) are ours;
-everything above it (scope guard `0x16FDC0`, recursion counter, ctx marshalling)
-is provided by the engine.
+**Void parts.** The instance field map (`+0x08` token id, `+0x0c` 2nd token, `+0x12/14/16` flags, `+0x18`
+arg token) and the `shim_execute` ctx-marshalling contract were both read out of the single shim
+`0x1BCD120`; §11 and §13 show those offsets carry flags, `0x7fff` sentinels and pointer low-halves
+depending on the class, so "the keyword id lives at `self+0x08`" is **not** a general rule and the route-A
+cheap path keyed on it is invalid as written. The "registration contract from `0xD150A0`/`0xE88500`"
+(keyword map at `reg_obj+0x450`, entries stride `0x110`, packed handle `+0x990`, explicit index `+0x97c`,
+generic keyword vtable `0x33720E8`, searched token `0x220`) rides on §8's falsified chain — §15 records
+that the three field anchors *do* appear verbatim in `0xCCCEB0`'s body but flags that as **circular** (§9
+was derived from that same chain), §16 corrects the stride to **`0x120`**, and §10 shows `0x33720E8` sits in
+uninitialized `.data` and is runtime-written data, not a vtable.
 
-Registration contract (from `0xD150A0` / `0xE88500`):
-```
-reg_obj->+0x450  = keyword map container   (entries 0x110 bytes, array at [c+0x20],
-                                            count at [c+0x2c])
-reg_obj->+0x990  = packed (gen<<24 | index) token handle
-reg_obj->+0x97c  = optional explicit entry index
-0xE88500(rdx=out descriptor*, r8=map, r9=name_obj, ...):
-    *out = vtable at RVA 0x33720E8          // engine's generic keyword vtable
-    token 0x220 (544) is the name/`type` token id it searches for
-```
-
-### Practical consequence for QuickJS integration
-1. **Cheap path (recommended first)**: register `my_qjs_effect` as a *scripted*
-   effect via the normal `common/scripted_effect` pipeline (tokens exist:
-   `on_built`, `has_triggered_message`, `trigger:` …) and detour `0x1D08520`
-   (read `ctx+0x10` → `self->+0x08` token id, compare with our id) to hand
-   execution to QuickJS. Zero binary patching, one hook point.
-2. **Full path**: allocate a descriptor + our own vtable with a Zig `callconv(.c)`
-   `slot2` shim and call `0xD150A0`/`0xE88500` after `0xCCCEB0` has run
-   (one-shot guard byte at RVA `0x337A844`), producing genuinely new hardcoded
-   keywords. Needs the 0x110-byte entry layout fully mapped first.
+Practical consequences as stated then: cheap path = register a scripted effect and detour `0x1D08520`
+comparing `self+0x08` against our id (invalid, above); full path = allocate a descriptor + our own vtable
+and call `0xD150A0` after `0xCCCEB0`, "needs the 0x110-byte entry layout mapped first" (both addresses and
+the stride wrong). Superseded by §17–§19.
 
 ## 10. base Execute hook surface, verified for the log-only detour (2026-09-28)
 
@@ -523,3 +510,114 @@ That makes the whole population enumerable from the file with no attach and no p
   0xE9B580, 0xE96E90, 0xCC4220, 0x974840 are already clustered in 0xE5…0xE9).
 - Live (needs one more paused install): driver now prints all 291 rows, so the next capture
   gives the full census to join against the 1,805-entry map.
+
+## 15. Local IDA headless is usable; §8/§9's registration chain is FALSIFIED (2026-09-29)
+
+IDA MCP now opens this exe headless on Linux with no license gate — the "本机 IDA 不可用"
+blocker in PLAN §3 is gone. Session `f3ea6101`, imagebase `0x140000000`, 103,000 functions,
+`hexrays_ready: true`, string cache 196,503 entries.
+
+**IDB quality caveat (cost me several detours):** this is a *fresh* IDB built from the exe, not
+the Windows `.i64`. Function *bounds* are right, but Hex-Rays frequently returns a 5-byte
+`JUMPOUT` stub. `mark_cfunc_dirty(ea, True)` fixes some (base Execute at `0x141D08520`), and the
+rest need `del_func` + `add_func` + `plan_and_wait` before decompiling (`0xCCCEB0`,
+`0xD150A0`, `0xE88500` all needed it). At least one pre-existing `func_t` was corrupt:
+`0x140E88500` reported size 5,301,002,666 bytes before rebuild, 716 after. Do not read a
+`JUMPOUT` as "no function here".
+
+### What held up
+`0xCCCEB0` is confirmed as a driver walking ~13k entries, and **all three §9 field anchors
+appear verbatim in its body**: container ref at `obj+0x450` (1104), explicit index at `obj+0x97c`
+(2428), packed token at `obj+0x990` (2448). The map it walks matches §9 exactly: array at
+`[c+0x20]`, count at `[c+0x2c]`, **entry stride 272 = 0x110**. Token→object resolution goes
+through globals `qword_14325EF00` / `qword_143260FD0`: 16-byte buckets, array at `[g+0x18]`,
+count at `[g+0x20]`, index = low 24 bits of the packed id (`& 0xFFFFFF`), then a full-word
+equality check. That is independent confirmation of A3's `gen<<24 | index` packing from the
+decompiler side, not from cap.py.
+
+### What did NOT hold up
+`0xD150A0` and its tail callee `0xE88500` are **not the keyword-registration writer**. Decompiled
+(`evidence/disasm/a2_register_fn_0xD150A0.c`): `0xD150A0` is a bounded-container push helper that
+emits the localization key `BIOSHIP_NO_GROWTH_UPGRADE` when the container can't grow — and that
+string's only xref (`0x140d15181`) is genuinely inside the function (size `0x1ef`), so it is not
+a boundary artifact. `0xE88500` is game logic operating on `BIOSHIP_GROWTH_PROGRESS` / item ids
+543–544. Neither writes a 0x110 descriptor field. So §8's "register fn: rcx = buffer obj,
+edx = token id, r8 = name ptr" and §9's "Registration contract (from 0xD150A0 / 0xE88500)" are
+both wrong; they were inferred from dynamic call sites without a decompiler view. §9's *offsets*
+survive, its *call chain* does not.
+
+### Consequence for Phase A
+The 0x110 entry field table (A2) cannot be built by following `0xD150A0`. Also, the name pool
+range from §8 is real (`pop_faction_support_increase_mul` sits at `0x142490410`, inside
+`0x2490000`–`0x2491000`) but **has zero code xrefs, at the string and at the base address** — the
+pool is reached only through computed addresses, so "who registers keyword X" is not answerable
+by xref walking. Next discriminator should come from the consumer side: `0xCCCEB0`'s own id array
+at `[a1+0x320]` / count at `[a1+0x32c]`, i.e. find who *fills* that array, instead of chasing a
+registration writer that may not exist as a distinct function.
+
+### Call-graph correction via offline scan (`scripts/find_refs.py`, 2026-09-29)
+
+IDA recorded **zero** xrefs to `0xCCCEB0` and to the name pool — because `auto_analysis_ready:
+false`: global flow analysis never ran on this fresh IDB, so cross-references simply are not
+populated. Pumping `auto_make_step` over `.text` drains at ~42k items/s yet had not emptied the
+queue after 2.75M steps, and a range-scoped `plan_and_wait` on a large function wedged the IDA
+main thread (785 s and counting). Do not use `plan_and_wait` on whole functions in this IDB.
+
+Hence a standalone PE scanner: `scripts/find_refs.py <rva>...` linear-sweeps executable sections
+for `call/jmp rel32` and `lea reg,[rip+d]`, decoding hits with capstone. Full `.text` sweep is
+~13 s and needs no IDA at all. Results:
+
+| Target | Call sites found |
+|--------|------------------|
+| `0xCCCEB0` | **exactly one** — `0x266D3D` (inside §8's `0x265DD0` init driver) |
+| `0xD150A0` | `0xCCD09E` (inside `0xCCCEB0`), `0xD1B0CB`, and `0xD15308` |
+| `0xE88500` | `0xD15269` (inside `0xD150A0`) |
+
+Two consequences. First, §8's "call site `0xD15308` sits inside the 13k-entry block" is wrong:
+`0xD150A0` spans `0xD150A0`–`0xD1528F` (size `0x1EF`), so `0xD15308` is past its end, in the
+following function. Second, the real chain is `0x265DD0 → 0xCCCEB0 → 0xD150A0 → 0xE88500`, a
+single-caller path whose leaf emits `BIOSHIP_GROWTH_PROGRESS`. A single call site is still
+consistent with a master registration routine, but the leaf's game-logic strings are not — so the
+"~13,000 entries = keywords" reading is now the open question, not an established fact. The §9
+offset anchors that the decompiler confirmed may themselves have been *derived from this same
+chain*, which would make the agreement in §15 circular; treat `+0x450`/`+0x97c`/`+0x990` as
+unverified until seen from an independent path.
+
+Note: `find_refs.py` initially scanned only 0x5D800 bytes because the section tuple was unpacked
+into `vs` while the body used `rawsz`, leaking the previous loop's last value (`.reloc`'s size).
+Fixed; the 13 s full-section runtime is the tell that it is actually sweeping.
+
+### The sole call site refutes "0xCCCEB0 = master keyword registration" (2026-09-29)
+
+`sub_140265DD0` will not decompile in this IDB (`Decompilation failed at 0x14026639c`), so the
+call site was disassembled offline with capstone instead. The 9 instructions before
+`call 0xCCCEB0` perform a **complete token→object resolution**:
+
+```
+266ce2: mov  eax, [rbx+0x430]          ; packed token
+266ce8: cmp  qword [rip+0x2ffa2e8], 0  ; -> RVA 0x3261FD8 (db global)
+266cf2: mov  edx, eax
+266cf4: and  edx, 0xFFFFFF             ; low 24 bits = index   (A3 packing, 3rd independent sighting)
+266cfa: mov  rcx, [rip+0x2ffa2d7]      ; -> RVA 0x3260FD8
+266d01: cmp  edx, [rcx+0x20]           ; count at +0x20
+266d0b: mov  rdx, [rcx+0x18]           ; bucket array at +0x18
+266d0f: mov  rcx, [rdx+rdi*8+8]        ; 16-byte buckets, payload at +8
+266d19: cmp  [rcx+0x20], eax           ; full-word packed-id verification
+266d1e: mov  rcx, [rip+0x2ff866b]      ; fallback -> RVA 0x325F390 == qword_14325F390
+266d3d: call 0xCCCEB0                  ; rcx = the RESOLVED OBJECT
+```
+
+The fallback global `0x325F390` is the same `qword_14325F390` that appears in `0xD150A0`'s
+decompiled body, so the two sites are confirmed to share one token database.
+
+Conclusion: `0xCCCEB0` is entered **with an already-resolved object as `a1`**, from a single site,
+in a context that reads `[rbx+0x430]` as a token. That is runtime object handling, not a startup
+loop registering ~13,000 keywords. §8's headline ("MASTER keyword registration (~13,000 entries)")
+should be treated as **unconfirmed / probably wrong**, and with it the Phase A premise that the
+registration pipeline can be read out of `0xCCCEB0`/`0xD150A0`. The `[a1+0x320]` / `[a1+0x32c]`
+array and the `+0x450`/`+0x97c`/`+0x990` fields are still real observations about this object, but
+they now describe *some* engine object with a token-keyed 272-byte-entry map — not a proven keyword table.
+
+`0xCCCEB0` and the name-pool base also have zero IDA xrefs purely because global flow analysis
+never ran (`auto_analysis_ready: false`); `plan_and_wait` blocks on the **whole** auto queue, not
+the requested range, which is what wedged the IDA main thread for 785 s. Avoid it on this IDB.

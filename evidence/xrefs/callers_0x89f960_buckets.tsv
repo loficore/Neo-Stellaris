@@ -1,0 +1,4 @@
+# caller_count	func_start	func_end	src_files	sites	ref_strings
+2	0x89fec0	0x8a034b		0x8a005c,0x8a0231	0x24b42b0:k formatting and verify encoding is UTF8 (no BOM) | 0x24b42c0: verify encoding is UTF8 (no BOM) | 0x24b42d0: is UTF8 (no BOM)
+1	0x1d7ce0	0x1d7db6		0x1d7d5c	
+1	0x89fdb0	0x89fec0	game_singleobjectdatabase.h	0x89fe76	0x24b46a8:Object with key: %s already exists, using the one at %s

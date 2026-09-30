@@ -32,3 +32,7 @@ Desktop.ini
 *~
 .vscode/
 .idea/
+
+# === Regenerable oversized evidence artifacts ===
+# 25 MB id-usage census; regenerate offline with scripts/idscan.py / scripts/idregistry.py.
+evidence/xrefs/token_id_use_sites_4_4_4.tsv

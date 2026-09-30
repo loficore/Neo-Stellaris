@@ -1,0 +1,490 @@
+# 10,000 functions contain a `call [reg+8]` encoding; 268 matching load->call pairs in 221 functions (gap<=8, key-slot required)
+func 9db100..9db9ac (0x8ac B) 4 site(s)
+    9db580: rax, qword ptr [rcx + 0x28]   ->  9db588: call [..+8]
+    9db604: rax, qword ptr [rcx + 0x28]   ->  9db60c: call [..+8]
+    9db89c: rax, qword ptr [rax + 0x28]   ->  9db8a0: call [..+8]
+    9db8a3: rdx, qword ptr [rsi + 0x28]   ->  9db8ae: call [..+8]
+func ed71c0..ed73d6 (0x216 B) 4 site(s)
+    ed7236: rax, qword ptr [rcx + 0x28]   ->  ed723e: call [..+8]
+    ed7288: rax, qword ptr [rcx + 0x28]   ->  ed7290: call [..+8]
+    ed72d8: rax, qword ptr [rcx + 0x28]   ->  ed72e0: call [..+8]
+    ed7329: rax, qword ptr [rcx + 0x28]   ->  ed7331: call [..+8]
+func 1db7df0..1db856b (0x77b B) 4 site(s)
+    1db7f58: rcx, qword ptr [rcx + 0x28]   ->  1db7f68: call [..+8]
+    1db7f97: rcx, qword ptr [rcx + 0x28]   ->  1db7fa7: call [..+8]
+    1db7fd2: rcx, qword ptr [rcx + 0x28]   ->  1db7fe2: call [..+8]
+    1db81a9: rcx, qword ptr [rsp + 0x28]   ->  1db81b1: call [..+8]
+func e413e0..e4189c (0x4bc B) 3 site(s)
+    e414e9: rax, qword ptr [rdi + 0x28]   ->  e414f1: call [..+8]
+    e4150f: rax, qword ptr [rdi + 0x28]   ->  e41517: call [..+8]
+    e4163e: rax, qword ptr [r15 + 0x28]   ->  e41646: call [..+8]
+func ec34d0..ec3af2 (0x622 B) 3 site(s)
+    ec34ee: rax, qword ptr [rdx + 0x28]   ->  ec34f6: call [..+8]
+    ec38d1: rax, qword ptr [rsi + 0x28]   ->  ec38d9: call [..+8]
+    ec3912: rax, qword ptr [rsi + 0x28]   ->  ec391a: call [..+8]
+func 146a800..146b436 (0xc36 B) 3 site(s)
+    146ad05: rax, qword ptr [rdi + 0x28]   ->  146ad0d: call [..+8]
+    146ad3b: rax, qword ptr [rdi + 0x28]   ->  146ad43: call [..+8]
+    146add1: rax, qword ptr [rdi + 0x28]   ->  146add9: call [..+8]
+func 1d0c720..1d0c9cc (0x2ac B) 3 site(s)
+    1d0c790: rcx, qword ptr [rcx + 0x28]   ->  1d0c7aa: call [..+8]
+    1d0c7cb: rcx, qword ptr [rcx + 0x28]   ->  1d0c7e9: call [..+8]
+    1d0c80a: rcx, qword ptr [rcx + 0x28]   ->  1d0c828: call [..+8]
+func 1bf620..1bf961 (0x341 B) 2 site(s)
+    1bf929: rcx, qword ptr [rsi + 0x28]   ->  1bf930: call [..+8]
+    1bf929: rcx, qword ptr [rsi + 0x28]   ->  1bf93d: call [..+8]
+func 398c00..399094 (0x494 B) 2 site(s)
+    398db5: rax, qword ptr [rax + 0x28]   ->  398db9: call [..+8]
+    398f42: rax, qword ptr [rax + 0x28]   ->  398f46: call [..+8]
+func 539e90..53a590 (0x700 B) 2 site(s)
+    53a258: rcx, qword ptr [rsp + 0x28]   ->  53a263: call [..+8]
+    53a4b8: rcx, qword ptr [rsp + 0x28]   ->  53a4c6: call [..+8]
+func 6dd650..6dd9e9 (0x399 B) 2 site(s)
+    6dd764: rax, qword ptr [rcx + 0x28]   ->  6dd76c: call [..+8]
+    6dd92b: rax, qword ptr [rdx + 0x28]   ->  6dd933: call [..+8]
+func 8c721e..8c7573 (0x355 B) 2 site(s)
+    8c72db: rax, qword ptr [rcx + 0x28]   ->  8c72e3: call [..+8]
+    8c72e6: rdx, qword ptr [rsi + 0x28]   ->  8c72f1: call [..+8]
+func 93b6a0..93cc10 (0x1570 B) 2 site(s)
+    93bc06: rcx, qword ptr [rsp + 0x28]   ->  93bc0e: call [..+8]
+    93cb62: rcx, qword ptr [rsp + 0x28]   ->  93cb6a: call [..+8]
+func 98dd00..98deac (0x1ac B) 2 site(s)
+    98ddcc: rax, qword ptr [rcx + 0x28]   ->  98ddd4: call [..+8]
+    98de1a: rax, qword ptr [rcx + 0x28]   ->  98de22: call [..+8]
+func 9dc730..9dcac0 (0x390 B) 2 site(s)
+    9dc94b: rax, qword ptr [rax + 0x28]   ->  9dc94f: call [..+8]
+    9dc952: rdx, qword ptr [rsi + 0x28]   ->  9dc95d: call [..+8]
+func a6ae70..a6afe5 (0x175 B) 2 site(s)
+    a6ae82: rax, qword ptr [rdx + 0x28]   ->  a6ae9c: call [..+8]
+    a6aefc: rax, qword ptr [rcx + 0x28]   ->  a6af04: call [..+8]
+func a947db..a94b98 (0x3bd B) 2 site(s)
+    a949c8: rax, qword ptr [rcx + 0x28]   ->  a949d0: call [..+8]
+    a949e8: rax, qword ptr [rcx + 0x28]   ->  a949f0: call [..+8]
+func d84b60..d84cb0 (0x150 B) 2 site(s)
+    d84bcf: rax, qword ptr [rcx + 0x28]   ->  d84bd7: call [..+8]
+    d84c28: rax, qword ptr [rcx + 0x28]   ->  d84c30: call [..+8]
+func e66809..e66981 (0x178 B) 2 site(s)
+    e66875: rax, qword ptr [rcx + 0x28]   ->  e6687d: call [..+8]
+    e668d5: rax, qword ptr [rcx + 0x28]   ->  e668dd: call [..+8]
+func e671b3..e67299 (0xe6 B) 2 site(s)
+    e67205: rax, qword ptr [rcx + 0x28]   ->  e6720d: call [..+8]
+    e67265: rax, qword ptr [rcx + 0x28]   ->  e6726d: call [..+8]
+func e95f5e..e96023 (0xc5 B) 2 site(s)
+    e95fa4: rax, qword ptr [rcx + 0x28]   ->  e95fac: call [..+8]
+    e95fef: rax, qword ptr [rcx + 0x28]   ->  e95ff7: call [..+8]
+func e966b0..e96b4a (0x49a B) 2 site(s)
+    e96938: rax, qword ptr [r14 + 0x28]   ->  e96940: call [..+8]
+    e96989: rax, qword ptr [r14 + 0x28]   ->  e96991: call [..+8]
+func eb7090..eb7217 (0x187 B) 2 site(s)
+    eb719a: rax, qword ptr [rcx + 0x28]   ->  eb71a2: call [..+8]
+    eb719a: rax, qword ptr [rcx + 0x28]   ->  eb71af: call [..+8]
+func edd7f7..edda2a (0x233 B) 2 site(s)
+    edd955: rax, qword ptr [r13 + 0x28]   ->  edd95e: call [..+8]
+    edd9fe: rax, qword ptr [r13 + 0x28]   ->  edda05: call [..+8]
+func 1025db0..1026430 (0x680 B) 2 site(s)
+    1025ed4: rax, qword ptr [rbx + 0x28]   ->  1025edc: call [..+8]
+    10261d6: rax, qword ptr [rbx + 0x28]   ->  10261de: call [..+8]
+func 1030400..10320ba (0x1cba B) 2 site(s)
+    1031a65: rcx, qword ptr [rbx + 0x28]   ->  1031a73: call [..+8]
+    1031ab2: r14, qword ptr [rbx + 0x28]   ->  1031ac0: call [..+8]
+func 104a590..104a8c7 (0x337 B) 2 site(s)
+    104a71e: rax, qword ptr [rcx + 0x28]   ->  104a726: call [..+8]
+    104a73e: rax, qword ptr [rax + 0x28]   ->  104a742: call [..+8]
+func 1052370..1052d4f (0x9df B) 2 site(s)
+    105239b: rcx, qword ptr [rcx + 0x28]   ->  10523a2: call [..+8]
+    10523db: rcx, qword ptr [rdi + 0x28]   ->  10523e2: call [..+8]
+func 146fc60..1470117 (0x4b7 B) 2 site(s)
+    146fd5e: rax, qword ptr [rcx + 0x28]   ->  146fd66: call [..+8]
+    146ff4d: rax, qword ptr [rcx + 0x28]   ->  146ff55: call [..+8]
+func 1471590..1472526 (0xf96 B) 2 site(s)
+    14719a4: r14, qword ptr [rbp + 0x28]   ->  14719ae: call [..+8]
+    14719a4: r14, qword ptr [rbp + 0x28]   ->  14719c0: call [..+8]
+func 14861e0..1486710 (0x530 B) 2 site(s)
+    14862bc: rax, qword ptr [rsi + 0x28]   ->  14862c4: call [..+8]
+    14862c7: rdx, qword ptr [r14 + 0x28]   ->  14862d2: call [..+8]
+func 1487ab0..1487f39 (0x489 B) 2 site(s)
+    1487b63: rax, qword ptr [rsp + 0x28]   ->  1487b87: call [..+8]
+    1487b8a: rdx, qword ptr [rsi + 0x28]   ->  1487b95: call [..+8]
+func 16ed4b0..16ed531 (0x81 B) 2 site(s)
+    16ed4b9: rcx, qword ptr [rcx + 0x28]   ->  16ed4c0: call [..+8]
+    16ed4cb: rdx, qword ptr [rbx + 0x28]   ->  16ed4d6: call [..+8]
+func 1c554a0..1c55e07 (0x967 B) 2 site(s)
+    1c55897: rcx, qword ptr [rsp + 0x28]   ->  1c558a2: call [..+8]
+    1c55c7a: rcx, qword ptr [rsp + 0x28]   ->  1c55c85: call [..+8]
+func 1d4af00..1d4b2db (0x3db B) 2 site(s)
+    1d4b0b3: rcx, qword ptr [rcx + 0x28]   ->  1d4b0cd: call [..+8]
+    1d4b232: rcx, qword ptr [rcx + 0x28]   ->  1d4b24d: call [..+8]
+func 1d70aa0..1d70e7b (0x3db B) 2 site(s)
+    1d70c53: rcx, qword ptr [rcx + 0x28]   ->  1d70c6d: call [..+8]
+    1d70dd2: rcx, qword ptr [rcx + 0x28]   ->  1d70ded: call [..+8]
+func 1dc1b70..1dc1f74 (0x404 B) 2 site(s)
+    1dc1d31: rcx, qword ptr [rcx + 0x28]   ->  1dc1d52: call [..+8]
+    1dc1ec4: rcx, qword ptr [rcx + 0x28]   ->  1dc1ee6: call [..+8]
+func 1bb7f0..1bc0e4 (0x8f4 B) 1 site(s)
+    1bc014: rcx, qword ptr [rbx + 0x28]   ->  1bc01b: call [..+8]
+func 26ac00..26ae57 (0x257 B) 1 site(s)
+    26ad39: rax, qword ptr [rbx + 0x28]   ->  26ad41: call [..+8]
+func 31d740..31e564 (0xe24 B) 1 site(s)
+    31d908: rcx, qword ptr [rsp + 0x28]   ->  31d916: call [..+8]
+func 3318e0..3319d4 (0xf4 B) 1 site(s)
+    33195c: rax, qword ptr [rbp + 0x28]   ->  331964: call [..+8]
+func 333540..333a03 (0x4c3 B) 1 site(s)
+    33382e: rcx, qword ptr [rsp + 0x28]   ->  333839: call [..+8]
+func 3482a0..3483ab (0x10b B) 1 site(s)
+    348323: rcx, qword ptr [rcx + 0x28]   ->  34832a: call [..+8]
+func 348450..348805 (0x3b5 B) 1 site(s)
+    348587: rcx, qword ptr [rcx + 0x28]   ->  34858e: call [..+8]
+func 349ae0..34a020 (0x540 B) 1 site(s)
+    349b70: rcx, qword ptr [rcx + 0x28]   ->  349b77: call [..+8]
+func 3769b0..376c4e (0x29e B) 1 site(s)
+    376b59: rcx, qword ptr [rsp + 0x28]   ->  376b61: call [..+8]
+func 39f2a0..39f99f (0x6ff B) 1 site(s)
+    39f39a: rcx, qword ptr [rsi + 0x28]   ->  39f3a1: call [..+8]
+func 3a08e0..3a0cd1 (0x3f1 B) 1 site(s)
+    3a0a67: rbp, qword ptr [rbx + 0x28]   ->  3a0a74: call [..+8]
+func 3af130..3af499 (0x369 B) 1 site(s)
+    3af223: rcx, qword ptr [rcx + 0x28]   ->  3af22a: call [..+8]
+func 3b01a0..3b0f7e (0xdde B) 1 site(s)
+    3b0396: rcx, qword ptr [rcx + 0x28]   ->  3b039d: call [..+8]
+func 408200..4086b4 (0x4b4 B) 1 site(s)
+    408500: rcx, qword ptr [rsp + 0x28]   ->  40850b: call [..+8]
+func 431670..431a71 (0x401 B) 1 site(s)
+    4318df: rcx, qword ptr [rsp + 0x28]   ->  4318e7: call [..+8]
+func 433a60..4351d6 (0x1776 B) 1 site(s)
+    434120: rcx, qword ptr [rsp + 0x28]   ->  43412b: call [..+8]
+func 4915b0..492308 (0xd58 B) 1 site(s)
+    491dbb: rcx, qword ptr [rsp + 0x28]   ->  491dc6: call [..+8]
+func 542ed0..54317e (0x2ae B) 1 site(s)
+    54308e: rcx, qword ptr [rsp + 0x28]   ->  543096: call [..+8]
+func 546ef0..547773 (0x883 B) 1 site(s)
+    5476bc: rcx, qword ptr [rsp + 0x28]   ->  5476d5: call [..+8]
+func 54b110..54b55a (0x44a B) 1 site(s)
+    54b1c9: rax, qword ptr [rsi + 0x28]   ->  54b1d4: call [..+8]
+func 587c19..587dd8 (0x1bf B) 1 site(s)
+    587d6a: rsi, qword ptr [rsp + 0x28]   ->  587d79: call [..+8]
+func 6581a0..6590cd (0xf2d B) 1 site(s)
+    658bd8: rcx, qword ptr [rsi + 0x28]   ->  658bdf: call [..+8]
+func 6625e0..66275b (0x17b B) 1 site(s)
+    662703: rcx, qword ptr [rsp + 0x28]   ->  66270b: call [..+8]
+func 691700..6917ac (0xac B) 1 site(s)
+    691706: rax, qword ptr [rcx + 0x28]   ->  691711: call [..+8]
+func 6ae0e0..6ae46f (0x38f B) 1 site(s)
+    6ae2e8: r8d, dword ptr [rsp + 0x28]   ->  6ae301: call [..+8]
+func 6dd186..6dd30a (0x184 B) 1 site(s)
+    6dd1d2: rax, qword ptr [rdx + 0x28]   ->  6dd1da: call [..+8]
+func 6dd468..6dd63d (0x1d5 B) 1 site(s)
+    6dd4cc: rax, qword ptr [rbx + 0x28]   ->  6dd4d4: call [..+8]
+func 6ec640..6ec792 (0x152 B) 1 site(s)
+    6ec774: rax, qword ptr [rdi + 0x28]   ->  6ec77f: call [..+8]
+func 6f3280..6f32f7 (0x77 B) 1 site(s)
+    6f32d6: rcx, qword ptr [rdi + 0x28]   ->  6f32dd: call [..+8]
+func 6f33f0..6f3490 (0xa0 B) 1 site(s)
+    6f344a: rcx, qword ptr [rbx + 0x28]   ->  6f3451: call [..+8]
+func 6f3cf0..6f3e15 (0x125 B) 1 site(s)
+    6f3dca: rcx, qword ptr [rsi + 0x28]   ->  6f3dd1: call [..+8]
+func 6f4ed0..6f4f32 (0x62 B) 1 site(s)
+    6f4ed9: rcx, qword ptr [rcx + 0x28]   ->  6f4ee0: call [..+8]
+func 6f4f40..6f4fca (0x8a B) 1 site(s)
+    6f4f4d: rcx, qword ptr [rcx + 0x28]   ->  6f4f54: call [..+8]
+func 6f4fd0..6f504b (0x7b B) 1 site(s)
+    6f5005: rcx, qword ptr [rbx + 0x28]   ->  6f500c: call [..+8]
+func 6f5ad0..6f5cd1 (0x201 B) 1 site(s)
+    6f5ae5: rcx, qword ptr [rcx + 0x28]   ->  6f5aec: call [..+8]
+func 6f5ce0..6f5d80 (0xa0 B) 1 site(s)
+    6f5d3a: rcx, qword ptr [rbx + 0x28]   ->  6f5d41: call [..+8]
+func 6f9c50..6f9cc3 (0x73 B) 1 site(s)
+    6f9c59: rcx, qword ptr [rcx + 0x28]   ->  6f9c60: call [..+8]
+func 6faa50..6fb75b (0xd0b B) 1 site(s)
+    6faace: rcx, qword ptr [r13 + 0x28]   ->  6faad5: call [..+8]
+func 6fca20..6fcd71 (0x351 B) 1 site(s)
+    6fca8e: rcx, qword ptr [rbp + 0x28]   ->  6fca95: call [..+8]
+func 703150..7031c8 (0x78 B) 1 site(s)
+    70319f: r9d, dword ptr [r11 + 0x28]   ->  7031bf: call [..+8]
+func 706010..7060cb (0xbb B) 1 site(s)
+    706057: rax, qword ptr [rdi + 0x28]   ->  706062: call [..+8]
+func 71cdb0..72034c (0x359c B) 1 site(s)
+    71d96f: rcx, qword ptr [rsp + 0x28]   ->  71d97a: call [..+8]
+func 7fbe60..7fbf93 (0x133 B) 1 site(s)
+    7fbeb8: rax, qword ptr [rsi + 0x28]   ->  7fbec3: call [..+8]
+func 8684b9..8686e2 (0x229 B) 1 site(s)
+    868699: rax, qword ptr [rcx + 0x28]   ->  8686a1: call [..+8]
+func 86aab0..86acdc (0x22c B) 1 site(s)
+    86abe5: rcx, qword ptr [rbx + 0x28]   ->  86ac00: call [..+8]
+func 86ace0..86b2dc (0x5fc B) 1 site(s)
+    86b130: rcx, qword ptr [rsi + 0x28]   ->  86b14c: call [..+8]
+func 86f240..86f6ae (0x46e B) 1 site(s)
+    86f28f: rcx, qword ptr [r13 + 0x28]   ->  86f2a6: call [..+8]
+func 8bc5a0..8bc6f4 (0x154 B) 1 site(s)
+    8bc6a1: rax, qword ptr [rcx + 0x28]   ->  8bc6a9: call [..+8]
+func 8d85e0..8d92f8 (0xd18 B) 1 site(s)
+    8d864b: rax, qword ptr [rsi + 0x28]   ->  8d8656: call [..+8]
+func 93fe70..940047 (0x1d7 B) 1 site(s)
+    93ff96: rax, qword ptr [rbp + 0x28]   ->  93ffb3: call [..+8]
+func 9404f0..940598 (0xa8 B) 1 site(s)
+    940558: eax, dword ptr [rsp + 0x28]   ->  94056a: call [..+8]
+func 98df8e..98e08f (0x101 B) 1 site(s)
+    98e04a: rax, qword ptr [rcx + 0x28]   ->  98e052: call [..+8]
+func 9d2b0b..9d2d6e (0x263 B) 1 site(s)
+    9d2b91: rax, qword ptr [rbx + 0x28]   ->  9d2b99: call [..+8]
+func 9d7d00..9d7f67 (0x267 B) 1 site(s)
+    9d7d98: rax, qword ptr [rcx + 0x28]   ->  9d7da0: call [..+8]
+func 9da5b0..9da9fa (0x44a B) 1 site(s)
+    9da8b3: rax, qword ptr [rsi + 0x28]   ->  9da8bb: call [..+8]
+func 9e0130..9e04d3 (0x3a3 B) 1 site(s)
+    9e0345: rax, qword ptr [rcx + 0x28]   ->  9e034d: call [..+8]
+func 9ef2b0..9ef4b1 (0x201 B) 1 site(s)
+    9ef315: rax, qword ptr [rcx + 0x28]   ->  9ef31d: call [..+8]
+func 9efa50..9efc56 (0x206 B) 1 site(s)
+    9efabd: rax, qword ptr [rcx + 0x28]   ->  9efac5: call [..+8]
+func 9efc60..9f0360 (0x700 B) 1 site(s)
+    9efe62: rax, qword ptr [rcx + 0x28]   ->  9efe6a: call [..+8]
+func 9f3e76..9f42ad (0x437 B) 1 site(s)
+    9f40ce: rdx, qword ptr [r14 + 0x28]   ->  9f40f1: call [..+8]
+func 9ffac0..9ffd4c (0x28c B) 1 site(s)
+    9ffce5: rax, qword ptr [rcx + 0x28]   ->  9ffced: call [..+8]
+func a32ac0..a32b4e (0x8e B) 1 site(s)
+    a32b35: rax, qword ptr [rbx + 0x28]   ->  a32b40: call [..+8]
+func a7897a..a789f8 (0x7e B) 1 site(s)
+    a789b7: rax, qword ptr [rbx + 0x28]   ->  a789bf: call [..+8]
+func a893f0..a8a1bd (0xdcd B) 1 site(s)
+    a89b3c: rcx, qword ptr [rsp + 0x28]   ->  a89b4a: call [..+8]
+func ab92b0..ab9366 (0xb6 B) 1 site(s)
+    ab92f7: rax, qword ptr [rdi + 0x28]   ->  ab9302: call [..+8]
+func abaf90..abb046 (0xb6 B) 1 site(s)
+    abafd7: rax, qword ptr [rdi + 0x28]   ->  abafe2: call [..+8]
+func abb3f0..abb50c (0x11c B) 1 site(s)
+    abb472: rax, qword ptr [rsi + 0x28]   ->  abb47d: call [..+8]
+func abda80..abdb6d (0xed B) 1 site(s)
+    abdad3: rax, qword ptr [rsi + 0x28]   ->  abdade: call [..+8]
+func abe6b0..abe72b (0x7b B) 1 site(s)
+    abe6e5: rcx, qword ptr [rbx + 0x28]   ->  abe6ec: call [..+8]
+func ac92d0..ac93fe (0x12e B) 1 site(s)
+    ac930a: rcx, qword ptr [rdi + 0x28]   ->  ac9311: call [..+8]
+func ad5f00..ad61e5 (0x2e5 B) 1 site(s)
+    ad608c: rcx, qword ptr [rsp + 0x28]   ->  ad6094: call [..+8]
+func b03b10..b03c54 (0x144 B) 1 site(s)
+    b03be4: r8d, dword ptr [rbp + 0x28]   ->  b03bfe: call [..+8]
+func b04df0..b04eb1 (0xc1 B) 1 site(s)
+    b04e6d: rcx, qword ptr [rdi + 0x28]   ->  b04e74: call [..+8]
+func b8ccf0..b8ceb9 (0x1c9 B) 1 site(s)
+    b8cd4d: rcx, qword ptr [rdi + 0x28]   ->  b8cd60: call [..+8]
+func b8fa60..b8fad8 (0x78 B) 1 site(s)
+    b8fa71: eax, dword ptr [rcx + 0x28]   ->  b8fa93: call [..+8]
+func b903c0..b90692 (0x2d2 B) 1 site(s)
+    b9056c: rcx, qword ptr [rsp + 0x28]   ->  b90574: call [..+8]
+func b91190..b91442 (0x2b2 B) 1 site(s)
+    b91327: rcx, qword ptr [rsp + 0x28]   ->  b9132f: call [..+8]
+func b92000..b92269 (0x269 B) 1 site(s)
+    b920ac: rax, qword ptr [rcx + 0x28]   ->  b920b4: call [..+8]
+func c26ca0..c281cf (0x152f B) 1 site(s)
+    c2777f: rdi, qword ptr [rbp + 0x28]   ->  c2778f: call [..+8]
+func c38f10..c3931b (0x40b B) 1 site(s)
+    c39079: rcx, qword ptr [r14 + 0x28]   ->  c3908c: call [..+8]
+func c51ad7..c51d2b (0x254 B) 1 site(s)
+    c51b4d: rax, qword ptr [rcx + 0x28]   ->  c51b55: call [..+8]
+func cb45d0..cb4c5c (0x68c B) 1 site(s)
+    cb46ad: rdi, qword ptr [r15 + 0x28]   ->  cb46b8: call [..+8]
+func cbe6c0..cbe7c0 (0x100 B) 1 site(s)
+    cbe743: rax, qword ptr [r14 + 0x28]   ->  cbe74b: call [..+8]
+func cbee10..cbeff4 (0x1e4 B) 1 site(s)
+    cbef1c: rax, qword ptr [r15 + 0x28]   ->  cbef24: call [..+8]
+func cc2790..cc2878 (0xe8 B) 1 site(s)
+    cc280d: rax, qword ptr [r14 + 0x28]   ->  cc2815: call [..+8]
+func cc4c10..cc5cfc (0x10ec B) 1 site(s)
+    cc57bd: r12, qword ptr [rbp + 0x28]   ->  cc57da: call [..+8]
+func d48530..d48e55 (0x925 B) 1 site(s)
+    d48c7a: rax, qword ptr [rcx + 0x28]   ->  d48c82: call [..+8]
+func d4da10..d4db96 (0x186 B) 1 site(s)
+    d4da3e: rax, qword ptr [rsi + 0x28]   ->  d4da49: call [..+8]
+func d7dca0..d7dd67 (0xc7 B) 1 site(s)
+    d7dd3b: rax, qword ptr [r8 + 0x28]   ->  d7dd43: call [..+8]
+func d84cb0..d84dab (0xfb B) 1 site(s)
+    d84d25: rax, qword ptr [rcx + 0x28]   ->  d84d2d: call [..+8]
+func d918f0..d91965 (0x75 B) 1 site(s)
+    d91913: rcx, qword ptr [rbx + 0x28]   ->  d9191a: call [..+8]
+func db3d70..db3f5c (0x1ec B) 1 site(s)
+    db3ea3: rax, qword ptr [rbx + 0x28]   ->  db3eab: call [..+8]
+func dd6840..dd695a (0x11a B) 1 site(s)
+    dd6862: rax, qword ptr [rsi + 0x28]   ->  dd686d: call [..+8]
+func e4d459..e4d805 (0x3ac B) 1 site(s)
+    e4d5fa: r8, qword ptr [rsp + 0x28]   ->  e4d61c: call [..+8]
+func e5a010..e5a1b0 (0x1a0 B) 1 site(s)
+    e5a13c: rax, qword ptr [rdx + 0x28]   ->  e5a15f: call [..+8]
+func e5a1b0..e5a350 (0x1a0 B) 1 site(s)
+    e5a2dc: rax, qword ptr [rdx + 0x28]   ->  e5a2ff: call [..+8]
+func e693ce..e694f4 (0x126 B) 1 site(s)
+    e69417: rax, qword ptr [rbx + 0x28]   ->  e6941f: call [..+8]
+func e69770..e69c97 (0x527 B) 1 site(s)
+    e698d9: rax, qword ptr [rcx + 0x28]   ->  e698e1: call [..+8]
+func e6a702..e6a8df (0x1dd B) 1 site(s)
+    e6a7da: rax, qword ptr [rax + 0x28]   ->  e6a7de: call [..+8]
+func e8bb00..e8bcfd (0x1fd B) 1 site(s)
+    e8bbf0: r14, qword ptr [rbp + 0x28]   ->  e8bc06: call [..+8]
+func e8bd00..e8c1c6 (0x4c6 B) 1 site(s)
+    e8bec0: r13, qword ptr [rsi + 0x28]   ->  e8bed5: call [..+8]
+func e8c600..e8c6e2 (0xe2 B) 1 site(s)
+    e8c630: r14, qword ptr [rbx + 0x28]   ->  e8c64e: call [..+8]
+func e9cc12..e9ccd7 (0xc5 B) 1 site(s)
+    e9cc62: rax, qword ptr [rcx + 0x28]   ->  e9cc6a: call [..+8]
+func e9ccd7..e9cd74 (0x9d B) 1 site(s)
+    e9cd13: rax, qword ptr [rcx + 0x28]   ->  e9cd1b: call [..+8]
+func e9cd74..e9ce16 (0xa2 B) 1 site(s)
+    e9cdab: rax, qword ptr [rcx + 0x28]   ->  e9cdb3: call [..+8]
+func eeb8f7..eeba69 (0x172 B) 1 site(s)
+    eeb94c: rax, qword ptr [rcx + 0x28]   ->  eeb954: call [..+8]
+func eec1f0..eec391 (0x1a1 B) 1 site(s)
+    eec254: rax, qword ptr [rcx + 0x28]   ->  eec25c: call [..+8]
+func f01fd0..f02107 (0x137 B) 1 site(s)
+    f02033: rax, qword ptr [rsi + 0x28]   ->  f0203e: call [..+8]
+func f538f0..f54230 (0x940 B) 1 site(s)
+    f53c18: rcx, qword ptr [rbp + 0x28]   ->  f53c28: call [..+8]
+func f55ed0..f5641b (0x54b B) 1 site(s)
+    f560f7: r9, qword ptr [rsp + 0x28]   ->  f56110: call [..+8]
+func f87660..f87898 (0x238 B) 1 site(s)
+    f8777c: rcx, qword ptr [rsp + 0x28]   ->  f87784: call [..+8]
+func fa2690..fa2fcf (0x93f B) 1 site(s)
+    fa29f6: rcx, qword ptr [r12 + 0x28]   ->  fa2a01: call [..+8]
+func fb7510..fb762a (0x11a B) 1 site(s)
+    fb758e: rax, qword ptr [rdi + 0x28]   ->  fb7596: call [..+8]
+func fb7630..fb78c5 (0x295 B) 1 site(s)
+    fb776c: rax, qword ptr [rcx + 0x28]   ->  fb7774: call [..+8]
+func 1028b93..1028be0 (0x4d B) 1 site(s)
+    1028b93: rax, qword ptr [r12 + 0x28]   ->  1028bab: call [..+8]
+func 102e920..102f3d4 (0xab4 B) 1 site(s)
+    102f047: rax, qword ptr [rsp + 0x28]   ->  102f05c: call [..+8]
+func 10332c0..10334b7 (0x1f7 B) 1 site(s)
+    1033399: rbx, qword ptr [rsi + 0x28]   ->  10333a7: call [..+8]
+func 110dec0..110df87 (0xc7 B) 1 site(s)
+    110dec6: rax, qword ptr [rdx + 0x28]   ->  110ded1: call [..+8]
+func 111f440..111fa47 (0x607 B) 1 site(s)
+    111f6d5: rcx, qword ptr [rsi + 0x28]   ->  111f6f0: call [..+8]
+func 1123830..1123990 (0x160 B) 1 site(s)
+    1123932: rax, qword ptr [rbx + 0x28]   ->  112393a: call [..+8]
+func 1138b20..11390b3 (0x593 B) 1 site(s)
+    1138cf5: rcx, qword ptr [rsp + 0x28]   ->  1138cfd: call [..+8]
+func 115ee40..115f0a1 (0x261 B) 1 site(s)
+    115f07a: rcx, qword ptr [rdi + 0x28]   ->  115f081: call [..+8]
+func 1172550..11728c5 (0x375 B) 1 site(s)
+    11727f7: r14, qword ptr [r11 + 0x28]   ->  1172817: call [..+8]
+func 1238a80..1238c11 (0x191 B) 1 site(s)
+    1238ab1: rcx, qword ptr [rsp + 0x28]   ->  1238ab9: call [..+8]
+func 12395f0..123978f (0x19f B) 1 site(s)
+    123962f: rcx, qword ptr [rsp + 0x28]   ->  1239637: call [..+8]
+func 1240160..1240bc3 (0xa63 B) 1 site(s)
+    12407bc: rcx, qword ptr [rbx + 0x28]   ->  12407d1: call [..+8]
+func 147cf95..147d0fb (0x166 B) 1 site(s)
+    147d008: rax, qword ptr [rcx + 0x28]   ->  147d010: call [..+8]
+func 14af440..14af506 (0xc6 B) 1 site(s)
+    14af4c4: rax, qword ptr [rcx + 0x28]   ->  14af4cc: call [..+8]
+func 1509930..1509ae4 (0x1b4 B) 1 site(s)
+    1509a74: rcx, qword ptr [rbx + 0x28]   ->  1509a85: call [..+8]
+func 1613ad0..1614304 (0x834 B) 1 site(s)
+    1613da5: rcx, qword ptr [rsi + 0x28]   ->  1613dba: call [..+8]
+func 1617970..1617ed5 (0x565 B) 1 site(s)
+    16179ed: rcx, qword ptr [rbx + 0x28]   ->  16179f4: call [..+8]
+func 1640020..1640a67 (0xa47 B) 1 site(s)
+    1640182: r8d, dword ptr [r14 + 0x28]   ->  164019b: call [..+8]
+func 1640a70..1640c48 (0x1d8 B) 1 site(s)
+    1640b28: r8d, dword ptr [rsi + 0x28]   ->  1640b40: call [..+8]
+func 168c890..168c9ff (0x16f B) 1 site(s)
+    168c940: rax, qword ptr [rcx + 0x28]   ->  168c948: call [..+8]
+func 16edb30..16edda0 (0x270 B) 1 site(s)
+    16edc86: rcx, qword ptr [r15 + 0x28]   ->  16edc8d: call [..+8]
+func 16edda0..16edfce (0x22e B) 1 site(s)
+    16eddd3: rcx, qword ptr [r14 + 0x28]   ->  16eddda: call [..+8]
+func 17153f0..1715b94 (0x7a4 B) 1 site(s)
+    17159a7: eax, dword ptr [rdi + 0x28]   ->  17159c3: call [..+8]
+func 17314b0..1731925 (0x475 B) 1 site(s)
+    173177b: rdx, qword ptr [rsi + 0x28]   ->  1731783: call [..+8]
+func 1743700..17437c9 (0xc9 B) 1 site(s)
+    174372e: rax, qword ptr [rbx + 0x28]   ->  1743736: call [..+8]
+func 1746d70..1746e27 (0xb7 B) 1 site(s)
+    1746d8c: rax, qword ptr [rbx + 0x28]   ->  1746d94: call [..+8]
+func 18083f0..1808559 (0x169 B) 1 site(s)
+    18084ad: rax, qword ptr [rsp + 0x28]   ->  18084d0: call [..+8]
+func 1813850..1816fc6 (0x3776 B) 1 site(s)
+    1814a85: rcx, qword ptr [rdi + 0x28]   ->  1814a92: call [..+8]
+func 1828c20..1828e61 (0x241 B) 1 site(s)
+    1828c77: ecx, dword ptr [rsp + 0x28]   ->  1828c8b: call [..+8]
+func 18428b0..1842a2b (0x17b B) 1 site(s)
+    1842993: ecx, dword ptr [rsp + 0x28]   ->  18429a2: call [..+8]
+func 18be1f0..18be449 (0x259 B) 1 site(s)
+    18be2f3: rcx, qword ptr [rcx + 0x28]   ->  18be2fa: call [..+8]
+func 18c5a10..18c5a82 (0x72 B) 1 site(s)
+    18c5a69: rcx, qword ptr [rcx + 0x28]   ->  18c5a70: call [..+8]
+func 18cd4a0..18cd74f (0x2af B) 1 site(s)
+    18cd52d: rax, qword ptr [rcx + 0x28]   ->  18cd535: call [..+8]
+func 18f6748..18f69d7 (0x28f B) 1 site(s)
+    18f67a8: rax, qword ptr [r15 + 0x28]   ->  18f67b0: call [..+8]
+func 18f7900..18f8674 (0xd74 B) 1 site(s)
+    18f7f53: rax, qword ptr [rsi + 0x28]   ->  18f7f5b: call [..+8]
+func 1ab5a00..1ab5be3 (0x1e3 B) 1 site(s)
+    1ab5a8b: rax, qword ptr [rcx + 0x28]   ->  1ab5a93: call [..+8]
+func 1b4bde0..1b4be91 (0xb1 B) 1 site(s)
+    1b4be4b: eax, dword ptr [rsp + 0x28]   ->  1b4be63: call [..+8]
+func 1b4bfd0..1b4c226 (0x256 B) 1 site(s)
+    1b4c0d3: rcx, qword ptr [rcx + 0x28]   ->  1b4c0da: call [..+8]
+func 1b50570..1b5061f (0xaf B) 1 site(s)
+    1b505f7: rcx, qword ptr [rcx + 0x28]   ->  1b505fe: call [..+8]
+func 1b89cc0..1b8a7d1 (0xb11 B) 1 site(s)
+    1b8a097: rcx, qword ptr [rsp + 0x28]   ->  1b8a0a2: call [..+8]
+func 1bae3a0..1bae568 (0x1c8 B) 1 site(s)
+    1bae4fb: rbx, qword ptr [rsp + 0x28]   ->  1bae519: call [..+8]
+func 1bbf730..1bbfa5b (0x32b B) 1 site(s)
+    1bbf9a9: rcx, qword ptr [rsp + 0x28]   ->  1bbf9b1: call [..+8]
+func 1be5320..1be5c50 (0x930 B) 1 site(s)
+    1be53c6: r14, qword ptr [r12 + 0x28]   ->  1be53ed: call [..+8]
+func 1c13e40..1c13f86 (0x146 B) 1 site(s)
+    1c13ebd: rax, qword ptr [rbp + 0x28]   ->  1c13ec5: call [..+8]
+func 1c49800..1c49ef8 (0x6f8 B) 1 site(s)
+    1c49996: rcx, qword ptr [rsp + 0x28]   ->  1c499a1: call [..+8]
+func 1c4c7e0..1c4c88b (0xab B) 1 site(s)
+    1c4c7fe: rdx, qword ptr [rax + 0x28]   ->  1c4c81b: call [..+8]
+func 1c4c890..1c4c93a (0xaa B) 1 site(s)
+    1c4c8ae: rcx, qword ptr [rcx + 0x28]   ->  1c4c8ca: call [..+8]
+func 1c932c0..1c9382d (0x56d B) 1 site(s)
+    1c936dc: rcx, qword ptr [rsp + 0x28]   ->  1c936ea: call [..+8]
+func 1ca9e30..1ca9f98 (0x168 B) 1 site(s)
+    1ca9eaa: rcx, qword ptr [rbp + 0x28]   ->  1ca9ebd: call [..+8]
+func 1caa000..1caa158 (0x158 B) 1 site(s)
+    1caa07a: rcx, qword ptr [rbp + 0x28]   ->  1caa08d: call [..+8]
+func 1cbd630..1cbd689 (0x59 B) 1 site(s)
+    1cbd63e: rcx, qword ptr [rcx + 0x28]   ->  1cbd64b: call [..+8]
+func 1cbd690..1cbd7c7 (0x137 B) 1 site(s)
+    1cbd745: rcx, qword ptr [rbx + 0x28]   ->  1cbd755: call [..+8]
+func 1d099f0..1d0a04c (0x65c B) 1 site(s)
+    1d09eb0: rdx, qword ptr [rbx + 0x28]   ->  1d09ec4: call [..+8]
+func 1d0b010..1d0b2d4 (0x2c4 B) 1 site(s)
+    1d0b0b5: rax, qword ptr [rdx + 0x28]   ->  1d0b0d2: call [..+8]
+func 1d0b2e0..1d0b9f0 (0x710 B) 1 site(s)
+    1d0b819: rcx, qword ptr [rsp + 0x28]   ->  1d0b824: call [..+8]
+func 1d6e580..1d6ebcc (0x64c B) 1 site(s)
+    1d6e8e8: rcx, qword ptr [rsp + 0x28]   ->  1d6e8f0: call [..+8]
+func 1dac6a0..1dac92d (0x28d B) 1 site(s)
+    1dac761: rax, qword ptr [rcx + 0x28]   ->  1dac76f: call [..+8]
+func 1dc9bc0..1dca174 (0x5b4 B) 1 site(s)
+    1dc9e68: rcx, qword ptr [rsp + 0x28]   ->  1dc9e76: call [..+8]
+func 1dca580..1dcad20 (0x7a0 B) 1 site(s)
+    1dca858: rcx, qword ptr [rsp + 0x28]   ->  1dca866: call [..+8]
+func 1dd2200..1dd2543 (0x343 B) 1 site(s)
+    1dd23fc: rcx, qword ptr [rsp + 0x28]   ->  1dd2404: call [..+8]
+func 1dfd240..1dfd3c7 (0x187 B) 1 site(s)
+    1dfd3a3: rcx, qword ptr [rsp + 0x28]   ->  1dfd3ab: call [..+8]
+func 1e092e0..1e09524 (0x244 B) 1 site(s)
+    1e09465: rcx, qword ptr [rsp + 0x28]   ->  1e0946d: call [..+8]
+func 1e6f260..1e6f355 (0xf5 B) 1 site(s)
+    1e6f30a: rcx, qword ptr [rdi + 0x28]   ->  1e6f311: call [..+8]
+func 1e71b40..1e71bf1 (0xb1 B) 1 site(s)
+    1e71b87: rax, qword ptr [rdi + 0x28]   ->  1e71b92: call [..+8]
+func 1e738b0..1e73965 (0xb5 B) 1 site(s)
+    1e738f7: rax, qword ptr [rdi + 0x28]   ->  1e73902: call [..+8]
+func 1e744c0..1e74533 (0x73 B) 1 site(s)
+    1e74507: rax, qword ptr [rdi + 0x28]   ->  1e74512: call [..+8]
+func 1e7ba50..1e7bb42 (0xf2 B) 1 site(s)
+    1e7babb: rax, qword ptr [r13 + 0x28]   ->  1e7bad1: call [..+8]
+func 1e7be70..1e7c144 (0x2d4 B) 1 site(s)
+    1e7bee9: rax, qword ptr [r14 + 0x28]   ->  1e7befe: call [..+8]
+func 1e7c4a0..1e7c598 (0xf8 B) 1 site(s)
+    1e7c4fe: rax, qword ptr [rdi + 0x28]   ->  1e7c514: call [..+8]
+func 1f4c3b0..1f4c5b8 (0x208 B) 1 site(s)
+    1f4c4bc: rax, qword ptr [rbx + 0x28]   ->  1f4c4db: call [..+8]

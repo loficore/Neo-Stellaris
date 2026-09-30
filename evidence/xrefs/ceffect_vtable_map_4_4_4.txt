@@ -1,4 +1,7 @@
 # 1805 vtables whose slot[1] is base Execute (0x141d08520)
+# NOTE: FLOOR, not the CEffect class count. The filter requires slot[1]==base Execute, so every
+# class that OVERRIDES Execute is absent (e.g. add_modifier vtable 0x2641B38, slot[1] 0x18AA2F0).
+# See runtime_444_keyword_pipeline.md §17.
 vtable 0x0247add0  slot0 0x0015ccc0  ExecuteActual(slot2) 0x0032da50
 vtable 0x0247aeb0  slot0 0x00164f10  ExecuteActual(slot2) 0x001605c0
 vtable 0x0247af28  slot0 0x0015ccc0  ExecuteActual(slot2) 0x001645d0

@@ -1,0 +1,16 @@
+# Produced 2026-09-30 against /var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
+# (sha256 9242c40a...b1a56), offline. No process attached, no engine state touched.
+# Commands:
+#   python3 scripts/disrva.py 0x5350d0 70    # the "dispatch switch" head + case 0x2cd
+#   python3 scripts/disrva.py 0x535c68 24    # its default branch
+#   python3 scripts/disrva.py 0x535ca1 12    # its common tail (void return)
+#   python3 scripts/disrva.py 0x1d092c0 48   # the generic fallback the default branch tails into
+#   python3 scripts/disrva.py 0x1d09330 76   # the helper 0x1d092c0 calls
+#   python3 scripts/disrva.py 0x15f770 26    # std::string assign(chars, len) used by both
+#   python3 scripts/fastcalls.py 0x1d092c0 --top 12   # 429 sites / 394 functions
+#   python3 scripts/fastcalls.py 0x5350d0 --top 8     # 0 direct sites
+# Key rip operands seen:
+#   0x5350d0 case 0x2cd: [rip+0x2d29a24] -> 0x325eba0 (a db global), string from [rdx+0x288],
+#                        lookup 0x53b3e0, then call [rax+0x38], error log 0x24f8f70 line 0x16a
+#   0x1d092c0 tail:      new(0x20) from 0x2185218, 16-byte template [rip+0x9f939c] -> 0x2702680,
+#                        16-byte template [rip+0x9dbc0f] -> 0x26e4f00 ("Unexpected token")
