@@ -1,7 +1,13 @@
-import sys, struct
+import sys, os, struct
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
-EXE = r'D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe'
+
+_cands = [os.environ.get('NS_STELLARIS_EXE'),
+          '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe',
+          r'D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe']
+EXE = next((c for c in _cands if c and os.path.exists(c)), None)
+if EXE is None:
+    sys.exit('stellaris.exe not found — set NS_STELLARIS_EXE')
 f = open(EXE, 'rb').read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 nsec = struct.unpack_from('<H', f, mz+6)[0]

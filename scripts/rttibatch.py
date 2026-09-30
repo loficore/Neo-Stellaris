@@ -8,12 +8,25 @@ Used to label the (vtable, shim) census from execspy.py: MSVC x64 stores an abso
 CompleteObjectLocator pointer just below the vtable, and the COL holds a 4-byte RVA to the
 TypeDescriptor whose name follows a 16-byte header.
 """
+import os
 import struct
 import sys
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-EXE = r'D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe'
+
+def find_exe():
+    """Same PE on either machine: env override first, then the Linux copy, then Windows."""
+    cands = [os.environ.get('NS_STELLARIS_EXE'),
+             '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe',
+             r'D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe']
+    for c in cands:
+        if c and os.path.exists(c):
+            return c
+    sys.exit('stellaris.exe not found — set NS_STELLARIS_EXE')
+
+
+EXE = find_exe()
 
 
 class Image:
@@ -204,6 +217,10 @@ def main():
         rows = effects(img)
         print(f'# {len(rows)} vtables whose slot[1] is base Execute '
               f'({img.image_base + RVA_BASE_EXECUTE:#x})')
+        print('# NOTE: this is a FLOOR, not the CEffect class count. The filter requires '
+              'slot[1]==base Execute, so every class that OVERRIDES Execute is absent '
+              '(e.g. add_modifier vtable 0x2641B38, slot[1]=0x18AA2F0). '
+              'See runtime_444_keyword_pipeline.md §17.')
         for vt, slot0, slot2 in rows:
             print(f'vtable {vt:#010x}  slot0 {slot0:#010x}  ExecuteActual(slot2) {slot2:#010x}')
         return

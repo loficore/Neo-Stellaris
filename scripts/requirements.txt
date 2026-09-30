@@ -1,0 +1,13 @@
+# Offline RE toolchain for scripts/ (Python 3, host only — nothing here ships in the DLL).
+# Versions are what the 2026-09-29 runs were produced with; the numbers in
+# evidence/analysis/runtime_444_keyword_pipeline.md §17-§20 and the descriptor oracle are only
+# reproducible against the same capstone/unicorn decoders.
+#
+#   pip install -r scripts/requirements.txt
+#
+# `unicorn` is needed only by scripts/emu_desc.py (the byte oracle). Its output is checked in
+# at evidence/xrefs/descriptor_oracle_4_4_4.tsv and src/dll/scripted/keyword_registry_golden.zig,
+# so `zig build test` verifies the descriptor contract without unicorn installed.
+capstone==5.0.7
+pefile==2024.8.26
+unicorn==2.1.4
