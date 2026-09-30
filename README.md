@@ -27,12 +27,9 @@ stellaris-quickjs.dll
 │   ├── gamestate.zig    — Game object access (stubs → real offsets)
 │   └── scope.zig        — CEventScope read access
 ├── effects/
-│   ├── ceffect.zig      — CEffect::ExecuteActual hook
-│   ├── handler.zig      — JS callback routing for effects
-│   └── id_mapper.zig    — Effect ID↔name mapping
+│   └── handler.zig      — JS callback routing (orphan: its hook was removed, see §26.3)
 ├── triggers/
-│   ├── ctrigger.zig     — CTrigger::Evaluate hook
-│   └── handler.zig      — JS callback routing for triggers
+│   └── handler.zig      — JS callback routing (orphan: its hook was removed, see §26.3)
 ├── hooking/
 │   ├── detour.zig       — Trampoline detour framework
 │   └── windows.zig      — Win32 API wrappers (VirtualProtect, alloc)
@@ -203,8 +200,9 @@ zig build test -- --test-filter "exports"
 # QuickJS runtime
 zig build test -- --test-filter "runtime"
 
-# Effect ID mapper
-zig build test -- --test-filter "id_mapper"
+# Scripted keyword registry + lookup detour
+zig build test -- --test-filter "keyword_registry"
+zig build test -- --test-filter "scripted"
 
 # Hooking framework
 zig build test -- --test-filter "detour"
