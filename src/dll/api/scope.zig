@@ -4,10 +4,17 @@
 // context for effects and triggers. The scope tells the engine what game
 // object the current operation is targeting.
 //
-// CEventScope layout (verified from IDA):
+// CEventScope layout — [UNVERIFIED 3.x, and contradicted for the Execute argument]:
 //   +0  (0)   — padding / vtable
-//   +8  (8)   — scope type (i64, bit flag)
-//   +16 (16)  — object ID (i64)
+//   +8  (8)   — claimed scope type (i64, bit flag)
+//   +16 (16)  — claimed object ID (i64)
+//
+// NOT "verified from IDA". §26 disassembled the 4.4.4 base CEffect::Execute (0x1D08520) and found
+// [arg2+8] incremented right before `call [vptr+0x10]` and decremented right after — a call-depth
+// counter — so the object the engine passes around as its execution frame does not carry a scope type
+// at +8. The real 4.4.4 chain reaches a keyword id through [[frame+0x30]+8]+8 (see §26.1).
+// Until a genuine frame pointer arrives from the record-only detour, these getters describe an
+// unconfirmed layout and their numbers must not be presented as a scope type or object id.
 //
 // Scope types are power-of-2 bit flags defined in offsets.zig:
 //   PLANET=2, COUNTRY=4, SHIP=8, POP=16, FLEET=32, etc.
@@ -19,7 +26,7 @@ const std = @import("std");
 const offsets = @import("../shared/offsets.zig");
 
 // ---------------------------------------------------------------------------
-// Constants (from verified offsets)
+// Constants (3.x values, unconfirmed — see the header note before trusting any of them)
 // ---------------------------------------------------------------------------
 
 /// Byte offset to the scope type field in CEventScope.

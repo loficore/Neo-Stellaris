@@ -51,16 +51,16 @@ pub const RVA_BASE_EXECUTE: usize = 0x1D08520;
 /// is checked but untouched — it is the identity proof for this build.
 const EXPECTED_CODE = [_]u8{
     0x48, 0x89, 0x5C, 0x24, 0x08, // mov [rsp+8], rbx
-    0x57,                         // push rdi
-    0x48, 0x83, 0xEC, 0x20,       // sub rsp, 0x20
-    0x8B, 0x42, 0x08,             // mov eax, [rdx+8]
-    0x48, 0x8B, 0xDA,             // mov rbx, rdx
-    0x48, 0x8B, 0xF9,             // mov rdi, rcx
-    0x85, 0xC0,                   // test eax, eax
-    0x78, 0x32,                   // js  +0x32
+    0x57, // push rdi
+    0x48, 0x83, 0xEC, 0x20, // sub rsp, 0x20
+    0x8B, 0x42, 0x08, // mov eax, [rdx+8]
+    0x48, 0x8B, 0xDA, // mov rbx, rdx
+    0x48, 0x8B, 0xF9, // mov rdi, rcx
+    0x85, 0xC0, // test eax, eax
+    0x78, 0x32, // js  +0x32
     0xBA, 0x10, 0x00, 0x00, 0x00, // mov edx, 0x10
-    0x48, 0x8B, 0xCB,             // mov rcx, rbx
-    0xE8,                         // call rel32 (displacement deliberately not pinned)
+    0x48, 0x8B, 0xCB, // mov rcx, rbx
+    0xE8, // call rel32 (displacement deliberately not pinned)
 };
 
 pub const VTBL_SLOT_EXECUTE: usize = 0x08; // descriptor slot[1] — this function
@@ -78,10 +78,10 @@ pub const SELF_FLAG_16: usize = 0x16; // u8
 pub const SELF_ARG: usize = 0x18; // u32 parameter token
 
 /// Context fields.
-pub const CTX_RECURSION: usize = 0x08; // i32 recursion counter, inc/dec around the shim call
-pub const CTX_10: usize = 0x10;
-pub const CTX_18: usize = 0x18;
-pub const CTX_30: usize = 0x30; // slot5 (0x535070) also dereferences this
+pub const CTX_RECURSION: usize = 0x08; // i32 call depth: inc before, dec after the shim call (§26)
+pub const CTX_10: usize = 0x10; // never read by the engine code measured so far
+pub const CTX_18: usize = 0x18; // byte guard: 0x1D116A0 tests it before touching the token DB (§26)
+pub const CTX_30: usize = 0x30; // -> value-holder object; [[ctx+0x30]+8]+8 is a token id (§26.1)
 
 // ---------------------------------------------------------------------------
 // Safe memory reads
@@ -95,7 +95,7 @@ fn plausible(p: usize) bool {
 
 fn readU64(addr: usize) ?u64 {
     if (!plausible(addr)) return null;
-    return @as(*const align(8) u64, @ptrFromInt(addr)).*;
+    return @as(*align(8) const u64, @ptrFromInt(addr)).*;
 }
 
 fn readU32(addr: usize, comptime off: usize) ?u32 {
@@ -373,7 +373,7 @@ pub fn install() !void {
     // them position-independent, so exactly those 16 land in the trampoline. `&orig` is armed
     // inside installHookArmed before the patch goes in, so the forward path exists from the
     // first intercepted call.
-    const hook = try detour_mod.installHookArmed(target, @constCast(@ptrCast(&execDetour)), &orig);
+    const hook = try detour_mod.installHookArmed(target, @ptrCast(@constCast(&execDetour)), &orig);
     if (hook.patch_size > saved_code.len) return error.PatchTooWide;
     stats.patch_size = hook.patch_size;
     state = .{ .hook = hook, .installed = true };

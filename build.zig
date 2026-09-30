@@ -117,18 +117,6 @@ pub fn build(b: *std.Build) void {
     });
     linkQuickjs(b, qjs_tests.root_module);
 
-    // Effect ID mapper tests (hash map, ID lookup).
-    // Pass offsets as a module dependency so relative imports from effects/ work.
-    const id_mapper_mod = b.createModule(.{
-        .root_source_file = b.path("src/dll/effects/id_mapper.zig"),
-        .target = native,
-        .optimize = optimize,
-    });
-    id_mapper_mod.addImport("offsets", offsets_mod);
-    const id_mapper_tests = b.addTest(.{
-        .root_module = id_mapper_mod,
-    });
-
     // Offsets validation tests.
     const offsets_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -137,6 +125,16 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
+    // Keyword registry — the 0x120 descriptor builder, checked byte-for-byte against
+    // vectors produced by running the engine's own writers (scripts/emu_desc.py).
+    const keyword_registry_mod = b.createModule(.{
+        .root_source_file = b.path("src/dll/scripted/keyword_registry.zig"),
+        .target = native,
+        .optimize = optimize,
+    });
+    keyword_registry_mod.addImport("offsets", offsets_mod);
+    const keyword_registry_tests = b.addTest(.{ .root_module = keyword_registry_mod });
 
     // Hooking framework tests (detour + windows wrappers).
     const windows_mod = b.createModule(.{
@@ -250,11 +248,11 @@ pub fn build(b: *std.Build) void {
     const run_qjs_tests = b.addRunArtifact(qjs_tests);
     run_qjs_tests.skip_foreign_checks = true;
 
-    const run_id_mapper_tests = b.addRunArtifact(id_mapper_tests);
-    run_id_mapper_tests.skip_foreign_checks = true;
-
     const run_offsets_tests = b.addRunArtifact(offsets_tests);
     run_offsets_tests.skip_foreign_checks = true;
+
+    const run_keyword_registry_tests = b.addRunArtifact(keyword_registry_tests);
+    run_keyword_registry_tests.skip_foreign_checks = true;
 
     const run_detour_tests = b.addRunArtifact(detour_tests);
     run_detour_tests.skip_foreign_checks = true;
@@ -283,8 +281,8 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_qjs_tests.step);
-    test_step.dependOn(&run_id_mapper_tests.step);
     test_step.dependOn(&run_offsets_tests.step);
+    test_step.dependOn(&run_keyword_registry_tests.step);
     test_step.dependOn(&run_detour_tests.step);
     test_step.dependOn(&run_api_gamestate_tests.step);
     // NOTE: scope.zig standalone test disabled — pre-existing "import of file outside

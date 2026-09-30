@@ -156,48 +156,50 @@ rpc.exports = {
 EFFECT_MONITOR_SCRIPT = """
 'use strict';
 
-rpc.exports = {
-    startEffectMonitor: function() {
-        // Effect dispatch switch-case at 0x14180B050
-        const effectDispatchAddr = ptr("0x14180B050");
-        const effects = [];
+// Record-only detour of the 4.4.4 hot path — PLAN §1 forbids anything that changes behaviour.
+// The old hook target here was the 3.x "effect dispatch switch-case at 0x14180B050", which is
+// doubly wrong on 4.4.4: that switch does not exist (runtime_444_structures.md §3/§14 — effects are
+// polymorphic CEffect::Execute via vtable), and an absolute image-base address is meaningless under
+// ASLR, so it would have patched some unrelated function. 0x1D08520 is the confirmed base
+// CEffect::Execute, added to the live module base.
+// At ~5,300 calls/s a per-call record would drown the process, so this counts and histograms the
+// dispatch target instead: slot[2] (ExecuteActual) is what the base method calls, so the histogram
+// says which concrete classes ran without storing one entry per call.
+var BASE_EXECUTE_RVA = 0x1D08520;
+var STATE = { calls: 0, targets: {}, errors: 0, attached: false };
 
-        Interceptor.attach(effectDispatchAddr, {
-            onEnter: function(args) {
-                const effectId = this.context.rcx;
-                effects.push({
-                    timestamp: Date.now(),
-                    effectId: effectId.toString(),
-                    instruction: "effect_dispatch"
-                });
+function attach() {
+    if (STATE.attached) return;
+    var mod = Process.findModuleByName('stellaris.exe');
+    if (mod === null) throw new Error('stellaris.exe not loaded');
+    Interceptor.attach(mod.base.add(BASE_EXECUTE_RVA), {
+        onEnter: function (args) {
+            STATE.calls++;
+            try {
+                // args[0] is `this`; [this] is its vtable, slot[2] is ExecuteActual.
+                var slot2 = args[0].readPointer().add(0x10).readPointer();
+                var key = slot2.toString();
+                STATE.targets[key] = (STATE.targets[key] || 0) + 1;
+            } catch (e) {
+                STATE.errors++;
             }
-        });
-
-        return { success: true, message: "Effect monitor attached" };
-    }
-};
-"""
-
-TRIGGER_MONITOR_SCRIPT = """
-'use strict';
+        }
+    });
+    STATE.attached = true;
+}
 
 rpc.exports = {
-    startTriggerMonitor: function() {
-        const triggers = [];
-
-        // Monitor trigger evaluations via script engine
-        Process.enumerateModules().forEach(function(mod) {
-            if (mod.name === "stellaris.exe") {
-                // Find trigger evaluation patterns
-                const ranges = mod.enumerateRanges("r-x");
-                ranges.forEach(function(range) {
-                    const buf = Memory.readByteArray(range.base, Math.min(range.size, 4096));
-                    // Look for trigger-related patterns
-                });
-            }
-        });
-
-        return { success: true, message: "Trigger monitor attached" };
+    startEffectMonitor: function () {
+        try {
+            attach();
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+        return { success: true, target_rva: BASE_EXECUTE_RVA, message: 'Effect monitor attached' };
+    },
+    // The point of the whole command: without this the counter was never read back.
+    collect: function () {
+        return { calls: STATE.calls, errors: STATE.errors, targets: STATE.targets };
     }
 };
 """
@@ -310,32 +312,13 @@ def cmd_monitor_effects(
     except KeyboardInterrupt:
         pass
 
-    return format_response("monitor_effects", True, message="Monitoring completed")
+    return format_response("monitor_effects", True, **script.exports_sync.collect())
 
 
-def cmd_monitor_triggers(
-    args: argparse.Namespace,
-) -> dict[str, Any]:
-    """Monitor trigger evaluations."""
-    device = get_device(args.host)
-    session = attach_process(device, args.pid)
-    script = create_script(session, TRIGGER_MONITOR_SCRIPT)
-
-    result = script.exports_sync.start_trigger_monitor()
-    if not result.get("success"):
-        return format_response("monitor_triggers", False, error=result.get("error"))
-
-    print(json.dumps(format_response("monitor_triggers", True, message="Monitoring started")))
-    print(f"Monitoring for {args.duration} seconds...", file=sys.stderr)
-
-    import time
-
-    try:
-        time.sleep(args.duration)
-    except KeyboardInterrupt:
-        pass
-
-    return format_response("monitor_triggers", True, message="Monitoring completed")
+# No trigger monitor: 4.4.4 has no confirmed `CTrigger::Evaluate` anchor. The command that used to
+# live here attached nothing at all — it walked the module's ranges and returned success — so keeping
+# it would keep reporting a hook that was never installed. The trigger-side facts we do have are
+# parse-time: 0x349AE0 (consumer) and 0x348450 (whole-tree enumerate), both in §23.
 
 
 def main() -> int:
@@ -394,9 +377,6 @@ def main() -> int:
     # monitor-effects
     subparsers.add_parser("monitor-effects", help="Monitor effect executions")
 
-    # monitor-triggers
-    subparsers.add_parser("monitor-triggers", help="Monitor trigger evaluations")
-
     args = parser.parse_args()
 
     if not args.command:
@@ -409,7 +389,6 @@ def main() -> int:
         "read-ssstring": cmd_read_ssstring,
         "follow-chain": cmd_follow_chain,
         "monitor-effects": cmd_monitor_effects,
-        "monitor-triggers": cmd_monitor_triggers,
     }
 
     handler = command_map.get(args.command)
