@@ -1,9 +1,10 @@
-# 4.4.4 C1 validation and corrections — offline evidence (§24–§29)
+# 4.4.4 C1 validation and corrections — offline evidence (§24–§30)
 
 > **Volume 3 of 3.** This evidence log is split across three files; the `§` numbers are unique across them.
 > §1–§15 — `runtime_444_structures.md` (live hot path, detours, CEffect class map, the falsified registration chain).
 > §16–§23 — `runtime_444_keyword_pipeline.md` (the static registration pipeline: driver, descriptors, thunk arrays, token allocator, class_info, consumers).
-> §24–§29 — `runtime_444_c1_validation.md` (the alias/donor decision, A5 cross-validation, ABI corrections, backlog).
+> §24–§30 — `runtime_444_c1_validation.md` (the alias/donor decision, A5 cross-validation, ABI corrections,
+> backlog, the fallback settled as an error-view builder, and the token DB's `id → name` table).
 
 ## §24 The alias approach is a natively shipped shape — donor chosen (2026-09-29)
 
@@ -644,6 +645,8 @@ keyword. Whether the fallback is a by-name variable lookup or an error-view cons
 settled** — the `std::string` temporaries in `0x1D09330`'s stack frame were not fully disambiguated, and
 `0x15F770` is an **assign** (`size = len; memcpy; buf[len] = 0`), not an append, so the concatenation story
 §25.4 used for iterator names does not transfer here. Do not reuse this section as a premise.
+> **Settled the next day by §30: error-view construction.** The disambiguation §28.3 asked for is done
+> there, and it removes `0x1D092C0` from the candidate list rather than promoting it.
 
 ### §28.4 The slot-index question is left open on purpose
 
@@ -666,9 +669,11 @@ conclusion about `0x24B1990`'s slot numbering.
 2. The keyword executor remains §23/§24: `create()` on the BST node, then the class's own virtuals. C1's
    four criteria (PLAN §6) are unchanged by anything here.
 3. The residual value is documentary: the chain `[[frame+0x30]+8]+8 → id` and
-   `[[frame+0x30]+8]+0x20 → object` (§26.1) now has a *purpose* attached to it, and `0x1D092C0` is a
+   `[[frame+0x30]+8]+0x20 → object` (§26.1) now has a *purpose* attached to it, and ~~`0x1D092C0` is a
    candidate anchor for a future scope-variable bridge from QuickJS — **candidate only**, and if that
-   bridge is ever built, §28.3's two unsettled points have to be pinned first.
+   bridge is ever built, §28.3's two unsettled points have to be pinned first~~ **§30 settled it: it is a
+   parse-error appender, so it is not that anchor.** §28.3's first question is closed; the second
+   (`0x24F9910`'s slot numbering) stays open and stays irrelevant to the verdict.
 
 ## §29 Backlog cleanup decided: `id_mapper.zig` retired, the two `handler.zig` files kept (2026-09-30)
 
@@ -703,3 +708,118 @@ orphan in the tree. If C3 ends up routing through QuickJS differently, they are 
 **Counts after this**: `zig build test` → 22/25 steps, **272/272** tests passed (293 − 21 id_mapper tests,
 2 steps removed); `zig build` still produces `zig-out/bin/stellaris_quickjs.dll` (7.1M). The two failing
 steps remain the host's QuickJS/GLIBC mismatch. No hook behaviour changed anywhere; C1 stays unauthorized.
+
+## §30 The `0x1D092C0` fallback settled offline — parse-error appender, and a token-DB `id → name` table (2026-09-30)
+
+### §30.1 The fallback, read end to end
+
+§28.3 left one question open and §28.5 left one candidate hanging on it — whether the generic fallback
+reaches *by-name variable lookup* or *builds an error view*. Read end to end (`scripts/disrva.py
+0x1D092C0 18`, `0x1D09330 120` + `0x1D09465 12`, `0x1D09130 64`, `0x1D0D320 64`,
+`0x59D010 30`; `scripts/riprefs.py 0x337ACBC`; `scripts/fastcalls.py 0x1D09330`; command record
+`evidence/logs/fallback_0x1d092c0.log`; `.pdata` bounds `0x1d092c0..0x1d0932f`,
+`0x1d09330..0x1d094d0`, `0x1d09130..0x1d092b1`, `0x1d0d320..0x1d0d3f4`), it is the **second**.
+
+**`0x1D092C0(rcx = parse object)`** — 0x6f bytes, one job: hand-build a `TokenNameHolder`-shaped local whose
+`+0x10` `std::string` is `"Unexpected token"` (`0x26E4F00`), then call `0x1D09330(obj, &holder)`. The string
+is deliberately on the **heap** branch: `new(0x20)` for the buffer, `{size, cap} = {16, 31}` copied as one
+`movdqa` from a size/cap table at `0x2702680` (`(16,31),(17,31),(18,31),(19,31)…`), into holder+0x20/+0x28.
+So this is an independent third confirmation of §20's holder shape — buf/ptr at `+0x00`, size `+0x10`,
+cap `+0x18`, and `+0x00..+0x0F` of the holder itself ignored by the callee.
+
+**`0x1D09330(rcx = obj, rdx = &holder)`** — assembles a 0x68-byte context on the stack and appends a node:
+
+```
+context+0x10  std::string  = the message template      (from holder+0x10)
+context+0x30  u32          = [[obj+0x30]+8]+8          <- §26.1's keyword-id chain, now with a purpose
+context+0x48  std::string  = [obj+0x48]                (a raw const char*, byte-strlen, no SSO decode)
+new(0x80) -> 0x1D0D320(node, &context, old_tail)       node: +0x10 string, +0x30 u32, +0x38 string
+push onto the std::list at [obj+0x10] head / [obj+0x18] tail / count [obj+0x20]; [prev+0x70] = node
+mov byte [obj+0x28], 1                                 error flag
+jmp 0x1D09130(obj)                                     parser advance, NOT an error raiser
+```
+
+Every stack offset is checked against its initializer: the three locals are opened with
+`size = 0 / cap = 15` writes at `rbp-0x39`/`rbp-0x31`, `rbp-9`/`rbp-1`, `rbp+0x2f`/`rbp+0x37`, which land on
+exactly the fields `0x1D0D320` reads through `rdx+0x10`, `rsi+0x30`, `rsi+0x48` once `rdx = rbp-0x29`.
+
+**Why the verdict is error-view, not lookup.** All **22** direct callers of `0x1D09330`
+(`evidence/xrefs/callers_0x1d09330_buckets.tsv`) open a *message* string and hand it in as the name field:
+`'Unexpected token'` `0x26E4F00`, `'Unreadable String'` `0x26E4D40`, `'Unhandled Entry'` `0x2622630`,
+`'Expected list start'` `0x252EF00`, and the `planet.cpp` / `dlc_metadata` paths. A variable lookup does not
+take its key from a table of parser error texts. `0x1D09130` confirms the other half: it is the tokenizer
+advance — `inc [0x337ACBC]` on entry and `dec` on the early-out (`0x1D0928d`), a balanced **recursion-depth**
+global with exactly 2 refs and both inside this function, so it is not an error counter either — and it
+recurses into itself (`0x1D09227`) after reading `[obj+0x30]`'s vtable slot `[rax+8]`.
+
+**Consequences, three of them:**
+1. **§28.5 item 3's candidate is withdrawn.** `0x1D092C0` is not the anchor for a QuickJS → scope-variable
+   bridge; a bridge that intercepted it would collect parse errors, not read game state. The by-name
+   *variable* path is still unpinned, but §30.2 turned up the token DB's `id → name` reverse table, which is
+   the concrete thing we actually need from this family.
+2. **§26.1's `[[frame+0x30]+8]+8 → token id` gains an independent witness.** Here that dword is loaded
+   straight into a report field (`0x1D09396`..`0x1D0939E` → `[rbp+7]` → `node+0x30`), which is a second,
+   different function arriving at the same field — the chain is no longer inferred from one call site.
+3. **C1 gets a failure signature, and it is a *bad* one.** `0x5350D0`'s default branch lands here, so an id
+   that reaches that getter without matching a case produces an `Unexpected token` entry plus
+   `[obj+0x28] = 1`. Read only in the direction that matters: if a C1 keyword is *referenced by a script
+   before our insert has run*, this is the path that records it — a script-visible parse error, not a silent
+   miss. PLAN §6 C1's criterion ① ("官方 keyword 路径不受影响") should therefore also look for stray
+   `Unexpected token` entries, and §28.3's "unknown ids are not dropped" stays true but is now known to mean
+   "they are reported", not "they resolve".
+
+### §30.2 What the search actually turned up: the token DB keeps an `id → name` reverse table
+
+`0xb5f3c0` is the one caller in the §30.1 bucket set with no error text, and following it opened something
+more useful than the question that led there. It maps a token **id** to its **name** through the token DB:
+
+```
+0xb5f3c0(rcx = context, rdx = obj, r8d = token id)     ; rcx is used only on the flag path
+  rax = 0x59D010(&id)        ; token-id -> flag bitmask (ret 0x40000, 0x200000, 0x8000000000 …).
+                             ;   3 callers, and it has NO .pdata entry (the preceding one ends at
+                             ;   0x59cf1b), so its bounds are inferential, not measured.
+  if rax != 0 -> dispatch on the flag value
+  else: db = 0x1D12C60()
+        if [db+0x7c] != [db+0x80] { call 0x1D12CD0 }        ; skip the refresh when they agree (0xb5f405 je)
+        holder = [db+0x70] + id*0x30                         ; <- the reverse table, indexed by RAW id
+        call 0x1D09330(obj, holder)
+```
+
+**`0x1D12CD0`** (bounds `0x1d12cd0..0x1d12de4`, no arguments — it reads the singleton itself) is the builder,
+and it has exactly two loops, both writing through `0x15F770` (the §28.3 assign) into
+`[db+0x70] + id*0x30 + 0x10`:
+
+1. `0x1D12D43`..`0x1D12D8F` — the **static** half: `0x172E50()` (the §17 descriptor driver),
+   `rsi += 0x120` while `rsi < 0x2B57E0` (9,863 entries again), id = `[entry+0x00]`,
+   name chars = `[entry+0x10]`.
+2. `0x1D12DA0`..`0x1D12DD9` — the **dynamic** half: walks `[db+0x58]` with stride 8 for `[db+0x64]` entries
+   (the name→id map §18 recorded at `[db+0x50]`), id = `[rec+0x00]`, name = `[rec+0x10]`.
+
+Before loop 1 it resizes through `0x391F90(rcx = db+0x68, edx = [db+0x80])` — sized to the **next free id**,
+i.e. deliberately large enough to hold ids minted after start-up — and it first clears every existing
+holder's string (`[h+0x20] = 0`, `[h+0x10][0] = 0`).
+
+**The measured facts, and their limits.** The array's element is a `0x30`-byte holder whose `std::string`
+lives at `+0x10` — §20's holder shape again, now seen from the other direction: not "what does the
+allocator read" but "what does the engine write". `[db+0x70]`/`[db+0x7c]` are **new fields**, absent from
+§18's field map (`+0x50`, `+0x64`, `+0x80`, `+0x84`). Unpinned, and deliberately not guessed here: whether
+`[db+0x7c]` is a count or a `std::vector` end high-half (the code uses it as `count * 0x30`, which is the
+reading §30.2 relies on); whether callers of `0x1D12CD0` (≈100 functions) are all read paths; and whether
+the `[db+0x7c] != [db+0x80]` guard means "stale" in the sense that *our* mint bumps it — that requires a
+live read.
+
+**Why it matters for C1 — this is a readback instrument, not just documentation.** If the guard does trip on
+our allocation, then after one call to `0x1D12CD0` the name at
+`[[0x37347A0+0x70] + 18818*0x30 + 0x10]` should read back exactly the string we handed `0x1D13270`. That is
+a **fifth** C1 observation, and unlike criterion ② it does not depend on the tree being walked by a script:
+it confirms mint → name-pool → reverse-table in one read, before any evaluation. Read-only, so it stays
+inside §1's boundary; it is recorded as a candidate because the guard's meaning is the live part.
+
+**Counts for §30**: no code changed, `zig build test` untouched (22/25 steps, 272/272). New artifacts:
+`evidence/logs/fallback_0x1d092c0.log` (every command from §30.1/§30.2, plus the raw `.rdata` dumps of
+`0x26E4F00` and the `{size, cap}` table at `0x2702680`), `evidence/xrefs/callers_0x1d09330_buckets.tsv`
+(22 callers), `evidence/xrefs/callers_0x1d12cd0_buckets.tsv`. C1's four criteria and its authorization
+status are unchanged.
+
+> **Correction pointer for §28.3's other open question** — `0x24F9910`'s slot numbering stays unresolved
+> (§28.4), and §30 neither needed nor changed it.

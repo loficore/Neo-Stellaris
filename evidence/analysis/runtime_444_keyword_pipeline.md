@@ -3,7 +3,8 @@
 > **Volume 2 of 3.** This evidence log is split across three files; the `§` numbers are unique across them.
 > §1–§15 — `runtime_444_structures.md` (live hot path, detours, CEffect class map, the falsified registration chain).
 > §16–§23 — `runtime_444_keyword_pipeline.md` (the static registration pipeline: driver, descriptors, thunk arrays, token allocator, class_info, consumers).
-> §24–§29 — `runtime_444_c1_validation.md` (the alias/donor decision, A5 cross-validation, ABI corrections, backlog).
+> §24–§30 — `runtime_444_c1_validation.md` (the alias/donor decision, A5 cross-validation, ABI corrections,
+> backlog, the fallback settled as an error-view builder, and the token DB's `id → name` table).
 
 ## 16. The real keyword registration table, found statically (2026-09-29) — **A2 solved**
 
@@ -243,9 +244,11 @@ layout is confirmed a second time, from the allocating side this time rather tha
 | offset | meaning | evidence |
 |--------|---------|----------|
 | `+0x50` | name → id hash map | `[[db]+0x30]` insert; `0x22D0E0(db+0x50, …)` |
+| `+0x58` | that map's value-array base, stride 8 | walked for `[db+0x64]` entries by `0x1D12CD0` (§30.2) |
 | `+0x64` | map size | seeded by the driver loop; read in the allocator |
 | `+0x84` | **max static token id** | ctor `0x1D136E5` runs `max([slot+0])` over the array |
 | `+0x80` | next free id | `= [db+0x84] + 1` after seeding; `= new_id+1` after each allocation |
+| `+0x68` / `+0x70` / `+0x7c` | **`id → name` reverse table**: holder array base `+0x70`, stride `0x30`, indexed by raw id; each holder's `std::string` at `holder+0x10` (§20's shape) | **added later, §30.2** — built by `0x1D12CD0` from the 9,863 static descriptors *and* the dynamic map; `+0x68` is resized to `[db+0x80]` via `0x391F90`. Not in §18's original reading; `+0x7c`'s exact nature (count vs vector end high-half) is left open there. |
 
 The seeding loop bound is `rbx` stepping `+= 0x120` while `rbx < 0x2B57E0`, and
 **`0x2B57E0 / 0x120 = 9,863`** — the exact entry count §17 measured from the reference census,

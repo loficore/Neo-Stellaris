@@ -1,0 +1,434 @@
+# §30 command record (2026-09-30, offline; second arg is a LENGTH or an instruction count, never an end RVA)
+$ python3 scripts/pdata.py 0x1D092C0 0x1D09330 0x1D09130 0x1D0D320
+0x1d092c0 -> func 0x1d092c0..0x1d0932f (0x6f bytes) unwind 0x2906f4c
+0x1d09330 -> func 0x1d09330..0x1d094d0 (0x1a0 bytes) unwind 0x2906f6c
+0x1d09130 -> func 0x1d09130..0x1d092b1 (0x181 bytes) unwind 0x28010ac
+0x1d0d320 -> func 0x1d0d320..0x1d0d3f4 (0xd4 bytes) unwind 0x29074c0
+
+$ python3 scripts/disrva.py 0x1D092C0 18
+; stellaris.exe  .text RVA 0x1d092c0  (24 insns)
+  01d092c0  push    rbx
+  01d092c2  sub     rsp, 0x50
+  01d092c6  mov     rbx, rcx
+  01d092c9  xor     eax, eax
+  01d092cb  mov     dword ptr [rsp + 0x20], eax
+  01d092cf  mov     qword ptr [rsp + 0x28], rax
+  01d092d4  lea     ecx, [rax + 0x20]
+  01d092d7  call    0x142185218  ; -> 0x2185218
+  01d092dc  movdqa  xmm0, xmmword ptr [rip + 0x9f939c]  ; -> 0x2702680
+  01d092e4  movdqu  xmmword ptr [rsp + 0x40], xmm0
+  01d092ea  movups  xmm0, xmmword ptr [rip + 0x9dbc0f]  ; -> 0x26e4f00
+  01d092f1  movups  xmmword ptr [rax], xmm0
+  01d092f4  mov     byte ptr [rax + 0x10], 0
+  01d092f8  mov     qword ptr [rsp + 0x30], rax
+  01d092fd  lea     rdx, [rsp + 0x20]
+  01d09302  mov     rcx, rbx
+  01d09305  call    0x141d09330  ; -> 0x1d09330
+  01d0930a  nop     
+  01d0930b  cmp     qword ptr [rsp + 0x48], 0x10
+  01d09311  jb      0x141d09329
+  01d09313  cmp     dword ptr [rsp + 0x20], 1
+  01d09318  je      0x141d09329
+  01d0931a  mov     rcx, qword ptr [rsp + 0x30]
+  01d0931f  add     rsp, 0x50
+
+$ python3 scripts/disrva.py 0x1D09330 120   ;# 0x1d09330..0x1d094d0
+; stellaris.exe  .text RVA 0x1d09330-0x1d09450
+  01d09330  mov     qword ptr [rsp + 0x10], rbx
+  01d09335  mov     qword ptr [rsp + 0x18], rsi
+  01d0933a  mov     qword ptr [rsp + 0x20], rdi
+  01d0933f  push    rbp
+  01d09340  push    r14
+  01d09342  push    r15
+  01d09344  lea     rbp, [rsp - 0x47]
+  01d09349  sub     rsp, 0xc0
+  01d09350  mov     rsi, rdx
+  01d09353  mov     rdi, rcx
+  01d09356  mov     rdx, qword ptr [rcx + 0x48]
+  01d0935a  xor     r15d, r15d
+  01d0935d  mov     dword ptr [rbp - 0x59], r15d
+  01d09361  xorps   xmm0, xmm0
+  01d09364  movdqu  xmmword ptr [rbp - 0x51], xmm0
+  01d09369  mov     qword ptr [rbp - 0x39], r15
+  01d0936d  mov     qword ptr [rbp - 0x31], 0xf
+  01d09375  mov     byte ptr [rbp - 0x49], r15b
+  01d09379  mov     rbx, 0xffffffffffffffff
+  01d09380  mov     r8, rbx
+  01d09383  inc     r8
+  01d09386  cmp     byte ptr [rdx + r8], r15b
+  01d0938a  jne     0x141d09383
+  01d0938c  lea     rcx, [rbp - 0x59]
+  01d09390  call    0x14015f770  ; -> 0x15f770
+  01d09395  nop     
+  01d09396  mov     rax, qword ptr [rdi + 0x30]
+  01d0939a  mov     rcx, qword ptr [rax + 8]
+  01d0939e  mov     r14d, dword ptr [rcx + 8]
+  01d093a2  lea     rdx, [rsi + 0x10]
+  01d093a6  cmp     qword ptr [rdx + 0x18], 0x10
+  01d093ab  jb      0x141d093b0
+  01d093ad  mov     rdx, qword ptr [rdx]
+  01d093b0  mov     dword ptr [rbp - 0x29], r15d
+  01d093b4  xorps   xmm0, xmm0
+  01d093b7  movdqu  xmmword ptr [rbp - 0x21], xmm0
+  01d093bc  mov     qword ptr [rbp - 9], r15
+  01d093c0  mov     qword ptr [rbp - 1], 0xf
+  01d093c8  mov     byte ptr [rbp - 0x19], 0
+  01d093cc  mov     r8, rbx
+  01d093cf  nop     
+  01d093d0  inc     r8
+  01d093d3  cmp     byte ptr [rdx + r8], 0
+  01d093d8  jne     0x141d093d0
+  01d093da  lea     rcx, [rbp - 0x29]
+  01d093de  call    0x14015f770  ; -> 0x15f770
+  01d093e3  nop     
+  01d093e4  mov     dword ptr [rbp + 7], r14d
+  01d093e8  lea     rdx, [rbp - 0x49]
+  01d093ec  cmp     qword ptr [rbp - 0x31], 0x10
+  01d093f1  cmovae  rdx, qword ptr [rbp - 0x49]
+  01d093f6  mov     dword ptr [rbp + 0xf], r15d
+  01d093fa  xorps   xmm0, xmm0
+  01d093fd  movdqu  xmmword ptr [rbp + 0x17], xmm0
+  01d09402  mov     qword ptr [rbp + 0x2f], r15
+  01d09406  mov     qword ptr [rbp + 0x37], 0xf
+  01d0940e  mov     byte ptr [rbp + 0x1f], 0
+  01d09412  inc     rbx
+  01d09415  cmp     byte ptr [rdx + rbx], 0
+  01d09419  jne     0x141d09412
+  01d0941b  mov     r8, rbx
+  01d0941e  lea     rcx, [rbp + 0xf]
+  01d09422  call    0x14015f770  ; -> 0x15f770
+  01d09427  nop     
+  01d09428  mov     rbx, qword ptr [rdi + 0x18]
+  01d0942c  mov     ecx, 0x80
+  01d09431  call    0x142185218  ; -> 0x2185218
+  01d09436  mov     qword ptr [rbp + 0x67], rax
+  01d0943a  mov     r8, rbx
+  01d0943d  lea     rdx, [rbp - 0x29]
+  01d09441  mov     rcx, rax
+  01d09444  call    0x141d0d320  ; -> 0x1d0d320
+  01d09449  nop     
+  01d0944a  mov     qword ptr [rdi + 0x18], rax
+
+$ python3 scripts/disrva.py 0x1D09130 64
+; stellaris.exe  .text RVA 0x1d09130  (100 insns)
+  01d09130  mov     qword ptr [rsp + 8], rbx
+  01d09135  mov     qword ptr [rsp + 0x10], rbp
+  01d0913a  mov     qword ptr [rsp + 0x18], rsi
+  01d0913f  mov     qword ptr [rsp + 0x20], rdi
+  01d09144  push    r14
+  01d09146  sub     rsp, 0x140
+  01d0914d  mov     rbx, qword ptr [rcx + 0x30]
+  01d09151  mov     rdi, rcx
+  01d09154  inc     dword ptr [rip + 0x1671b62]  ; -> 0x337acbc
+  01d0915a  cmp     dword ptr [rbx + 0x18], 3
+  01d0915e  jne     0x141d0928d
+  01d09164  lea     rbp, [rip + 0x771f0d]  ; -> 0x247b078
+  01d0916b  xor     r14d, r14d
+  01d0916e  mov     rcx, rbx
+  01d09171  cmp     byte ptr [rbx + 0x13c], r14b
+  01d09178  jne     0x141d0919c
+  01d0917a  mov     rax, qword ptr [rbx]
+  01d0917d  mov     rcx, rbx
+  01d09180  call    qword ptr [rax + 8]
+  01d09183  mov     dword ptr [rbx + 0x10], eax
+  01d09186  test    eax, eax
+  01d09188  jne     0x141d09191
+  01d0918a  mov     dword ptr [rbx + 0x18], 0x13
+  01d09191  mov     byte ptr [rbx + 0x13c], 1
+  01d09198  mov     rcx, qword ptr [rdi + 0x30]
+  01d0919c  mov     eax, dword ptr [rbx + 0x18]
+  01d0919f  cmp     eax, 4
+  01d091a2  je      0x141d09235
+  01d091a8  cmp     eax, 0x13
+  01d091ab  je      0x141d09235
+  01d091b1  mov     rax, qword ptr [rcx]
+  01d091b4  call    qword ptr [rax + 8]
+  01d091b7  mov     rbx, qword ptr [rdi + 0x30]
+  01d091bb  mov     esi, eax
+  01d091bd  mov     rdx, qword ptr [rbx + 0x28]
+  01d091c1  cmp     byte ptr [rdx], 0x40
+  01d091c4  jne     0x141d0920b
+  01d091c6  lea     r8, [rdi + 0x3a8]
+  01d091cd  mov     rcx, rdi
+  01d091d0  lea     rdx, [rsp + 0x20]
+  01d091d5  call    0x141d0a0f0  ; -> 0x1d0a0f0
+  01d091da  lea     rdx, [rsp + 0x20]
+  01d091df  lea     rcx, [rbx + 0x18]
+  01d091e3  call    0x14016ffc0  ; -> 0x16ffc0
+  01d091e8  mov     rcx, qword ptr [rsp + 0x30]
+  01d091ed  lea     rax, [rsp + 0x40]
+  01d091f2  mov     qword ptr [rsp + 0x28], rbp
+  01d091f7  mov     dword ptr [rsp + 0x3c], r14d
+  01d091fc  cmp     rcx, rax
+  01d091ff  je      0x141d0920b
+  01d09201  test    rcx, rcx
+  01d09204  je      0x141d0920b
+  01d09206  call    0x142185254  ; -> 0x2185254
+  01d0920b  test    esi, esi
+  01d0920d  je      0x141d09293
+  01d09213  mov     rbx, qword ptr [rdi + 0x30]
+  01d09217  mov     rcx, rbx
+  01d0921a  cmp     dword ptr [rbx + 0x18], 3
+  01d0921e  jne     0x141d09171
+  01d09224  mov     rcx, rdi
+  01d09227  call    0x141d09130  ; -> 0x1d09130
+  01d0922c  mov     rbx, qword ptr [rdi + 0x30]
+  01d09230  jmp     0x141d0916e  ; -> 0x1d0916e
+  01d09235  mov     rax, qword ptr [rcx]
+  01d09238  call    qword ptr [rax + 8]
+  01d0923b  mov     rbx, qword ptr [rdi + 0x30]
+  01d0923f  mov     rax, qword ptr [rbx + 0x28]
+  01d09243  cmp     byte ptr [rax], 0x40
+  01d09246  jne     0x141d0928d
+  01d09248  lea     r8, [rdi + 0x3a8]
+  01d0924f  mov     rcx, rdi
+  01d09252  lea     rdx, [rsp + 0x20]
+  01d09257  call    0x141d0a0f0  ; -> 0x1d0a0f0
+  01d0925c  lea     rdx, [rsp + 0x20]
+  01d09261  lea     rcx, [rbx + 0x18]
+  01d09265  call    0x14016ffc0  ; -> 0x16ffc0
+  01d0926a  mov     rcx, qword ptr [rsp + 0x30]
+  01d0926f  lea     rax, [rsp + 0x40]
+  01d09274  mov     qword ptr [rsp + 0x28], rbp
+  01d09279  mov     dword ptr [rsp + 0x3c], r14d
+  01d0927e  cmp     rcx, rax
+  01d09281  je      0x141d0928d
+  01d09283  test    rcx, rcx
+  01d09286  je      0x141d0928d
+  01d09288  call    0x142185254  ; -> 0x2185254
+  01d0928d  dec     dword ptr [rip + 0x1671a29]  ; -> 0x337acbc
+  01d09293  lea     r11, [rsp + 0x140]
+  01d0929b  mov     rbx, qword ptr [r11 + 0x10]
+  01d0929f  mov     rbp, qword ptr [r11 + 0x18]
+  01d092a3  mov     rsi, qword ptr [r11 + 0x20]
+  01d092a7  mov     rdi, qword ptr [r11 + 0x28]
+  01d092ab  mov     rsp, r11
+  01d092ae  pop     r14
+  01d092b0  ret     
+  01d092b1  int3    
+  01d092b2  int3    
+  01d092b3  int3    
+  01d092b4  int3    
+  01d092b5  int3    
+  01d092b6  int3    
+
+$ python3 scripts/disrva.py 0x1D0D320 64
+; stellaris.exe  .text RVA 0x1d0d320  (100 insns)
+  01d0d320  mov     qword ptr [rsp + 8], rbx
+  01d0d325  mov     qword ptr [rsp + 0x10], rbp
+  01d0d32a  mov     qword ptr [rsp + 0x20], r9
+  01d0d32f  push    rsi
+  01d0d330  push    rdi
+  01d0d331  push    r14
+  01d0d333  sub     rsp, 0x20
+  01d0d337  mov     rbp, r8
+  01d0d33a  mov     rsi, rdx
+  01d0d33d  mov     rdi, rcx
+  01d0d340  mov     qword ptr [rsp + 0x58], rcx
+  01d0d345  add     rdx, 0x10
+  01d0d349  cmp     qword ptr [rdx + 0x18], 0x10
+  01d0d34e  jb      0x141d0d353
+  01d0d350  mov     rdx, qword ptr [rdx]
+  01d0d353  xor     r14d, r14d
+  01d0d356  mov     dword ptr [rcx], r14d
+  01d0d359  mov     qword ptr [rcx + 8], r14
+  01d0d35d  mov     qword ptr [rcx + 0x10], r14
+  01d0d361  mov     qword ptr [rcx + 0x20], r14
+  01d0d365  mov     qword ptr [rcx + 0x28], 0xf
+  01d0d36d  mov     byte ptr [rcx + 0x10], r14b
+  01d0d371  mov     rbx, 0xffffffffffffffff
+  01d0d378  mov     r8, rbx
+  01d0d37b  nop     dword ptr [rax + rax]
+  01d0d380  inc     r8
+  01d0d383  cmp     byte ptr [rdx + r8], r14b
+  01d0d387  jne     0x141d0d380
+  01d0d389  call    0x14015f770  ; -> 0x15f770
+  01d0d38e  nop     
+  01d0d38f  mov     eax, dword ptr [rsi + 0x30]
+  01d0d392  mov     dword ptr [rdi + 0x30], eax
+  01d0d395  lea     rcx, [rdi + 0x38]
+  01d0d399  lea     rdx, [rsi + 0x48]
+  01d0d39d  cmp     qword ptr [rdx + 0x18], 0x10
+  01d0d3a2  jb      0x141d0d3a7
+  01d0d3a4  mov     rdx, qword ptr [rdx]
+  01d0d3a7  mov     dword ptr [rcx], r14d
+  01d0d3aa  mov     qword ptr [rcx + 8], r14
+  01d0d3ae  mov     qword ptr [rcx + 0x10], r14
+  01d0d3b2  mov     qword ptr [rcx + 0x20], r14
+  01d0d3b6  mov     qword ptr [rcx + 0x28], 0xf
+  01d0d3be  nop     
+  01d0d3c0  inc     rbx
+  01d0d3c3  cmp     byte ptr [rdx + rbx], 0
+  01d0d3c7  jne     0x141d0d3c0
+  01d0d3c9  mov     r8, rbx
+  01d0d3cc  call    0x14015f770  ; -> 0x15f770
+  01d0d3d1  nop     
+  01d0d3d2  mov     qword ptr [rdi + 0x68], rbp
+  01d0d3d6  mov     qword ptr [rdi + 0x70], r14
+  01d0d3da  mov     byte ptr [rdi + 0x78], 0
+  01d0d3de  mov     rax, rdi
+  01d0d3e1  mov     rbx, qword ptr [rsp + 0x40]
+  01d0d3e6  mov     rbp, qword ptr [rsp + 0x48]
+  01d0d3eb  add     rsp, 0x20
+  01d0d3ef  pop     r14
+  01d0d3f1  pop     rdi
+  01d0d3f2  pop     rsi
+  01d0d3f3  ret     
+  01d0d3f4  int3    
+  01d0d3f5  int3    
+  01d0d3f6  int3    
+  01d0d3f7  int3    
+  01d0d3f8  int3    
+  01d0d3f9  int3    
+  01d0d3fa  int3    
+  01d0d3fb  int3    
+  01d0d3fc  int3    
+  01d0d3fd  int3    
+  01d0d3fe  int3    
+  01d0d3ff  int3    
+  01d0d400  mov     qword ptr [rsp + 0x10], rbx
+  01d0d405  push    rsi
+  01d0d406  sub     rsp, 0x20
+  01d0d40a  mov     rbx, qword ptr [rcx + 8]
+  01d0d40e  mov     rsi, rcx
+  01d0d411  test    rbx, rbx
+  01d0d414  je      0x141d0d446
+  01d0d416  mov     qword ptr [rsp + 0x30], rdi
+  01d0d41b  nop     dword ptr [rax + rax]
+  01d0d420  mov     rdi, qword ptr [rbx + 0x70]
+  01d0d424  mov     rcx, rbx
+  01d0d427  call    0x140167fa0  ; -> 0x167fa0
+  01d0d42c  mov     edx, 0x80
+  01d0d431  mov     rcx, rbx
+  01d0d434  call    0x142185254  ; -> 0x2185254
+  01d0d439  mov     rbx, rdi
+  01d0d43c  test    rdi, rdi
+  01d0d43f  jne     0x141d0d420
+  01d0d441  mov     rdi, qword ptr [rsp + 0x30]
+  01d0d446  mov     rbx, qword ptr [rsp + 0x38]
+  01d0d44b  xor     eax, eax
+  01d0d44d  mov     qword ptr [rsi + 8], rax
+  01d0d451  mov     qword ptr [rsi + 0x10], rax
+  01d0d455  mov     dword ptr [rsi + 0x18], eax
+  01d0d458  add     rsp, 0x20
+  01d0d45c  pop     rsi
+  01d0d45d  ret     
+  01d0d45e  int3    
+
+$ python3 scripts/riprefs.py 0x337ACBC
+
+== 2 refs to 337acbc (.text) ==
+      2  func 1d09130..1d092b1
+
+$ python3 scripts/fastcalls.py 0x1D09330 --top 40   ;# -> evidence/xrefs/callers_0x1d09330_buckets.tsv
+22 direct code sites to 0x1d09330 in .text
+in 22 functions
+
+  1 sites  0x3ae900..0x3aeadd (0x1dd)  -
+         0x252ef00 'Expected list start'
+  1 sites  0x3f55f0..0x3f587d (0x28d)  -
+
+$ raw qwords at 0x26E4F00 (messages) and 0x2702680 ({size,cap} table)
+0x26e4f00 [.rdata] 556e657870656374656420746f6b656e00000000000000002c206e656172206c696e653a2000000020f0d0410100000000f1d04101000000006b154001000000
+   ascii: Unexpected token........, near line: ... ..A.......A.....k.@....
+0x2702680 [.rdata] 10000000000000001f0000000000000011000000000000001f0000000000000012000000000000001f0000000000000013000000000000001f00000000000000
+   ascii: ................................................................
+   qwords: ['0x10', '0x1f', '0x11', '0x1f', '0x12', '0x1f', '0x13', '0x1f']
+
+$ python3 scripts/disrva.py 0x1D09465 12   ;# appender tail: [obj+0x28]=1 then jmp 0x1D09130
+; stellaris.exe  .text RVA 0x1d09465  (18 insns)
+  01d09465  cmp     qword ptr [rbp + 0x37], 0x10
+  01d0946a  jb      0x141d0947b
+  01d0946c  cmp     dword ptr [rbp + 0xf], 1
+  01d09470  je      0x141d0947b
+  01d09472  mov     rcx, qword ptr [rbp + 0x1f]
+  01d09476  call    0x141cc4450  ; -> 0x1cc4450
+  01d0947b  cmp     qword ptr [rbp - 1], 0x10
+  01d09480  jb      0x141d09492
+  01d09482  cmp     dword ptr [rbp - 0x29], 1
+  01d09486  je      0x141d09492
+  01d09488  mov     rcx, qword ptr [rbp - 0x19]
+  01d0948c  call    0x141cc4450  ; -> 0x1cc4450
+  01d09491  nop     
+  01d09492  cmp     qword ptr [rbp - 0x31], 0x10
+  01d09497  jb      0x141d094a8
+  01d09499  cmp     dword ptr [rbp - 0x59], 1
+  01d0949d  je      0x141d094a8
+  01d0949f  mov     rcx, qword ptr [rbp - 0x49]
+
+$ python3 scripts/disrva.py 0x1D12CD0 0x114   ;# §30.2 reverse-table builder
+; stellaris.exe  .text RVA 0x1d12cd0-0x1d12de4
+  01d12cd0  mov     qword ptr [rsp + 0x18], rbx
+  01d12cd5  mov     qword ptr [rsp + 0x20], rbp
+  01d12cda  push    rsi
+  01d12cdb  push    rdi
+  01d12cdc  push    r14
+  01d12cde  sub     rsp, 0x20
+  01d12ce2  call    0x141d12c60  ; -> 0x1d12c60
+  01d12ce7  xor     r14d, r14d
+  01d12cea  mov     rdi, rax
+  01d12ced  mov     rdx, qword ptr [rax + 0x70]
+  01d12cf1  movsxd  rcx, dword ptr [rax + 0x7c]
+  01d12cf5  lea     r9, [rcx + rcx*2]
+  01d12cf9  shl     r9, 4
+  01d12cfd  add     r9, rdx
+  01d12d00  cmp     rdx, r9
+  01d12d03  je      0x141d12d31
+  01d12d05  nop     word ptr [rax + rax]
+  01d12d10  mov     r8, rdx
+  01d12d13  add     rdx, 0x30
+  01d12d17  cmp     qword ptr [r8 + 0x28], 0x10
+  01d12d1c  lea     rax, [r8 + 0x10]
+  01d12d20  jb      0x141d12d25
+  01d12d22  mov     rax, qword ptr [rax]
+  01d12d25  mov     qword ptr [r8 + 0x20], r14
+  01d12d29  mov     byte ptr [rax], r14b
+  01d12d2c  cmp     rdx, r9
+  01d12d2f  jne     0x141d12d10
+  01d12d31  mov     edx, dword ptr [rdi + 0x80]
+  01d12d37  lea     rcx, [rdi + 0x68]
+  01d12d3b  call    0x140391f90  ; -> 0x391f90
+  01d12d40  mov     rsi, r14
+  01d12d43  call    0x140172e50  ; -> 0x172e50
+  01d12d48  mov     rbx, qword ptr [rax + rsi + 0x10]
+  01d12d4d  call    0x140172e50  ; -> 0x172e50
+  01d12d52  mov     r8, 0xffffffffffffffff
+  01d12d59  nop     dword ptr [rax]
+  01d12d60  inc     r8
+  01d12d63  cmp     byte ptr [rbx + r8], r14b
+  01d12d67  jne     0x141d12d60
+  01d12d69  movsxd  rax, dword ptr [rax + rsi]
+  01d12d6d  mov     rdx, rbx
+  01d12d70  lea     rcx, [rax + rax*2]
+  01d12d74  shl     rcx, 4
+  01d12d78  add     rcx, qword ptr [rdi + 0x70]
+  01d12d7c  call    0x14015f770  ; -> 0x15f770
+  01d12d81  add     rsi, 0x120
+  01d12d88  cmp     rsi, 0x2b57e0
+  01d12d8f  jl      0x141d12d43
+  01d12d91  mov     esi, r14d
+  01d12d94  cmp     dword ptr [rdi + 0x64], r14d
+  01d12d98  jle     0x141d12ddb
+  01d12d9a  mov     rbx, r14
+  01d12d9d  nop     dword ptr [rax]
+  01d12da0  mov     rax, qword ptr [rdi + 0x58]
+  01d12da4  mov     r8, 0xffffffffffffffff
+  01d12dab  mov     rcx, qword ptr [rbx + rax]
+  01d12daf  mov     rdx, qword ptr [rcx + 0x10]
+  01d12db3  inc     r8
+  01d12db6  cmp     byte ptr [rdx + r8], r14b
+  01d12dba  jne     0x141d12db3
+  01d12dbc  movsxd  rax, dword ptr [rcx]
+  01d12dbf  lea     rcx, [rax + rax*2]
+  01d12dc3  shl     rcx, 4
+  01d12dc7  add     rcx, qword ptr [rdi + 0x70]
+  01d12dcb  call    0x14015f770  ; -> 0x15f770
+  01d12dd0  inc     esi
+  01d12dd2  add     rbx, 8
+  01d12dd6  cmp     esi, dword ptr [rdi + 0x64]
+  01d12dd9  jl      0x141d12da0
+  01d12ddb  mov     rsi, qword ptr [rdi + 0x70]
+  01d12ddf  mov     ebp, 0xf
+
+$ python3 scripts/fastcalls.py 0x1D12CD0 --top 8   ;# -> evidence/xrefs/callers_0x1d12cd0_buckets.tsv
+$ python3 scripts/disrva.py 0x59D010 30   ;# id -> flag bitmask tree (NOT in any .pdata function)

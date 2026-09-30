@@ -5,7 +5,8 @@ Verified against live `stellaris.exe` 4.4.4 (pid 5172, base `0x7ff74a630000`).
 > **Volume 1 of 3.** This evidence log is split across three files; the `§` numbers are unique across them.
 > §1–§15 — `runtime_444_structures.md` (live hot path, detours, CEffect class map, the falsified registration chain).
 > §16–§23 — `runtime_444_keyword_pipeline.md` (the static registration pipeline: driver, descriptors, thunk arrays, token allocator, class_info, consumers).
-> §24–§29 — `runtime_444_c1_validation.md` (the alias/donor decision, A5 cross-validation, ABI corrections, backlog).
+> §24–§30 — `runtime_444_c1_validation.md` (the alias/donor decision, A5 cross-validation, ABI corrections,
+> backlog, the fallback settled as an error-view builder, and the token DB's `id → name` table).
 
 ## 1. DB globals are live even at main menu (CONFIRMED)
 
