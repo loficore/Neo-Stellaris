@@ -3,7 +3,7 @@
 // Values fall into two tiers, marked on each item:
 //   [VERIFIED 4.4.4] — confirmed by live Frida scan + disasm (see
 //                      evidence/xrefs/anchors_4_4_4.md and the three evidence volumes
-//                      evidence/analysis/runtime_444_*.md, §1–§29).
+//                      evidence/analysis/runtime_444_*.md, §1–§30).
 //   [UNVERIFIED 3.x] — inherited from 3.x analysis, not reconfirmed for 4.4.4.
 //                      Do NOT use for patching until runtime-verified.
 //

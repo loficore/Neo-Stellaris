@@ -16,7 +16,7 @@ registration pipeline and identify extension points for new effects/triggers.
 |---|---|
 | 取证过程 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
 | 取证过程 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证过程 §24–§29(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 离线脚本用法与判读陷阱 | `docs/offline-tooling.md` |
 | 4.4.4 锚点全表(Frida 重锚定) | `evidence/xrefs/anchors_4_4_4.md` |
 | keyword→behaviour 机器可读转储(3,900 条) | `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`(`scripts/thunkarrays.py`) |
@@ -84,6 +84,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 |-----|------|------|
 | `0x1D13270` | **`eax = GetOrAddToken(rcx = *name holder)` — 运行时 token 分配器**;`rdx` 死;名以 `-` 或数字开头则 `eax=0` | §18 §20 |
 | `0x1D12C60` / `0x37347A0` | token DB singleton 访问器 / 对象(vtable `0x26E5180`, ctor `0x1D13570`, guard `0x3734790`) | §18 |
+| **`0x1D12CD0`** | **`id → name` 反查表构建器**(无参,自取 singleton):`[db+0x70] + id*0x30` 的 holder 数组,`std::string` 在 `holder+0x10`;两半灌入 —— 9,863 条静态描述符 + `[db+0x58]`/`[db+0x64]` 的动态 map | **§30.2** |
 | `0x1D15270` / `0x1D152D0` | descriptor 写手:静态路径 / 动态路径 | §20 |
 | `0x1D158A0` | **两条路径共用的 slot writer** ⇒ 运行时 descriptor 与静态字节一致 | §18 §20 |
 | `0x337B400` | descriptor 数组,**stride `0x120` × 9,863**,只含 `{token id, SSO name}`,无 behaviour 槽 | §17 §20 |
@@ -127,7 +128,8 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | effect dispatch switch(`3.x 0x180B050`) | 4.4.x **不存在**;改为 per-class vtable 派发 | §3 §14 |
 | lexer/parser 会从脚本文本 mint token | **false**;567 个调用点分 139 桶无一处在解析器里,且 `0x1D13270` **零 qword 引用**。mod 脚本里的新词**不会**有 id,DLL 必须自己调 | §19 |
 | `0x5350D0` = keyword 执行器 / 真实扩展面 | 是按 token-id 的属性 getter,22 个派发消息里混着 `graphicsSettings`/`sendgame`;**0 个直接调用点** | §26.1 §28 |
-| `0x1D092C0` 可作 JS 作用域变量桥的前提 | 未定论(具名查找还是 error-view 构建都未判定)—— 只可当候选锚点,**不可当前提** | §28.3 |
+| `0x1D092C0` 可作 JS 作用域变量桥的候选锚点 | **已否**(§30):它是 parse-error 表追加器 —— `new(0x80)` 节点写进 `[obj+0x10]/+0x18/count +0x20` 链表、置 `[obj+0x28]=1`,尾调 tokenizer 推进 `0x1D09130`;`0x1D09330` 的 **22** 个调用方全部传**错误文案**(`'Unexpected token'`/`'Unreadable String'`/`'Unhandled Entry'`/`'Expected list start'`)。真正的按名变量查找**仍未定位**,不要再从这里找 | §28.3 → **§30** |
+| `0x337ACBC` 像"脚本错误计数" | 是**递归深度** global:全镜像只有 2 处引用,都在 `0x1D09130` 内(入口 `inc`、提前返回路径 `dec`),净为零 | §30 |
 | 3.x `CEventScope` 布局(`+8` scope type / `+16` object id) | 被 §26 证伪;但 `src/dll/api/scope.zig` **仍在读 `+8`/`+16` 且已链进 DLL** | §26 |
 
 ## 新硬编码 keyword 配方(Phase A 结论 — 全程离线,不 patch 静态表)
@@ -153,6 +155,14 @@ Cross-reference work prefers the offline scripts (约束 2)。
 **时机**(§19):步骤 1 是**强制**的(解析器永不 mint token)。不需要全局同步点;真正的前置只有
 两个 —— 目标 db 已拉起,以及我们的插入早于任何 *求值* 引用该 keyword。id 空间在整个启动期间持续增长
 (iterator 初始化数组、惰性访问器),所以"等 id 不再变化"是错的判据。
+
+**插入后的读回验伪,以及时序错了会长什么样**(§30):`0x1D12CD0` 会把 `[db+0x70] + id*0x30` 的反查表
+从静态描述符**和**动态 map 重灌一遍,所以我们 mint 的名字应能按 `[[0x37347A0+0x70] + id*0x30 + 0x10]`
+读回 —— 这条不依赖任何脚本走到 BST,是判据 ② 之外的独立只读观测(候选:守卫 `[db+0x7c] != [db+0x80]
+是否被我们的 mint 触发,仍需实机)。反过来,若脚本在我们插入**之前**就引用了新 keyword,落点是
+`0x5350D0` 默认分支 → `0x1D092C0` → `0x1D09330`,产出的是 **`'Unexpected token'` 错误表项 + `[obj+0x28]=1`**,
+即「报错」而非「静默没命中」——杂散的 `Unexpected token` 就是时序问题的信号。
+`0x1D092C0` 本身**不是**作用域变量桥(§30 判定为 error-view 构建器)。
 
 **Zig 侧**:`src/dll/scripted/keyword_registry.zig` — 字节层(`buildDescriptor`/`ValueRecord`/`NameCheck`,
 对 56 条 golden 向量做测试)+ 带门执行器(按 §19 顺序 `getToken` → `ensureDb` → `new(0x10)` → insert)。

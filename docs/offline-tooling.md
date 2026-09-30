@@ -4,8 +4,8 @@
 它编码的 capstone/PE 陷阱、以及曾经导致错误结论的度量口径。`AGENTS.md` 只保留一行一条的索引,
 用到哪个脚本时再来读这里。
 
-结论本身(§17–§29)在三卷取证日志 `evidence/analysis/runtime_444_*.md`——§16–§23 在
-`runtime_444_keyword_pipeline.md`,§24–§29 在 `runtime_444_c1_validation.md`;本文件只讲**怎么量**。
+结论本身(§17–§30)在三卷取证日志 `evidence/analysis/runtime_444_*.md`——§16–§23 在
+`runtime_444_keyword_pipeline.md`,§24–§30 在 `runtime_444_c1_validation.md`;本文件只讲**怎么量**。
 
 ## 前置条件
 
@@ -41,6 +41,11 @@ PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 
 **Any RVA range, disassembled offline** — annotates every
 rip-relative operand with the RVA it resolves to; this is what pinned the descriptor ctors' store order (§20).
+
+**第二个参数的口径（§30 现场踩过）**:它**不是**结束 RVA —— `a > 0xFF` 时脚本算的是 `end = start + a`,
+所以 `disrva.py 0x1D092C0 0x1D09330` 会去反汇编 `0x1D092C0..0x3A125F0`(约 30 MB `.text`)。
+要按函数边界读,先 `pdata.py <rva>` 取区间,再传**指令条数**(`a <= 0xFF`)或传**长度** `end-start`。
+本函数边界一律以 `.pdata` 为准,不要靠 `int3` 填充猜结尾。
 
 ### `scripts/emu_desc.py` — the oracle
 
