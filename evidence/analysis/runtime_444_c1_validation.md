@@ -1259,7 +1259,7 @@ refcount helpers; both reimplementations were wrong and both were live in HEAD):
    `void JS_FreeValue(JSContext *ctx, JSValue v) { __JS_FreeValue(ctx, v); }` —
    no `JS_VALUE_HAS_REF_COUNT` guard and no decrement test.
    `__JS_FreeValueRT` (quickjs.c:6473) switches on the tag with cases only for
-   the refcounted tags and ends in `default: abort()` (quickjs.c:6571-6572), so
+   the refcounted tags and ends in `default: abort()` (quickjs.c:6539-6540), so
    freeing a `JS_TAG_INT` (exactly what `JS_Eval("1+1")` returns), a
    `JS_TAG_EXCEPTION` marker or a `JS_TAG_FLOAT64` aborted the host process —
    inside `stellaris.exe` that is a self-inflicted game death. It also ignored
@@ -1330,8 +1330,10 @@ Observations pinned by those tests, all against the real vendored QuickJS (no
 mocks): `1+1` → rc **11**, `@divTrunc(11-3,4) == 2`, `11 % 4 == 3`; `1.5` → rc 7
 (n = 1, i.e. `JS_ToInt32` truncates and the FLOAT64 is freed without aborting);
 `this_is_not_valid_js ~~` → rc **1** and the *same* context then returns 11 for
-`1+1` (the pending exception is moved out by `c2_clear_pending_exception`,
-quickjs.c:7406-7413, so the gate is dispatchable more than once per instance);
+`1+1` (the pending exception is moved out and released by `c2_clear_pending_exception`,
+quickjs.c:7406-7413 — that release is leak prevention for the moved-out exception
+value, not what makes the context re-dispatchable: a second `JS_Eval("1+1")` succeeds
+even with an exception pending);
 `({ valueOf() { throw 1; } })` → rc **2** (ToNumber propagates, `JS_ToInt32`
 returns -1) and 11 again afterwards; `C2EvalProbe("1+1")` with no init at all →
 rc **0**, the `if (!g_test_ctx) return 0;` guard (quickjs_wrapper.c:413) reached

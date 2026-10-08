@@ -119,10 +119,13 @@ extern int JS_NewContextDiag(JSRuntime *rt, JSContext **out_ctx);
    JS_TAG_INT result of JS_Eval("1+1"), or a JS_TAG_EXCEPTION, aborted the host
    process (ruling P19). It also ignored the refcount outright: a value held
    twice was released while a holder remained (observed natively).
-   Note on `== 0` vs quickjs.h's `<= 0`: this file's JSRefCountHeader counts with
-   uint32_t, where `<= 0` means `== 0`; the two agree for every well-formed
-   value and differ only for an already-zero refcount, where quickjs.h would
-   double-free and this releases nothing. */
+   Note on `== 0` vs quickjs.h's `<= 0` (quickjs.h:691): the equivalence `<= 0`
+   means `== 0` holds only of THIS file's header, whose JSRefCountHeader counts
+   with uint32_t. The header this mirrors (quickjs.h:100) counts with a signed
+   int ref_count, where `<= 0` and `== 0` diverge for an already non-positive
+   count. The two forms agree for every well-formed value and differ only for
+   an already-zero refcount, where quickjs.h would double-free and this
+   releases nothing. */
 void JS_FreeValue(JSContext *ctx, JSValue v) {
     if (JS_VALUE_HAS_REF_COUNT(v)) {
         JSRefCountHeader *p = __js_rc(JS_VALUE_GET_PTR(v));
@@ -374,10 +377,12 @@ extern JSValue JS_Eval(JSContext *ctx, const char *input, size_t input_len,
 extern int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
 extern JSValue JS_GetException(JSContext *ctx);
 
-/* Move a pending exception out of rt->current_exception and release it, so one
-   context can serve more than one probe (quickjs.c:7406-7413; the slot would
-   otherwise stay occupied until the next JS_Throw frees it). JS_FreeValue on the
-   JS_UNINITIALIZED marker is a no-op under the P19 guard. */
+/* Move a pending exception out of rt->current_exception and release it, so the
+   moved-out exception value does not leak (quickjs.c:7406-7413; the slot would
+   otherwise stay occupied until the next JS_Throw frees it). The justification
+   here is leak prevention, not re-dispatchability: a second JS_Eval succeeds
+   even with an exception pending. JS_FreeValue on the JS_UNINITIALIZED marker
+   is a no-op under the P19 guard. */
 static void c2_clear_pending_exception(JSContext *ctx) {
     JSValue exc = JS_GetException(ctx);
     JS_FreeValue(ctx, exc);

@@ -100,9 +100,16 @@ def decode_probe_rc(raw_rc):
     ``c2_harness.call_remote`` returns: the low 32 bits of the thread exit code
     as an *unsigned* Python int (``ctypes.c_uint``). ``C2EvalProbe`` returns a C
     ``int``, so a negative result arrives wrapped (``-1`` -> ``4294967295``) and
-    is re-biased here before decoding. After that the decode is exact: ``rc`` is
-    in int32 and congruent to 3 (mod 4), so ``4n + 3 = rc`` never wrapped on the
-    way out.
+    is re-biased here before decoding. After that the decode is exact for the
+    ``rc`` it is given: ``rc`` is in int32 and congruent to 3 (mod 4), so
+    ``(rc - 3) // 4`` divides exactly. Caveat (same as the P20 deferred minor
+    recorded at ``quickjs_wrapper.c``'s return-encoding comment and §35): for
+    ``|n| >= 2^29`` (more precisely, outside ``-2^29 <= n < 2^29``) the C
+    encoding ``n * 4 + 3`` itself overflows int32 and wraps, so this decode
+    recovers an aliased ``n`` — it differs from the encoded value by a multiple
+    of ``2^30``, the period of the wrap — not the value that went in. The
+    fixed ``1+1`` probe never reaches that range, but callers must not treat a
+    decoded ``n`` as faithful outside it.
 
     Returns ``(name, None)`` for a sentinel (0/1/2) and ``(VALUE, n)`` otherwise.
     Raises ``ValueError`` for anything that cannot be a probe rc: negative (an
@@ -188,12 +195,15 @@ def run_live_case(pid, dll_path, noinit):
         assert "C2Init" not in _dispatched, "no-init mode must never dispatch C2Init"
         rc = dispatch_once(pid, base, probe_rva, "C2EvalProbeOnePlusOne")
         assert_game_alive(pid)
-        kind, n = decode_probe_rc(rc)
         assert rc == 0, (
             f"no-init case expected the !g_test_ctx guard (rc 0), got rc={rc} "
-            f"(kind={kind}, n={n}) — this instance evaluated, so C2Init ran in it "
+            "— this instance evaluated, so C2Init ran in it "
             "or the resolved base belongs to an already-initialized copy (P22)"
         )
+        # Decode runs only after the rc == 0 assert, so a misaligned or garbage
+        # rc (e.g. 42 from dispatching the wrong symbol) fails with the
+        # assertion text above, never with decode_probe_rc's bare ValueError.
+        kind, n = decode_probe_rc(rc)
         assert_game_alive(pid)
         print("Task 6 (Step 6): C2EvalProbeOnePlusOne returned 0 with no C2Init in "
               "this module copy — the !g_test_ctx guard holds and did not crash")
