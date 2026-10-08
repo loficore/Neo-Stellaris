@@ -353,3 +353,86 @@ test "C2EvalProbe on a value JS_ToInt32 cannot convert returns 2" {
     try std.testing.expectEqual(@as(c_int, 2), C2EvalProbe("({ valueOf() { throw 1; } })"));
     try std.testing.expectEqual(@as(c_int, 11), C2EvalProbe("1+1"));
 }
+
+// ---------------------------------------------------------------------------
+// Cross-thread stack guard (final whole-branch review's Important finding).
+//
+// CONFIG_STACK_CHECK is compiled for every non-Emscripten target
+// (quickjs.c:75-77). JS_NewRuntime2 captures rt->stack_top exactly once
+// (quickjs.c:2116 -> JS_UpdateStackTop, quickjs.c:2897-2900) on WHICHEVER
+// thread created the runtime, and JS_SetMaxStackSize(rt, 1 MiB) sets
+// stack_limit = stack_top - 1 MiB (quickjs.c:2882-2895). js_check_stack_overflow
+// (quickjs.c:2059-2064) then compares the EVALUATING thread's sp against that
+// stale limit. The live C2 sequence dispatches C2Init on CreateRemoteThread A
+// and C2EvalProbeOnePlusOne on a different CreateRemoteThread B — exactly the
+// "changing thread" case quickjs.h:376-378 documents ("should be called when
+// changing thread"), which only the public JS_UpdateStackTop can service.
+//
+// The refresh call itself lives in quickjs_wrapper.c (C, per the constraint
+// that no Zig file binds a QuickJS C symbol — bindings.zig:345's declaration
+// stays unused by the live path).
+//
+// What THIS test can and cannot prove:
+//   * It IS a real two-thread reproduction: init on the main thread captures
+//     the main stack top (~0x7ffc/0x7ffe.. here, 3/3 prototype runs);
+//     std.Thread.spawn gives B a fresh mmap'd pthread stack (~0x7f.., a
+//     100s-of-GB gap below main's top), so B's entry sp < stack_limit_stale
+//     and the unfixed guard throws a spurious StackOverflow -> rc 1 (observed
+//     RED). The precondition assert below pins that layout, so a libc that
+//     ever placed B above main_top - 1 MiB fails loudly instead of passing
+//     vacuously.
+//   * The literal live order (A inits then EXITS, then B spawns) was tried
+//     first and is VACUOUS on this host: every run lands B on A's exact stack
+//     segment — B's thread-local address equalled A's 10/10 prototype runs,
+//     even at unequal stack sizes (glibc cached-stack reuse, or an
+//     indistinguishable same-address remap; the mechanism does not matter,
+//     the address identity does) — so B inherits A's top and the stale guard
+//     looks correct either way. That is a host-layout accident; on Windows the
+//     freed thread stack is returned to the OS and B lands elsewhere — the
+//     defect stands.
+//   * The CROSS-THREAD CORRECTNESS argument (that refreshing to B's own sp is
+//     the right fix) rests on the QuickJS API contract at quickjs.h:376-378,
+//     not on this test; the test pins that the refresh links, runs before
+//     JS_Eval (a call placed after it would leave rc 1), and does not break an
+//     otherwise-successful evaluation.
+// ---------------------------------------------------------------------------
+
+test "C2EvalProbe on a lower-stack thread (runtime built on main) returns 11, not stale-guard 1" {
+    var layout_delta: i64 = undefined;
+    var rc: c_int = undefined;
+
+    // Capture a main-thread stack address to compare against, then build the
+    // runtime HERE so rt->stack_top belongs to the main thread.
+    var main_local: u8 = 0;
+    const main_addr = @intFromPtr(&main_local);
+
+    var diag: [512]u8 = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), C2DiagQuickJS(&diag, @intCast(diag.len)));
+
+    const t = try std.Thread.spawn(.{}, struct {
+        fn threadFn(out_rc: *c_int, out_delta: *i64, anchor: usize) void {
+            var b_local: u8 = 0;
+            // Signed, so an inverted layout (B above anchor) reads NEGATIVE and
+            // trips the precondition below instead of wrapping huge and passing
+            // the test vacuously.
+            out_delta.* = @as(i64, @bitCast(anchor)) -% @as(i64, @bitCast(@intFromPtr(&b_local)));
+            out_rc.* = C2EvalProbe("1+1");
+        }
+    }.threadFn, .{ &rc, &layout_delta, main_addr });
+    t.join();
+
+    // Layout precondition (deterministic on Linux x86-64: main stack sits at
+    // the top of the task address space, pthread stacks mmap far below). If
+    // this ever trips, the test no longer reproduces anything — fail loudly.
+    try std.testing.expect(layout_delta > 1024 * 1024);
+
+    // The assertion proper: with the refresh, QuickJS re-anchors stack_top to
+    // B's own frame and `1+1` evaluates (rc 11). Without it, JS_Eval throws a
+    // spurious stack overflow and the probe reports sentinel rc 1 — the exact
+    // wrong-diagnosis path SENTINEL_DIAGNOSIS[1] would have sent the human
+    // partner down on the live shot.
+    try std.testing.expectEqual(@as(c_int, 11), rc);
+
+    // The same context still serves afterwards (refresh left it usable):
+    try std.testing.expectEqual(@as(c_int, 11), C2EvalProbe("1+1"));
+}

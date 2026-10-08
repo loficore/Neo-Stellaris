@@ -1402,6 +1402,116 @@ RVAs — P10).** `zig build` output `zig-out/bin/stellaris_quickjs.dll` (7 156 7
   `C:/temp/sqjs_c5_noinit.dll` (Windows loads per-path, so the second instance gets
   its own zero-initialised `g_test_ctx` — what makes Step 6 a real test rather than
   a state leak).
+  **SUPERSEDED 2026-10-09**: this hash describes the pre-`JS_UpdateStackTop` build.
+  The final whole-branch review found the cross-thread stack-guard defect recorded
+  in the next subsection; the queued live dispatch block below now names the
+  rebuilt artifact (`cef9fa056de2…`), and the hash/RVAs above must not be used to
+  check the upload.
+
+### Fix dispatch: cross-thread stack guard refresh — CONFIRMED BY CODE READING, NOT YET OBSERVED LIVE (2026-10-09)
+
+**What this section is.** Per ruling P13 the ledger records observed facts only;
+this is explicitly labelled: the defect below is a **confirmed defect from static
+code reading plus a native reproduction, NOT a live measurement** — no game was
+touched, and the spurious `rc == 1` has not been observed in the live session
+(the live shot was still queued when the fix landed, so it never had the chance).
+
+**The defect** (every line re-read and verified in `libs/quickjs` on 2026-10-09):
+QuickJS's stack guard is compiled for every non-Emscripten target —
+`CONFIG_STACK_CHECK` at quickjs.c:75-77. `JSRuntime` caches `uintptr_t stack_top`
+and `uintptr_t stack_limit` (quickjs.c:349-350); `update_stack_limit()` computes
+`stack_limit = stack_top - stack_size` (quickjs.c:2882-2889, the subtraction at
+:2887) and `JS_SetMaxStackSize` calls it (quickjs.c:2891-2895, the call at :2894);
+`js_check_stack_overflow()` is `return unlikely(sp < rt->stack_limit);`
+(quickjs.c:2059-2064, the return at :2063). `rt->stack_top` is set only by
+`JS_UpdateStackTop(rt)` (quickjs.c:2897-2900), declared public at quickjs.h:378
+with the comment "should be called when changing thread" (:376-377) — and it is
+called **exactly once**, inside `JS_NewRuntime2` (quickjs.c:2116; a grep over
+`libs/quickjs` finds no call site in quickjs.c other than :2116). The live C2
+sequence dispatches `C2Init` on `CreateRemoteThread` A — which captures **A's**
+stack top, sets `stack_limit = top_A − 1 MiB` (`JS_SetMaxStackSize(g_test_rt,
+1024*1024)`) — and then **exits**; `C2EvalProbeOnePlusOne` runs on a different
+`CreateRemoteThread` B, and `JS_Eval` → `JS_CallInternal` compares **B's** sp
+against the stale limit. If B's stack base lies below `top_A − 1 MiB` (likely:
+Windows returns a freed thread stack to the OS and the next thread lands
+elsewhere) QuickJS throws a spurious `StackOverflow`, `JS_Eval` returns the
+exception marker, the probe reports sentinel `rc = 1`, and `SENTINEL_DIAGNOSIS[1]`
+would steer the human partner toward "parser rejecting global code / missing base
+intrinsics" — a wrong diagnosis on the single authorized live shot. If B's stack
+lies above A's, the guard instead points at the wrong region (ineffective).
+Either way it is wrong. The pre-existing native tests could not catch this by
+construction: they run init and probe on one thread, so the cached top is always
+the evaluator's.
+
+**The fix** (`quickjs_wrapper.c`, two edits): `extern void
+JS_UpdateStackTop(JSRuntime *rt);` declared alongside the file's other QuickJS
+externs (after `JS_SetMemoryLimit`) — a genuine exported QuickJS function bound
+**in C**, per the global constraint; no new Zig `extern fn` was added and
+`bindings.zig:345`'s existing declaration remains unreferenced by the live path.
+`C2EvalProbe` now calls `JS_UpdateStackTop(g_test_rt);` immediately after the
+`if (!g_test_ctx) return 0;` early-return and before `JS_Eval` (ctx non-NULL
+implies rt non-NULL: every init path sets both together and nothing frees
+either). Refcount/`JS_FreeValue` handling untouched.
+
+**Native evidence (observed, verbatim).** TDD order: the test was written first
+and run against the UNFIXED wrapper (working-tree diff was `c2_diag_test.zig`
+only, so no file restoration was needed to verify state):
+
+```
+1/1 …C2EvalProbe on a lower-stack thread (runtime built on main) returns 11, not stale-guard 1…
+expected 11, found 1
+FAIL (TestExpectedEqual)   (exit 1)
+```
+
+— the stale guard really does turn a cross-thread `1+1` into sentinel 1. After
+the two-line C fix: filtered test GREEN 3/3 runs, whole file 14/14, suite
+`zig build test` → `289/289 tests passed` with the same pre-existing
+exports-rooted link failure (8 errors, symbols `CreateFileA/WriteFile/
+CloseHandle/GetModuleHandleA`, ruling P15, unchanged); `python3 -m pytest
+scripts/test_c2_harness.py -q` → 26 passed; `zig build` exit 0.
+
+**What the test proves and what it does not** (stated honestly, as briefed). The
+shipped test builds the runtime on the MAIN thread and evaluates on a spawned
+`std.Thread` whose pthread stack lies hundreds of GB below main's top (measured
+layout: main ~`0x7ffc/7ffe…`, pthread ~`0x7f…`, 3/3 prototype runs), pinning
+that gap with a precondition assert so an inverted layout fails loudly instead of
+passing vacuously. It pins: the symbol links and is callable with our runtime;
+the refresh runs BEFORE `JS_Eval` (a call placed after it leaves rc 1 — exactly
+the RED shown); and a refreshed guard does not break the `1+1` → rc 11 gate. The
+**cross-thread correctness argument rests on the QuickJS API contract**
+(quickjs.h:376-378), not on this test. The literal live order (A inits then
+exits, B evals) was attempted first and is VACUOUS on this host: every run
+lands B on A's exact stack segment — B's thread-local address equalled A's
+10/10 prototype runs, even at unequal stack sizes (default-size A → 8 MiB B;
+glibc cached-stack reuse or an indistinguishable same-address remap — the
+observed fact is the address identity) — so the stale guard would look correct
+either way. Reported per the brief rather than shipped as a test that asserts
+nothing. That is a host-layout accident; on Windows the freed stack is returned
+to the OS, which is why the live defect stands.
+
+**Also changed**: `scripts/c2_task6_e2e.py` `SENTINEL_DIAGNOSIS[1]` gained one
+clause — "or the cross-thread stack guard — see §35" — among the causes `rc == 1`
+can mean (no structural change; the probe stays on its own thread so the
+`--noinit` tripwire semantics of 93b1cda hold; the table is not host-tested, so
+`test_c2_harness.py` is unchanged at 26 passed).
+
+**Rebuilt artifact** (host-side `c2_harness.list_exports`, no hard-coded RVAs):
+`zig-out/bin/stellaris_quickjs.dll`, 7 156 736 bytes (same size as the superseded
+build, different content — check the hash, not the length):
+- sha256 `cef9fa056de272c9acd6cef562b16c8167932259237b224a0beff6a1d27a1214`
+- 31 exports, all RVAs distinct; `C2Sanity = 0x44bb30`, `C2Init = 0x44bab0`,
+  `C2QuickJSPointersInto = 0x44b8f0`, **`C2EvalProbeOnePlusOne = 0x44b860`** —
+  each exactly +0x10 from the superseded build, consistent with the wrapper
+  growing by the declared extern and the refresh call.
+- Not committed (`.dll`/`.pdb` excluded). Source identities at commit time:
+  `quickjs_wrapper.c` sha256 `d4eb0d78cebe…`, `c2_diag_test.zig` sha256
+  `06277cbee500…`, `scripts/c2_task6_e2e.py` sha256 `9ebd4572f477…`.
+
+**Counts for this fix dispatch**: `src/dll/quickjs/quickjs_wrapper.c` (+1 extern,
++1 call + comments), `src/dll/quickjs/c2_diag_test.zig` (+1 two-thread test +
+header block), `scripts/c2_task6_e2e.py` (one diagnosis clause), this §35
+subsection + supersession notes. No new exports, no `c2_harness.py` change, no
+C3 API, `keyword_registry.zig:211` gate state untouched.
 
 **Task 5 deferred Minor carried.** `scripts/c2_task5_init.py`'s ctx-NULL-with-live-rt
 diagnosis said "init got partway (runtime created, JS_NewContextDiag did not
@@ -1452,7 +1562,7 @@ scp scripts/c2_harness.py scripts/c2_task2_load.py scripts/c2_task3_diag.py \
 
 # 1. confirm the uploaded bytes are the ones hashed above.
 ssh Windows_Jiaolong "certutil -hashfile C:\temp\sqjs_c5.dll SHA256"
-#    expect: 3ad4433ea75fe893d5771e1f63e3ffed75a417f58f6190966077ff17b15a3cac
+#    expect: cef9fa056de272c9acd6cef562b16c8167932259237b224a0beff6a1d27a1214
 
 # 2. Step 3 — load + sanity on the new copy (path passed as argv; P22).
 ssh Windows_Jiaolong "python C:/temp/c2_task2_load.py C:/temp/sqjs_c5.dll"

@@ -80,7 +80,8 @@ SENTINEL_DIAGNOSIS = {
     1: (
         "JS_Eval threw on the fixed source `1+1` — QuickJS was reached and a "
         "context exists, but it cannot evaluate even trivial code (e.g. base "
-        "intrinsics missing from the context, or the parser rejecting global code)"
+        "intrinsics missing from the context, the parser rejecting global "
+        "code, or the cross-thread stack guard — see §35)"
     ),
     2: (
         "JS_Eval succeeded but JS_ToInt32 produced no int32 — the context "

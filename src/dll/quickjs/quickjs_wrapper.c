@@ -106,6 +106,9 @@ extern void JS_FreeContext(JSContext *ctx);
 extern void JS_FreeRuntime(JSRuntime *rt);
 extern void JS_SetMaxStackSize(JSRuntime *rt, size_t stack_size);
 extern void JS_SetMemoryLimit(JSRuntime *rt, size_t limit);
+/* Genuine exported QuickJS API (quickjs.h:378), bound here in C — not on the Zig
+   side (global constraint; bindings.zig:345's declaration stays unused). */
+extern void JS_UpdateStackTop(JSRuntime *rt);
 extern void *JS_GetRuntimeOpaque(JSRuntime *rt);
 extern void JS_SetRuntimeOpaque(JSRuntime *rt, void *opaque);
 extern int JS_NewContextDiag(JSRuntime *rt, JSContext **out_ctx);
@@ -416,6 +419,18 @@ static void c2_clear_pending_exception(JSContext *ctx) {
  * are deferred to C3). eval_flags 0 == JS_EVAL_TYPE_GLOBAL (quickjs.h:332). */
 int C2EvalProbe(const char *src) {
     if (!g_test_ctx) return 0;
+
+    /* CONFIG_STACK_CHECK (quickjs.c:75-77) caches rt->stack_top on whichever
+       thread created the runtime — JS_NewRuntime2 captures it exactly once
+       (quickjs.c:2116) — and js_check_stack_overflow compares the EVALUATING
+       thread's sp against stack_limit = stack_top - stack_size
+       (quickjs.c:2882-2887, :2059-2064). This probe is dispatched on a
+       different CreateRemoteThread than the C2Init that built the runtime, so
+       the cached top belongs to a dead thread's stack and JS_Eval can throw a
+       spurious stack overflow (rc 1, wrong diagnosis on the live shot).
+       quickjs.h:376-378 documents exactly this: "should be called when
+       changing thread". Refresh before any evaluation. */
+    JS_UpdateStackTop(g_test_rt);
 
     JSValue v = JS_Eval(g_test_ctx, src, strlen(src), "<probe>", 0);
 
