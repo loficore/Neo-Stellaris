@@ -107,6 +107,7 @@ extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2DiagGetLog() ?[*:0]const u8;
 extern fn C2GetQuickJSPointers(out_rt: *?*anyopaque, out_ctx: *?*anyopaque) void;
 extern fn C2WriteQuickJSPointersInto(out16: [*]u8) void;
+extern fn C2EvalProbe(src: [*:0]const u8) c_int;
 
 /// C2 diagnostic: test QuickJS init from C side. Returns 0=OK, 1=malloc fail, 2=runtime fail, 3=context fail.
 export fn C2TestQJS() callconv(.c) i32 {
@@ -249,6 +250,34 @@ export fn C2DiagQJSInto(out_diag: [*]u8) callconv(.c) i32 {
 /// Read-only observation aid, not a permanent API (Task 5 brief).
 export fn C2QuickJSPointersInto(out16: [*]u8) callconv(.c) void {
     C2WriteQuickJSPointersInto(out16);
+}
+
+/// C2 Task 6 acceptance gate (brief Step 2): evaluate the FIXED string "1+1" in
+/// the QuickJS context `C2Init` built, and return the encoded int32 so a
+/// CreateRemoteThread caller reads it back through the 32-bit thread exit code:
+///   0 = C2Init has not run (g_test_ctx NULL), 1 = JS_Eval threw, 2 = the result
+///   is not an int32, n*4+3 = the result was int32 n  →  decode (rc - 3) / 4.
+/// So `1+1` returns 11 and decodes to 2 — ruling P20: the brief's "expected 7"
+/// was an arithmetic slip (`1+1` is 2, not 1); the ENCODING is the contract, and
+/// n*4+3 is always congruent to 3 (mod 4), which is what keeps it distinguishable
+/// from the three sentinels. No remote marshalling: the source string is baked in
+/// here; general JS text from the caller is deferred to C3.
+///
+/// Delegates to OUR wrapper symbol `C2EvalProbe` in quickjs_wrapper.c — no new
+/// Zig `extern fn` binding to a QuickJS C symbol (global constraint: JS_Eval and
+/// JS_ToInt32 are declared in C). Inside the DLL this is the first code to pass a
+/// real JSValue by value across the boundary where one side (quickjs_wrapper.c)
+/// hand-forwards the type without including quickjs.h (ruling P21); the crossing
+/// is C wrapper ↔ QuickJS engine, and the native e2e test
+/// (src/dll/quickjs/c2_diag_test.zig: rc == 11) is its executed proof — this Zig
+/// export itself cannot run on the Linux host (exports-rooted tests do not link,
+/// ledgered as P15), so its PE name is verified by re-parsing the built DLL.
+/// Unlike Task 5's split (P17), the two names here simply differ — "C2EvalProbe"
+/// is the C entry taking a source pointer, "C2EvalProbeOnePlusOne" is the fixed-
+/// string PE export — so no duplicate-symbol collision had to be routed around.
+export fn C2EvalProbeOnePlusOne() callconv(.c) i32 {
+    const probe = "1+1"; // fixed string; no remote marshalling needed at this gate
+    return @intCast(C2EvalProbe(probe.ptr));
 }
 
 /// C2 test: only build vtables, no hooks. For debugging.

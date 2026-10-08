@@ -6,7 +6,7 @@ Run this ON WINDOWS (the game box) after uploading, into C:/temp/ (ruling P5):
     held this name loaded, so no file lock / stale copy can interfere; the
     export C2QuickJSPointersInto only exists in this rebuilt copy).
 
-    python C:/temp/c2_task5_init.py [dll_path]   # default C:\\temp\\sqjs_c4.dll
+    python C:/temp/c2_task5_init.py [dll_path]   # default C:\\temp\\sqjs_c5.dll
 
 SINGLE-RUN PROBE — one C2Init dispatch per session, and the script refuses a
 second. C2TestQuickJS (which C2Init delegates to) resets g_test_rt/g_test_ctx
@@ -76,7 +76,7 @@ def dispatch_c2_init_once(pid: int, base: int, rva: int) -> int:
 
 def main():
     pid = resolve_pid("stellaris")
-    dll_path = sys.argv[1] if len(sys.argv) > 1 else r"C:\temp\sqjs_c4.dll"
+    dll_path = sys.argv[1] if len(sys.argv) > 1 else r"C:\temp\sqjs_c5.dll"
     dll_name = os.path.basename(dll_path)
     print(f"[task5] pid={pid}  dll={dll_path}")
 
@@ -131,7 +131,10 @@ def main():
         elif rt == 0:
             detail = "rt is NULL while ctx is non-NULL — no C2TestQuickJS path can produce that; suspect a wrong/stale module copy being called"
         else:
-            detail = "ctx is NULL while rt is live — init got partway (runtime created, JS_NewContextDiag did not complete)"
+            # rc == 0 already proves JS_NewContextDiag completed and set both
+            # globals, so "init got partway" is unreachable here — the only
+            # live reading matches c2_task3_diag.py's rc=0-but-ctx=NULL check.
+            detail = "ctx is NULL while rt is live — rc=0 already proves the context call completed and set both globals, so no path in the module that returned it can produce this; suspect a wrong/stale module copy being called"
         raise AssertionError(f"C2QuickJSPointersInto returned a NULL pointer: {detail}")
 
     assert_game_alive(pid)

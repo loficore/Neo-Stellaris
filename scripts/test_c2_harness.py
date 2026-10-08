@@ -26,7 +26,9 @@ pure defs run at import). Its pure log-parsing helper ``parse_ctx`` — the rc==
 success gate's decoder — is pinned by host tests at the bottom of this file;
 the probe's remote-call control flow stays Windows-only. ``c2_task5_init``
 likewise contributes one pure helper, ``parse_pointers`` (the 16-byte
-C2QuickJSPointersInto buffer decoder), pinned by host tests below.
+C2QuickJSPointersInto buffer decoder), pinned by host tests below, and
+``c2_task6_e2e`` contributes ``decode_probe_rc`` (the C2EvalProbe exit-code
+decoder: sentinel names vs the ``n*4+3`` encoding), pinned below as well.
 """
 
 import os
@@ -38,6 +40,7 @@ import c2_harness
 from c2_harness import list_exports, parse_module_base_from_ps, resolve_pid
 from c2_task3_diag import parse_ctx
 from c2_task5_init import parse_pointers
+from c2_task6_e2e import decode_probe_rc
 
 # The built DLL is at <repo root>/zig-out/bin/... . Tests are invoked from the
 # repo root (``python3 -m pytest scripts/test_c2_harness.py``), but resolve the
@@ -89,7 +92,8 @@ def test_list_exports_recovers_all_known_names():
     # A handful of names that genuinely exist in the artifact (progress.md list).
     for name in ("C2Sanity", "C2Init", "C2DiagQJS", "C2DiagGetLogAddr",
                  "C2TestQJS", "C2RegisterEffect", "C2RegisterTrigger",
-                 "C2DiagQJSInto", "C2QuickJSPointersInto"):
+                 "C2DiagQJSInto", "C2QuickJSPointersInto",
+                 "C2EvalProbeOnePlusOne"):
         assert name in exports, f"missing real export {name!r}"
     # RVAs are distinct positive integers, proving a real directory walk.
     rvas = list(exports.values())
@@ -202,3 +206,47 @@ def test_parse_pointers_wrong_length_raises():
     for bad in (b"", b"\x00" * 8, b"\x00" * 15, b"\x00" * 17):
         with pytest.raises(ValueError):
             parse_pointers(bad)
+
+
+# --- c2_task6_e2e.decode_probe_rc: the C2EvalProbe exit-code contract ---------
+# The gate's whole verdict rides on this mapping, so it is pinned here rather
+# than only on the live box. Encoding (quickjs_wrapper.c C2EvalProbe):
+#   0 = no_ctx, 1 = exception, 2 = not_int32, n*4+3 = int32 n.
+# Because 4n+3 is always congruent to 3 (mod 4), a value can never be read as a
+# sentinel; the decoder must reject anything else. call_remote hands back an
+# UNSIGNED c_uint, so a C-int result that is negative arrives wrapped, and the
+# decoder re-biases it before matching the sentinels.
+
+def test_decode_probe_rc_one_plus_one_is_eleven_decoding_to_two():
+    # The Task 6 gate itself (ruling P20: 1+1 = 2, so 2*4+3 = 11).
+    assert decode_probe_rc(11) == ("int32", 2)
+
+
+def test_decode_probe_rc_sentinels_name_without_value():
+    assert decode_probe_rc(0) == ("no_ctx", None)
+    assert decode_probe_rc(1) == ("exception", None)
+    assert decode_probe_rc(2) == ("not_int32", None)
+
+
+def test_decode_probe_rc_three_is_value_zero_not_a_sentinel():
+    # The discrimination the encoding exists for: n = 0 must NOT read as "no ctx".
+    assert decode_probe_rc(3) == ("int32", 0)
+
+
+def test_decode_probe_rc_negative_rc_raises():
+    for bad in (-1, -4, -1000):
+        with pytest.raises(ValueError):
+            decode_probe_rc(bad)
+
+
+def test_decode_probe_rc_non_congruent_raises():
+    # 4,5,6 (mod 4 = 0,1,2) are not sentinels, so they cannot be encodings.
+    for bad in (4, 5, 6, 10, 42, 2 ** 32 - 1 - 1):
+        with pytest.raises(ValueError):
+            decode_probe_rc(bad)
+
+
+def test_decode_probe_rc_wraps_an_unsigned_negative_result():
+    # C returns int; a negative result crosses as an unsigned 32-bit exit code
+    # (n = -1 -> 4n+3 = -1 -> 0xFFFFFFFF). Re-biasing must recover n = -1.
+    assert decode_probe_rc(2 ** 32 - 1) == ("int32", -1)

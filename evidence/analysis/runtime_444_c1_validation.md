@@ -1226,3 +1226,263 @@ export), `src/dll/quickjs/c2_diag_test.zig` (+2 tests), `scripts/test_c2_harness
 (+4 tests, 2 doc/list touch-ups), added `scripts/c2_task5_init.py`. No `.dll`/`.pdb`/
 `C:\temp\*` committed; `build.zig` unchanged (the `c2_diag_tests` step already exists);
 `src/dll/scripted/**`, C1 gate, and the `0x5350D0` constraint untouched.
+
+## 35. Task 6: `JS_Eval("1+1")` through the wrapper — P19 defects fixed, native RED→GREEN; live dispatch PENDING (2026-10-08, native only)
+
+**Scope actually executed.** Offline side of Task 6 only: the two P19 wrapper
+defects fixed, `C2EvalProbe` in `quickjs_wrapper.c`, the `C2EvalProbeOnePlusOne`
+Zig export, 8 new native tests, the Windows-side probe script
+`scripts/c2_task6_e2e.py` (written, **never run**), host tests for its pure
+decoder, and the carried Task 5 Minor. **Live dispatch PENDING: the game is down
+and only the human partner restarts it. Plan Steps 3, 5 and 6 (re-upload + re-run
+live, and the no-init live re-run) were NOT executed — no `ssh`, no `scp`, no
+injection, no Windows-side command was run from this host.** Nothing below is a
+live observation; the queued commands are listed verbatim at the end.
+
+**Ruling P19 — the two defects, as found and as fixed** (`quickjs_wrapper.c`
+hand-forwards QuickJS's `JSValue` and re-implements quickjs.h's static-inline
+refcount helpers; both reimplementations were wrong and both were live in HEAD):
+
+1. *Macro bound.* HEAD `quickjs_wrapper.c:60`:
+   `#define JS_VALUE_HAS_REF_COUNT(v) (((uint32_t)((v).tag)) >= (uint32_t)7)`
+   vs quickjs.h:287 `((unsigned)JS_VALUE_GET_TAG(v) >= (unsigned)JS_TAG_FIRST)`
+   with `JS_TAG_FIRST = -9` (quickjs.h:77, comment at :76 "all tags with a
+   reference count are negative"). `>= 7` wrongly admits
+   `JS_TAG_SHORT_BIG_INT = 7` and `JS_TAG_FLOAT64 = 8` (quickjs.h:93-94), for
+   which `JS_VALUE_GET_PTR(v)` is the number's own bit pattern: `JS_DupValue`
+   then wrote a refcount through `0x3FF8000000000000 - 4` (the double 1.5).
+   Fixed at `quickjs_wrapper.c:67-82` — `JS_TAG_FIRST` is defined as `(-9)` and
+   the test is `((uint32_t)JS_VALUE_GET_TAG(v)) >= (uint32_t)JS_TAG_FIRST`, the
+   exact unsigned form quickjs.h uses (negative tags wrap above `0xFFFFFFF6`, so
+   every positive tag is rejected).
+2. *Unguarded free.* HEAD `quickjs_wrapper.c:93-95`:
+   `void JS_FreeValue(JSContext *ctx, JSValue v) { __JS_FreeValue(ctx, v); }` —
+   no `JS_VALUE_HAS_REF_COUNT` guard and no decrement test.
+   `__JS_FreeValueRT` (quickjs.c:6473) switches on the tag with cases only for
+   the refcounted tags and ends in `default: abort()` (quickjs.c:6571-6572), so
+   freeing a `JS_TAG_INT` (exactly what `JS_Eval("1+1")` returns), a
+   `JS_TAG_EXCEPTION` marker or a `JS_TAG_FLOAT64` aborted the host process —
+   inside `stellaris.exe` that is a self-inflicted game death. It also ignored
+   the refcount entirely, releasing values that still had holders. Fixed at
+   `quickjs_wrapper.c:114-133`, mirroring quickjs.h:687-695 (`<= 0` on a
+   `uint32_t` count is this file's `== 0`; the two agree for every well-formed
+   value and differ only for an already-zero count, where quickjs.h double-frees
+   and this releases nothing).
+
+Both defects were **dormant until Task 6**: nothing before it passed a real
+`JSValue` by value through these wrappers, and `1+1`'s result is precisely the
+tag that reaches `abort()`.
+
+**Native RED evidence (observed, verbatim).** Reproduction method, recorded so
+the output is trusted: the Task 6 tests were written first, then
+`git show HEAD:src/dll/quickjs/quickjs_wrapper.c` was temporarily put back in
+place (pre-fix sha256 `0489961d288cb76f77aa80cacf269c95689a21c5c00197c4d3136cb58f91ef52`)
+and each test was run alone with the same command shape:
+
+```
+zig test --test-filter "<test name>" src/dll/quickjs/c2_diag_test.zig -lc -Ilibs/quickjs \
+  -cflags '-DCONFIG_VERSION="2025-09-13"' -Wno-gnu-zero-variadic-macro-arguments -- \
+  libs/quickjs/quickjs.c libs/quickjs/libregexp.c libs/quickjs/libunicode.c \
+  libs/quickjs/cutils.c libs/quickjs/dtoa.c src/dll/quickjs/quickjs_wrapper.c
+```
+
+- free test (`P19: JS_FreeValue on non-refcounted tags returns instead of aborting`) —
+  no Zig trace, a C-side abort:
+  `error: the following test command terminated with signal ABRT:` (exit 1).
+- dup test (`P19: JS_DupValue on JS_TAG_FLOAT64 / SHORT_BIG_INT writes outside nothing`):
+  ```
+  General protection exception (no address available)
+  src/dll/quickjs/quickjs_wrapper.c:104:21: 0x153eb85 in JS_DupValue (src/dll/quickjs/quickjs_wrapper.c)
+          p->ref_count++;
+                      ^
+  …/src/dll/quickjs/c2_diag_test.zig:238:27: … const df = JS_DupValue(ctx, f);
+  error: the following test command terminated with signal ABRT:
+  ```
+- refcounted-string test (`P19 fix keeps genuinely refcounted tags refcounted (real JS string)`):
+  `expected 1, found 2` / `FAIL (TestExpectedEqual)` at `c2_diag_test.zig:275`
+  (`expectEqual(initial, rc.*)` after one free). Observed mechanism, which differs
+  from the double-free crash predicted while writing it: `JS_TAG_STRING` is -7 and
+  `(uint32_t)(-7) >= 7` is true, so dup *did* increment 1→2; the unconditional free
+  then released the string **without decrementing**, so the (already freed) header
+  still read 2. Recorded as observed (P13).
+- probe tests before `C2EvalProbe` existed: `error: undefined symbol: C2EvalProbe`
+  (`referenced by c2_diag_test.o:c2_diag_test.test.C2EvalProbe on a value JS_ToInt32
+  cannot convert returns 2` … `referenced 3 more times`) — link stage, exactly where
+  a missing C symbol surfaces (same failure mode as §34's P4 RED).
+
+**GREEN.** The fixed wrapper was restored (`cp -f`, sha256 verified back to
+`03e8f5bf6f77d8d5b1a7f3bace395d4150d447506cdfc42e760e0aab3786f7a7`, `git diff
+--stat` → 119 insertions / 2 deletions) and the same command, unfiltered, gives:
+
+```
+1/13 …C2EvalProbe returns 0 while g_test_ctx is NULL (no init has run yet)...OK
+7/13 …P19: JS_FreeValue on non-refcounted tags returns instead of aborting...OK
+8/13 …P19: JS_DupValue on JS_TAG_FLOAT64 / SHORT_BIG_INT writes outside nothing...OK
+9/13 …P19 fix keeps genuinely refcounted tags refcounted (real JS string)...OK
+10/13 …C2EvalProbe("1+1") returns 11, decoding to int32 2...OK
+11/13 …C2EvalProbe on a float result (JS_TAG_FLOAT64) is freed, not aborted...OK
+12/13 …C2EvalProbe on unparseable JS returns 1 and leaves the context usable...OK
+13/13 …C2EvalProbe on a value JS_ToInt32 cannot convert returns 2...OK
+All 13 tests passed.    (exit 0)
+```
+
+Observations pinned by those tests, all against the real vendored QuickJS (no
+mocks): `1+1` → rc **11**, `@divTrunc(11-3,4) == 2`, `11 % 4 == 3`; `1.5` → rc 7
+(n = 1, i.e. `JS_ToInt32` truncates and the FLOAT64 is freed without aborting);
+`this_is_not_valid_js ~~` → rc **1** and the *same* context then returns 11 for
+`1+1` (the pending exception is moved out by `c2_clear_pending_exception`,
+quickjs.c:7406-7413, so the gate is dispatchable more than once per instance);
+`({ valueOf() { throw 1; } })` → rc **2** (ToNumber propagates, `JS_ToInt32`
+returns -1) and 11 again afterwards; `C2EvalProbe("1+1")` with no init at all →
+rc **0**, the `if (!g_test_ctx) return 0;` guard (quickjs_wrapper.c:413) reached
+before `JS_Eval`. The no-init test is **declared first** in `c2_diag_test.zig`
+because nothing here frees `g_test_ctx` — its precondition (rt/ctx still NULL) is
+asserted, so a reordering fails loudly as `error.InitRanBeforeThisTest` instead of
+passing silently; the live equivalent is the second module instance (P22).
+
+**Suite / build / host-test numbers.**
+- `zig build test` → `Build Summary: 22/25 steps succeeded (1 failed); 288/288 tests passed`
+  (§34 baseline 280/280, +8 Task 6 tests). The one failure is the **same
+  pre-existing** exports.zig-rooted link failure — `undefined symbol: CreateFileA /
+  WriteFile / CloseHandle / GetModuleHandleA` (kernel32 on an ELF host, ruling P15),
+  8 errors, unchanged in mode and symbol set; `C2EvalProbe` is not among them.
+- `zig build` (x86_64-windows) → exit 0.
+- `python3 -m pytest scripts/test_c2_harness.py -q` → **26 passed** (§34 baseline 20;
+  +6 host tests for `decode_probe_rc`: 11→`("int32", 2)`, the three sentinels, 3→n=0,
+  negatives raise, non-congruent codes raise, the wrapped-unsigned `2**32-1` → `("int32", -1)`).
+  `C2EvalProbeOnePlusOne` was added to `test_list_exports_recovers_all_known_names`.
+
+**Ruling P20 — the brief's expected rc was wrong, corrected against real output.**
+Plan Step 2/4 assert `rc == 7` ("`1*4 + 3 = 7`") and print "returned int32 1". The
+encoding is `n*4+3` with `n` the *result* of the eval; `1+1` yields **n = 2**, so the
+expected exit code is **11**, confirmed by native QuickJS above. `7` is exactly what
+the same encoding produces for `n = 1` (the observed `1.5` case), which is where the
+slip came from. The encoding itself stands and is collision-free: `n*4+3 ≡ 3 (mod 4)`
+can never equal the sentinels 0/1/2. `scripts/c2_task6_e2e.py` asserts 11/2 and says
+so in its failure text.
+
+**Ruling P21 — first real by-value `JSValue` crossing.** `C2EvalProbe` is the first
+code to receive a `JSValue` *by value from QuickJS* (`JS_Eval`'s result) and pass one
+back (`JS_ToInt32`'s argument) through a TU that includes no `quickjs.h`. Legal
+because quickjs.h:56-65 defines `JS_PTR64` whenever `INTPTR_MAX >= INT64_MAX`, which
+*suppresses* `JS_NAN_BOXING`, so x86-64 uses the 16-byte `{JSValueUnion u; int64_t
+tag;}` struct of quickjs.h:216-232 — byte-compatible with the hand-forwarded copy at
+`quickjs_wrapper.c:43-53` (its union is 8 bytes either way). Test 10/13 (rc 11) is
+this crossing's executed proof; a 32-bit or NaN-boxed target is where it would break.
+
+**Deviations from the plan's Step 1/2 sketch (ruling P9).** The sketch's
+`JS_ToInt32_`, `JS_IsException_`, `JS_FreeValue_` do not exist: `JS_Eval`
+(quickjs.h:836), `JS_ToInt32` (:730) and `JS_GetException` (:669) are real exported
+symbols and are extern'd at `quickjs_wrapper.c:372-375`, while `JS_IsException` (:641)
+and `JS_FreeValue` (:687) are `static inline` with no linker symbol — the exception
+test is therefore the tag comparison `JS_VALUE_GET_TAG(v) == JS_TAG_EXCEPTION` and the
+free reuses this file's own (now guarded) `JS_FreeValue`. No QuickJS C symbol is bound
+on the Zig side: `src/dll/exports.zig:110` externs only `C2EvalProbe`, our wrapper
+(global constraint). `eval_flags 0` is `JS_EVAL_TYPE_GLOBAL` (quickjs.h:332). Unlike
+Task 5's P17 there was no duplicate-symbol split here: the C symbol `C2EvalProbe` and
+the PE name `C2EvalProbeOnePlusOne` simply differ (`exports.zig:278` is a one-line
+forwarder with the fixed string `"1+1"`; remote string marshalling is deferred to C3).
+`return (int)((uint32_t)n * 4u + 3u)` is modular, not signed-overflow UB — `n*4`
+overflows int32 for `|n| >= 2^30`; the wrap preserves `(rc-3)/4` in two's complement
+and is irrelevant for the fixed `1+1`, but C3's general-argument API must not reuse
+this encoding without a range check (P20 deferred minor).
+
+**Built artifact (host-side PE reparse with `c2_harness.list_exports`, no hard-coded
+RVAs — P10).** `zig build` output `zig-out/bin/stellaris_quickjs.dll` (7 156 736 bytes):
+- sha256 `3ad4433ea75fe893d5771e1f63e3ffed75a417f58f6190966077ff17b15a3cac`
+- 31 exports (§34: 30, +1 = the new probe), all RVAs distinct. Task-6-relevant rows:
+  `C2Sanity = 0x44bb20`, `C2Init = 0x44baa0`, `C2QuickJSPointersInto = 0x44b8e0`,
+  **`C2EvalProbeOnePlusOne = 0x44b850`**. All four moved relative to §34 because the
+  wrapper grew; the probes reparse at run time and never trust these.
+- Not committed (`.dll`/`.pdb` excluded); recorded so the upload can be checked
+  byte-identical. Per P22 the authorized live session uploads these bytes as
+  `C:/temp/sqjs_c5.dll` **and** a second copy of the same bytes as
+  `C:/temp/sqjs_c5_noinit.dll` (Windows loads per-path, so the second instance gets
+  its own zero-initialised `g_test_ctx` — what makes Step 6 a real test rather than
+  a state leak).
+
+**Task 5 deferred Minor carried.** `scripts/c2_task5_init.py`'s ctx-NULL-with-live-rt
+diagnosis said "init got partway (runtime created, JS_NewContextDiag did not
+complete)", which `assert rc == 0` makes unreachable: `JS_NewContextDiag`
+(quickjs.c:2669) stores `*out_ctx = NULL` on entry and every failure path (rc 1..12)
+frees the context and leaves it NULL, so rc 0 ⟹ `g_test_ctx` was set — a NULL ctx can
+only mean the module that answered is not the module whose code produced rc 0.
+Reworded at `c2_task5_init.py:133-137` to the `c2_task3_diag.py:105-109` shape — a
+contradiction between rc and the observed pointer, pointing at a wrong/stale module
+copy — diagnostic text only, no control-flow change. Its argv default moved from
+`sqjs_c4.dll` to `sqjs_c5.dll` (code + docstring) per P22. §34's sentence
+"ctx-NULL-with-live-rt = init got partway" describes the pre-fix text and is superseded
+by this paragraph.
+
+**Probe design facts** (`scripts/c2_task6_e2e.py`, written but not run): `main()`
+parses `--noinit` and an optional dll path (default `C:\temp\sqjs_c5.dll`, or
+`C:\temp\sqjs_c5_noinit.dll` with `--noinit`) and checks `os.path.isfile` on the dll
+**before** touching the game. Gate order is the verbatim `c2_task3_diag.py` shape,
+duplicated per probe rather than moved into the harness (ruling P18;
+`scripts/c2_harness.py` not modified): inject once → alive → `resolve_base_address`
+keyed on the exact filename injected (P8) → MZ check at that base →
+`list_exports` of that same Windows-side file (P10) → `C2Sanity == 42` → alive. Only
+then: `C2Init` (assert rc 0) → `C2EvalProbeOnePlusOne` → decode → alive.
+`dispatch_once` refuses a second dispatch of either symbol (re-dispatch resets
+`g_test_rt/g_test_ctx` without freeing the previous runtime, §33/§34), and no-init
+mode carries a tripwire asserting `"C2Init" not in _dispatched`. The three sentinels
+get three distinct diagnoses. `decode_probe_rc` is pure and host-tested; it exists as
+a separate function because `GetExitCodeThread` yields a `DWORD` and
+`c2_harness.call_remote` returns it as an **unsigned** Python int (`ctypes.c_uint`),
+so a C-`int` negative would arrive wrapped (`-1` → `4294967295`): the helper re-biases
+values above `0x7FFFFFFF` before matching, which keeps the decode exact instead of
+reporting a wrong `n`.
+
+### LIVE DISPATCH PENDING (Task 6 Steps 3, 5, 6 — queued, not run)
+
+Blocked on: the game being down and the human partner restarting it. No command below
+was executed. Order matters; each remote run needs `c2_harness.py` present in
+`C:/temp/` (P5), and every script must be re-scp'd with this section's final content.
+
+```sh
+# 0. build + upload the §35 artifact under its NEW name (P12/P22), twice: once as the
+#    live copy, once as the independent no-init instance.
+zig build
+scp zig-out/bin/stellaris_quickjs.dll Windows_Jiaolong:C:/temp/sqjs_c5.dll
+scp zig-out/bin/stellaris_quickjs.dll Windows_Jiaolong:C:/temp/sqjs_c5_noinit.dll
+scp scripts/c2_harness.py scripts/c2_task2_load.py scripts/c2_task3_diag.py \
+    scripts/c2_task5_init.py scripts/c2_task6_e2e.py Windows_Jiaolong:C:/temp/
+
+# 1. confirm the uploaded bytes are the ones hashed above.
+ssh Windows_Jiaolong "certutil -hashfile C:\temp\sqjs_c5.dll SHA256"
+#    expect: 3ad4433ea75fe893d5771e1f63e3ffed75a417f58f6190966077ff17b15a3cac
+
+# 2. Step 3 — load + sanity on the new copy (path passed as argv; P22).
+ssh Windows_Jiaolong "python C:/temp/c2_task2_load.py C:/temp/sqjs_c5.dll"
+#    expect: C2Sanity -> 42
+
+# 3. Task 5's pending dispatch, now against the same bytes (argv default is sqjs_c5.dll).
+ssh Windows_Jiaolong "python C:/temp/c2_task5_init.py"
+#    expect: C2Init rc == 0 and both pointers non-NULL.
+
+# 4. Step 5 — the C2 acceptance gate.
+ssh Windows_Jiaolong "python C:/temp/c2_task6_e2e.py"
+#    expect: `Task 6: 1+1 evaluated inside the game process and returned int32 2 (rc=11 = 2*4+3)`
+
+# 5. Step 6 — the !g_test_ctx guard on a SECOND instance of the same bytes,
+#    in a separate Python process (fresh _dispatched, own base, own reparse).
+ssh Windows_Jiaolong "python C:/temp/c2_task6_e2e.py --noinit"
+#    expect: `Task 6 (Step 6): C2EvalProbeOnePlusOne returned 0 with no C2Init in this
+#    module copy — the !g_test_ctx guard holds and did not crash`
+```
+
+Expected outcome if the P19 fix is right: steps 4 and 5 above print their Task 6
+lines with the game alive. Expected outcome if it is wrong: the game dies at step 4
+(the abort is in the free that follows a successful eval) — that is the risk this
+section records rather than measures. **Task 6 is not closed until these five commands
+run in an authorized live session.**
+
+**Counts for §35**: changed `src/dll/quickjs/quickjs_wrapper.c` (P19 macro + guarded
+`JS_FreeValue`, + Task 6 block `C2EvalProbe`/`c2_clear_pending_exception`/3 externs),
+`src/dll/exports.zig` (+extern `C2EvalProbe` +`export fn C2EvalProbeOnePlusOne`),
+`src/dll/quickjs/c2_diag_test.zig` (+8 tests: 1 guard, 3 P19, 4 probe),
+`scripts/test_c2_harness.py` (+6 tests, +1 known-export name, docstring),
+`scripts/c2_task5_init.py` (diagnostic text + argv default only), added
+`scripts/c2_task6_e2e.py`. No `.dll`/`.pdb`/`C:\temp\*` committed; `build.zig` and
+`scripts/c2_harness.py` unchanged; no new Zig `extern fn` bound to a QuickJS C symbol;
+`src/dll/scripted/**`, the C1 gate and the `0x5350D0` constraint untouched.
