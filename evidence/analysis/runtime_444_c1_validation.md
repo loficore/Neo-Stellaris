@@ -862,3 +862,115 @@ harness does not use it.
 untouched. `scripts/c2_harness.py` (resolve_pid only), `scripts/test_c2_harness.py` (+3 tests, 11/11
 passing on the host), `scripts/c2_task2_load.py` created. Remote Python 3.13.2 AMD64; one injection
 attempt total, no repeated guessing.
+
+## 32. C2 QuickJS diagnostic — the diag call itself terminated the game (2026-10-08, live, BLOCKED)
+
+**Goal.** PLAN §6 blocker 2 ("`JS_NewContext` returns NULL") needs the *failing step code* from
+`C2DiagQuickJS` (wrapper `src/dll/quickjs/quickjs_wrapper.c:208`) which delegates to
+`JS_NewContextDiag` (`libs/quickjs/quickjs.c:2669`). **This task did not obtain that code: the remote
+call crashed `stellaris.exe` before any rc/log could be read back.** Per the hard safety rails the run
+was STOPPED immediately — no restart, no re-injection, no repeated guessing. The human partner restarts
+the game.
+
+**What was built for this (ruling P4, so the harness never crosses a 64-bit pointer through the 32-bit
+thread exit code).** Added one Zig export `C2DiagQJSInto(out_diag: [*]u8) callconv(.c) i32`
+(`src/dll/exports.zig:226`) that delegates to the existing C routine `C2DiagQuickJS(out_diag, 512)` —
+reusing its (buffer, size) logic rather than duplicating it or adding a same-named C pass-through
+(which a Zig `extern fn`/`export fn` pair cannot share in one file anyway). It returns only the i32 step
+code and writes the step log into the caller-supplied buffer. The old `C2DiagGetLogAddr` was annotated
+as unusable-by-injector (64-bit pointer truncated by `GetExitCodeThread`). No QuickJS C symbol gained a
+new Zig `extern` binding — this binds our own wrapper only (PLAN §6 blocker 1 workaround). Fresh build
+`zig build` OK, sha256 `8c81d678e00ccf15a0f7efe51d8d2747b6aebeb5f1a59cb26b0ddd917700f42d`, export
+`C2DiagQJSInto` RVA `0x44b270` confirmed by a host `list_exports` reparse (29 exports).
+
+**Derived decode table (ruling P7 — built from the code, NOT the brief's table).**
+Two return sites, and their value ranges OVERLAP, so a bare number is ambiguous; the log text is
+authoritative:
+
+`C2DiagQuickJS` outer path (`quickjs_wrapper.c`):
+
+| rc | condition | log sentinel | line |
+|----|-----------|--------------|------|
+| 10 | `GetProcessHeap()` NULL | `no_process_heap` | :217 |
+| 11 | test `HeapAlloc(256)` NULL | `heap_alloc_failed` | :219 |
+| 2  | `JS_NewRuntime2` NULL | `runtime2_null` | :223 |
+| 3  | runtime opaque write/read mismatch | `opaque_mismatch got=%p` | :228–230 |
+| 4  | standalone `JS_NewContextRaw` NULL | `raw_ctx_null` | :236–237 |
+
+`JS_NewContextDiag` inner path (`quickjs.c:2669-2691`), returned verbatim as the outer `result` once the
+outer steps pass:
+
+| rc | condition | line |
+|----|-----------|------|
+| 0  | raw ctx + all 11 intrinsics OK, `*out_ctx` set | :2689–2690 |
+| 1  | `JS_NewContextRaw` failed (allocation) | :2675 |
+| 2  | `JS_AddIntrinsicBaseObjects` failed | :2677 |
+| 3  | `JS_AddIntrinsicDate` failed | :2678 |
+| 4  | `JS_AddIntrinsicEval` failed | :2679 |
+| 5  | `JS_AddIntrinsicStringNormalize` failed | :2680 |
+| 6  | `JS_AddIntrinsicRegExp` failed | :2681 |
+| 7  | `JS_AddIntrinsicJSON` failed | :2682 |
+| 8  | `JS_AddIntrinsicProxy` failed | :2683 |
+| 9  | `JS_AddIntrinsicMapSet` failed | :2684 |
+| 10 | `JS_AddIntrinsicTypedArrays` failed | :2685 |
+| 11 | `JS_AddIntrinsicPromise` failed | :2686 |
+| 12 | `JS_AddIntrinsicWeakRef` failed | :2687 |
+
+**How this differs from the brief's `DECODE`.** The brief (a) has **no entry for rc 1** even though 1 is
+a real `JS_NewContextDiag` code; (b) **shifts every intrinsic by +3** (it labels 5–15 as the intrinsic
+codes, but the code emits them at 2–12); (c) **omits the outer heap codes 10 and 11** entirely, and its
+"10 = TypedArrays" collides with the outer "10 = no_process_heap" — the log text resolves that collision
+but the brief's table cannot; (d) `exports.zig:199-204`'s docstring ("1 = malloc broken, 5–12 intrinsic,
+98 = wait failed, 99 = thread creation failed") matches **neither** table — rc 1 is `JS_NewContextRaw`
+(allocation) inside the diag, malloc/heap failure is 10/11, and this wrapper returns no 98/99. The
+docstring is stale, not code-derived. If a future rc lands outside both tables it is a finding, not noise.
+
+**What was run and observed.** `scripts/c2_task3_diag.py` (on Windows, `C:\temp`, bare-name import of
+`c2_harness.py`; P5/P10). Uploaded under a NEW filename `C:\temp\sqjs_c3.dll` (P12: `sqjs_c2.dll` is
+loaded + file-locked in PID 20564 and lacks the new export), hash-verified identical to the local build.
+
+- Run 1 aborted **before any remote call** on a bad guard I had added (`assert buf >= 2**32`). That
+  guard was wrong: `VirtualAllocEx` legitimately returned a sub-2^32 scratch address (`0xeb0000`), and the
+  buffer address travels *inward* via `lpParameter` (full 64-bit), so its magnitude is not the P4 risk
+  (P4 concerns a *returned* pointer). Guard removed; the crash had not yet occurred and no diag call had
+  been made, so this did not consume the "one diag call per hypothesis."
+- Run 2 (fixed script): injected `sqjs_c3.dll`, base **`0x7ffa3ec90000`** (a genuine 64-bit address, MZ
+  header OK), buffer `0xec0000`, then dispatched `C2DiagQJSInto`. The **`assert_game_alive` immediately
+  after that call raised `RuntimeError('game (pid 20564) is no longer alive')`** and the process was
+  confirmed gone by `tasklist` (`IMAGENAME eq stellaris.exe` → "no tasks match"; `PID eq 20564` → no
+  match; `Get-Process stellaris` → empty). **Exit code of the run: 1.** The **rc and log were never
+  printed** (they are read after the alive check, which failed first) — so there is **no observed step
+  code from this run**, by construction.
+
+**Observed correlation, stated without invented causation (ruling P13).** The only new remote action in
+run 2 versus run 1 was the `C2DiagQJSInto` dispatch; the game was alive through injection and
+`remote_alloc` and died across that call. `call_remote_with_arg` returned (the remote thread handle
+signalled, consistent with process teardown), then the alive check failed. We therefore record the fact:
+**invoking the QuickJS context-creation diagnostic on an injected thread in the live game process is
+associated with the game process terminating.** This run does **not** identify *why* (no rc, no log, no
+faulting-module captured — the WER query returned nothing within the last 80 Application events), and no
+second attempt was made. The PLAN hypothesis "blocker 2 = `JS_NewContext` returns NULL" is **neither
+confirmed nor refuted**: the code path never reached a point where a NULL could be reported back, because
+the process died first. A crash and a NULL return are different failure modes; this is a crash.
+
+**Confounders a controlled retry must eliminate (Task 4, not done here — listed for completeness, no
+action taken).** (1) Two DLL copies (`sqjs_c2`, `sqjs_c3`) are simultaneously resident; §31/P12 argued a
+second load is inert (`DllMain` only `writeMarker`), but that verification predates a resident pair both
+holding QuickJS globals. (2) A scratch `VirtualAllocEx` buffer and CreateRemoteThread stack context differ
+from the game's own threads; `quickjs_wrapper.c` was written specifically because "Zig's libc malloc
+doesn't work in DLL injection context" (its own header comment), and `C2Init` (`exports.zig:189-194`)
+carries an open note that `writeLogStatic`/`CreateFileA` in the remote-thread context "may corrupt TLS or
+stack state." None of these is *established* — each is a hypothesis for Task 4 to test with a method that
+survives the call.
+
+**Consequence for the plan.** §32 is now written down (this section), which is the gate for Task 4. But
+Task 4 cannot pick a fix "from the number" because no number was captured: the plan's assumption that the
+diagnostic is a safe read-only probe of the live process is **falsified by this run**. Task 4's first job
+should be an observation method that returns a step code **without killing the host** (e.g. reproduce
+`JS_NewContextDiag` in the native `zig build test`/glibc harness, or under a debugger/crash-dump
+capturing the faulting module, before touching the live game again).
+
+**Counts for §32**: `src/dll/**` changed only by the `C2DiagQJSInto` export + two docstring annotations
+(no QuickJS C `extern` added, no keyword registered, C1 gate `authorize.c1_registration = false`
+untouched, no hot-path detour). `scripts/c2_task3_diag.py` created. **Game crashed and was STOPPED per
+safety rails; no restart, no re-injection after the crash; exactly one `C2DiagQJSInto` dispatch.**

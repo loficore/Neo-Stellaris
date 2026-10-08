@@ -1,0 +1,131 @@
+"""Task 3: capture the QuickJS JS_NewContext failure STEP from the live game.
+
+This is OBSERVATION ONLY (Task 4 owns any fix). It runs the step-by-step
+diagnostic baked into the DLL (`C2DiagQuickJS` in quickjs_wrapper.c, delegating
+to `JS_NewContextDiag` in libs/quickjs/quickjs.c) against the running game and
+records: the numeric step code, the decoded step, and the raw log string.
+
+Run this ON WINDOWS (the game box) after uploading, into C:/temp/ (ruling P5):
+  * scripts/c2_harness.py            (bare-name import, cwd resolves it)
+  * the freshly built DLL under a NEW filename (ruling P12: PID 20564 already
+    holds sqjs_c2.dll loaded + file-locked, so we cannot overwrite it; the new
+    export C2DiagQJSInto only exists in this rebuilt copy).
+
+    python C:/temp/c2_task3_diag.py [dll_path]   # default C:\\temp\\sqjs_c3.dll
+
+Mechanism (ruling P4): the log lives in a DLL .data static above 2^32, so its
+ADDRESS cannot survive GetExitCodeThread (32-bit truncation) — the brief's
+"C2DiagGetLogAddr + read_memory" approach reads an unmapped low-32 address.
+Instead we `remote_alloc` a 512-byte buffer, pass its address as the single
+CreateRemoteThread lpParameter to `C2DiagQJSInto`, take the 32-bit return as the
+step code, and `read_memory` the buffer for the log. One call, no pointer ever
+crosses the exit code. The DLL-side symbol bound is OUR wrapper, never a QuickJS
+C symbol (global constraint / PLAN §6 blocker 1 workaround).
+
+Decode table (ruling P7) is derived from the ACTUAL code, not the brief's table.
+See evidence §32 for the derivation and how it differs from the brief.
+"""
+import sys, os
+from c2_harness import (
+    resolve_pid, resolve_base_address, inject_dll,
+    list_exports, call_remote_with_arg, remote_alloc, read_memory,
+    assert_game_alive,
+)
+
+# ---------------------------------------------------------------------------
+# Derived decode tables — from quickjs_wrapper.c C2DiagQuickJS (outer path) and
+# libs/quickjs/quickjs.c JS_NewContextDiag (inner path). Codes 2,3,4,10,11 can
+# come from EITHER path; the LOG TEXT disambiguates (see decode()).
+# ---------------------------------------------------------------------------
+OUTER_SENTINELS = {
+    # (substring in log) -> meaning, source line in quickjs_wrapper.c
+    "no_process_heap": "OUTER: GetProcessHeap() returned NULL  [rc 10, quickjs_wrapper.c:217]",
+    "heap_alloc_failed": "OUTER: test HeapAlloc(256) failed     [rc 11, quickjs_wrapper.c:219]",
+    "runtime2_null": "OUTER: JS_NewRuntime2 returned NULL        [rc 2, quickjs_wrapper.c:223]",
+    "opaque_mismatch": "OUTER: runtime opaque write+read mismatch   [rc 3, quickjs_wrapper.c:228-230]",
+    "raw_ctx_null": "OUTER: JS_NewContextRaw (standalone) NULL   [rc 4, quickjs_wrapper.c:236-237]",
+}
+DIAG = {  # JS_NewContextDiag return codes (quickjs.c:2669-2691)
+    0:  "OK: raw ctx + all 11 intrinsics succeeded, context created  [quickjs.c:2689-2690]",
+    1:  "DIAG: JS_NewContextRaw failed (allocation)                 [quickjs.c:2675]",
+    2:  "DIAG: JS_AddIntrinsicBaseObjects failed                    [quickjs.c:2677]",
+    3:  "DIAG: JS_AddIntrinsicDate failed                           [quickjs.c:2678]",
+    4:  "DIAG: JS_AddIntrinsicEval failed                           [quickjs.c:2679]",
+    5:  "DIAG: JS_AddIntrinsicStringNormalize failed                [quickjs.c:2680]",
+    6:  "DIAG: JS_AddIntrinsicRegExp failed                         [quickjs.c:2681]",
+    7:  "DIAG: JS_AddIntrinsicJSON failed                           [quickjs.c:2682]",
+    8:  "DIAG: JS_AddIntrinsicProxy failed                          [quickjs.c:2683]",
+    9:  "DIAG: JS_AddIntrinsicMapSet failed                         [quickjs.c:2684]",
+    10: "DIAG: JS_AddIntrinsicTypedArrays failed                    [quickjs.c:2685]",
+    11: "DIAG: JS_AddIntrinsicPromise failed                        [quickjs.c:2686]",
+    12: "DIAG: JS_AddIntrinsicWeakRef failed                        [quickjs.c:2687]",
+}
+
+
+def decode(rc, log):
+    """Interpret rc TOGETHER with the log text (codes overlap by value)."""
+    for sentinel, meaning in OUTER_SENTINELS.items():
+        if sentinel in log:
+            return meaning
+    if "diag_rc=" in log:
+        # The diag path: rc == the "diag_rc=%d" echoed in the log. Cross-check.
+        return DIAG.get(rc, f"DIAG: rc {rc} NOT in derived table (unexpected code)")
+    return f"rc {rc} — no outer sentinel and no diag_rc marker (misaligned harness?)"
+
+
+def main():
+    pid = resolve_pid("stellaris")
+    dll_path = sys.argv[1] if len(sys.argv) > 1 else r"C:\temp\sqjs_c3.dll"
+    dll_name = os.path.basename(dll_path)
+    print(f"[task3] pid={pid}  dll={dll_path}")
+
+    # The new export exists only in this rebuilt copy -> one injection (P12).
+    inject_dll(pid, dll_path)
+    assert_game_alive(pid)
+    base = resolve_base_address(pid, dll_name)
+    print(f"[task3] {dll_name} base (64-bit): 0x{base:x}")
+
+    head = read_memory(pid, base, 2)
+    assert head == b"MZ", f"Bad header at 0x{base:x}: {head!r}"
+    print("[task3] MZ header at base OK")
+
+    exports = list_exports(dll_path)  # Windows-side copy (P10)
+    into_rva = exports["C2DiagQJSInto"]
+    print(f"[task3] C2DiagQJSInto RVA from PE reparse: 0x{into_rva:x}")
+
+    # P4: caller-supplied buffer; alloc is page-granular (>=4096 committed).
+    # The buffer ADDRESS is passed IN via lpParameter as a full 64-bit value, so
+    # VirtualAllocEx may return a low address (<2^32) — that is fine and is NOT
+    # the truncation risk P4 addresses (that risk is a *returned* pointer, which
+    # this design never crosses the exit code). Only require a real allocation.
+    buf = remote_alloc(pid, 512)
+    assert buf, "remote_alloc returned NULL"
+    print(f"[task3] remote diag buffer @ 0x{buf:x}")
+
+    # ONE diag call per hypothesis (C2DiagQuickJS mutates g_test_rt/g_test_ctx).
+    rc = call_remote_with_arg(pid, base, into_rva, buf, timeout_ms=60000)
+    assert_game_alive(pid)
+
+    raw = read_memory(pid, buf, 512)
+    log = raw.split(b"\x00", 1)[0].decode("ascii", errors="replace")
+
+    print(f"[task3] C2DiagQJSInto rc = {rc}")
+    print(f"[task3] decoded step     = {decode(rc, log)}")
+    print(f"[task3] diag log         = {log!r}")
+
+    # Cross-check: if the log carries diag_rc=N, it must equal rc.
+    if "diag_rc=" in log:
+        echoed = log.split("diag_rc=", 1)[1].split(" ", 1)[0].split(")", 1)[0]
+        try:
+            echoed_n = int(echoed)
+        except ValueError:
+            echoed_n = None
+        assert echoed_n == rc, f"log says diag_rc={echoed!r} but exit code rc={rc}"
+        print(f"[task3] cross-check OK: log diag_rc == exit-code rc == {rc}")
+
+    assert_game_alive(pid)
+    print("[task3] game alive at end — PASS (observation recorded)")
+
+
+if __name__ == "__main__":
+    main()

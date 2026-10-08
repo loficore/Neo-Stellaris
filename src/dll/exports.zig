@@ -209,9 +209,23 @@ export fn C2DiagQJS() callconv(.c) i32 {
 }
 
 /// Returns the address of the diagnostic log buffer (for remote reading).
+/// NOTE: unusable via CreateRemoteThread exit code — the pointer is 64-bit and
+/// GetExitCodeThread truncates it (ruling P4). Use C2DiagQJSInto instead.
 export fn C2DiagGetLogAddr() callconv(.c) usize {
     const p = C2DiagGetLog();
     return @intFromPtr(p);
+}
+
+/// C2 diagnostic that writes the log into a CALLER-SUPPLIED buffer, returning
+/// only the 32-bit step code (ruling P4: no 64-bit pointer may cross the thread
+/// exit code). Delegates to the existing C `C2DiagQuickJS`, which already has
+/// the (out_diag, diag_size) signature and fills that buffer with the step log.
+/// `out_diag` must be a remote buffer of at least 512 bytes, allocated by the
+/// caller and passed as CreateRemoteThread lpParameter. Returns the same step
+/// code as C2DiagQJS.
+export fn C2DiagQJSInto(out_diag: [*]u8) callconv(.c) i32 {
+    const r = C2DiagQuickJS(out_diag, 512);
+    return @intCast(r);
 }
 
 /// C2 test: only build vtables, no hooks. For debugging.
