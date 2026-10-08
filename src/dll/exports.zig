@@ -106,6 +106,7 @@ extern fn C2TestQuickJS() c_int;
 extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2DiagGetLog() ?[*:0]const u8;
 extern fn C2GetQuickJSPointers(out_rt: *?*anyopaque, out_ctx: *?*anyopaque) void;
+extern fn C2WriteQuickJSPointersInto(out16: [*]u8) void;
 
 /// C2 diagnostic: test QuickJS init from C side. Returns 0=OK, 1=malloc fail, 2=runtime fail, 3=context fail.
 export fn C2TestQJS() callconv(.c) i32 {
@@ -230,6 +231,24 @@ export fn C2DiagGetLogAddr() callconv(.c) usize {
 export fn C2DiagQJSInto(out_diag: [*]u8) callconv(.c) i32 {
     const r = C2DiagQuickJS(out_diag, 512);
     return @intCast(r);
+}
+
+/// C2 Task 5 observation export (ruling P4): writes the FULL native-width
+/// `g_test_rt` / `g_test_ctx` pointers into a CALLER-SUPPLIED 16-byte remote
+/// buffer — rt at out16+0, ctx at out16+8 (x86-64: pointers are 8 bytes) — so
+/// the injector reads real addresses back with read_u64/read_memory. No
+/// pointer ever crosses a 32-bit thread exit code (that is why
+/// C2DiagGetLogAddr above is injector-unusable, and why the brief's low-32
+/// truncation exports were rejected). `out16` must be at least 16 bytes,
+/// allocated by the caller and passed as CreateRemoteThread lpParameter — one
+/// argument only, the size is baked in, not passed. Delegates to OUR wrapper
+/// symbol `C2WriteQuickJSPointersInto` in quickjs_wrapper.c (no new QuickJS C
+/// bindings — global constraint); the C link name differs from this PE name
+/// because `export fn` owns the link symbol `C2QuickJSPointersInto` in the
+/// same namespace as the C objects (duplicate symbol otherwise, verified).
+/// Read-only observation aid, not a permanent API (Task 5 brief).
+export fn C2QuickJSPointersInto(out16: [*]u8) callconv(.c) void {
+    C2WriteQuickJSPointersInto(out16);
 }
 
 /// C2 test: only build vtables, no hooks. For debugging.

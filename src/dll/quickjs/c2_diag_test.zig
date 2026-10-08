@@ -20,6 +20,7 @@ extern fn C2TestQuickJS() c_int;
 extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2DiagGetLog() ?[*:0]const u8;
 extern fn C2GetQuickJSPointers(out_rt: *?*anyopaque, out_ctx: *?*anyopaque) void;
+extern fn C2WriteQuickJSPointersInto(out16: [*]u8) void;
 
 test "C2SanityCheck returns 42" {
     try std.testing.expectEqual(@as(c_int, 42), C2SanityCheck());
@@ -57,4 +58,56 @@ test "C2TestQuickJS (sibling path) also reaches rc=0" {
     // now asserts the heap_mf path actually initializes fully.
     const rc = C2TestQuickJS();
     try std.testing.expectEqual(@as(c_int, 0), rc);
+}
+
+test "C2WriteQuickJSPointersInto returns rt/ctx bit-identical to C2GetQuickJSPointers" {
+    // Task 5 observation path (ruling P4): after a full rc=0 run, the 16-byte
+    // buffer must carry the EXACT native-width pointers, not a low-32 shadow.
+    // Equality against C2GetQuickJSPointers — the direct read of the same two
+    // statics — is the real proof the observation path returns the actual
+    // runtime/context; nonzero-of-a-truncated-value proves nothing.
+    var diag: [512]u8 = undefined;
+    const rc = C2DiagQuickJS(&diag, @intCast(diag.len));
+    try std.testing.expectEqual(@as(c_int, 0), rc);
+
+    var out16: [16]u8 align(@alignOf(usize)) = undefined;
+    C2WriteQuickJSPointersInto(&out16);
+
+    var rt: ?*anyopaque = null;
+    var ctx: ?*anyopaque = null;
+    C2GetQuickJSPointers(&rt, &ctx);
+    try std.testing.expect(rt != null);
+    try std.testing.expect(ctx != null);
+
+    const rt_bits = std.mem.bytesToValue(usize, out16[0..@sizeOf(usize)]);
+    const ctx_bits = std.mem.bytesToValue(usize, out16[@sizeOf(usize).. @sizeOf(usize) * 2]);
+    try std.testing.expectEqual(@intFromPtr(rt), rt_bits);
+    try std.testing.expectEqual(@intFromPtr(ctx), ctx_bits);
+}
+
+test "C2WriteQuickJSPointersInto writes exactly 16 bytes and nothing outside" {
+    // The live caller VirtualAllocEx's exactly 16 bytes; an overwrite of a
+    // neighbour would corrupt the injector's buffer, so 32 guard bytes flank
+    // the window and must survive untouched. Pre-fill 0xAA throughout: all 16
+    // written bytes must end up accounted for by the two pointers (they are
+    // real non-NULL addresses, never an 0xAA pattern).
+    var diag: [512]u8 = undefined;
+    const rc = C2DiagQuickJS(&diag, @intCast(diag.len));
+    try std.testing.expectEqual(@as(c_int, 0), rc);
+
+    var region: [32 + 16 + 32]u8 align(@alignOf(usize)) = undefined;
+    for (&region) |*b| b.* = 0xAA;
+    const buf = region[32..48];
+    C2WriteQuickJSPointersInto(buf.ptr);
+
+    for (region[0..32]) |b| try std.testing.expectEqual(@as(u8, 0xAA), b);
+    for (region[48..80]) |b| try std.testing.expectEqual(@as(u8, 0xAA), b);
+
+    var rt: ?*anyopaque = null;
+    var ctx: ?*anyopaque = null;
+    C2GetQuickJSPointers(&rt, &ctx);
+    const rt_bits = std.mem.bytesToValue(usize, buf[0..@sizeOf(usize)]);
+    const ctx_bits = std.mem.bytesToValue(usize, buf[@sizeOf(usize).. @sizeOf(usize) * 2]);
+    try std.testing.expectEqual(@intFromPtr(rt), rt_bits);
+    try std.testing.expectEqual(@intFromPtr(ctx), ctx_bits);
 }

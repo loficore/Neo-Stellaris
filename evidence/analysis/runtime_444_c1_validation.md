@@ -1131,3 +1131,98 @@ portability guards; DLOG clamp), `src/dll/exports.zig` (docstring correction onl
 (new native test step), added `src/dll/quickjs/c2_diag_test.zig`. No new Zig extern bindings to
 QuickJS C symbols; C1 gate, `assert rc == 42`, and `scripts/**` untouched; no `.dll`/`.pdb`
 committed.
+
+## 34. Task 5: the C2Init/pointer observation path — native RED→GREEN; live dispatch PENDING (2026-10-08, native only)
+
+**Scope actually executed.** Offline side of Task 5 only: the observation export
+(pair of full native-width pointers → caller-supplied 16-byte buffer), its Zig
+export, native tests for it, the Windows-side probe script `scripts/c2_task5_init.py`,
+host tests for its pure decoder. **Live dispatch pending: game down, awaiting human
+restart + authorization; plan Steps 3–4 (scp/ssh/re-run-live) were NOT executed.**
+This section does not claim Task 5 passed live; nothing below is a live observation.
+
+**Ruling P4 implemented, with one verified deviation.** The brief's Step 2
+(`C2GetRtPtrLow32`/`C2GetCtxPtrLow32` via `@truncate`, "non-zero proves not NULL")
+was not implemented, per P4. What P4 itself mandates — the Zig export
+`C2QuickJSPointersInto` and a same-named C symbol in `quickjs_wrapper.c`, extern'd
+in `exports.zig` — was verified **unimplementable as literally worded**: a Zig
+`export fn` takes its link symbol from its identifier, and `quickjs_wrapper.c` is
+linked into the same DLL. Observed (scratch repros in /tmp, Zig 0.16.0):
+- same file, `extern fn Sym` + `export fn Sym`: `error: duplicate struct member name 'Sym'`
+- extern in one file, export in another, C object defining the same name:
+  `error: duplicate symbol definition: Sym` (`defined by xfile.o` / `defined by sym.o`)
+
+Resolution keeping every externally observable contract (PE export name, single
+lpParameter, 16-byte buffer, rt at +0 / ctx at +8): the C symbol is named
+`C2WriteQuickJSPointersInto` and the Zig export `C2QuickJSPointersInto` forwards to
+it — the same naming split as the existing `C2DiagQJSInto` → `C2DiagQuickJS`.
+No new Zig `extern fn` bindings to QuickJS C symbols were added (global constraint;
+the new symbol is our own wrapper).
+
+**TDD evidence (native).**
+- Pre-change baseline: `zig build test` → `Build Summary: 22/25 steps succeeded
+  (1 failed); 278/278 tests passed`. The 1 failure is pre-existing: the
+  exports.zig-rooted step fails at **link** on undefined `CreateFileA/WriteFile/
+  CloseHandle/GetModuleHandleA` (kernel32 bindings on an ELF host).
+- RED (tests added, C function absent): `zig build test` →
+  `Build Summary: 20/25 steps succeeded (2 failed); 275/275 tests passed`, new
+  failure = the c2_diag step: `error: undefined symbol: C2WriteQuickJSPointersInto`
+  (2 errors, each `referenced by c2_diag_test.o:c2_diag_test.test.C2WriteQuickJSPointersInto …`).
+  Expected exactly this: the link step is where a missing C symbol surfaces.
+  (275 not 278 because the whole 5-test c2_diag step — 3 old + 2 new — no longer links.)
+- GREEN (C function + Zig export added): `zig build test` →
+  `Build Summary: 22/25 steps succeeded (1 failed); 280/280 tests passed`.
+  Failure count/mode unchanged from baseline (`grep "undefined symbol"` over the
+  build output lists only the four pre-existing kernel32 symbols, ×2 each;
+  no `C2Write*` among them).
+  The two new tests:
+  1. "returns rt/ctx **bit-identical** to `C2GetQuickJSPointers`" after a
+     `C2DiagQuickJS` run reaching rc=0 — an equality check against the direct read
+     of the same two statics, not a nonzero check.
+  2. "writes exactly 16 bytes and nothing outside" — 0xAA-filled region with
+     32-byte guards on both sides; guards must survive; all 16 buffer bytes must
+     be accounted for by the two pointers. On the Linux host this exercises the
+     libc-backed `GetProcessHeap/HeapAlloc` shim (`quickjs_wrapper.c:14-37`), i.e.
+     the same accounting path that broke on Windows (§33).
+- `zig build` (x86_64-windows DLL) → exit 0; `C2QuickJSPointersInto` links into
+  the PE, confirming the rename clears the duplicate-symbol problem on COFF too.
+- `python3 -m pytest scripts/test_c2_harness.py -q` → **20 passed** (baseline 16;
+  +4 host tests for `parse_pointers`: realistic non-NULL pair, rt-live/ctx-NULL
+  decoding to `(int, 0)` without raising, both-zero, wrong length (0/8/15/17
+  bytes) → `ValueError`).
+
+**Built artifact (host-side PE reparse with `c2_harness.list_exports`, no hard-coded
+RVAs — P10).** `zig build` output `zig-out/bin/stellaris_quickjs.dll`:
+- sha256 `d51c3fbd8c7a04a7235abf249027fc93968dbde31ae28e633e90b8a3843540d9`
+- 30 exports, all RVAs distinct; the Task-5-relevant rows:
+  `C2Sanity = 0x44b720`, `C2Init = 0x44b6a0`, `C2QuickJSPointersInto = 0x44b4e0`
+  (context: `C2DiagQJSInto = 0x44b500`). These are RVAs of **this build**; the
+  probe reparses the Windows-side copy at run time and never trusts them.
+- Not committed (`.dll` excluded); recorded so the upload can be checked
+  byte-identical (P12: upload under the NEW name `sqjs_c4.dll`).
+
+**C2Init logic: untouched, no disproof found.** `exports.zig::C2Init` still
+delegates to `C2TestQuickJS()` and returns its rc. Native `C2TestQuickJS`
+returns rc=0 (§33 and re-run here), so nothing written or run this task showed
+C2Init broken; whether the **live** C2Init returns 0 is exactly what the pending
+dispatch will establish — hypothesis, neither confirmed nor refuted here (P13).
+
+**Probe design facts** (`scripts/c2_task5_init.py`): gate first, verbatim
+`c2_task3_diag.py:137-144` shape (inject once → alive → PowerShell 64-bit base →
+MZ → `list_exports` of the injected copy → `C2Sanity == 42` + alive), then the
+single `C2Init` dispatch (assert rc==0, alive), then `remote_alloc(16)` →
+`call_remote_with_arg(C2QuickJSPointersInto, buf)` → alive → `read_memory(16)` →
+`parse_pointers`. `C2DiagGetLogAddr` is never used (usize, injector-unusable). A
+NULL result raises with the specific diagnosis of *which* pointer is NULL
+(rt-only-NULL = wrong module copy called; ctx-NULL-with-live-rt = init got
+partway; both-NULL = rc=0 set neither). `dispatch_c2_init_once` refuses a second
+C2Init per session — §33 ledgered that re-dispatch resets `g_test_rt/g_test_ctx`
+without freeing the previous runtime. The ~8-line sanity gate stays duplicated
+per probe script; `c2_harness.py` not modified (controller ruling).
+
+**Counts for §34**: changed `src/dll/quickjs/quickjs_wrapper.c` (+
+`C2WriteQuickJSPointersInto`), `src/dll/exports.zig` (+extern decl +`C2QuickJSPointersInto`
+export), `src/dll/quickjs/c2_diag_test.zig` (+2 tests), `scripts/test_c2_harness.py`
+(+4 tests, 2 doc/list touch-ups), added `scripts/c2_task5_init.py`. No `.dll`/`.pdb`/
+`C:\temp\*` committed; `build.zig` unchanged (the `c2_diag_tests` step already exists);
+`src/dll/scripted/**`, C1 gate, and the `0x5350D0` constraint untouched.

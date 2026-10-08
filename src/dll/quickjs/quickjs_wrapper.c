@@ -300,6 +300,25 @@ void C2GetQuickJSPointers(void **out_rt, void **out_ctx) {
     *out_ctx = g_test_ctx;
 }
 
+/* Task 5 observation aid (ruling P4): write the FULL native-width pointers
+ * into a caller-supplied 16-byte buffer — g_test_rt at out16+0, g_test_ctx at
+ * out16+sizeof(void*) (both 8 bytes on x86-64, the only target). One argument
+ * only because CreateRemoteThread passes exactly one lpParameter; the size is
+ * baked into the contract, never passed. memcpy, not a void** store: the
+ * caller's buffer has only byte alignment.
+ *
+ * The C link name is deliberately NOT the DLL's PE export name
+ * `C2QuickJSPointersInto` (src/dll/exports.zig): Zig's `export fn` takes its
+ * link symbol from the function identifier, and quickjs_wrapper.c is linked
+ * into the same DLL — the same name twice is a duplicate-symbol link error
+ * (verified). Read-only observation aids, not a permanent API (Task 5 brief). */
+void C2WriteQuickJSPointersInto(unsigned char *out16) {
+    void *rt = g_test_rt;
+    void *ctx = g_test_ctx;
+    memcpy(out16 + 0, &rt, sizeof(void *));
+    memcpy(out16 + sizeof(void *), &ctx, sizeof(void *));
+}
+
 const char *C2DiagGetLog(void) {
     return g_diag_log;
 }

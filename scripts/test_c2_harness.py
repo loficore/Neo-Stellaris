@@ -24,16 +24,20 @@ subprocess parsing — so its filter semantics ARE pinned by a host test below
 ``c2_task3_diag`` is importable on the Linux host for the same reason (only
 pure defs run at import). Its pure log-parsing helper ``parse_ctx`` — the rc==0
 success gate's decoder — is pinned by host tests at the bottom of this file;
-the probe's remote-call control flow stays Windows-only.
+the probe's remote-call control flow stays Windows-only. ``c2_task5_init``
+likewise contributes one pure helper, ``parse_pointers`` (the 16-byte
+C2QuickJSPointersInto buffer decoder), pinned by host tests below.
 """
 
 import os
+import struct
 
 import pytest
 
 import c2_harness
 from c2_harness import list_exports, parse_module_base_from_ps, resolve_pid
 from c2_task3_diag import parse_ctx
+from c2_task5_init import parse_pointers
 
 # The built DLL is at <repo root>/zig-out/bin/... . Tests are invoked from the
 # repo root (``python3 -m pytest scripts/test_c2_harness.py``), but resolve the
@@ -84,7 +88,8 @@ def test_list_exports_recovers_all_known_names():
     exports = list_exports(DLL_PATH)
     # A handful of names that genuinely exist in the artifact (progress.md list).
     for name in ("C2Sanity", "C2Init", "C2DiagQJS", "C2DiagGetLogAddr",
-                 "C2TestQJS", "C2RegisterEffect", "C2RegisterTrigger"):
+                 "C2TestQJS", "C2RegisterEffect", "C2RegisterTrigger",
+                 "C2DiagQJSInto", "C2QuickJSPointersInto"):
         assert name in exports, f"missing real export {name!r}"
     # RVAs are distinct positive integers, proving a real directory walk.
     rvas = list(exports.values())
@@ -166,3 +171,34 @@ def test_parse_ctx_surrounded_by_extra_text():
 
 def test_parse_ctx_empty_string_returns_none():
     assert parse_ctx("") is None
+
+
+# --- c2_task5_init.parse_pointers: decode the 16-byte pointer buffer ----------
+# The Task 5 probe reads the C2QuickJSPointersInto output buffer (rt at +0,
+# ctx at +8, native-width little-endian on x86-64) and must be able to tell
+# "rt NULL" from "ctx NULL" from "both NULL" — so 0 must decode to the int 0,
+# never raise, and only a wrong-length buffer is an error.
+
+def test_parse_pointers_two_realistic_non_null():
+    # Typical Windows x64 heap/module addresses from live runs so far.
+    raw = struct.pack("<QQ", 0x7FF65BF90000, 0x000001ABCDEF0120)
+    assert parse_pointers(raw) == (0x7FF65BF90000, 0x000001ABCDEF0120)
+
+
+def test_parse_pointers_rt_nonnull_ctx_null():
+    # "init got partway" shape: rt live, ctx NULL. Must decode, not raise —
+    # the caller diagnoses which one is NULL.
+    raw = struct.pack("<QQ", 0x000001ABCDEF0120, 0)
+    rt, ctx = parse_pointers(raw)
+    assert rt == 0x000001ABCDEF0120
+    assert ctx == 0
+
+
+def test_parse_pointers_both_zero():
+    assert parse_pointers(struct.pack("<QQ", 0, 0)) == (0, 0)
+
+
+def test_parse_pointers_wrong_length_raises():
+    for bad in (b"", b"\x00" * 8, b"\x00" * 15, b"\x00" * 17):
+        with pytest.raises(ValueError):
+            parse_pointers(bad)
