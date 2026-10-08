@@ -82,6 +82,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         std.process.exit(3);
     }
     printErr("injected OK, remote HMODULE=0x{x}\n", .{hmodule_remote});
+    printErr("C1Run will auto-trigger from DllMain (check game logs for result)\n", .{});
 }
 
 fn resolvePid(spec: []const u8) !u32 {

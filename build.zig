@@ -126,15 +126,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Keyword registry — the 0x120 descriptor builder, checked byte-for-byte against
-    // vectors produced by running the engine's own writers (scripts/emu_desc.py).
-    const keyword_registry_mod = b.createModule(.{
-        .root_source_file = b.path("src/dll/scripted/keyword_registry.zig"),
-        .target = native,
-        .optimize = optimize,
-    });
-    keyword_registry_mod.addImport("offsets", offsets_mod);
-    const keyword_registry_tests = b.addTest(.{ .root_module = keyword_registry_mod });
+    // Keyword registry tests run via the exports.zig test root (main.zig imports
+    // keyword_registry), so no standalone test module is needed here.
 
     // Hooking framework tests (detour + windows wrappers).
     const windows_mod = b.createModule(.{
@@ -251,9 +244,6 @@ pub fn build(b: *std.Build) void {
     const run_offsets_tests = b.addRunArtifact(offsets_tests);
     run_offsets_tests.skip_foreign_checks = true;
 
-    const run_keyword_registry_tests = b.addRunArtifact(keyword_registry_tests);
-    run_keyword_registry_tests.skip_foreign_checks = true;
-
     const run_detour_tests = b.addRunArtifact(detour_tests);
     run_detour_tests.skip_foreign_checks = true;
 
@@ -282,7 +272,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_qjs_tests.step);
     test_step.dependOn(&run_offsets_tests.step);
-    test_step.dependOn(&run_keyword_registry_tests.step);
     test_step.dependOn(&run_detour_tests.step);
     test_step.dependOn(&run_api_gamestate_tests.step);
     // NOTE: scope.zig standalone test disabled — pre-existing "import of file outside

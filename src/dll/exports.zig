@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const main = @import("main.zig");
+const keyword_registry = main.keyword_registry;
 
 // ---------------------------------------------------------------------------
 // Engine pointer storage
@@ -27,6 +28,11 @@ var engine_ptr: ?*anyopaque = null;
 /// DLL module base address, set by PushCApplicationPtr.
 /// Used by the extension host to resolve version-specific offsets.
 var base_address: usize = 0;
+
+/// C1 registration result — observable from the loader after C1Run returns.
+/// token_id = 0 means not yet run or failed; check c1_error for the reason.
+var c1_result: ?keyword_registry.Registration = null;
+var c1_error: ?keyword_registry.RegisterError = null;
 
 /// Retrieve the stored engine pointer. Returns null if not yet set.
 pub fn getEnginePtr() ?*anyopaque {
@@ -51,9 +57,349 @@ export fn PushCApplicationPtr(args: *PushArgs) callconv(.c) void {
     std.log.info("stellaris_quickjs: DLL base address @ {any}", .{args.base});
 }
 
+extern "kernel32" fn GetModuleHandleA(lpModuleName: [*:0]const u8) ?*anyopaque;
+extern "kernel32" fn CreateThread(
+    lpThreadAttributes: ?*anyopaque,
+    dwStackSize: usize,
+    lpStartAddress: *const fn (?*anyopaque) callconv(.c) u32,
+    lpParameter: ?*anyopaque,
+    dwCreationFlags: u32,
+    lpThreadId: ?*u32,
+) ?*anyopaque;
+extern "kernel32" fn CreateFileA(
+    lpFileName: [*:0]const u8,
+    dwDesiredAccess: u32,
+    dwShareMode: u32,
+    lpSecurityAttributes: ?*anyopaque,
+    dwCreationDisposition: u32,
+    dwFlagsAndAttributes: u32,
+    hTemplateFile: ?*anyopaque,
+) ?*anyopaque;
+extern "kernel32" fn WriteFile(
+    hFile: ?*anyopaque,
+    lpBuffer: *const anyopaque,
+    nNumberOfBytesToWrite: u32,
+    lpNumberOfBytesWritten: ?*u32,
+    lpOverlapped: ?*anyopaque,
+) i32;
+extern "kernel32" fn CloseHandle(hObject: ?*anyopaque) i32;
+
+fn writeMarker() void {
+    const path = "C:\\temp\\dll_loaded.txt";
+    const msg = "DLL loaded OK\n";
+    const h = CreateFileA(path, 0x40000000, 0, null, 2, 0x80, null);
+    if (h == null) return;
+    if (@intFromPtr(h) == @as(usize, @bitCast(@as(i64, -1)))) return;
+    var written: u32 = 0;
+    _ = WriteFile(h, msg.ptr, @intCast(msg.len), &written, null);
+    _ = CloseHandle(h);
+}
+
+fn markerThreadMain(_: ?*anyopaque) callconv(.c) u32 {
+    writeMarker();
+    return 0;
+}
+
+// From quickjs_wrapper.c — diagnostic test and pointer retrieval.
+extern fn C2SanityCheck() c_int;
+extern fn C2TestQuickJS() c_int;
+extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
+extern fn C2DiagGetLog() ?[*:0]const u8;
+extern fn C2GetQuickJSPointers(out_rt: *?*anyopaque, out_ctx: *?*anyopaque) void;
+
+/// C2 diagnostic: test QuickJS init from C side. Returns 0=OK, 1=malloc fail, 2=runtime fail, 3=context fail.
+export fn C2TestQJS() callconv(.c) i32 {
+    const result = C2TestQuickJS();
+    var buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "C2TestQJS: result={d}\n", .{result}) catch "C2TestQJS: done\n";
+    writeLogStatic("C:\\temp\\c2_testqjs.log", msg);
+    return @intCast(result);
+}
+
+const GENERIC_WRITE: u32 = 0x40000000;
+const CREATE_ALWAYS: u32 = 2;
+const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+const INVALID_HANDLE_VALUE: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(i64, -1))));
+
+/// C1: register a new trigger keyword into the live engine's BST.
+/// PLAN §6 C1 — alias form, donor = has_crisis_perk (0x269CAA8).
+/// Resolves the game's module base via GetModuleHandleA, so it does not
+/// depend on PushCApplicationPtr being called first.
+/// Can be invoked via CreateRemoteThread from the injector, or from DllMain.
+///
+/// Candidate name: "neo_effect" — cleared by scripts/c1_preflight.py
+/// (no collision in 9,863 descriptors + 1,610 keyword names, case-folded).
+/// Predicted token id: >= 18818 (larger if lazy accessors already minted during startup).
+export fn C1Run() callconv(.c) u32 {
+    const exe_name: [*:0]const u8 = "stellaris.exe";
+    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    if (game_base == 0) {
+        writeLogStatic("C:\\temp\\c1_result.log", "C1 FAIL: no game base\n");
+        return 0;
+    }
+
+    const eng = keyword_registry.Engine.map(game_base);
+
+    // Register trigger: neo_effect (already done, but do it again for completeness)
+    const holder_trigger = keyword_registry.NameHolder.inlineSso("neo_effect");
+    const info_trigger = keyword_registry.ClassInfo.triggerDonor(game_base);
+    const trigger_result = keyword_registry.register(&eng, .triggers, &holder_trigger, info_trigger) catch |err| {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "C1 trigger FAIL: error={d}\n", .{@intFromError(err)}) catch "C1 trigger FAIL\n";
+        writeLogStatic("C:\\temp\\c1_result.log", msg);
+        return 0;
+    };
+
+    // Register effect: neo_action (effect-side twin)
+    const holder_effect = keyword_registry.NameHolder.inlineSso("neo_action");
+    const info_effect = keyword_registry.ClassInfo.effectDonor(game_base);
+    const effect_result = keyword_registry.register(&eng, .effects, &holder_effect, info_effect) catch |err| {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "C1 effect FAIL: error={d}\n", .{@intFromError(err)}) catch "C1 effect FAIL\n";
+        writeLogStatic("C:\\temp\\c1_result.log", msg);
+        return 0;
+    };
+
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "C1 OK: trigger_id={d} effect_id={d}\n", .{ trigger_result.token_id, effect_result.token_id }) catch "C1 OK\n";
+    writeLogStatic("C:\\temp\\c1_result.log", msg);
+    return trigger_result.token_id;
+}
+
+// ---------------------------------------------------------------------------
+// C2: QuickJS runtime integration
+// ---------------------------------------------------------------------------
+
+const c2_handler = main.c2_handler;
+const c2_vtable = main.c2_vtable;
+const c2_predicate_hook = main.c2_predicate_hook;
+const c = @import("quickjs/bindings.zig");
+const offsets = @import("shared/offsets.zig");
+
+/// Sanity check: returns 42 if the new DLL code is loaded.
+/// Pure Zig, no C wrapper — proves the DLL binary is correct.
+export fn C2Sanity() callconv(.c) i32 {
+    return 42;
+}
+
+/// C2: Initialize QuickJS, custom vtables, and predicate hooks.
+/// Must be called after C1Run. QuickJS init is done here (not DllMain) because
+/// DllMain runs under loader lock which can prevent QuickJS memory allocation.
+/// Returns 0 on success, negative on error.
+///
+/// NOTE: writeLogStatic removed (2026-10-07) — suspected of crashing C2Init
+/// while C2TestQJS (which also calls writeLogStatic but *after* the C fn) does not.
+/// The CreateFileA/WriteFile calls may corrupt TLS or stack state in the
+/// CreateRemoteThread context. Re-add only after blocker 3 is confirmed resolved.
+export fn C2Init() callconv(.c) i32 {
+    const r = C2TestQuickJS();
+    return @intCast(r);
+}
+
+/// C2 extended diagnostic: narrows down why JS_NewContext returns NULL.
+/// Returns 0 on success, or a code indicating which step failed:
+///   1 = malloc broken, 2 = runtime NULL, 3 = opaque mismatch,
+///   4 = raw context NULL (allocation), 5-12 = specific intrinsic failed,
+///   98 = wait failed, 99 = thread creation failed.
+/// Call C2DiagGetLogAddr to read the diagnostic string from remote memory.
+export fn C2DiagQJS() callconv(.c) i32 {
+    var diag_buf: [512]u8 = undefined;
+    const r = C2DiagQuickJS(&diag_buf, @intCast(diag_buf.len));
+    return @intCast(r);
+}
+
+/// Returns the address of the diagnostic log buffer (for remote reading).
+export fn C2DiagGetLogAddr() callconv(.c) usize {
+    const p = C2DiagGetLog();
+    return @intFromPtr(p);
+}
+
+/// C2 test: only build vtables, no hooks. For debugging.
+export fn C2TestVtable() callconv(.c) i32 {
+    writeLogStatic("C:\\temp\\c2_test.log", "C2Test: entry\n");
+
+    const exe_name: [*:0]const u8 = "stellaris.exe";
+    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    if (game_base == 0) {
+        writeLogStatic("C:\\temp\\c2_test.log", "C2Test FAIL: no game base\n");
+        return -1;
+    }
+
+    // Log game_base for diagnosis.
+    var buf: [512]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&buf, "C2Test: game_base=0x{x}\n", .{game_base}) catch "C2Test: game_base ok\n";
+    writeLogStatic("C:\\temp\\c2_test.log", hdr);
+
+    c2_vtable.buildVtables(game_base);
+    if (!c2_vtable.isInitialized()) {
+        writeLogStatic("C:\\temp\\c2_test.log", "C2Test FAIL: vtable build failed\n");
+        return -2;
+    }
+
+    writeLogStatic("C:\\temp\\c2_test.log", "C2Test OK: vtables built\n");
+    return 0;
+}
+
+/// C2 diagnostic: step-by-step memory reads to find the exact crash point.
+/// Tests reading the donor vtable addresses byte-by-byte.
+export fn C2Diag() callconv(.c) i32 {
+    var log_buf: [1024]u8 = undefined;
+    var pos: usize = 0;
+
+    const exe_name: [*:0]const u8 = "stellaris.exe";
+    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+
+    pos = appendFmt(&log_buf, pos, "C2Diag: game_base=0x{x}\n", .{game_base});
+    if (game_base == 0) {
+        writeLogStatic("C:\\temp\\c2_diag.log", log_buf[0..pos]);
+        return -1;
+    }
+
+    // Test reading the donor effect vtable address.
+    const donor_eff = game_base + offsets.keyword_reg.DONOR_EFFECT_VTABLE;
+    pos = appendFmt(&log_buf, pos, "C2Diag: donor_eff_vtbl=0x{x}\n", .{donor_eff});
+
+    // Check alignment.
+    pos = appendFmt(&log_buf, pos, "C2Diag: donor_eff aligned={d}\n", .{@as(u32, @intCast((donor_eff & 7)))});
+
+    // Try reading a single u64 from the donor effect vtable.
+    if (donor_eff >= 0x10000 and donor_eff <= 0x00007FFF_FFFF_0000) {
+        const p: [*]const u8 = @ptrFromInt(donor_eff);
+        const val = std.mem.readInt(u64, p[0..8], .little);
+        pos = appendFmt(&log_buf, pos, "C2Diag: eff[0]=0x{x}\n", .{val});
+
+        // Check if it looks like a code pointer (within the game image).
+        if (val >= game_base and val < game_base + 0x4000000) {
+            pos = appendFmt(&log_buf, pos, "C2Diag: eff[0] looks like valid code ptr (offset=0x{x})\n", .{val - game_base});
+        } else {
+            pos = appendFmt(&log_buf, pos, "C2Diag: eff[0] DOES NOT look like code ptr!\n", .{});
+        }
+
+        // Read a few more slots.
+        const val2 = std.mem.readInt(u64, p[8..16], .little);
+        pos = appendFmt(&log_buf, pos, "C2Diag: eff[1]=0x{x}\n", .{val2});
+
+        const val3 = std.mem.readInt(u64, p[16..24], .little);
+        pos = appendFmt(&log_buf, pos, "C2Diag: eff[2]=0x{x}\n", .{val3});
+    } else {
+        pos = appendFmt(&log_buf, pos, "C2Diag: donor_eff OUT OF plausible range!\n", .{});
+    }
+
+    // Test reading the donor trigger vtable address.
+    const donor_trig = game_base + offsets.keyword_reg.DONOR_TRIGGER_VTABLE;
+    pos = appendFmt(&log_buf, pos, "C2Diag: donor_trig_vtbl=0x{x}\n", .{donor_trig});
+
+    if (donor_trig >= 0x10000 and donor_trig <= 0x00007FFF_FFFF_0000) {
+        const p: [*]const u8 = @ptrFromInt(donor_trig);
+        const val = std.mem.readInt(u64, p[0..8], .little);
+        pos = appendFmt(&log_buf, pos, "C2Diag: trig[0]=0x{x}\n", .{val});
+
+        const val2 = std.mem.readInt(u64, p[8..16], .little);
+        pos = appendFmt(&log_buf, pos, "C2Diag: trig[1]=0x{x}\n", .{val2});
+    } else {
+        pos = appendFmt(&log_buf, pos, "C2Diag: donor_trig OUT OF plausible range!\n", .{});
+    }
+
+    pos = appendFmt(&log_buf, pos, "C2Diag: DONE\n", .{});
+    writeLogStatic("C:\\temp\\c2_diag.log", log_buf[0..pos]);
+    return 0;
+}
+
+fn appendFmt(buf: []u8, pos: usize, comptime fmt: []const u8, args: anytype) usize {
+    const remaining = buf[pos..];
+    const written = std.fmt.bufPrint(remaining, fmt, args) catch return pos;
+    return pos + written.len;
+}
+
+/// C2: Register a JavaScript handler for an effect keyword.
+/// `name` is the keyword name (e.g., "neo_action").
+/// `js_code` is the JavaScript function body (e.g., "function(scope) { ... }").
+/// Returns the token_id on success, 0 on failure.
+export fn C2RegisterEffect(name_ptr: [*:0]const u8, js_code_ptr: [*:0]const u8) callconv(.c) u32 {
+    const name = std.mem.span(name_ptr);
+    const js_code = std.mem.span(js_code_ptr);
+
+    if (main.js_runtime) |*rt| {
+        // Eval the JS code to get the function object.
+        const result = rt.eval(js_code, "<c2_effect>");
+        switch (result) {
+            .ok => |func_val| {
+                const handler_result = c2_handler.registerHandler(name, func_val, .effect) catch |err| {
+                    var buf: [128]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "C2 RegisterEffect FAIL: {d}\n", .{@intFromError(err)}) catch "C2 RegisterEffect FAIL\n";
+                    writeLogStatic("C:\\temp\\c2_result.log", msg);
+                    c.JS_FreeValue(rt.ctx, func_val);
+                    return 0;
+                };
+                _ = handler_result;
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "C2 RegisterEffect OK: {s}\n", .{name}) catch "C2 RegisterEffect OK\n";
+                writeLogStatic("C:\\temp\\c2_result.log", msg);
+                // Note: token_id will be set later by matching with C1 registration.
+                return 1; // Success indicator
+            },
+            .err => |e| {
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "C2 RegisterEffect FAIL: eval error: {s}\n", .{e.message}) catch "C2 RegisterEffect FAIL: eval error\n";
+                writeLogStatic("C:\\temp\\c2_result.log", msg);
+                return 0;
+            },
+        }
+    }
+    return 0;
+}
+
+/// C2: Register a JavaScript handler for a trigger keyword.
+/// `name` is the keyword name (e.g., "neo_effect").
+/// `js_code` is the JavaScript function body (e.g., "function(scope) { return true; }").
+/// Returns the token_id on success, 0 on failure.
+export fn C2RegisterTrigger(name_ptr: [*:0]const u8, js_code_ptr: [*:0]const u8) callconv(.c) u32 {
+    const name = std.mem.span(name_ptr);
+    const js_code = std.mem.span(js_code_ptr);
+
+    if (main.js_runtime) |*rt| {
+        const result = rt.eval(js_code, "<c2_trigger>");
+        switch (result) {
+            .ok => |func_val| {
+                const handler_result = c2_handler.registerHandler(name, func_val, .trigger) catch |err| {
+                    var buf: [128]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "C2 RegisterTrigger FAIL: {d}\n", .{@intFromError(err)}) catch "C2 RegisterTrigger FAIL\n";
+                    writeLogStatic("C:\\temp\\c2_result.log", msg);
+                    c.JS_FreeValue(rt.ctx, func_val);
+                    return 0;
+                };
+                _ = handler_result;
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "C2 RegisterTrigger OK: {s}\n", .{name}) catch "C2 RegisterTrigger OK\n";
+                writeLogStatic("C:\\temp\\c2_result.log", msg);
+                return 1;
+            },
+            .err => |e| {
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "C2 RegisterTrigger FAIL: eval error: {s}\n", .{e.message}) catch "C2 RegisterTrigger FAIL: eval error\n";
+                writeLogStatic("C:\\temp\\c2_result.log", msg);
+                return 0;
+            },
+        }
+    }
+    return 0;
+}
+
+fn writeLogStatic(path: [*:0]const u8, data: []const u8) void {
+    const h = CreateFileA(path, GENERIC_WRITE, 0, null, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, null);
+    if (h == null or h == INVALID_HANDLE_VALUE) return;
+    var written: u32 = 0;
+    _ = WriteFile(h, data.ptr, @intCast(data.len), &written, null);
+    _ = CloseHandle(h);
+}
+
+/// Thread entry point that calls C1Run. Spawned from DllMain to avoid loader lock.
+fn c1ThreadMain(_: ?*anyopaque) callconv(.c) u32 {
+    return C1Run();
+}
+
 /// Standard Windows DLL entry point.
-/// We do not perform meaningful work here — real initialization happens
-/// when PushCApplicationPtr is called. This just satisfies the loader.
+/// Writes a marker file to prove the DLL loaded.
 export fn DllMain(
     hinstDLL: ?*anyopaque,
     fdwReason: u32,
@@ -61,25 +407,9 @@ export fn DllMain(
 ) callconv(.c) i32 {
     _ = hinstDLL;
     _ = lpvReserved;
-
-    const DLL_PROCESS_ATTACH: u32 = 1;
-    const DLL_PROCESS_DETACH: u32 = 0;
-
-    switch (fdwReason) {
-        DLL_PROCESS_ATTACH => {
-            std.log.info("stellaris_quickjs: DLL_PROCESS_ATTACH", .{});
-            main.initializeQuickJS();
-        },
-        DLL_PROCESS_DETACH => {
-            std.log.info("stellaris_quickjs: DLL_PROCESS_DETACH", .{});
-            main.deinitializeQuickJS();
-            engine_ptr = null;
-            base_address = 0;
-        },
-        else => {},
+    if (fdwReason == 1) { // DLL_PROCESS_ATTACH
+        writeMarker();
     }
-
-    // Return TRUE (1)
     return 1;
 }
 

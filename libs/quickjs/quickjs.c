@@ -2649,6 +2649,47 @@ JSContext *JS_NewContext(JSRuntime *rt)
     return ctx;
 }
 
+/* Diagnostic: step-by-step JS_NewContext to find which intrinsic fails.
+ * Returns 0 on success, or a code indicating which step failed:
+ *   1 = JS_NewContextRaw failed (allocation)
+ *   2 = JS_AddIntrinsicBaseObjects failed
+ *   3 = JS_AddIntrinsicDate failed
+ *   4 = JS_AddIntrinsicEval failed
+ *   5 = JS_AddIntrinsicStringNormalize failed
+ *   6 = JS_AddIntrinsicRegExp failed
+ *   7 = JS_AddIntrinsicJSON failed
+ *   8 = JS_AddIntrinsicProxy failed
+ *   9 = JS_AddIntrinsicMapSet failed
+ *  10 = JS_AddIntrinsicTypedArrays failed
+ *  11 = JS_AddIntrinsicPromise failed
+ *  12 = JS_AddIntrinsicWeakRef failed
+ * On success, *out_ctx is set to the new context.
+ * On failure, the partial context is freed and *out_ctx is set to NULL.
+ */
+int JS_NewContextDiag(JSRuntime *rt, JSContext **out_ctx)
+{
+    JSContext *ctx;
+
+    *out_ctx = NULL;
+    ctx = JS_NewContextRaw(rt);
+    if (!ctx) return 1;
+
+    if (JS_AddIntrinsicBaseObjects(ctx)) { JS_FreeContext(ctx); return 2; }
+    if (JS_AddIntrinsicDate(ctx)) { JS_FreeContext(ctx); return 3; }
+    if (JS_AddIntrinsicEval(ctx)) { JS_FreeContext(ctx); return 4; }
+    if (JS_AddIntrinsicStringNormalize(ctx)) { JS_FreeContext(ctx); return 5; }
+    if (JS_AddIntrinsicRegExp(ctx)) { JS_FreeContext(ctx); return 6; }
+    if (JS_AddIntrinsicJSON(ctx)) { JS_FreeContext(ctx); return 7; }
+    if (JS_AddIntrinsicProxy(ctx)) { JS_FreeContext(ctx); return 8; }
+    if (JS_AddIntrinsicMapSet(ctx)) { JS_FreeContext(ctx); return 9; }
+    if (JS_AddIntrinsicTypedArrays(ctx)) { JS_FreeContext(ctx); return 10; }
+    if (JS_AddIntrinsicPromise(ctx)) { JS_FreeContext(ctx); return 11; }
+    if (JS_AddIntrinsicWeakRef(ctx)) { JS_FreeContext(ctx); return 12; }
+
+    *out_ctx = ctx;
+    return 0;
+}
+
 void *JS_GetContextOpaque(JSContext *ctx)
 {
     return ctx->user_opaque;

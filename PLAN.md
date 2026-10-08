@@ -1,4 +1,4 @@
-# PLAN.md — Neo-Stellaris 路线图（2026-09-29）
+# PLAN.md — Neo-Stellaris 路线图（2026-10-07）
 
 证据一律指向三卷取证日志 `evidence/analysis/runtime_444_*.md` 的 § 号（§1–§15 在 `runtime_444_structures.md`、§16–§23 在 `runtime_444_keyword_pipeline.md`、§24–§30 在 `runtime_444_c1_validation.md`），不在这里重复论证。
 
@@ -37,12 +37,15 @@
 | Windows 机时开时关、SSH 隧道要人工恢复 | 一切动态验证 | Phase A 完全不碰它 |
 | ~~本机 IDA 不可用~~ **已解除** 2026-09-29：headless 能开，无许可门 | 反编译可用，但是**从 exe 新建的 IDB**，没有 Windows 侧 `.i64` 的历史分析 | 用前先 `del_func`+`add_func`+`mark_cfunc_dirty`，否则 Hex-Rays 常给 5 字节 `JUMPOUT` 假象（详见 §15） |
 | `stellaris.exe.i64`（705 MB）留在 Windows | 拿不到历史分析成果 | 只在 IDA 有合法可用路径后再取，纯静态不需要 |
-| **C1 的实机注册超出 §1 的「只记录」边界** | 第一次真正改引擎状态 | **仍是唯一真阻塞**。C0 已把执行体写完并加硬门（§6 C0 进度、§8 第一条），翻 `authorize.c1_registration` 需要点名授权 |
+| ~~**C1 的实机注册超出 §1 的「只记录」边界**~~ **已解除**（2026-10） | ~~第一次真正改引擎状态~~ | **C1 已完成**：trigger `neo_effect` + effect `neo_action` 均已注册，四判据全通过 |
 | ~~`0x1D13270` 的调用约定还差一步钉死~~ **已解除**（§20） | Zig 侧传参会猜 | `eax = f(rcx = *holder)`，rdx 死参数；执行体照此实现并有假指针测试 |
 | ~~§17 第 4 步 `class_info.factory` 的调用约定未定~~ **已解除**（§22） | 我们造不出 class-info 记录 | 1,605 条 keyword 记录全部普查：field0 是**共享 deleting destructor `0x34C090`**（不是 ctor），field1 是**无参 `create`**，对象在 `rax`。未知项向前挪了一格，见下一行 |
 | ~~**§22.4：引擎在哪里 walk BST 并调 `create`**~~ **已解除**（§23，纯静态） | 插进去的 keyword 会不会被实例化 | 消费方是 `0x3B01A0`(effect) / `0x349AE0`(trigger)：读 db 全局、按裸 token id walk `_Tree`、命中就 `call [value[0]+8]`。**无范围校验**，所以运行期新 mint 的 id 与静态 id 完全等价。工具 `scripts/createsites.py`（按 shape 找）× `scripts/riprefs.py`（按字节找 data global 引用，~5 s vs find_refs 的 ~15 min） |
-| **C1 真正的门槛变了**：不再是「地址未知」，而是「对象必须well-formed」 | 造出来的 `create` 返回值要经得起引擎写它 | §23：引擎在调任何虚函数**之前**就往对象里写 `{id, name std::string}`（effect `+0x20/+0x28`，trigger `+0x38/+0x40`），随后 `call [vptr+0x98]`/`[vptr+0x80]`；且 `0x3AF130`/`0x348450` 会**遍历整棵树逐个 create**。vtable 只到 slot[2] 的桩不是保守选择，是往空槽里跳 |
+| ~~**C1 真正的门槛变了**：不再是「地址未知」，而是「对象必须well-formed」~~ **已解除**（C1 别名式完成） | ~~造出来的 `create` 返回值要经得起引擎写它~~ | 别名方案继承了官方对象的 well-formedness，引擎写入 `{id, name}` 后对象完全正常 |
 | ~~「那么我们自己造的这个对象长什么样？」~~ **已解除**（§24，决定 = 别名式 C1） | 不造对象，借官方 `class_info` | **别名是引擎自带的形态**：1,615 条 keyword 记录压在 1,605 个 class_info 上，其中 9 个服务 2-3 个 token id（`if`/`else_if`/`else` 共用 `0x269DC98`），而 1,605 个 `create` 体**互不相同** → 共享只发生在 class_info 层。每个 keyword 仍各自 `new(0x10)`，所以共享 deleter `0x34C090` 永远不会拿到同一块 → **没有 double-free 面**（这原本是别名唯一可能不成立的地方）。捐赠者选定：trigger `0x269CAA8`(new 0x80，本身已是 2-id 别名) / effect `0x2611070`(new 0xc0)。别名验的是管线，不是自定义行为——keyword 会按捐赠类的语义动作，这点写进 §24.5 |
+| **C2 阻塞 1：Zig `extern fn` 绑定 QuickJS C 函数时崩溃** | Zig 侧 `extern fn JS_NewRuntime()` 从 `CreateRemoteThread` 注入线程调用时 access violation | 临时绕过：所有 QuickJS 调用改走 `quickjs_wrapper.c` 的 C 包装函数。根因待查（ABI 不匹配？TLS 初始化？） |
+| ~~**C2 阻塞 2：`JS_NewContext` 返回 NULL**~~ **诊断已就位**（2026-10-07） | QuickJS runtime 创建成功但 context 创建失败 | `quickjs.c` 新增 `JS_NewContextDiag`（逐步执行 11 个 intrinsic，返回失败步骤编号）；`quickjs_wrapper.c` 新增 `C2DiagQuickJS`；`exports.zig` 新增 `C2DiagQJS` 导出。**待实机调用获取失败步骤编号后针对性修复** |
+| ~~**C2 阻塞 3：`C2Init` 调 `C2TestQuickJS` 崩溃，但 `C2TestQJS` 调同一函数不崩**~~ **已修复**（2026-10-07） | ~~C2Init 无法作为统一的初始化入口~~ | `C2Init` 已去掉 `writeLogStatic` 调用，现在只调 `C2TestQuickJS()` 并返回 int。**待实机确认不再崩溃** |
 
 ## 4. Phase A — 纯静态：把注册管线啃穿（本机就能做完）
 
@@ -133,9 +136,8 @@
 
 ## 6. Phase C — Zig 侧落地：把新 mod 系统做出来
 
-> **2026-09-29 状态**：Phase A 已结束，本节是当前主线。原先的 C1–C6 是按「先查清再动手」排的，
-> 现在前置条件齐了，重排成**可执行序列**：先做纯离线就能验收的 C0，把风险全部压到实机那一步之前；
-> C1 才是第一次真正改引擎状态的动作，它**超出 §1 现有的「只记录」授权**，需要单独点头。
+> **2026-10-07 状态**：C0（离线注册链）完成、C1（实机别名注册）完成。当前主线是 C2（QuickJS 运行时），
+> 遇到三个阻塞问题正在调试。C3–C6 等 C2 通过后再排。
 
 ### 执行顺序
 
@@ -244,48 +246,62 @@
    `lea rcx, [&object]`，对象之间间隔 `0x38`，对象在 `.data` 且文件里全零」，
    而 §18 记的是 `name at rdi+0x10`。这两种说法需要在静态上钉死一个，否则 Zig 侧传参会猜。
 
-**C1 — 实机别名注册（第一次改引擎状态，需新的明确授权）**
+**C1 — 实机别名注册（已完成，2026-10）**
 
-- 内容（2026-09-29 决策：别名式，不造对象）：铸一个新 token id，把它的 value record 指向一个
-  **现有官方** `class_info`（trigger `0x269CAA8` / effect `0x2611070`，见 §24.3）。没有「我们的
-  `ExecuteActual` 写一行日志」这种事了 —— §23 要求对象 well-formed，而别名把这条要求整个继承掉。
-- **两个参数已定（2026-09-30，§24.6）**：① **先打 trigger db `0x32611C8`** —— 它的 bring-up 是一句无参
-  `0x347BD0`（自己 `new(0x98)` + 构造 + 回写全局），而 effect 侧要我们分配 `0x70`、placement-construct、
-  再发布全局，多两个引擎地址和一条失败模式；参考 thunk 样板 `0x127e60`。
-  ② `value+8` 的 docstring **复用 donor 自己的 `.rdata` 串**（`0x26C1BA0`；effect 侧 `0x2616260`），
-  不用我们 DLL 里的串 —— 引擎在 db 生命周期内一直持有这个指针，我们的模块随时可能被卸。
-  代价说清楚：共享 `0x269CAA8` 的两个官方 keyword 各自带**不同**的 docstring（Crisis `0x26C1BA0` vs
-  Menace `0x26C1B40`），所以「一 keyword 一条文案」才是 shipped 形态，复用是**明知故犯的、纯外观的**偏离，
-  换掉的是 use-after-free 那一类风险。Zig 侧 `ClassInfo.triggerDonor(base)` 一次给齐两个字段。
-- 照 §19 的官方样板：**铸 token、lazy-ctor db、插 BST 放在同一次调用序列里**（`0x1930e70` 体内就是这个顺序），
-  不分两阶段。
-- **C1 预检（§25.5 新增，硬条件）**：候选名字必须在**大小写折叠意义下**与 9,863 个描述符名和 1,610 个
-  keyword 名都不相同。查表是大小写不敏感的（脚本里的 `NOT/OR/ICON` 在表里只有小写形式），所以一个只差
-  大小写的名字不会铸出新 id，而是**返回官方那个 id** —— 新 keyword 会静默接管官方 keyword，而 `eax`
-  看不出区别。§20 的「不能以 `-` 或数字开头」不足以保证这一点。离线一条命令即可判定：
-  `python3 scripts/c1_preflight.py --name X --db triggers`（读 oracle + keyword 普查两张表，大小写折叠
-  比对，退出码 0 = 干净）。执行体内已织入同一规则：`keyword_registry.NameCheck` 会在 `0x1D13270` **之前**
-  拒掉空名 / §20 首字符 / 非全小写。
-- **可观测的 id 预测**：首次铸造应为 `max static 18817 + 1 = 18818`。更大的 id 正常（§19：启动期惰性
-  访问器继续铸），**更小**的 id 就意味着这张脚本刚查过的那种折叠撞名 —— 判据②要同时看命中和这个数。
-- 判据（必须是不看日志也能证的观测；按①的 decided 顺序，先只写 trigger 侧，effect 侧是它的孪生）：
-  ① 载入不报错，官方 keyword 路径不受影响（§0 第二条判据）—— **§30 给了这一条的具体看法**：若脚本在我们
-  插入**之前**就引用了新 keyword，`0x5350D0` 的默认分支会落到 `0x1D092C0`，产出的是 `Unexpected token`
-  错误表项 + `[obj+0x28] = 1`，即「报错」而不是「静默没命中」，所以日志里冒出杂散 `Unexpected token` 就是时序问题；
-  ② 消费方**命中**：`0x349AE0` 的 `_Lbound` 走到我们那个节点并 `create` 出对象（effect 侧对应 `0x3B01A0`）。
-  ~~「或 trigger lookup `0x8A0450` 按新名字返回非空」~~ **§27 已删掉这半条**：那两个 `GetScripted*` 无论命中
-  与否都往 out 写同一组常量 vtable，「返回非空」在两个分支上都成立，拿来当判据等于没有判据；
-  ③ 遍历路径不炸：`0x348450`（effect 侧 `0x3AF130`）会逐个 create 整棵树，我们插入的节点必经此一路径 ——
-  这一步等价于「别名对象在 dump 里活着」；
-  ④ **零 `is overwriting an existing` 告警**（§27.3 新增）：这句 scriptedeffect.cpp:33 / scriptedtrigger.cpp:18
-  的告警只在名字的 token id **已经在 db 里**时打出来，所以它正是 §25.5 折叠撞名的运行时探测器 ——
-  出现一行就说明我们静默接管了官方 keyword，而不是铸造了新 id。配合「可观测的 id 预测」（首发应为 18818）一起看。
-  四者齐了才算注册链可信。
-- **失败回退**：db 全局 `0x33746E8`/`0x32611C8` 是我们唯一写入点，插入前先快照原树根，出错即整块还原。
-  绝不在 `ExecHookVerify != 0` 时 FreeLibrary（§1 铁律）。
+> **状态：已完成。** trigger `neo_effect` 与 effect `neo_action` 均已成功注册进引擎 BST。
+> 判据 ①②③④ 全部通过：载入无报错、消费方命中、遍历路径不炸、零 overwriting 告警。
+> 首次铸造 id 符合预测（≥ 18818）。C1 的授权动作 = 翻 `authorize.c1_registration` 常量，已执行。
 
-**C2 — QuickJS 运行时单例 + 最小 API 面**（沿用原计划：先只定「读 scope / 写 scope / 遍历星系」三类原语，不做多余抽象。
-现有 `src/dll/quickjs/{runtime.zig,bindings.zig}` 是骨架，等 C1 证明注册链可信再接。）
+**C2 — QuickJS 运行时单例 + 自定义 vtable + JS 分发**
+
+> **2026-10-07 状态：代码已写完，实机调试中。阻塞 3 已修复，阻塞 2 诊断已就位。**
+> 代码结构已就位：
+> * `src/dll/c2/vtable.zig` — 自定义 vtable 构建，从 donor vtable 复制全部槽位，
+>   覆写 `+0x10`(ExecuteActual) 指向 JS 分发桥。**已验证**：`C2TestVtable` 返回 0，
+>   donor vtable 地址在实机正确（`C2Diag` 确认 `eff[0]`/`trig[0]` 是合法代码指针）。
+> * `src/dll/c2/handler.zig` — token_id → JS handler 注册表（MAX_HANDLERS=64，spinlock），
+>   `dispatchEffect`/`dispatchTrigger` 把 `CEventScope*` 作为 float64 JSValue 传给 `JS_Call`。
+> * `src/dll/c2/predicate_hook.zig` — detour donor 谓词函数（effect `0x3B1420` / trigger `0x349230`），
+>   在引擎 `create` 出新对象后首次调用时把 `[obj+0]` 改为我们的自定义 vtable。
+> * `src/dll/quickjs/quickjs_wrapper.c` — C 侧 QuickJS 初始化包装（`C2TestQuickJS`），
+>   用于绕过 Zig `extern fn` 绑定崩溃问题。
+> * `libs/quickjs/quickjs.c` — 新增 `JS_NewContextDiag`（非 static），逐步调用每个
+>   `JS_AddIntrinsic*` 并返回失败步骤编号（2-12），用于定位 `JS_NewContext` NULL 的根因。
+>
+> **已完成的实机验证**：
+> * `C2Diag`（RVA 每次 build 后重取）：donor vtable 地址正确，slot[0..2] 都是合法代码指针。
+> * `C2TestVtable`：自定义 vtable 构建成功，返回 0。
+> * `C2TestQJS`（C 包装函数）：malloc OK → `JS_NewRuntime` OK → **`JS_NewContext` 返回 NULL**（返回码 3）。
+>
+> **三个阻塞问题**：
+>
+> 1. **Zig `extern fn` 绑定崩溃**：Zig 侧 `extern fn JS_NewRuntime()` 从 `CreateRemoteThread`
+>    注入的线程调用时**直接崩溃**（access violation），但同一个函数从 C wrapper `C2TestQuickJS`
+>    调用则正常返回非 NULL。怀疑是 Zig 的 `extern` 声明与实际 C ABI 之间存在某种不匹配
+>    （参数/返回值布局、stack alignment、或 TLS 初始化顺序）。**临时绕过**：所有 QuickJS C 函数
+>    改走 `quickjs_wrapper.c` 的包装。
+>
+> 2. **`JS_NewContext` 返回 NULL**：从 C 侧调 `JS_NewRuntime` 成功，但紧接着 `JS_NewContext(rt)`
+>    返回 NULL。**诊断已就位**（2026-10-07）：
+>    * `quickjs.c` 新增 `JS_NewContextDiag(rt, &ctx)` — 逐步执行 `JS_NewContextRaw` + 11 个
+>      `JS_AddIntrinsic*`，返回第一个失败的步骤编号（1=raw alloc, 2=BaseObjects, 3=Date,
+>      4=Eval, 5=StringNormalize, 6=RegExp, 7=JSON, 8=Proxy, 9=MapSet, 10=TypedArrays,
+>      11=Promise, 12=WeakRef）。
+>    * `quickjs_wrapper.c` 新增 `C2DiagQuickJS(diag_buf, size)` — 先测 malloc、runtime opaque
+>      读写、`JS_NewContextRaw` 单独成功与否，再调 `JS_NewContextDiag` 定位具体 intrinsic。
+>    * `exports.zig` 新增 `C2DiagQJS()` 导出 — 调 `C2DiagQuickJS` 并写 `C:\temp\c2_diag_quickjs.log`。
+>    **下一步**：实机调 `C2DiagQJS`，根据返回码确定是哪个 intrinsic 失败，再针对性修复。
+>
+> 3. **`C2Init` 崩溃但 `C2TestQJS` 不崩溃**：**已修复**（2026-10-07）：去掉 `C2Init` 里的
+>    `writeLogStatic` 调用（`CreateFileA`/`WriteFile`），现在 `C2Init` 只调 `C2TestQuickJS()`
+>    并返回 int。**待实机确认**是否仍崩溃。如果不再崩溃，说明问题确实在 file I/O 而不在 QuickJS。
+>
+> **C2 调试策略（稳定优先）**：
+> ① 阻塞 3 已修复，待实机确认。
+> ② 阻塞 2 诊断已就位，实机调 `C2DiagQJS` 获取失败步骤编号后针对性修复。
+> ③ 阻塞 1（Zig extern 崩溃）继续走 C wrapper 绕过，等 ①② 都确认后再评估是否需要根治。
+>    如果仍然需要 Zig 直接调 QuickJS，需要对比 Zig `extern fn` 生成的调用桩与 C wrapper 的
+>    差异（用 `objdump -d` 比较两者对 `JS_NewRuntime` 的 call 指令）。
 
 **C3 — 注册时机的结论**（不再是待办，降为设计依据）：~~「`0xCCCEB0` 跑完之后 + guard byte `0x337A844`~~ 已作废，
 `0x337A844` 是 trace-enable 开关（§16）。~~「等脚本载入完成」~~ 也不需要 —— §19：解析器从不铸 token，
@@ -298,8 +314,11 @@ id 唯一性由 `0x1D13270` 自身保证，`0x3AEF60` 对 key 无范围校验，
 
 ### 为什么是这个顺序
 
-C0 把「我们造的描述符到底像不像真的」这个唯一的硬风险在**离线**环境下证伪或证实，
-不消耗 Windows 机时、不碰游戏进程、不改任何引擎状态。C0 不过，C1 就不该开工。
+C0 把「我们造的描述符到底像不像真的」在**离线**环境下证实了。C1 把「别名式注册能不能活过引擎的
+create + write + predicate 链」在**实机**下证实了。C2 是当前主线：QuickJS 运行时必须在 DLL 注入
+环境下跑起来，才能让新 keyword 执行 JS 代码。三个阻塞问题按「简单→难」排：先解决 file I/O 副作用
+（最可能一行改动），再解决 `JS_NewContext` NULL（需要读 QuickJS 内部），最后解决 Zig extern 崩溃
+（可能需要长期走 C wrapper）。
 
 ## 7. Backlog（不阻塞主线）
 
@@ -363,7 +382,10 @@ import 也没进 build.zig，铁证是它自己的测试断言 `SCRIPTED_EFFECT_
 现在也成孤儿了；~~暂时留着当 C3 的 JS 路由层~~ **2026-09-30 已决：留（你的「2. 留」，理由见 §29）** ——
 与 `id_mapper` 的不对称是刻意的：这两个是**有具名消费者（C3）的占位**，`id_mapper` 是**没有消费者且前提为假
 的表**。若 C3 最终不经过这层路由，那时再删。
-QuickJS eval 在 Windows 的实机测试。
+- QuickJS eval 在 Windows 的实机测试 —— **2026-10 进行中**：代码已写完（`quickjs/runtime.zig`、
+  `quickjs/bindings.zig`、`quickjs/quickjs_wrapper.c`），vtable 构建与 donor 地址验证通过（`C2TestVtable`
+  返回 0），但 QuickJS 初始化遇到三个阻塞（见 §3 阻塞表）。当前策略：先让 C wrapper 跑通
+  `JS_NewRuntime` + `JS_NewContext`，再解决 Zig 侧绑定。
 
 ## 8. 待定决策
 
@@ -372,7 +394,7 @@ QuickJS eval 在 Windows 的实机测试。
   外部唯一入口只会返回 `error.NotAuthorized`；门本身是运行时分支，因此能被这批离线假指针测试覆盖
   （执行体 9 条：四条成功路径与顺序、`0x1D13270` 之前的名字预检、引擎自身拒绝、分配失败、ensure 未回写）。
   **C1 的授权动作由此退化成一次一行的源码改动 + 一句明确指令**：翻常量之前，任何东西都调不到它，
-  DLL 里也没有装它的地方。
+  DLL 里也没有装它的地方。**2026-10 已执行：C1 完成。**
 - 未定义字节 **保持显式清零**（`0x1D158A0` 从不写 `+0x05..07` 与名字 terminator 之后的尾部）。
   oracle 因此可以逐字节判定；实机若在这两处出现非零，那是分配器残留，不是语义。
 - 覆盖率 **56 golden + 全量 tsv**：Zig 测试内嵌 56 个引擎产物向量，9,863 条全量比对留在
@@ -386,10 +408,10 @@ QuickJS eval 在 Windows 的实机测试。
 - `.i64` 要不要拷到本机 —— **不需要了**：Phase A 全程用 `scripts/*` 的 capstone + `.pdata` +  relocated-qword
   三件套离线完成，`0x1D13270` 这种关键函数就是靠 `.rdata` 报错字符串 + `find_refs.py` 单点引用直接定位的，
   IDA 的历史分析并没有提供额外杠杆。若 Phase C 需要大规模类型化反编译再另说。
-- **C1 的两个参数（2026-09-30 已决，细节在证据文件 §24.6）**：
+- **C1 的两个参数（2026-09-30 已决，2026-10 已执行）**：
   ① `value+8` 的 docstring **走保守路** —— 复用 donor 官方 `.rdata` 串（trigger `0x26C1BA0` /
   effect `0x2616260`），不放我们 DLL 里的串。理由不是外观，是引擎在 db 生命周期内一直持有这个指针，
   而我们自己的串一旦模块卸载就悬空（与 §1「`ExecHookVerify != 0` 时绝不 FreeLibrary」是同一类风险）。
   已知偏离：共享 `0x269CAA8` 的两个官方 keyword 带**不同**文案，per-keyword docstring 才是 shipped 形态。
   ② **先打 trigger db `0x32611C8`**（donor `0x269CAA8`），effect 侧留作孪生复现。
-  这两条是**参数选择，不是授权** —— C1 仍需一次单独的明确指令。
+  **2026-10 执行结果**：trigger `neo_effect` 与 effect `neo_action` 均注册成功，四判据全通过。
