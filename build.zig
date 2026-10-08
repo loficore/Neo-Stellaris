@@ -117,6 +117,18 @@ pub fn build(b: *std.Build) void {
     });
     linkQuickjs(b, qjs_tests.root_module);
 
+    // C2 native bootstrap-sequence test: runs the exact step sequence that
+    // crashed the live game (evidence §32/§33) against the real vendored
+    // QuickJS on this host, through quickjs_wrapper.c's own C2DiagQuickJS.
+    const c2_diag_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dll/quickjs/c2_diag_test.zig"),
+            .target = native,
+            .optimize = optimize,
+        }),
+    });
+    linkQuickjs(b, c2_diag_tests.root_module);
+
     // Offsets validation tests.
     const offsets_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -241,6 +253,9 @@ pub fn build(b: *std.Build) void {
     const run_qjs_tests = b.addRunArtifact(qjs_tests);
     run_qjs_tests.skip_foreign_checks = true;
 
+    const run_c2_diag_tests = b.addRunArtifact(c2_diag_tests);
+    run_c2_diag_tests.skip_foreign_checks = true;
+
     const run_offsets_tests = b.addRunArtifact(offsets_tests);
     run_offsets_tests.skip_foreign_checks = true;
 
@@ -271,6 +286,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_qjs_tests.step);
+    test_step.dependOn(&run_c2_diag_tests.step);
     test_step.dependOn(&run_offsets_tests.step);
     test_step.dependOn(&run_detour_tests.step);
     test_step.dependOn(&run_api_gamestate_tests.step);

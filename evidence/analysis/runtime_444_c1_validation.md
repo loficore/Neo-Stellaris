@@ -974,3 +974,160 @@ capturing the faulting module, before touching the live game again).
 (no QuickJS C `extern` added, no keyword registered, C1 gate `authorize.c1_registration = false`
 untouched, no hot-path detour). `scripts/c2_task3_diag.py` created. **Game crashed and was STOPPED per
 safety rails; no restart, no re-injection after the crash; exactly one `C2DiagQJSInto` dispatch.**
+
+---
+
+## 33. Task 4 offline root-cause: use-after-free in `heap_free` corrupts `malloc_size` → QuickJS OOM (2026-10-08, native, DONE)
+
+**Observed crash (restating §32 without new live data).** One `C2DiagQJSInto` dispatch on a
+CreateRemoteThread in live `stellaris.exe` (pid 20564) terminated the process before any rc/log came
+back. No new live observation was made in this task — everything below is native/offline.
+
+**Native reproduction — achieved.** New test `src/dll/quickjs/c2_diag_test.zig` (wired into
+`zig build test` via a dedicated `c2_diag_tests` native step in `build.zig`, same `linkQuickjs`
+pattern as `qjs_tests`) calls the *production* entry `C2DiagQuickJS(buf, 512)` against the real
+vendored QuickJS (`libs/quickjs/quickjs.c` @ CONFIG_VERSION "2025-09-13") plus the wrapper's own
+`heap_mf`, i.e. the exact step sequence of the live call: GetProcessHeap → test HeapAlloc →
+JS_NewRuntime2(&heap_mf) → opaque round-trip → JS_SetMaxStackSize(1 MiB) → JS_SetMemoryLimit(256 MiB)
+→ JS_NewContextRaw + JS_FreeContext → JS_NewContextDiag. No new Zig `extern fn` to any QuickJS C
+symbol was added (PLAN §6 blocker 1 respected) — the test externs only project wrapper symbols
+(`C2SanityCheck`, `C2TestQuickJS`, `C2DiagQuickJS`, `C2DiagGetLog`, `C2GetQuickJSPointers`).
+
+**Root cause (proven).** `heap_free` (HEAD `src/dll/quickjs/quickjs_wrapper.c:113`) freed the block
+first (`HeapFree(heap, 0, h)` at :118) and *then* read the size-tracking header
+(`s->malloc_size -= h->size;` at :121). That is a use-after-free read of allocator-owned memory.
+Once the block is back in the heap, its first word carries allocator bookkeeping (free-list link on
+glibc/Windows both), so `h->size` returns garbage and `malloc_size` (a `size_t`) underflows to
+~2⁶⁴. gdb on the native repro at the OOM point: `malloc_size = 18446603336352331383`,
+`malloc_count = 29`, `malloc_limit = 268435456`. Thereafter every `heap_malloc` fails the limit check
+(wrapper :124 `if (s->malloc_size + size > s->malloc_limit) return NULL;`), so
+`JS_AddIntrinsicBaseObjects` inside `JS_NewContextDiag` (`libs/quickjs/quickjs.c:2669`) returns -1
+(Out of memory) → step 2 → rc=2. **Any js_free suffices to poison the counter — the temporary frees
+inside `JS_NewContextRaw`'s own base-object setup already do it** (variant matrix below), which is why
+the sequence fails even before the explicit `JS_FreeContext`.
+
+**Variant isolation (native `/tmp/c2repro/variants.c`, flags: 1=skip raw-ctx step, 2=create raw ctx
+but don't free it, 4=no JS_SetMaxStackSize, 8=no JS_SetMemoryLimit, 16=QuickJS default allocator):**
+
+| flags | sequence | rc |
+|---|---|---|
+| 0 | full live sequence (heap_mf) | **2 (fail)** |
+| 1 | skip raw-ctx create+free | 0 |
+| 2 | raw ctx created, never freed | **2 (fail)** — internal frees alone poison |
+| 4 | no SetMaxStackSize | 2 (fail) — stack-size call not the trigger |
+| 8 | no SetMemoryLimit | 0 — counter still corrupts, but with the default unlimited `malloc_limit` the underflowed counter passes no gate, so nothing fails: confirms the *mechanism* is the limit check reading the corrupted counter |
+| 14 | no raw free + no stack size + no mem limit | 0 — counter still corrupts, but with the default unlimited `malloc_limit` the underflowed counter passes no gate, so nothing fails: confirms the *mechanism* is the limit check reading the corrupted counter |
+| 16 | **QuickJS default mf**, full sequence | 0 — decisive contrast |
+| 18 | default mf, raw ctx not freed | 0 |
+
+The default-allocator contrast is the historical delta too: QuickJS's built-in
+`js_def_malloc/js_def_free` (`quickjs.c:2154+`) reads the usable size *before* calling `free`
+(`_msize`/`malloc_usable_size`), so it never has this bug. The 2026-10-07 surviving run
+(`C2TestQuickJS`, rc=3) predates `heap_mf` being wired into that path; the crashed run was the first
+live exposure of `heap_mf`.
+
+**Candidates cleared/condemned.**
+- `heap_mf` `heap_free` read-after-free — **CONDEMNED (the root cause)**; gdb counter dump +
+  valgrind: pre-fix binary reports "Invalid read of size 8 at heap_free", post-fix
+  `valgrind --leak-check=no` on the identical test: `ERROR SUMMARY: 0 errors`.
+- `heap_malloc_usable_size` / size header writes — cleared: reads/writes are of live blocks only;
+  `AllocHeader` is written immediately after a successful HeapAlloc; no wild write found anywhere in
+  the allocator (all accesses in-bounds).
+- DLOG buffer arithmetic — **cleared as the 2026-10-08 crash cause, condemned as a latent bug.**
+  Computed, not hand-waved: worst-case actual content of the current step log
+  ("hp ok, alloc fail / rt null / op mismatch / raw ok / diag_rc=N" branches) is ≈90 bytes « 512, so
+  `512 - pos` never went negative in the crashed run. Still fixed: `snprintf` returns the *would-be*
+  length, so a future longer line could make `pos` overshoot 512 and then `512 - pos` (negative int →
+  huge size_t) plus `g_diag_log + pos` past the array end. DLOG now clamps `pos` to ≤511.
+- Process-wide exception/signal handlers in quickjs.c — cleared: no `AddVectoredExceptionHandler`,
+  `SetUnhandledExceptionFilter`, `sigaction`/`signal` anywhere in `libs/quickjs/` or the wrapper;
+  pthread/atomics code is gated behind `CONFIG_ATOMICS` (off in this build); the only `_WIN32` use
+  near allocation is `_msize` in the *default* mf (not used).
+- `JS_NewContextDiag` (WIP addition, quickjs.c:2669) — cleared line by line: `*out_ctx` is NULL on
+  every failure path, no intrinsic is called with a NULL ctx, all step codes 1–12 match the
+  intrinsic order in `JS_NewContext2`, freeing is balanced. It was never *run* before natively —
+  it now is, and passes with rc=0 once the allocator is fixed. (The stale docstring above
+  `C2DiagQJS` in `exports.zig` claiming 1=malloc broken/98/99 was wrong and is corrected to the real
+  two-table decode.)
+- JS_NewContextRaw + JS_FreeContext state shifting — cleared as *state* damage; the pair is what
+  triggers a js_free, i.e. it only mattered as the delivery mechanism for the `heap_free` UAF.
+- CreateRemoteThread stack vs `JS_SetMaxStackSize(1 MiB)` — not the cause of *this* failure (no JS
+  is evaluated; `js_check_stack_overflow` is only consulted during evaluation/deep recursion), but it
+  remains a **hypothesis/future hazard** for later tasks: `CONFIG_STACK_CHECK` is hardcoded on
+  (quickjs.c:77) and captures `stack_top` from the calling frame on the remote thread; with
+  `dwStackSize=0` the reserve comes from the exe header. When Task 6 evaluates JS on a remote thread
+  this must be re-checked; for the init sequence observed on 2026-10-08 it is not implicated.
+
+**Why the *process died* on Windows is still not fully explained (labelled honestly).** The proven
+native consequence of this bug is QuickJS OOM → rc=2 → NULL ctx — a *clean failure*, not a crash.
+For the live process to terminate, the post-free read of `h->size` must have faulted or tripped
+something in *that* environment. **Hypothesis (unproven offline):** Windows heap bookkeeping on
+low-fragmentation/segment-terminating blocks — after `HeapFree` of a tail block the segment can be
+coalesced/decommitted, so the subsequent `h->size` load reads freed-or-unmapped memory; under
+stellaris.exe's heap state that is a plausible access violation on the injected thread, and an
+unhandled AV kills the process. Valgrind proves the invalid read happens (glibc); only a Windows run
+can prove it *faults* there. No other candidate survived scrutiny for the death mechanism
+(handlers: none installed; buffer overflow: arithmetically excluded; Zig side: unchanged from the run
+that survived §31's sanity probe). **A wrong root cause costs another game crash — but here the fix
+removes the only memory-safety violation in the path, which is also the only mechanism that can
+produce an AV.**
+
+**Fix (minimal, at the root).** `src/dll/quickjs/quickjs_wrapper.c::heap_free`: snapshot
+`size_t freed = h->size;` *before* `HeapFree`, then `s->malloc_size -= freed;`. Nothing else in the
+allocator changed; `heap_mf` stays live for the next Windows run. Two support edits in the same file:
+(a) the Windows includes are now guarded by `#ifdef _WIN32` with libc-based shims for the native
+test path (Windows build byte-identical in behavior; this is what makes the repro runnable in
+`zig build test`), (b) DLOG clamp (latent-bug fix, described above). `src/dll/exports.zig`: corrected
+the `C2DiagQJS` docstring to the actual two-table step-code decode (outer wrapper codes 10/11/2/3/4,
+inner `JS_NewContextDiag` codes 0/1/2–12) — documentation only, `assert rc == 42` untouched, C1 gate
+untouched.
+
+**Native repro before/after, exact commands.**
+- Before (HEAD state, pre-fix binary of the same test):
+  `zig build test` → 2 failures in `c2_diag_test`: "C2DiagQuickJS completes the live-crash step
+  sequence with rc=0…expected 0, found 2 / FAIL" and "C2TestQuickJS (sibling path) also reaches
+  rc=0…expected 0, found 2 / FAIL". (The identical failures were captured in the suite *before* the
+  fix was applied, then the fix was made and the suite re-run.)
+- After:
+  `zig build test` → `Build Summary: 22/25 steps succeeded (1 failed); 278/278 tests passed`. The 3
+  c2_diag tests pass: `1/3 C2SanityCheck returns 42...OK / 2/3 C2DiagQuickJS … rc=0...OK / 3/3
+  C2TestQuickJS … rc=0...OK`.
+- `valgrind --leak-check=no <c2_diag test binary>` → `ERROR SUMMARY: 0 errors` (pre-fix: two
+  "Invalid read of size 8" at `heap_free`). Remaining valgrind reports are leak records only,
+  including the by-design still-alive global runtime (`g_test_rt` is intentionally never freed while
+  the DLL is resident).
+- `zig build` (Windows DLL) → exit 0, `stellaris_quickjs.dll` produced.
+
+**Baseline composition note.** The documented task-start baseline was 254/254 tests + exactly 2
+broken test steps (roots `runtime.zig` and `exports.zig`, both failing to *compile*
+`quickjs_wrapper.c` on `<process.h>`). After this change: 278/278 tests pass and only **1** step
+fails — `exports.zig`-rooted, now failing at **link** on undefined `CreateFileA/WriteFile/CloseHandle/
+GetModuleHandleA` (pre-existing `extern "kernel32"` bindings, unavoidable on an ELF host). The
+`runtime.zig` step was *revived* by the `#ifdef _WIN32` guards (+21 tests) and my new step adds 3.
+No new failures were introduced; one pre-existing failure changed stage, one was fixed.
+`zig build` (artifacts) unaffected.
+
+**What is still unproven.** (1) The exact Windows kill mechanism (AV on the freed block vs. heap-
+manager trip) — hypothesis above; only a live probe or a Windows-side crash dump can settle it.
+(2) That `heap_mf` overall is safe under the Windows heap (the *other* three mf functions are read-
+before-free-correct, but only one live run will confirm the whole table). (3) Remote-thread stack
+adequacy for actual JS evaluation (Task 6 concern, not this call). (4) §32's confounder (1) — two
+DLL copies resident — is untouched by this task and remains an open variable for the next run.
+
+**What the next live probe must check (for the user to run; not executed here).** Fresh DLL filename
+(e.g. `sqjs_c4.dll`, freshly built from this tree) after a human-restarted game; keep §31/§32 rails:
+one `C2SanityCheck` (must still be 42 — proves the new image is loaded), then exactly one
+`C2DiagQJSInto` dispatch with a liveness check immediately after. Expected on success: rc=**0**,
+non-NULL ctx, and the 512-byte log containing `raw_ok` and `diag_rc=0`. If rc is nonzero the log's
+outer code (10/11/2/3/4) or inner `diag_rc=N` (1=raw alloc, 2-12=first failing intrinsic) localizes
+the step without ambiguity. If the process terminates *again* despite rc-path being clean, the
+Windows kill mechanism is something else in the remote-thread context (stack/handler confounders),
+and the probe should be repeated once under a crash-dump-capturing setup before any retry — do not
+blind-reinject. `scripts/c2_task3_diag.py` behavior is unchanged by this task and needs only the new
+DLL name to run this probe.
+
+**Counts for §33**: changed `src/dll/quickjs/quickjs_wrapper.c` (heap_free UAF fix; `#ifdef _WIN32`
+portability guards; DLOG clamp), `src/dll/exports.zig` (docstring correction only), `build.zig`
+(new native test step), added `src/dll/quickjs/c2_diag_test.zig`. No new Zig extern bindings to
+QuickJS C symbols; C1 gate, `assert rc == 42`, and `scripts/**` untouched; no `.dll`/`.pdb`
+committed.

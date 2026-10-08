@@ -10,8 +10,31 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+
+#ifdef _WIN32
 #include <process.h>
 #include <windows.h>
+#else
+/* Native (non-Windows) shims so this file — and the exact same step sequence of
+ * C2DiagQuickJS/C2TestQuickJS — can be compiled and run on the Linux host as
+ * part of `zig build test`. The Windows build path is byte-identical: all of
+ * this is inside #ifdef _WIN32 guards. */
+#include <stdlib.h>
+typedef void *HANDLE;
+#define GetProcessHeap() ((HANDLE)1)
+static void *HeapAlloc(HANDLE heap, unsigned flags, size_t size) {
+    (void)heap; (void)flags;
+    return malloc(size);
+}
+static void HeapFree(HANDLE heap, unsigned flags, void *ptr) {
+    (void)heap; (void)flags;
+    free(ptr);
+}
+static void *HeapReAlloc(HANDLE heap, unsigned flags, void *ptr, size_t size) {
+    (void)heap; (void)flags;
+    return realloc(ptr, size);
+}
+#endif
 
 // Forward-declare QuickJS types
 typedef struct JSRuntime JSRuntime;
@@ -114,11 +137,19 @@ static void heap_free(JSMallocState *s, void *ptr) {
     if (!ptr) return;
     
     AllocHeader *h = ((AllocHeader *)ptr) - 1;
+    /* Read the recorded size BEFORE releasing the block. After HeapFree the
+       heap manager owns the block: it writes free-list links into the user
+       area (and for tail blocks may decommit the pages), so reading h->size
+       afterwards is a use-after-free — it fed a garbage (or unmapped) value
+       into s->malloc_size, underflowing the counter to ~2^64, which made
+       every subsequent heap_malloc fail its limit check (QuickJS OOM,
+       JS_AddIntrinsicBaseObjects rc=2) — see evidence §33. */
+    size_t freed = h->size;
     HANDLE heap = GetProcessHeap();
     HeapFree(heap, 0, h);
     
     s->malloc_count--;
-    s->malloc_size -= h->size;
+    s->malloc_size -= freed;
 }
 
 static void *heap_realloc(JSMallocState *s, void *ptr, size_t size) {
@@ -211,7 +242,18 @@ int C2DiagQuickJS(char *out_diag, int diag_size) {
     g_diag_log[0] = '\0';
     int result = 0;
     int pos = 0;
-    #define DLOG(...) do { pos += snprintf(g_diag_log + pos, 512 - pos, __VA_ARGS__); } while(0)
+    /* snprintf returns the WOULD-BE length, so an unguarded `pos +=` can
+       overshoot 512; a later `512 - pos` would then be negative (huge size_t)
+       and g_diag_log + pos would be past the end of the static. Clamp pos to
+       stay within the buffer forever. (Not the crash cause for the 2026-10-08
+       run — the actual log content is ~90 bytes max — but a latent overflow
+       the moment more steps are logged.) */
+    #define DLOG(...) do { \
+        int n_ = snprintf(g_diag_log + pos, 512 - pos, __VA_ARGS__); \
+        if (n_ < 0) n_ = 0; \
+        pos += n_; \
+        if (pos > 511) pos = 511; \
+    } while(0)
 
     HANDLE heap = GetProcessHeap();
     if (!heap) { DLOG("no_process_heap"); result = 10; goto finish; }

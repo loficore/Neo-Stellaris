@@ -197,11 +197,15 @@ export fn C2Init() callconv(.c) i32 {
 }
 
 /// C2 extended diagnostic: narrows down why JS_NewContext returns NULL.
-/// Returns 0 on success, or a code indicating which step failed:
-///   1 = malloc broken, 2 = runtime NULL, 3 = opaque mismatch,
-///   4 = raw context NULL (allocation), 5-12 = specific intrinsic failed,
-///   98 = wait failed, 99 = thread creation failed.
-/// Call C2DiagGetLogAddr to read the diagnostic string from remote memory.
+/// Return codes come from two overlapping sites — C2DiagQuickJS's outer steps
+/// and JS_NewContextDiag's inner steps — so the log text is authoritative.
+/// Outer (quickjs_wrapper.c): 10 = no process heap, 11 = test HeapAlloc failed,
+///   2 = JS_NewRuntime2 NULL, 3 = runtime opaque mismatch, 4 = raw ctx NULL.
+/// Inner (JS_NewContextDiag, echoed once the outer steps pass):
+///   0 = success, 1 = JS_NewContextRaw alloc fail,
+///   2-12 = first failing intrinsic (BaseObjects, Date, Eval, StringNormalize,
+///   RegExp, JSON, Proxy, MapSet, TypedArrays, Promise, WeakRef).
+/// Use C2DiagQJSInto to capture the log; C2DiagQJS's buffer is stack-local.
 export fn C2DiagQJS() callconv(.c) i32 {
     var diag_buf: [512]u8 = undefined;
     const r = C2DiagQuickJS(&diag_buf, @intCast(diag_buf.len));
