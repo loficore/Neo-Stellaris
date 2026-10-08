@@ -24,11 +24,20 @@ C symbol (global constraint / PLAN §6 blocker 1 workaround).
 
 Decode table (ruling P7) is derived from the ACTUAL code, not the brief's table.
 See evidence §32 for the derivation and how it differs from the brief.
+
+Gates around the diag dispatch:
+  * `C2Sanity` (zero-arg, must return 42) is called FIRST through this module
+    copy, and the game must still be alive afterwards; only then may
+    `C2DiagQJSInto` be dispatched.
+  * rc==0 is accepted as success ONLY if the log carries a `ctx=` token whose
+    pointer is non-NULL (the token is emitted only on the JS_NewContextDiag
+    path; Windows `%p` renders NULL as 0000000000000000). An rc==0 without a
+    non-NULL ctx is a loud failure, never a PASS line.
 """
 import sys, os
 from c2_harness import (
     resolve_pid, resolve_base_address, inject_dll,
-    list_exports, call_remote_with_arg, remote_alloc, read_memory,
+    list_exports, call_remote, call_remote_with_arg, remote_alloc, read_memory,
     assert_game_alive,
 )
 
@@ -62,6 +71,29 @@ DIAG = {  # JS_NewContextDiag return codes (quickjs.c:2669-2691)
 }
 
 
+def parse_ctx(log):
+    """Decode the '%p'-rendered pointer after 'ctx=' in a diag log string.
+
+    Returns the pointer as an int — NULL decodes to 0, because Windows '%p'
+    renders NULL as 0000000000000000 — or None when the 'ctx=' token is absent
+    or malformed. The DLL emits the token only on the JS_NewContextDiag path
+    (`DLOG("diag_rc=%d ctx=%p", ...)`), so None means the log never came from
+    that path.
+    """
+    idx = log.find("ctx=")
+    if idx < 0:
+        return None
+    token = log[idx + len("ctx="):].split(" ", 1)[0]
+    if token[:2].lower() == "0x":
+        token = token[2:]
+    if not token:
+        return None
+    try:
+        return int(token, 16)
+    except ValueError:
+        return None
+
+
 def decode(rc, log):
     """Interpret rc TOGETHER with the log text (codes overlap by value)."""
     for sentinel, meaning in OUTER_SENTINELS.items():
@@ -69,6 +101,12 @@ def decode(rc, log):
             return meaning
     if "diag_rc=" in log:
         # The diag path: rc == the "diag_rc=%d" echoed in the log. Cross-check.
+        if rc == 0:
+            ctx = parse_ctx(log)
+            if ctx is None:
+                return "FAIL: rc=0 but log has no parsable 'ctx=' token — rc 0 did not come from the JS_NewContextDiag path"
+            if ctx == 0:
+                return "FAIL: rc=0 but ctx=NULL — JS_NewContextDiag reported success without a context"
         return DIAG.get(rc, f"DIAG: rc {rc} NOT in derived table (unexpected code)")
     return f"rc {rc} — no outer sentinel and no diag_rc marker (misaligned harness?)"
 
@@ -93,6 +131,18 @@ def main():
     into_rva = exports["C2DiagQJSInto"]
     print(f"[task3] C2DiagQJSInto RVA from PE reparse: 0x{into_rva:x}")
 
+    # Gate 0: this module copy must pass the pure sanity call (zero-arg,
+    # constant 42) BEFORE anything with side effects is dispatched, and the
+    # game must still be alive after it.
+    sanity_rva = exports["C2Sanity"]
+    sanity = call_remote(pid, base, sanity_rva)
+    assert sanity == 42, (
+        f"C2Sanity returned {sanity}, expected 42 — refusing to dispatch "
+        f"C2DiagQJSInto against this module copy"
+    )
+    assert_game_alive(pid)
+    print("[task3] C2Sanity == 42, game alive — diag dispatch authorized")
+
     # P4: caller-supplied buffer; alloc is page-granular (>=4096 committed).
     # The buffer ADDRESS is passed IN via lpParameter as a full 64-bit value, so
     # VirtualAllocEx may return a low address (<2^32) — that is fine and is NOT
@@ -112,6 +162,18 @@ def main():
     print(f"[task3] C2DiagQJSInto rc = {rc}")
     print(f"[task3] decoded step     = {decode(rc, log)}")
     print(f"[task3] diag log         = {log!r}")
+
+    # rc==0 is only believable as "context created" with a non-NULL ctx= token.
+    if rc == 0:
+        ctx_ptr = parse_ctx(log)
+        assert ctx_ptr is not None, (
+            f"rc=0 but no parsable 'ctx=' token in log {log!r} — rc 0 did not "
+            "come from the JS_NewContextDiag path; refusing to report success"
+        )
+        assert ctx_ptr != 0, (
+            f"rc=0 but ctx=NULL in log {log!r} — JS_NewContextDiag reported "
+            "success without a context; refusing to report success"
+        )
 
     # Cross-check: if the log carries diag_rc=N, it must equal rc.
     if "diag_rc=" in log:

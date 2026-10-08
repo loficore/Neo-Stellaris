@@ -20,6 +20,11 @@ exercised only on the real Windows machine in Tasks 2+ and is deliberately not
 mocked here. ``resolve_pid`` is no Win32 binding at all — pure ``tasklist``
 subprocess parsing — so its filter semantics ARE pinned by a host test below
 (Task 2 live-run regression).
+
+``c2_task3_diag`` is importable on the Linux host for the same reason (only
+pure defs run at import). Its pure log-parsing helper ``parse_ctx`` — the rc==0
+success gate's decoder — is pinned by host tests at the bottom of this file;
+the probe's remote-call control flow stays Windows-only.
 """
 
 import os
@@ -28,6 +33,7 @@ import pytest
 
 import c2_harness
 from c2_harness import list_exports, parse_module_base_from_ps, resolve_pid
+from c2_task3_diag import parse_ctx
 
 # The built DLL is at <repo root>/zig-out/bin/... . Tests are invoked from the
 # repo root (``python3 -m pytest scripts/test_c2_harness.py``), but resolve the
@@ -127,3 +133,36 @@ def test_resolve_pid_raises_when_not_running(monkeypatch):
     monkeypatch.setattr(c2_harness.subprocess, "check_output", fake_check_output)
     with pytest.raises(RuntimeError, match="not running"):
         resolve_pid("stellaris")
+
+
+# --- c2_task3_diag.parse_ctx: read the 'ctx=%p' token out of a diag log -------
+# The probe's rc==0 success gate must never treat rc==0/ctx-NULL as OK, which
+# needs a pure parser turning the log's 'ctx=' token into a pointer-as-int, or
+# None when the token is absent.
+
+def test_parse_ctx_null_pointer_is_zero_int():
+    # Windows renders a NULL pointer via '%p' as 16 zeros — must decode to 0,
+    # NOT to None, so the caller can distinguish 'NULL ctx' from 'no ctx token'.
+    log = "rt=000001ABCDEF raw_ok diag_rc=0 ctx=0000000000000000"
+    assert parse_ctx(log) == 0
+
+
+def test_parse_ctx_real_nonzero_pointer():
+    log = "rt=000001ABCDEF raw_ok diag_rc=0 ctx=000001AB1234"
+    assert parse_ctx(log) == 0x000001AB1234
+
+
+def test_parse_ctx_token_absent_returns_none():
+    # An outer-sentinel log that never reached JS_NewContextDiag has no ctx=.
+    log = "rt=000001ABCDEF no_process_heap"
+    assert parse_ctx(log) is None
+
+
+def test_parse_ctx_surrounded_by_extra_text():
+    # 'ctx=' appears mid-log with other tokens around it; parser must isolate it.
+    log = "prefix garbage ctx=7FF65BF90000 suffix more=123"
+    assert parse_ctx(log) == 0x7FF65BF90000
+
+
+def test_parse_ctx_empty_string_returns_none():
+    assert parse_ctx("") is None
