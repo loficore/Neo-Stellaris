@@ -12,19 +12,22 @@ pure, host-testable logic is exercised here:
                               PowerShell's ``BaseAddress`` actually emits on the
                               target machine (ruling P2).
 
-The Win32-dependent helpers (``resolve_pid``, ``resolve_base_address``,
-``inject_dll``, ``call_remote``, ``call_remote_with_arg``, ``read_memory``,
-``read_u64``, ``assert_game_alive``) bind kernel32 LAZILY so that importing this
+The Win32-dependent helpers (``resolve_base_address``, ``inject_dll``,
+``call_remote``, ``call_remote_with_arg``, ``read_memory``, ``read_u64``,
+``assert_game_alive``) bind kernel32 LAZILY so that importing this
 module is side-effect-free on Linux (ruling P3); their remote-call behaviour is
 exercised only on the real Windows machine in Tasks 2+ and is deliberately not
-mocked here.
+mocked here. ``resolve_pid`` is no Win32 binding at all — pure ``tasklist``
+subprocess parsing — so its filter semantics ARE pinned by a host test below
+(Task 2 live-run regression).
 """
 
 import os
 
 import pytest
 
-from c2_harness import list_exports, parse_module_base_from_ps
+import c2_harness
+from c2_harness import list_exports, parse_module_base_from_ps, resolve_pid
 
 # The built DLL is at <repo root>/zig-out/bin/... . Tests are invoked from the
 # repo root (``python3 -m pytest scripts/test_c2_harness.py``), but resolve the
@@ -86,3 +89,41 @@ def test_list_exports_recovers_all_known_names():
 def test_list_exports_missing_file_raises():
     with pytest.raises((FileNotFoundError, ValueError)):
         list_exports(os.path.join(_REPO_ROOT, "zig-out", "bin", "does_not_exist.dll"))
+
+
+# --- resolve_pid: tasklist IMAGENAME filter is EXACT, with extension ----------
+
+def test_resolve_pid_appends_exe_for_bare_name(monkeypatch):
+    """Task 2 live-run regression: tasklist only matches 'IMAGENAME eq
+    stellaris.exe'; 'eq stellaris' returns the 'no tasks' INFO line. A bare
+    name must be normalized to '<name>.exe' for both the filter and the
+    row comparison."""
+    captured = []
+
+    def fake_check_output(cmd, *args, **kwargs):
+        captured.append(cmd)
+        filt = cmd[cmd.index("/FI") + 1]
+        if filt == "IMAGENAME eq stellaris.exe":
+            return b'"stellaris.exe","20564","Console","1","490,028 K"\n'
+        return b"INFO: No tasks are running which match the specified criteria.\n"
+
+    monkeypatch.setattr(c2_harness.subprocess, "check_output", fake_check_output)
+    assert resolve_pid("stellaris") == 20564
+    assert captured[-1][captured[-1].index("/FI") + 1] == "IMAGENAME eq stellaris.exe"
+
+
+def test_resolve_pid_accepts_full_image_name(monkeypatch):
+    def fake_check_output(cmd, *args, **kwargs):
+        return b'"stellaris.exe","20564","Console","1","490,028 K"\n'
+
+    monkeypatch.setattr(c2_harness.subprocess, "check_output", fake_check_output)
+    assert resolve_pid("stellaris.exe") == 20564
+
+
+def test_resolve_pid_raises_when_not_running(monkeypatch):
+    def fake_check_output(cmd, *args, **kwargs):
+        return b"INFO: No tasks are running which match the specified criteria.\n"
+
+    monkeypatch.setattr(c2_harness.subprocess, "check_output", fake_check_output)
+    with pytest.raises(RuntimeError, match="not running"):
+        resolve_pid("stellaris")

@@ -823,3 +823,42 @@ status are unchanged.
 
 > **Correction pointer for §28.3's other open question** — `0x24F9910`'s slot numbering stays unresolved
 > (§28.4), and §30 neither needed nor changed it.
+
+## 31. C2 harness bootstrap (2026-10-08)
+
+**What was confirmed live.** `scripts/c2_task2_load.py` (running on the Windows box, against the live
+game PID 20564) injected `C:\temp\sqjs_c2.dll` via `LoadLibraryA` in a `CreateRemoteThread`, resolved
+the module base from PowerShell `Get-Process | Modules | BaseAddress`, and called `C2Sanity`:
+
+- **DLL base: `0x7ffa67210000`** — a genuine 64-bit address. An independent post-run read of the module
+  list showed `sqjs_c2.dll` at decimal `140713448767488`, which is the identical value. The uploaded
+  DLL was hash-verified before injecting (sha256 `fb7ec274…`, matching the fresh local build).
+- MZ header check at base passed. `C2Sanity` RVA `0x44b410` came from a fresh PE reparse
+  (`list_exports` on the Windows-side DLL), not a hard-coded table.
+- **`C2Sanity` returned 42**, and `assert_game_alive` passed immediately after injection and after the
+  remote call. The game was never restarted during this task.
+
+**Root-cause position on the old crashes.** The earlier C2 remote-call failures were attributed to
+`GetExitCodeThread` truncating the HMODULE to 32 bits (e.g. `0x41d20000`) and every subsequent
+`CreateRemoteThread` then aiming at unmapped memory. This task did **not** re-run the old harness, so
+the truncation crash was not reproduced; what we can now state directly is its complement: with the
+base taken from the filename-keyed PowerShell query instead of the thread exit code, remote calls land
+on mapped memory, return real values, and the game survives. The hypothesis is consistent with every
+observation and the fixed path is proven; the old buggy path remains what we removed, not what we
+re-measured.
+
+**New defect found and fixed during this task (before any injection happened).**
+`c2_harness.resolve_pid` built `tasklist /FI "IMAGENAME eq stellaris"`, but tasklist's IMAGENAME filter
+is an **exact match including the extension**: `eq stellaris` returns "no tasks match" (exit 0), only
+`eq stellaris.exe` returns the game. Every plan task calls `resolve_pid("stellaris")`, so the function
+raised `RuntimeError('stellaris' is not running)` against a live, verifiable PID 20564 — the failure
+mode is loud and pre-injection, but it made Task 2 unrunnable until fixed. Fix: normalize a bare name
+to `name + ".exe"` before filtering and comparing, plus three host-runnable regression tests in
+`scripts/test_c2_harness.py` (fake `tasklist` reproducing the exact-match semantics). This also
+corrects the earlier suspicion that pywin32 was involved: it is not installed on the remote and the
+harness does not use it.
+
+**Counts for §31**: no engine addresses beyond those already recorded; `src/dll/**` untouched; C1 gate
+untouched. `scripts/c2_harness.py` (resolve_pid only), `scripts/test_c2_harness.py` (+3 tests, 11/11
+passing on the host), `scripts/c2_task2_load.py` created. Remote Python 3.13.2 AMD64; one injection
+attempt total, no repeated guessing.

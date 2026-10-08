@@ -230,14 +230,20 @@ def resolve_pid(process_name: str) -> int:
     """Return the PID of ``process_name`` (e.g. ``"stellaris.exe"``).
 
     Raises ``RuntimeError`` if it is not running. Uses ``tasklist`` CSV output.
+    ``tasklist``'s IMAGENAME filter is an EXACT match on the full image name
+    including extension (Task 2 finding on the live machine: ``eq stellaris``
+    returns "no tasks match", ``eq stellaris.exe`` returns the game), so a bare
+    name like ``"stellaris"`` — how every C2 task script calls this — gets
+    ``.exe`` appended before filtering and comparing.
     """
-    cmd = ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/FO", "CSV", "/NH"]
+    target = process_name if process_name.lower().endswith(".exe") else process_name + ".exe"
+    cmd = ["tasklist", "/FI", f"IMAGENAME eq {target}", "/FO", "CSV", "/NH"]
     try:
         out = subprocess.check_output(cmd).decode("utf-8", errors="replace")
     except (subprocess.SubprocessError, OSError) as exc:
         raise RuntimeError(f"tasklist failed while resolving {process_name!r}: {exc}") from exc
 
-    want = process_name.lower()
+    want = target.lower()
     for line in out.splitlines():
         line = line.strip()
         if not line:
