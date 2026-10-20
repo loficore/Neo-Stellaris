@@ -1,22 +1,29 @@
+import builtins
+import contextlib
 import ctypes
 import ctypes.wintypes as _wt
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import launch_stellaris
 from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
-                              EXIT_INTERNAL, EXIT_LAUNCHER_WINDOW_MISSING,
-                              EXIT_OK, EXIT_PREKILL_PERMISSION,
-                              _enum_windows_owned_by, _poll_marker,
-                              _steam_has_window, _write_marker,
+                              EXIT_INTERNAL, EXIT_LAUNCHER_NO_ADVANCE,
+                              EXIT_LAUNCHER_NO_FOCUS,
+                              EXIT_LAUNCHER_WINDOW_MISSING, EXIT_OK,
+                              EXIT_PREKILL_PERMISSION, _enum_windows_owned_by,
+                              _poll_marker, _steam_has_window, _write_marker,
                               bridge_to_interactive_session, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
-                              build_bridge_task_command, prekill, steam_ready,
-                              steam_spawn, timeline_event)
+                              build_bridge_task_command, build_inner_tr,
+                              prekill, steam_ready, steam_spawn,
+                              timeline_event)
 
 
 def test_exit_codes_match_spec():
@@ -150,13 +157,16 @@ class _FakeUser32:
     """Stand-in for the three user32 bindings _user32_fns() hands back.
 
     Only the Win32 calls themselves need Windows; the PID-ownership matching
-    is plain Python, so this lets the regression below be checked on a
-    non-Windows host. `owners` maps HWND -> owning PID.
+    is plain Python, so this lets the regressions below be checked on a
+    non-Windows host. `owners` maps HWND -> owning PID. `enum_result` is what
+    EnumWindows itself reports: True on a clean walk, False both when the
+    callback stops it early and when enumeration genuinely fails.
     """
 
-    def __init__(self, owners):
+    def __init__(self, owners, enum_result=True):
         self.owners = dict(owners)
         self.visited = []
+        self.enum_result = enum_result
 
     def enum_proc(self, fn):
         return fn  # WINFUNCTYPE wrapping is a no-op for a pure-Python callback
@@ -166,19 +176,21 @@ class _FakeUser32:
             self.visited.append(hwnd)
             if not cb(hwnd, lparam):
                 break  # Win32 stops the walk when the callback returns False
-        return True
+        return self.enum_result
 
     def get_thread_pid(self, hwnd, pid_ptr):
         ctypes.cast(pid_ptr, ctypes.POINTER(_wt.DWORD))[0] = self.owners[hwnd]
         return 1
 
 
-def _bind_fake(monkeypatch_target, owners):
-    """Build a _FakeUser32 and point launch_stellaris._user32_fns at it."""
-    fake = _FakeUser32(owners)
-    monkeypatch_target.return_value = (fake.enum_windows, fake.enum_proc,
-                                      fake.get_thread_pid)
-    return fake
+@contextlib.contextmanager
+def _bind_fake(owners, enum_result=True):
+    """Point launch_stellaris._user32_fns at a _FakeUser32 for the block."""
+    fake = _FakeUser32(owners, enum_result=enum_result)
+    with patch("launch_stellaris._user32_fns",
+               return_value=(fake.enum_windows, fake.enum_proc,
+                             fake.get_thread_pid)):
+        yield fake
 
 
 def test_window_ownership_matches_pid_not_window_class():
@@ -190,10 +202,7 @@ def test_window_ownership_matches_pid_not_window_class():
     EXIT_STEAM_NO_CLIENT (11) before the launcher phases. Window ownership by
     PID is the only class-name-independent contract available.
     """
-    fake = _FakeUser32({10: 500, 11: 9999, 12: 7777})
-    with patch("launch_stellaris._user32_fns",
-               return_value=(fake.enum_windows, fake.enum_proc,
-                             fake.get_thread_pid)):
+    with _bind_fake({10: 500, 11: 9999, 12: 7777}):
         assert _enum_windows_owned_by(9999) is True
         assert _enum_windows_owned_by(4242) is False
 
@@ -201,21 +210,36 @@ def test_window_ownership_matches_pid_not_window_class():
 def test_window_ownership_stops_at_first_match():
     """The walk must stop as soon as a window owned by the PID shows up —
     otherwise every poll pays for all ~383 desktop windows on a real box."""
-    fake = _FakeUser32({10: 500, 11: 9999, 12: 9999, 13: 9999})
-    with patch("launch_stellaris._user32_fns",
-               return_value=(fake.enum_windows, fake.enum_proc,
-                             fake.get_thread_pid)):
+    with _bind_fake({10: 500, 11: 9999, 12: 9999, 13: 9999}) as fake:
         assert _enum_windows_owned_by(9999) is True
     assert fake.visited == [10, 11]
 
 
 def test_window_ownership_false_when_desktop_has_no_windows():
     """EnumWindows yields nothing -> no window owned by that PID."""
-    fake = _FakeUser32({})
-    with patch("launch_stellaris._user32_fns",
-               return_value=(fake.enum_windows, fake.enum_proc,
-                             fake.get_thread_pid)):
+    with _bind_fake({}):
         assert _enum_windows_owned_by(9999) is False
+
+
+def test_enum_windows_failure_is_not_reported_as_no_window():
+    """EnumWindows returns FALSE both when our callback stops the walk and when
+    enumeration itself fails. Dropping the return value makes the second case
+    indistinguishable from "this PID owns no window" — which is precisely the
+    silent EXIT_STEAM_NO_CLIENT shape the PID-ownership fix just repaired.
+    """
+    with _bind_fake({10: 500}, enum_result=False) as fake, \
+            pytest.raises(OSError):
+        _enum_windows_owned_by(9999)
+    assert fake.visited == [10]
+
+
+def test_enum_windows_early_stop_is_not_a_failure():
+    """The normal hit path stops the walk from the callback, so EnumWindows
+    reports FALSE there too. That must not raise — otherwise every successful
+    window match turns into a logged error."""
+    with _bind_fake({10: 500, 11: 9999, 12: 9999}, enum_result=False) as fake:
+        assert _enum_windows_owned_by(9999) is True
+    assert fake.visited == [10, 11]
 
 
 def test_steam_has_window_short_circuits_off_windows():
@@ -307,3 +331,77 @@ def test_poll_marker_returns_none_when_inner_never_signalled(mock_sleep):
         marker = str(Path(td) / "inner.txt")
         Path(marker).write_text("", encoding="utf-8")
         assert _poll_marker(marker, timeout_s=1) is None
+
+
+@patch("subprocess.run")
+def test_bridge_create_failure_deletes_the_partial_task(mock_run):
+    """A /create that fails after registering leaves a schtasks entry behind.
+    The run-failure path right below it already cleans up; the create path has
+    to as well, or every retry leaks another task."""
+    mock_run.return_value = MagicMock(returncode=1, stdout="",
+                                      stderr="ERROR: Access is denied.")
+    args = build_arg_parser().parse_args(["--bridge-timeout-s", "1"])
+    with patch("launch_stellaris.current_session_id", return_value=0), \
+            patch("launch_stellaris.interactive_session_id", return_value=1):
+        assert bridge_to_interactive_session(args) == EXIT_BRIDGE_SCHTASKS_DENIED
+    invocations = [" ".join(c.args[0]) for c in mock_run.call_args_list]
+    assert any("/delete" in i for i in invocations), invocations
+
+
+@patch("subprocess.run")
+def test_bridge_noop_session_runs_the_chain_inline(mock_run):
+    """Already inside the logged-on session there is nothing to schedule.
+
+    It must run the launch chain right here: returning 0 without running it —
+    the plan's other, self-contradictory reading — turns an
+    interactive-console invocation into a silent no-op that reports success
+    without ever touching Steam. The inner's own code is what this pins.
+    """
+    args = build_arg_parser().parse_args([])
+    with patch("launch_stellaris.current_session_id", return_value=1), \
+            patch("launch_stellaris.interactive_session_id", return_value=1), \
+            patch("launch_stellaris.run_launch_chain",
+                  return_value=EXIT_LAUNCHER_NO_ADVANCE) as mock_chain:
+        assert bridge_to_interactive_session(args) == EXIT_LAUNCHER_NO_ADVANCE
+    mock_chain.assert_called_once_with(args)
+
+
+def test_inner_tr_forwards_every_user_settable_flag():
+    """The outer parses the CLI; the inner is a *different process* and only
+    sees what the /tr string forwards. Anything dropped silently reverts to the
+    argparse default in the inner — which is how a 120 s chain ends up dying on
+    a 30 s budget nobody asked for."""
+    args = build_arg_parser().parse_args([
+        "--app-id", "12345",
+        "--launcher-timeout-s", "111",
+        "--game-timeout-s", "222",
+        "--observe-s", "333",
+        "--bridge-timeout-s", "444",
+        "--no-prekill", "--dry-run", "--verbose",
+    ])
+    tr = build_inner_tr(args, marker=r"C:\TEMP\m.txt",
+                        python=r"C:\py\python.exe",
+                        script=r"C:\work\launch_stellaris.py")
+    for expected in ("--inner",
+                     '--marker "C:\\TEMP\\m.txt"',
+                     "--app-id 12345",
+                     "--launcher-timeout-s 111",
+                     "--game-timeout-s 222",
+                     "--observe-s 333",
+                     "--bridge-timeout-s 444",
+                     "--no-prekill",
+                     "--dry-run",
+                     "--verbose"):
+        assert expected in tr, (expected, tr)
+
+
+def test_inner_tr_omits_flags_the_user_did_not_set():
+    """Forwarding must not invent flags either: the inner should see exactly
+    the shape the user asked for, so a default run stays a default run."""
+    args = build_arg_parser().parse_args([])
+    tr = build_inner_tr(args, marker=r"C:\TEMP\m.txt")
+    assert "--no-prekill" not in tr
+    assert "--dry-run" not in tr
+    assert "--verbose" not in tr
+    assert "--inner" in tr and "--marker" in tr
+

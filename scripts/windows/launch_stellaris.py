@@ -37,6 +37,15 @@ EXIT_BRIDGE_SCHTASKS_DENIED = 42
 EXIT_BRIDGE_TIMEOUT = 43
 EXIT_INTERNAL = 99
 
+def _last_error() -> int:
+    """ctypes.get_last_error() on Windows, 0 everywhere else.
+
+    The attribute does not exist on Linux, and this module has to import there
+    for the host-side unit tests.
+    """
+    get_last_error = getattr(ctypes, "get_last_error", None)
+    return int(get_last_error()) if get_last_error is not None else 0
+
 
 def timeline_event(phase: str, **fields: Any) -> str:
     """Format one stderr timeline line."""
@@ -148,6 +157,11 @@ def _enum_windows_owned_by(pid: int) -> bool:
     window class is whatever its SDL build picks — 'SDL_app' on Windows_Jiaolong,
     'Valve001' elsewhere — so a hardcoded class name silently reports "no
     window" for the whole poll budget. PID ownership has no such dependency.
+
+    NOTE: the callback body must stay exception-free. ctypes swallows anything
+    raised inside a WINFUNCTYPE callback, prints it, and reports the call as
+    an early stop — so a bug in here silently truncates the walk instead of
+    reaching the caller's `except`.
     """
     enum_windows, enum_windows_proc, get_window_thread_process_id = _user32_fns()
     found = False
@@ -162,7 +176,12 @@ def _enum_windows_owned_by(pid: int) -> bool:
             return False  # False stops the EnumWindows walk
         return True
 
-    enum_windows(_cb, 0)
+    # EnumWindows returns FALSE both when our callback stops the walk (the
+    # `found` path) and when enumeration itself fails. Only the second is an
+    # error, and reporting it as "no window" would be the silent 30 s budget
+    # burn the PID-ownership fix just eliminated.
+    if not enum_windows(_cb, 0) and not found:
+        raise OSError(_last_error(), "EnumWindows failed")
     return found
 
 
@@ -276,6 +295,48 @@ def build_bridge_run_command(task_name: str) -> list[str]:
     return ["schtasks", "/run", "/tn", task_name, "/I"]
 
 
+def _delete_bridge_task(task_name: str) -> None:
+    """Remove the one-shot task. Best effort: a leftover entry is a nuisance,
+    never a reason to fail a launch."""
+    subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"],
+                   capture_output=True, text=True)
+
+
+def build_inner_tr(args: argparse.Namespace, marker: str,
+                   python: str | None = None,
+                   script: str | None = None) -> str:
+    """The /tr payload: the exact command line the inner will run.
+
+    The inner is a *separate process* and only knows the flags spelled out
+    here. Forwarding every user-settable flag — not just the three that were
+    needed when this was first written — is what stops `--launcher-timeout-s
+    300` from silently reverting to the 30 s default inside the bridged run.
+    Forwarding the defaults too keeps the inner's view pinned to what the
+    outer actually parsed, so the two can never drift.
+    """
+    python = python or sys.executable
+    script = script or os.path.abspath(__file__)
+    parts = [
+        f'"{python}"', f'"{script}"',
+        "--inner",
+        "--marker", f'"{marker}"',
+        "--app-id", str(args.app_id),
+        "--launcher-timeout-s", str(args.launcher_timeout_s),
+        "--game-timeout-s", str(args.game_timeout_s),
+        "--observe-s", str(args.observe_s),
+        # The inner never bridges, so this one is inert there; forwarding it
+        # anyway means a future inner-side bridge needs no change here.
+        "--bridge-timeout-s", str(args.bridge_timeout_s),
+    ]
+    if args.no_prekill:
+        parts.append("--no-prekill")
+    if args.dry_run:
+        parts.append("--dry-run")
+    if args.verbose:
+        parts.append("--verbose")
+    return " ".join(parts)
+
+
 def _poll_marker(marker: str, timeout_s: float) -> str | None:
     """Poll the marker file for a final 'DONE:<int>' line. Returns the line or None."""
     deadline = _time.time() + timeout_s
@@ -331,15 +392,7 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     marker = args.marker or os.path.join(tempfile.gettempdir(), f"launch_inner_{pid}_{ts}.txt")
 
     # Build /tr: inner invocation. Marker path is the contract.
-    py = sys.executable
-    this = os.path.abspath(__file__)
-    tr = f'"{py}" "{this}" --inner --marker "{marker}"'
-    if args.app_id != 281990:
-        tr += f" --app-id {args.app_id}"
-    if args.no_prekill:
-        tr += " --no-prekill"
-    if args.dry_run:
-        tr += " --dry-run"
+    tr = build_inner_tr(args, marker)
 
     # /st = HH:MM in the near future (schtasks needs a future scheduled time even
     # with /I on some Windows builds; 1 minute out is enough).
@@ -353,17 +406,20 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     )
     if create.returncode != 0:
         log_event("BRIDGE", step="create", rc=create.returncode, stderr=create.stderr.strip())
+        # A /create that fails partway can still have registered the task.
+        # Mirror the run-failure branch below: clean up before returning.
+        _delete_bridge_task(task_name)
         return EXIT_BRIDGE_SCHTASKS_DENIED
 
     run = subprocess.run(build_bridge_run_command(task_name), capture_output=True, text=True)
     if run.returncode != 0:
         log_event("BRIDGE", step="run", rc=run.returncode, stderr=run.stderr.strip())
-        subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], capture_output=True, text=True)
+        _delete_bridge_task(task_name)
         return EXIT_BRIDGE_SCHTASKS_DENIED
 
     log_event("BRIDGE", task=task_name, marker=marker)
     done = _poll_marker(marker, args.bridge_timeout_s)
-    subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], capture_output=True, text=True)
+    _delete_bridge_task(task_name)
     with contextlib.suppress(OSError):
         os.remove(marker)
 
