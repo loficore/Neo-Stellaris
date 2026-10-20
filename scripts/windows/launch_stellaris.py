@@ -8,7 +8,10 @@ import argparse
 import datetime as _dt
 import subprocess
 import sys
+import time as _time
 from typing import Any
+
+import psutil
 
 # Exit codes — see spec §4.
 EXIT_OK = 0
@@ -90,6 +93,48 @@ def prekill(no_prekill: bool = False) -> int:
     return EXIT_OK
 
 
+def steam_spawn(app_id: int, dry_run: bool = False) -> int:
+    """Fire steam://rungameid/<app_id> via Start-Process. Caller polls for the
+    Steam client process afterwards."""
+    if dry_run:
+        log_event("STEAM_SPAWN", dry_run=True, app_id=str(app_id))
+        return EXIT_OK
+    uri = f"steam://rungameid/{app_id}"
+    # Start-Process goes through ShellExecute, same protocol handler as os.startfile.
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", f"Start-Process '{uri}'"],
+        capture_output=True, text=True,
+    )
+    log_event("STEAM_SPAWN", uri=uri)
+    return EXIT_OK
+
+
+def _steam_has_window(pid: int) -> bool:
+    """Best-effort check that a Steam window is on screen. Uses FindWindow('Valve001'),
+    which is the Steam overlay/UI window class. Returns True if any such window exists."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.FindWindowW.restype = ctypes.c_int
+        user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+        return user32.FindWindowW("Valve001", None) != 0
+    except Exception:
+        return True  # assume yes on non-Windows or unexpected failure
+
+
+def steam_ready(timeout_s: int) -> int | None:
+    """Poll for steam.exe with a visible Valve001 window. Returns PID or None."""
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        for p in psutil.process_iter(["name", "pid"]):
+            if p.info["name"] and p.info["name"].lower() == "steam.exe" and _steam_has_window(p.info["pid"]):
+                log_event("STEAM_READY", steam_pid=p.info["pid"])
+                return p.info["pid"]
+        _time.sleep(0.5)
+    log_event("STEAM_READY", timeout=True)
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     log_event("BOOT", app_id=args.app_id, argv=argv if argv is not None else "default")
@@ -98,6 +143,12 @@ def main(argv: list[str] | None = None) -> int:
     rc = prekill(args.no_prekill)
     if rc != EXIT_OK:
         return rc
+    rc = steam_spawn(args.app_id, args.dry_run)
+    if rc != EXIT_OK:
+        return rc
+    steam_pid = steam_ready(args.launcher_timeout_s)
+    if steam_pid is None and not args.dry_run:
+        return EXIT_STEAM_NO_CLIENT
     return EXIT_OK
 
 
