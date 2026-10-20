@@ -1,10 +1,18 @@
 import re
-import pytest
+from unittest.mock import patch, MagicMock
+
 from launch_stellaris import (
-    EXIT_OK, EXIT_PREKILL_PERMISSION, EXIT_BRIDGE_NO_SESSION,
-    EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT, EXIT_INTERNAL,
-    timeline_event, log_event, build_arg_parser,
+    EXIT_OK,
+    EXIT_PREKILL_PERMISSION,
+    EXIT_BRIDGE_NO_SESSION,
+    EXIT_BRIDGE_SCHTASKS_DENIED,
+    EXIT_BRIDGE_TIMEOUT,
+    EXIT_INTERNAL,
+    timeline_event,
+    build_arg_parser,
+    prekill,
 )
+
 
 def test_exit_codes_match_spec():
     assert EXIT_OK == 0
@@ -14,10 +22,12 @@ def test_exit_codes_match_spec():
     assert EXIT_BRIDGE_TIMEOUT == 43
     assert EXIT_INTERNAL == 99
 
+
 def test_timeline_event_format():
     line = timeline_event("PREKILL", killed_pids=[1234, 5678], reason="stale")
     # 2026-...  PREKILL  killed_pids=[1234, 5678]  reason=stale
     assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z  PREKILL  killed_pids=\[1234, 5678\]  reason=stale$", line)
+
 
 def test_arg_parser_defaults():
     args = build_arg_parser().parse_args([])
@@ -28,6 +38,7 @@ def test_arg_parser_defaults():
     assert args.no_prekill is False
     assert args.dry_run is False
     assert args.marker is None
+
 
 def test_arg_parser_overrides():
     args = build_arg_parser().parse_args([
@@ -41,8 +52,6 @@ def test_arg_parser_overrides():
     assert args.inner is True
     assert args.marker == r"C:\TEMP\m.txt"
 
-from unittest.mock import patch, MagicMock
-from launch_stellaris import prekill, EXIT_OK, EXIT_PREKILL_PERMISSION
 
 def _fake_run(args, **kwargs):
     """taskkill returns 0 for missing process; 1 with stderr '... ACCESS denied' for permission."""
@@ -52,15 +61,18 @@ def _fake_run(args, **kwargs):
     m = MagicMock(returncode=1, stdout="", stderr="ERROR: Access is denied.")
     return m
 
+
 @patch("subprocess.run", side_effect=_fake_run)
 def test_prekill_happy_path(mock_run):
     assert prekill() == EXIT_OK
+
 
 @patch("subprocess.run", side_effect=_fake_run)
 def test_prekill_handles_missing_processes(mock_run):
     """A second invocation with stale targets must also return 0."""
     assert prekill() == EXIT_OK
     assert prekill() == EXIT_OK
+
 
 @patch("subprocess.run")
 def test_prekill_returns_2_on_permission_error(mock_run):
