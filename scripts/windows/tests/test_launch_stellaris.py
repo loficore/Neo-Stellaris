@@ -1,19 +1,11 @@
 import re
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from launch_stellaris import (
-    EXIT_OK,
-    EXIT_PREKILL_PERMISSION,
-    EXIT_BRIDGE_NO_SESSION,
-    EXIT_BRIDGE_SCHTASKS_DENIED,
-    EXIT_BRIDGE_TIMEOUT,
-    EXIT_INTERNAL,
-    timeline_event,
-    build_arg_parser,
-    prekill,
-    steam_spawn,
-    steam_ready,
-)
+from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
+                              EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
+                              EXIT_INTERNAL, EXIT_OK, EXIT_PREKILL_PERMISSION,
+                              build_arg_parser, prekill, steam_ready,
+                              steam_spawn, timeline_event)
 
 
 def test_exit_codes_match_spec():

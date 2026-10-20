@@ -112,6 +112,11 @@ def steam_spawn(app_id: int, dry_run: bool = False) -> int:
 def _steam_has_window(pid: int) -> bool:
     """Best-effort check that a Steam window is on screen. Uses FindWindow('Valve001'),
     which is the Steam overlay/UI window class. Returns True if any such window exists."""
+    if sys.platform != "win32":
+        # ctypes.windll is Windows-only. On any other platform assume yes so
+        # the production poll loop is not needlessly blocked during local
+        # integration tests / cross-platform CI.
+        return True
     try:
         import ctypes
         user32 = ctypes.windll.user32
@@ -119,7 +124,7 @@ def _steam_has_window(pid: int) -> bool:
         user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
         return user32.FindWindowW("Valve001", None) != 0
     except Exception:
-        return True  # assume yes on non-Windows or unexpected failure
+        return True  # unexpected failure: assume yes, do not block launch
 
 
 def steam_ready(timeout_s: int) -> int | None:
