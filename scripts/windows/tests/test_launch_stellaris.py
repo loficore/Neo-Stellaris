@@ -1,10 +1,17 @@
+import os
 import re
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
-                              EXIT_INTERNAL, EXIT_OK, EXIT_PREKILL_PERMISSION,
-                              build_arg_parser, prekill, steam_ready,
+                              EXIT_INTERNAL, EXIT_LAUNCHER_WINDOW_MISSING,
+                              EXIT_OK, EXIT_PREKILL_PERMISSION, _poll_marker,
+                              _write_marker, bridge_to_interactive_session,
+                              build_arg_parser, build_bridge_account,
+                              build_bridge_run_command,
+                              build_bridge_task_command, prekill, steam_ready,
                               steam_spawn, timeline_event)
 
 
@@ -133,3 +140,82 @@ def test_steam_ready_returns_pid_when_steam_found(mock_iter, mock_sleep):
 @patch("psutil.process_iter", return_value=[])
 def test_steam_ready_returns_none_on_timeout(mock_iter, mock_sleep):
     assert steam_ready(1) is None
+
+
+def test_bridge_task_command_uses_ru_rl_highest():
+    cmd = build_bridge_task_command(
+        task_name="stellaris-launch-1234-1700000000",
+        tr='"python C:\\launch.py --inner --marker C:\\TEMP\\m.txt"',
+        st_hhmm="18:30",
+        ru=r"lofibass\13229",
+    )
+    s = " ".join(cmd)
+    assert "/ru" in s and r"lofibass\13229" in s
+    assert "/rl" in s and "highest" in s
+    assert "/sc" in s and "once" in s
+    assert "/st" in s and "18:30" in s
+    assert "/f" in s
+
+
+def test_bridge_run_command_uses_I_not_IT():
+    cmd = build_bridge_run_command("stellaris-launch-1234-1700000000")
+    s = " ".join(cmd)
+    assert "/I" in s
+    # Legacy schtasks does not accept /IT on this box
+    assert "/IT" not in s
+    assert "/tn" in s
+    assert cmd[-1] != "/IT"
+
+
+def test_bridge_account_uses_computername_not_userdomain():
+    """On a standalone box USERDOMAIN is the *workgroup* name (WORKGROUP on
+    Windows_Jiaolong), which schtasks cannot resolve to a SID — it fails with
+    'No mapping between account names and security IDs'. COMPUTERNAME is the
+    prefix `whoami` prints, so it is the one that resolves.
+    """
+    assert build_bridge_account("lofibass", "13229") == r"lofibass\13229"
+    # COMPUTERNAME must win over USERDOMAIN when both are present.
+    with patch.dict(os.environ, {"COMPUTERNAME": "lofibass",
+                                 "USERDOMAIN": "WORKGROUP",
+                                 "USERNAME": "13229"}, clear=False):
+        assert build_bridge_account() == r"lofibass\13229"
+
+
+@patch("subprocess.run")
+def test_bridge_returns_timeout_on_corrupt_marker(mock_run):
+    """A torn or hand-edited marker must not escape as an uncaught ValueError.
+
+    int() on a truncated 'DONE:' would otherwise kill the outer with a
+    traceback and exit code 1, which is not a documented exit code at all.
+    A marker we cannot read is a timeout (43), nothing else.
+    """
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    args = build_arg_parser().parse_args(["--bridge-timeout-s", "1"])
+    with patch("launch_stellaris.current_session_id", return_value=0), \
+         patch("launch_stellaris.interactive_session_id", return_value=1), \
+         patch("launch_stellaris._poll_marker", return_value="DONE:garbage"):
+        assert bridge_to_interactive_session(args) == EXIT_BRIDGE_TIMEOUT
+
+
+def test_marker_round_trip_carries_inner_exit_code():
+    """_write_marker -> _poll_marker is the whole bridge contract: the inner
+    writes DONE:<rc>, the outer reads it back. If this pair drifts, every
+    bridged run degrades into a silent EXIT_BRIDGE_TIMEOUT (43).
+    """
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        _write_marker(marker, EXIT_OK)
+        assert _poll_marker(marker, timeout_s=1) == "DONE:0"
+
+        _write_marker(marker, EXIT_LAUNCHER_WINDOW_MISSING)
+        assert _poll_marker(marker, timeout_s=1) == "DONE:21"
+
+
+@patch("time.sleep", return_value=None)
+def test_poll_marker_returns_none_when_inner_never_signalled(mock_sleep):
+    """No DONE: line means the inner died mid-chain. The outer must treat that
+    as a timeout (43), not as a successful launch."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        Path(marker).write_text("", encoding="utf-8")
+        assert _poll_marker(marker, timeout_s=1) is None

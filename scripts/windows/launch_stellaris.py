@@ -5,9 +5,14 @@ See docs/superpowers/specs/2026-09-29-launch-stellaris-design.md for the contrac
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ctypes
+import ctypes.wintypes as _wt
 import datetime as _dt
+import os
 import subprocess
 import sys
+import tempfile
 import time as _time
 from typing import Any
 
@@ -140,11 +145,188 @@ def steam_ready(timeout_s: int) -> int | None:
     return None
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
-    log_event("BOOT", app_id=args.app_id, argv=argv if argv is not None else "default")
-    # PREKILL runs before every other phase (Task 2). Remaining chain
-    # (STEAM_SPAWN .. GAME_OBSERVE) is wired in Tasks 3–6.
+_session_fns_cache: tuple[Any, Any, Any] | None = None
+
+
+def _session_fns() -> tuple[Any, Any, Any]:
+    """Bind (GetCurrentProcessId, ProcessIdToSessionId, WTSGetActiveConsoleSessionId).
+
+    Bound lazily instead of at module scope: ctypes.WinDLL only exists on
+    Windows, and this module must import cleanly on Linux for the host-side
+    unit tests. Only the command builders are exercised there.
+    """
+    global _session_fns_cache
+    if _session_fns_cache is None:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_current_process_id = k32.GetCurrentProcessId
+        get_current_process_id.restype = _wt.DWORD
+        get_current_process_id.argtypes = []
+        process_id_to_session_id = k32.ProcessIdToSessionId
+        # POINTER lives on ctypes, not ctypes.wintypes.
+        process_id_to_session_id.argtypes = [_wt.DWORD, ctypes.POINTER(_wt.DWORD)]
+        process_id_to_session_id.restype = _wt.BOOL
+        wts_get_active_console_session_id = k32.WTSGetActiveConsoleSessionId
+        wts_get_active_console_session_id.restype = _wt.DWORD
+        wts_get_active_console_session_id.argtypes = []
+        _session_fns_cache = (get_current_process_id, process_id_to_session_id,
+                              wts_get_active_console_session_id)
+    return _session_fns_cache
+
+
+def current_session_id() -> int:
+    get_current_process_id, process_id_to_session_id, _ = _session_fns()
+    out = _wt.DWORD(0)
+    process_id_to_session_id(get_current_process_id(), ctypes.byref(out))
+    return int(out.value)
+
+
+def interactive_session_id() -> int:
+    """The session of the user logged on at the console. 0 if there is none."""
+    return int(_session_fns()[2]())
+
+
+def build_bridge_account(computer: str | None = None, user: str | None = None) -> str:
+    """The run-as account for the bridge task: <machine>\\<user>.
+
+    COMPUTERNAME, deliberately not USERDOMAIN: on a standalone box USERDOMAIN is
+    the workgroup name (WORKGROUP on Windows_Jiaolong), which schtasks cannot
+    resolve to a SID — it rejects it with 'No mapping between account names and
+    security IDs'. COMPUTERNAME is the prefix `whoami` prints, so it resolves.
+    """
+    computer = (computer or os.environ.get("COMPUTERNAME")
+                or os.environ.get("USERDOMAIN") or "lofibass")
+    user = user or os.environ.get("USERNAME") or "13229"
+    return f"{computer}\\{user}"
+
+
+def build_bridge_task_command(task_name: str, tr: str, st_hhmm: str, ru: str) -> list[str]:
+    """The schtasks /create argv for an interactive-session run-as-user task.
+
+    Note: the legacy schtasks.exe on Windows 10/11 does NOT recognize /it. The
+    /ru <user> /rl highest pair is what actually runs the task in that user's
+    interactive session. /st must be HH:MM in the near future."""
+    return [
+        "schtasks", "/create", "/tn", task_name,
+        "/tr", tr,
+        "/sc", "once", "/st", st_hhmm,
+        "/ru", ru,
+        "/rl", "highest",
+        "/f",
+    ]
+
+
+def build_bridge_run_command(task_name: str) -> list[str]:
+    """/I is legacy schtasks "ignore schedule constraints, run now"."""
+    return ["schtasks", "/run", "/tn", task_name, "/I"]
+
+
+def _poll_marker(marker: str, timeout_s: float) -> str | None:
+    """Poll the marker file for a final 'DONE:<int>' line. Returns the line or None."""
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        if os.path.exists(marker):
+            try:
+                with open(marker, encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                content = ""
+            for line in reversed(content.splitlines()):
+                if line.startswith("DONE:"):
+                    return line
+        _time.sleep(0.5)
+    return None
+
+
+def _write_marker(marker: str, code: int) -> None:
+    """Signal the waiting outer process that the inner chain finished.
+
+    Written last and with a single write so a torn read by _poll_marker is
+    impossible in practice; no DONE: line means timeout, which is the correct
+    signal for an inner that died mid-chain.
+    """
+    try:
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(f"DONE:{code}\n")
+    except OSError as e:
+        log_event("MARKER", error=str(e))
+
+
+def bridge_to_interactive_session(args: argparse.Namespace) -> int:
+    """Run the rest of the chain in the logged-on user's interactive session.
+
+    If already in that session, run the chain inline (the inner launches
+    immediately) and return its exit code. Otherwise schedule a one-shot task
+    via schtasks /create ... /ru <user> /rl highest + schtasks /run /I, poll
+    the marker, clean up, and return the inner's exit code.
+    """
+    my_sid = current_session_id()
+    target_sid = interactive_session_id()
+    if target_sid == 0:
+        log_event("BRIDGE", result="no_interactive_session")
+        return EXIT_BRIDGE_NO_SESSION
+    if my_sid == target_sid:
+        log_event("BRIDGE", result="noop", sid=target_sid)
+        return run_launch_chain(args)
+
+    # Generate a unique task name + marker
+    pid = os.getpid()
+    ts = int(_time.time())
+    task_name = f"stellaris-launch-{pid}-{ts}"
+    marker = args.marker or os.path.join(tempfile.gettempdir(), f"launch_inner_{pid}_{ts}.txt")
+
+    # Build /tr: inner invocation. Marker path is the contract.
+    py = sys.executable
+    this = os.path.abspath(__file__)
+    tr = f'"{py}" "{this}" --inner --marker "{marker}"'
+    if args.app_id != 281990:
+        tr += f" --app-id {args.app_id}"
+    if args.no_prekill:
+        tr += " --no-prekill"
+    if args.dry_run:
+        tr += " --dry-run"
+
+    # /st = HH:MM in the near future (schtasks needs a future scheduled time even
+    # with /I on some Windows builds; 1 minute out is enough).
+    future = _dt.datetime.now() + _dt.timedelta(minutes=1)
+    st_str = future.strftime("%H:%M")
+    ru = build_bridge_account()
+
+    create = subprocess.run(
+        build_bridge_task_command(task_name, tr, st_str, ru),
+        capture_output=True, text=True,
+    )
+    if create.returncode != 0:
+        log_event("BRIDGE", step="create", rc=create.returncode, stderr=create.stderr.strip())
+        return EXIT_BRIDGE_SCHTASKS_DENIED
+
+    run = subprocess.run(build_bridge_run_command(task_name), capture_output=True, text=True)
+    if run.returncode != 0:
+        log_event("BRIDGE", step="run", rc=run.returncode, stderr=run.stderr.strip())
+        subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], capture_output=True, text=True)
+        return EXIT_BRIDGE_SCHTASKS_DENIED
+
+    log_event("BRIDGE", task=task_name, marker=marker)
+    done = _poll_marker(marker, args.bridge_timeout_s)
+    subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], capture_output=True, text=True)
+    with contextlib.suppress(OSError):
+        os.remove(marker)
+
+    if not done:
+        log_event("BRIDGE", result="timeout")
+        return EXIT_BRIDGE_TIMEOUT
+    try:
+        code = int(done.split(":", 1)[1])
+    except (IndexError, ValueError):
+        # A torn or truncated marker is unreadable, which is a timeout — not a
+        # reason to escape with an undocumented exit code 1.
+        log_event("BRIDGE", result="corrupt_marker", line=done)
+        return EXIT_BRIDGE_TIMEOUT
+    log_event("BRIDGE", result="inner_exit", code=code)
+    return code
+
+
+def run_launch_chain(args: argparse.Namespace) -> int:
+    """PREKILL .. GAME_OBSERVE. This is the inner's body; Tasks 5–6 extend it."""
     rc = prekill(args.no_prekill)
     if rc != EXIT_OK:
         return rc
@@ -155,6 +337,20 @@ def main(argv: list[str] | None = None) -> int:
     if steam_pid is None and not args.dry_run:
         return EXIT_STEAM_NO_CLIENT
     return EXIT_OK
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+    log_event("BOOT", app_id=args.app_id, argv=argv if argv is not None else "default")
+    if not args.inner:
+        # Outer: bridge into the logged-on user's session. Whatever it returns
+        # is the job's exit code — the inner already ran the chain and wrote
+        # the marker, so the outer must not run it again.
+        return bridge_to_interactive_session(args)
+    rc = run_launch_chain(args)
+    if args.marker:
+        _write_marker(args.marker, rc)
+    return rc
 
 
 if __name__ == "__main__":
