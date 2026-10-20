@@ -9,16 +9,15 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import launch_stellaris
+import pytest
 from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
                               EXIT_INTERNAL, EXIT_LAUNCHER_NO_ADVANCE,
                               EXIT_LAUNCHER_NO_FOCUS,
                               EXIT_LAUNCHER_WINDOW_MISSING, EXIT_OK,
-                              EXIT_PREKILL_PERMISSION, VK_RETURN, VK_TAB,
-                              INPUT, INPUT_KEYBOARD, KEYBDINPUT,
+                              EXIT_PREKILL_PERMISSION, INPUT, INPUT_KEYBOARD,
+                              KEYBDINPUT, VK_RETURN, VK_TAB,
                               _enum_windows_owned_by, _handoff_observed,
                               _hwnd_for_pid, _poll_marker, _steam_has_window,
                               _write_marker, bridge_to_interactive_session,
@@ -350,6 +349,188 @@ def test_bridge_create_failure_deletes_the_partial_task(mock_run):
         assert bridge_to_interactive_session(args) == EXIT_BRIDGE_SCHTASKS_DENIED
     invocations = [" ".join(c.args[0]) for c in mock_run.call_args_list]
     assert any("/delete" in i for i in invocations), invocations
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: schtasks /tr shim + typed EXIT_BRIDGE_TR_TOO_LONG.
+#
+# On the live box (Windows_Jiaolong), the inline /tr payload measured:
+#   * 276 chars with default flags
+#   * 309 chars with --no-prekill --dry-run --verbose
+# Both blow schtasks' 261-character ceiling with the opaque error
+#   '/tr' 选项值不能超过 261 个字符。
+#   (Error: value for '/tr' option cannot be more than 261 characters)
+# The shim replaces the inline command with a short path to a .cmd file.
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_tr_shim_path_fits_schtasks_261_char_budget():
+    """The whole point of the shim: schtasks refuses /tr values over 261
+    characters. With inline command lines we measured 276 chars at default
+    flags and 309 with --no-prekill --dry-run --verbose. The shim replaces
+    the inline command with a short file path, so /tr carries a path whose
+    length is bounded by the tempdir + a short basename.
+    """
+    from launch_stellaris import write_bridge_tr_shim
+    args = build_arg_parser().parse_args([
+        "--app-id", "12345",
+        "--launcher-timeout-s", "111",
+        "--game-timeout-s", "222",
+        "--observe-s", "333",
+        "--bridge-timeout-s", "444",
+        "--no-prekill", "--dry-run", "--verbose",
+    ])
+    with tempfile.TemporaryDirectory() as td:
+        shim = write_bridge_tr_shim(
+            task_name="ls_smoke",
+            inner_command=build_inner_tr(args, marker=r"C:\TEMP\m.txt"),
+            tempdir=td,
+        )
+    assert len(shim) <= 261, (len(shim), shim)
+
+
+def test_bridge_tr_shim_writes_echo_off_and_inner_command():
+    """cmd.exe needs the @echo off prefix to suppress its own banner from
+    drowning the inner chain's stderr timeline. The inner command itself
+    must follow verbatim — that string is what build_inner_tr's tests pin.
+    """
+    from launch_stellaris import write_bridge_tr_shim
+    args = build_arg_parser().parse_args([
+        "--app-id", "12345",
+        "--launcher-timeout-s", "111",
+        "--no-prekill",
+    ])
+    with tempfile.TemporaryDirectory() as td:
+        shim = write_bridge_tr_shim(
+            task_name="ls_smoke",
+            inner_command=build_inner_tr(args, marker=r"C:\TEMP\m.txt"),
+            tempdir=td,
+        )
+        content = Path(shim).read_text(encoding="utf-8")
+    # Header (case-insensitive — cmd accepts both, schtasks shims do too).
+    assert content[:9].lower() == "@echo off"
+    # Inner command: same shape build_inner_tr already pins.
+    for expected in ("--inner", "--marker",
+                     "--app-id 12345",
+                     "--launcher-timeout-s 111",
+                     "--no-prekill"):
+        assert expected in content, (expected, content)
+
+
+def test_bridge_tr_shim_naming_is_unique_per_task():
+    """Two writes with the same content but different task names must not
+    collide on disk — the bridge would otherwise race against its own prior
+    shim during the cleanup window."""
+    from launch_stellaris import write_bridge_tr_shim
+    with tempfile.TemporaryDirectory() as td:
+        a = write_bridge_tr_shim("ls_a", "echo a", tempdir=td)
+        b = write_bridge_tr_shim("ls_b", "echo b", tempdir=td)
+    assert a != b
+    assert os.path.basename(a).startswith("ls_a")
+    assert os.path.basename(b).startswith("ls_b")
+
+
+def test_bridge_tr_shim_returns_loud_failure_when_path_still_too_long():
+    """A tempdir whose own absolute path exceeds ~250 chars would push the
+    shim path past 261. The bridge must not silently hand schtasks an
+    over-budget /tr and let it fail opaquely — log the actual length and
+    return the typed exit code.
+    """
+    from launch_stellaris import EXIT_BRIDGE_TR_TOO_LONG, _validate_tr_length
+
+    # Build a string that is provably > 261 chars without tripping Linux's
+    # NAME_MAX (255 bytes per component) — a single string is one component.
+    long_tr = "C:\\" + ("very_long_segment" * 30) + "\\ls_shim.cmd"
+    assert len(long_tr) > 261
+    rc = _validate_tr_length(long_tr)
+    assert rc == EXIT_BRIDGE_TR_TOO_LONG
+    assert EXIT_BRIDGE_TR_TOO_LONG != EXIT_BRIDGE_SCHTASKS_DENIED, (
+        "44 must be its own code — 42 already means schtasks rejected /create"
+    )
+
+
+def test_validate_tr_length_accepts_short_paths():
+    """The pre-flight check must not return 44 on paths that fit. A 50-char
+    shim path is what we get on every normal Windows box."""
+    from launch_stellaris import _validate_tr_length
+    assert _validate_tr_length(
+        r"C:\Users\13229\AppData\Local\Temp\ls_99.cmd"
+    ) is None
+
+
+def test_validate_tr_length_boundary_accepts_exactly_the_limit():
+    """Exactly 261 chars must still be accepted — schtasks treats the limit
+    as inclusive on every build we tested."""
+    from launch_stellaris import SCHTASKS_TR_LIMIT, _validate_tr_length
+
+    # Path shape: "C:\\" (3 chars: C, :, \) + pad + ".cmd" (4 chars) = 7 fixed.
+    # So pad is SCHTASKS_TR_LIMIT - 7. Using only 'a' avoids accidental separators.
+    pad = "a" * (SCHTASKS_TR_LIMIT - 7)
+    candidate = f"C:\\{pad}.cmd"
+    assert len(candidate) == SCHTASKS_TR_LIMIT
+    assert _validate_tr_length(candidate) is None
+
+
+def test_validate_tr_length_rejects_one_char_over_the_limit():
+    """One char over the limit must trigger 44 — the failure must not wait
+    until the next multiple of some arbitrary bucket."""
+    from launch_stellaris import (EXIT_BRIDGE_TR_TOO_LONG, SCHTASKS_TR_LIMIT,
+                                  _validate_tr_length)
+    pad = "a" * (SCHTASKS_TR_LIMIT - 7 + 1)  # one char over the limit
+    assert _validate_tr_length(f"C:\\{pad}.cmd") == EXIT_BRIDGE_TR_TOO_LONG
+
+
+def test_bridge_marker_path_is_short():
+    """The marker path is forwarded into /tr too. Long names do not
+    exhaust the 261 budget by themselves, but the shim's whole point is to
+    keep the payload compact — start by trimming the marker."""
+    from launch_stellaris import _default_marker_path
+    path = _default_marker_path(pid=12345)
+    # Old name: launch_inner_<pid>_<ts>.txt. New: ls_<pid>.txt.
+    basename = os.path.basename(path)
+    assert basename.startswith("ls_")
+    assert "launch_inner" not in basename
+    assert "12345" in basename
+
+
+def test_bridge_tr_shim_is_deleted_by_the_cleanup_helper():
+    """Cleanup must match create: every shim written gets removed on the
+    same call site as the schtasks /delete, never leaking a .cmd into TEMP
+    across runs."""
+    from launch_stellaris import _delete_bridge_shim
+    with tempfile.TemporaryDirectory() as td:
+        shim = os.path.join(td, "ls_x.cmd")
+        Path(shim).write_text("@echo off\r\necho x\r\n", encoding="utf-8")
+        assert os.path.exists(shim)
+        _delete_bridge_shim(shim)
+        assert not os.path.exists(shim)
+
+
+def test_bridge_tr_shim_cleanup_swallows_missing_file():
+    """A shim that was already gone (manual cleanup, antivirus, prior run's
+    retry) must not raise out of the cleanup path."""
+    from launch_stellaris import _delete_bridge_shim
+
+    # Should not raise even though the file does not exist.
+    _delete_bridge_shim("/nonexistent/path/ls_already_gone.cmd")
+
+
+def test_bridge_returns_44_when_shim_path_exceeds_schtasks_ceiling():
+    """End-to-end: when the shim path is too long, bridge_to_interactive_session
+    must short-circuit before /create with EXIT_BRIDGE_TR_TOO_LONG (44) and
+    clean up the shim — never pass an over-budget /tr to schtasks."""
+    from launch_stellaris import EXIT_BRIDGE_TR_TOO_LONG
+    args = build_arg_parser().parse_args(["--bridge-timeout-s", "1"])
+    long_tr = "C:\\" + ("very_long_segment" * 30) + "\\ls_shim.cmd"
+    with patch("launch_stellaris.current_session_id", return_value=0), \
+            patch("launch_stellaris.interactive_session_id", return_value=1), \
+            patch("launch_stellaris.write_bridge_tr_shim",
+                  return_value=long_tr) as mock_shim:
+        rc = bridge_to_interactive_session(args)
+    assert rc == EXIT_BRIDGE_TR_TOO_LONG
+    # /create must not have been called — the pre-flight guard must reject
+    # the payload before schtasks is ever invoked.
+    mock_shim.assert_called_once()
 
 
 @patch("subprocess.run")

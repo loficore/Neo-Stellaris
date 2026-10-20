@@ -35,7 +35,12 @@ EXIT_WER_DIALOG = 34
 EXIT_BRIDGE_NO_SESSION = 41
 EXIT_BRIDGE_SCHTASKS_DENIED = 42
 EXIT_BRIDGE_TIMEOUT = 43
+EXIT_BRIDGE_TR_TOO_LONG = 44
 EXIT_INTERNAL = 99
+
+# schtasks /create rejects /tr values longer than this with an opaque
+# 'cannot be more than 261 characters' error. Measured on Windows_Jiaolong.
+SCHTASKS_TR_LIMIT = 261
 
 # Process images this chain looks for. Compared case-insensitively: Windows
 # file names are case-insensitive and psutil reports whatever the image has.
@@ -510,6 +515,60 @@ def _delete_bridge_task(task_name: str) -> None:
                    capture_output=True, text=True)
 
 
+def _default_marker_path(pid: int) -> str:
+    """Path of the completion marker file. Short by design: this string gets
+    forwarded into the inner command line and carried into /tr, where every
+    character counts toward schtasks' 261-char ceiling.
+    """
+    return os.path.join(tempfile.gettempdir(), f"ls_{pid}.txt")
+
+
+def write_bridge_tr_shim(task_name: str, inner_command: str,
+                         tempdir: str | None = None) -> str:
+    """Write the /tr shim: a .cmd file that runs `inner_command`.
+
+    schtasks rejects /tr values longer than 261 characters. With the
+    forwarded flag set, the inline command line is 276 chars by default and
+    309 with --no-prekill --dry-run --verbose — both well over the limit.
+    Pointing /tr at a short path to a .cmd shim sidesteps the ceiling.
+
+    The shim starts with `@echo off` so cmd.exe's own banner doesn't drown
+    the inner chain's stderr timeline. Returns the shim path; the caller is
+    responsible for removing it on every exit path via _delete_bridge_shim.
+    """
+    tempdir = tempdir or tempfile.gettempdir()
+    shim_path = os.path.join(tempdir, f"{task_name}.cmd")
+    with open(shim_path, "w", encoding="utf-8", newline="") as f:
+        f.write("@echo off\r\n")
+        f.write(inner_command + "\r\n")
+    return shim_path
+
+
+def _delete_bridge_shim(shim_path: str) -> None:
+    """Best-effort: a leftover shim is a nuisance, never a reason to fail.
+
+    Mirrors _delete_bridge_task. Both call sites in bridge_to_interactive_session
+    must invoke this alongside _delete_bridge_task to keep tempdir tidy.
+    """
+    with contextlib.suppress(OSError):
+        os.remove(shim_path)
+
+
+def _validate_tr_length(tr: str) -> int | None:
+    """Pre-flight check on the /tr value before handing it to schtasks.
+
+    Returns None if `tr` fits in the 261-char ceiling, otherwise returns
+    EXIT_BRIDGE_TR_TOO_LONG (44). Letting schtasks fail opaquely is what
+    produces the misleading EXIT_BRIDGE_SCHTASKS_DENIED (42) — 42 is
+    reserved for genuine /create or /run rejections like 'Access is denied'.
+    """
+    if len(tr) > SCHTASKS_TR_LIMIT:
+        log_event("BRIDGE", step="tr_too_long",
+                  length=len(tr), limit=SCHTASKS_TR_LIMIT)
+        return EXIT_BRIDGE_TR_TOO_LONG
+    return None
+
+
 def build_inner_tr(args: argparse.Namespace, marker: str,
                    python: str | None = None,
                    script: str | None = None) -> str:
@@ -593,14 +652,27 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
         log_event("BRIDGE", result="noop", sid=target_sid)
         return run_launch_chain(args)
 
-    # Generate a unique task name + marker
+    # Generate a unique task name + marker. The marker path is forwarded into
+    # /tr via the shim, so keep it short.
     pid = os.getpid()
     ts = int(_time.time())
     task_name = f"stellaris-launch-{pid}-{ts}"
-    marker = args.marker or os.path.join(tempfile.gettempdir(), f"launch_inner_{pid}_{ts}.txt")
+    marker = args.marker or _default_marker_path(pid)
 
-    # Build /tr: inner invocation. Marker path is the contract.
-    tr = build_inner_tr(args, marker)
+    # Build the inner command line and write the /tr shim. schtasks refuses
+    # /tr values > 261 chars; the inline command is 276 chars by default and
+    # 309 with --no-prekill --dry-run --verbose — both over. The shim replaces
+    # the inline command with a short path that points at a .cmd file holding
+    # the same command.
+    inner_command = build_inner_tr(args, marker)
+    shim_path = write_bridge_tr_shim(task_name, inner_command)
+
+    # Pre-flight: if the shim path is still over the 261-char ceiling (only
+    # possible on a box with a pathologically long tempdir), fail loudly with
+    # a typed exit code rather than letting schtasks reject it opaquely.
+    if (tr_too_long := _validate_tr_length(shim_path)) is not None:
+        _delete_bridge_shim(shim_path)
+        return tr_too_long
 
     # /st = HH:MM in the near future (schtasks needs a future scheduled time even
     # with /I on some Windows builds; 1 minute out is enough).
@@ -609,7 +681,7 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     ru = build_bridge_account()
 
     create = subprocess.run(
-        build_bridge_task_command(task_name, tr, st_str, ru),
+        build_bridge_task_command(task_name, shim_path, st_str, ru),
         capture_output=True, text=True,
     )
     if create.returncode != 0:
@@ -617,17 +689,20 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
         # A /create that fails partway can still have registered the task.
         # Mirror the run-failure branch below: clean up before returning.
         _delete_bridge_task(task_name)
+        _delete_bridge_shim(shim_path)
         return EXIT_BRIDGE_SCHTASKS_DENIED
 
     run = subprocess.run(build_bridge_run_command(task_name), capture_output=True, text=True)
     if run.returncode != 0:
         log_event("BRIDGE", step="run", rc=run.returncode, stderr=run.stderr.strip())
         _delete_bridge_task(task_name)
+        _delete_bridge_shim(shim_path)
         return EXIT_BRIDGE_SCHTASKS_DENIED
 
-    log_event("BRIDGE", task=task_name, marker=marker)
+    log_event("BRIDGE", task=task_name, marker=marker, shim=shim_path)
     done = _poll_marker(marker, args.bridge_timeout_s)
     _delete_bridge_task(task_name)
+    _delete_bridge_shim(shim_path)
     with contextlib.suppress(OSError):
         os.remove(marker)
 
