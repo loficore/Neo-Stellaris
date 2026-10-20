@@ -66,3 +66,34 @@ def test_prekill_handles_missing_processes(mock_run):
 def test_prekill_returns_2_on_permission_error(mock_run):
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="ERROR: Access is denied.")
     assert prekill() == EXIT_PREKILL_PERMISSION
+
+
+@patch("subprocess.run")
+def test_prekill_treats_missing_process_as_success(mock_run):
+    """taskkill returns rc=128 with 'not found' in stderr when the process is
+    already gone. prekill must treat this as success — re-entrant safe
+    (spec §3 're-entrant safe').
+    """
+    mock_run.return_value = MagicMock(
+        returncode=128, stdout="",
+        stderr='ERROR: The process "stellaris.exe" not found.',
+    )
+    assert prekill() == EXIT_OK
+    # prekill must have issued at least one taskkill call per target image
+    # (it iterates both 'stellaris.exe' and 'Paradox Launcher.exe').
+    assert mock_run.call_count >= 1
+
+
+@patch("subprocess.run")
+def test_prekill_treats_missing_process_as_success_chinese(mock_run):
+    """Chinese-locale taskkill returns '找不到' (not found) on missing process.
+
+    The not-found check must match both English and Chinese localizations,
+    otherwise a CN-locale machine breaks the re-entrant safety contract.
+    """
+    mock_run.return_value = MagicMock(
+        returncode=128, stdout="",
+        stderr='\u9519\u8bef: \u627e\u4e0d\u5230\u8fdb\u7a0b "stellaris.exe"\u3002',
+    )
+    assert prekill() == EXIT_OK
+    assert mock_run.call_count >= 1
