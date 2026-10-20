@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import subprocess
 import sys
 from typing import Any
 
@@ -58,11 +59,45 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _taskkill(image: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["taskkill", "/F", "/IM", image, "/T"],
+        capture_output=True, text=True,
+    )
+
+
+def prekill(no_prekill: bool = False) -> int:
+    """Kill any stale stellaris.exe and Paradox Launcher.exe. Re-entrant safe.
+
+    Missing processes are OK. Permission errors return EXIT_PREKILL_PERMISSION.
+    """
+    if no_prekill:
+        log_event("PREKILL", skipped=True)
+        return EXIT_OK
+    killed = []
+    for image in ("stellaris.exe", "Paradox Launcher.exe"):
+        r = _taskkill(image)
+        # rc=0 success; rc=128 with stderr containing 'not found' / '找不到' is OK
+        if r.returncode == 0:
+            killed.append(image)
+            continue
+        # Treat "process not found" as success
+        if "not found" in r.stderr.lower() or "\u627e\u4e0d\u5230" in r.stderr:
+            continue
+        log_event("PREKILL", image=image, rc=r.returncode, stderr=r.stderr.strip())
+        return EXIT_PREKILL_PERMISSION
+    log_event("PREKILL", killed=killed)
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     log_event("BOOT", app_id=args.app_id, argv=argv if argv is not None else "default")
-    # Real chain is wired in Tasks 2–7. For now the skeleton just exits OK
-    # so the CI / lint cycle can run.
+    # PREKILL runs before every other phase (Task 2). Remaining chain
+    # (STEAM_SPAWN .. GAME_OBSERVE) is wired in Tasks 3–6.
+    rc = prekill(args.no_prekill)
+    if rc != EXIT_OK:
+        return rc
     return EXIT_OK
 
 

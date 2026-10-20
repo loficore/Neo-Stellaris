@@ -40,3 +40,29 @@ def test_arg_parser_overrides():
     assert args.observe_s == 60
     assert args.inner is True
     assert args.marker == r"C:\TEMP\m.txt"
+
+from unittest.mock import patch, MagicMock
+from launch_stellaris import prekill, EXIT_OK, EXIT_PREKILL_PERMISSION
+
+def _fake_run(args, **kwargs):
+    """taskkill returns 0 for missing process; 1 with stderr '... ACCESS denied' for permission."""
+    if "stellaris.exe" in args or "Paradox Launcher.exe" in args:
+        m = MagicMock(returncode=0, stdout="", stderr="")
+        return m
+    m = MagicMock(returncode=1, stdout="", stderr="ERROR: Access is denied.")
+    return m
+
+@patch("subprocess.run", side_effect=_fake_run)
+def test_prekill_happy_path(mock_run):
+    assert prekill() == EXIT_OK
+
+@patch("subprocess.run", side_effect=_fake_run)
+def test_prekill_handles_missing_processes(mock_run):
+    """A second invocation with stale targets must also return 0."""
+    assert prekill() == EXIT_OK
+    assert prekill() == EXIT_OK
+
+@patch("subprocess.run")
+def test_prekill_returns_2_on_permission_error(mock_run):
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="ERROR: Access is denied.")
+    assert prekill() == EXIT_PREKILL_PERMISSION
