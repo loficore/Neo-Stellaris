@@ -114,26 +114,82 @@ def steam_spawn(app_id: int, dry_run: bool = False) -> int:
     return EXIT_OK
 
 
+_user32_fns_cache: tuple[Any, Any, Any] | None = None
+
+
+def _user32_fns() -> tuple[Any, Any, Any]:
+    """Bind (EnumWindows, EnumWindowsProc, GetWindowThreadProcessId).
+
+    Bound lazily instead of at module scope: ctypes.WinDLL only exists on
+    Windows, and this module must import cleanly on Linux for the host-side
+    unit tests. See _session_fns for the same reason.
+    """
+    global _user32_fns_cache
+    if _user32_fns_cache is None:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        enum_windows_proc = ctypes.WINFUNCTYPE(_wt.BOOL, _wt.HWND, _wt.LPARAM)
+        enum_windows_proc.argtypes = [_wt.HWND, _wt.LPARAM]
+        enum_windows_proc.restype = _wt.BOOL
+        enum_windows = user32.EnumWindows
+        enum_windows.argtypes = [enum_windows_proc, _wt.LPARAM]
+        enum_windows.restype = _wt.BOOL
+        get_window_thread_process_id = user32.GetWindowThreadProcessId
+        get_window_thread_process_id.argtypes = [_wt.HWND, ctypes.POINTER(_wt.DWORD)]
+        get_window_thread_process_id.restype = _wt.DWORD
+        _user32_fns_cache = (enum_windows, enum_windows_proc,
+                             get_window_thread_process_id)
+    return _user32_fns_cache
+
+
+def _enum_windows_owned_by(pid: int) -> bool:
+    """True if any top-level window belongs to `pid`.
+
+    Ownership by PID, deliberately never by window class. Steam's top-level
+    window class is whatever its SDL build picks — 'SDL_app' on Windows_Jiaolong,
+    'Valve001' elsewhere — so a hardcoded class name silently reports "no
+    window" for the whole poll budget. PID ownership has no such dependency.
+    """
+    enum_windows, enum_windows_proc, get_window_thread_process_id = _user32_fns()
+    found = False
+
+    @enum_windows_proc
+    def _cb(hwnd, _lparam):
+        nonlocal found
+        owner = _wt.DWORD(0)
+        get_window_thread_process_id(hwnd, ctypes.byref(owner))
+        if owner.value == pid:
+            found = True
+            return False  # False stops the EnumWindows walk
+        return True
+
+    enum_windows(_cb, 0)
+    return found
+
+
 def _steam_has_window(pid: int) -> bool:
-    """Best-effort check that a Steam window is on screen. Uses FindWindow('Valve001'),
-    which is the Steam overlay/UI window class. Returns True if any such window exists."""
+    """Best-effort check that the Steam client owning `pid` has a window.
+
+    Fails open: an unexpected binding/enumeration error returns True so a
+    probe quirk can never deadlock the launch chain. The failure is logged so
+    it stays visible instead of hiding like the class-string bug did.
+    """
     if sys.platform != "win32":
-        # ctypes.windll is Windows-only. On any other platform assume yes so
+        # ctypes.WinDLL is Windows-only. On any other platform assume yes so
         # the production poll loop is not needlessly blocked during local
         # integration tests / cross-platform CI.
         return True
     try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        user32.FindWindowW.restype = ctypes.c_int
-        user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
-        return user32.FindWindowW("Valve001", None) != 0
-    except Exception:
-        return True  # unexpected failure: assume yes, do not block launch
+        return _enum_windows_owned_by(pid)
+    except Exception as e:  # noqa: BLE001 — deliberate fail-open, logged below
+        log_event("STEAM_WINDOW", pid=pid, error=repr(e))
+        return True
 
 
 def steam_ready(timeout_s: int) -> int | None:
-    """Poll for steam.exe with a visible Valve001 window. Returns PID or None."""
+    """Poll for a steam.exe that owns at least one top-level window.
+
+    Returns that PID, or None once the budget is spent.
+    """
     deadline = _time.time() + timeout_s
     while _time.time() < deadline:
         for p in psutil.process_iter(["name", "pid"]):

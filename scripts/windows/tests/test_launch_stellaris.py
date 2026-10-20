@@ -1,16 +1,20 @@
+import ctypes
+import ctypes.wintypes as _wt
 import os
 import re
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import launch_stellaris
 from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
                               EXIT_INTERNAL, EXIT_LAUNCHER_WINDOW_MISSING,
-                              EXIT_OK, EXIT_PREKILL_PERMISSION, _poll_marker,
-                              _write_marker, bridge_to_interactive_session,
-                              build_arg_parser, build_bridge_account,
-                              build_bridge_run_command,
+                              EXIT_OK, EXIT_PREKILL_PERMISSION,
+                              _enum_windows_owned_by, _poll_marker,
+                              _steam_has_window, _write_marker,
+                              bridge_to_interactive_session, build_arg_parser,
+                              build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, prekill, steam_ready,
                               steam_spawn, timeline_event)
 
@@ -140,6 +144,90 @@ def test_steam_ready_returns_pid_when_steam_found(mock_iter, mock_sleep):
 @patch("psutil.process_iter", return_value=[])
 def test_steam_ready_returns_none_on_timeout(mock_iter, mock_sleep):
     assert steam_ready(1) is None
+
+
+class _FakeUser32:
+    """Stand-in for the three user32 bindings _user32_fns() hands back.
+
+    Only the Win32 calls themselves need Windows; the PID-ownership matching
+    is plain Python, so this lets the regression below be checked on a
+    non-Windows host. `owners` maps HWND -> owning PID.
+    """
+
+    def __init__(self, owners):
+        self.owners = dict(owners)
+        self.visited = []
+
+    def enum_proc(self, fn):
+        return fn  # WINFUNCTYPE wrapping is a no-op for a pure-Python callback
+
+    def enum_windows(self, cb, lparam):
+        for hwnd in self.owners:
+            self.visited.append(hwnd)
+            if not cb(hwnd, lparam):
+                break  # Win32 stops the walk when the callback returns False
+        return True
+
+    def get_thread_pid(self, hwnd, pid_ptr):
+        ctypes.cast(pid_ptr, ctypes.POINTER(_wt.DWORD))[0] = self.owners[hwnd]
+        return 1
+
+
+def _bind_fake(monkeypatch_target, owners):
+    """Build a _FakeUser32 and point launch_stellaris._user32_fns at it."""
+    fake = _FakeUser32(owners)
+    monkeypatch_target.return_value = (fake.enum_windows, fake.enum_proc,
+                                      fake.get_thread_pid)
+    return fake
+
+
+def test_window_ownership_matches_pid_not_window_class():
+    """Regression: Steam's real top-level window class on Windows_Jiaolong is
+    'SDL_app', not 'Valve001'.
+
+    Matching a hardcoded class string made _steam_has_window return False for
+    every steam.exe, so steam_ready burned its whole budget and the run died at
+    EXIT_STEAM_NO_CLIENT (11) before the launcher phases. Window ownership by
+    PID is the only class-name-independent contract available.
+    """
+    fake = _FakeUser32({10: 500, 11: 9999, 12: 7777})
+    with patch("launch_stellaris._user32_fns",
+               return_value=(fake.enum_windows, fake.enum_proc,
+                             fake.get_thread_pid)):
+        assert _enum_windows_owned_by(9999) is True
+        assert _enum_windows_owned_by(4242) is False
+
+
+def test_window_ownership_stops_at_first_match():
+    """The walk must stop as soon as a window owned by the PID shows up —
+    otherwise every poll pays for all ~383 desktop windows on a real box."""
+    fake = _FakeUser32({10: 500, 11: 9999, 12: 9999, 13: 9999})
+    with patch("launch_stellaris._user32_fns",
+               return_value=(fake.enum_windows, fake.enum_proc,
+                             fake.get_thread_pid)):
+        assert _enum_windows_owned_by(9999) is True
+    assert fake.visited == [10, 11]
+
+
+def test_window_ownership_false_when_desktop_has_no_windows():
+    """EnumWindows yields nothing -> no window owned by that PID."""
+    fake = _FakeUser32({})
+    with patch("launch_stellaris._user32_fns",
+               return_value=(fake.enum_windows, fake.enum_proc,
+                             fake.get_thread_pid)):
+        assert _enum_windows_owned_by(9999) is False
+
+
+def test_steam_has_window_short_circuits_off_windows():
+    """The non-Windows guard must stay ahead of any ctypes.WinDLL binding.
+
+    ctypes.WinDLL does not exist on Linux; binding at import time would break
+    the host-side test run this whole suite depends on.
+    """
+    with patch.object(launch_stellaris.sys, "platform", "linux"), \
+            patch("launch_stellaris._user32_fns") as mock_fns:
+        assert _steam_has_window(1234) is True
+    mock_fns.assert_not_called()
 
 
 def test_bridge_task_command_uses_ru_rl_highest():
