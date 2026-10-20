@@ -48,7 +48,7 @@ def test_arg_parser_defaults():
     args = build_arg_parser().parse_args([])
     assert args.app_id == 281990
     assert args.observe_s == 30
-    assert args.bridge_timeout_s == 90
+    assert args.bridge_timeout_s == launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S
     assert args.inner is False
     assert args.no_prekill is False
     assert args.dry_run is False
@@ -531,6 +531,70 @@ def test_bridge_returns_44_when_shim_path_exceeds_schtasks_ceiling():
     # /create must not have been called — the pre-flight guard must reject
     # the payload before schtasks is ever invoked.
     mock_shim.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Finding 2: derive --bridge-timeout-s default from inner chain phase budgets.
+#
+# Phase budgets the inner traverses with all defaults:
+#   prekill + steam_spawn   3s
+#   steam_ready            30s   (= --launcher-timeout-s)
+#   launcher_wait          30s   (= --launcher-timeout-s)
+#   launcher_keyboard      24s   (Enter + 3x Tab+Enter, 5s wait each)
+#   game_timeout           30s   (= --game-timeout-s, Task 6)
+#   observe                30s   (= --observe-s, Task 6)
+#                         ------
+#                          147s
+#
+# The hard-coded 90 s default drifted below that as soon as Task 6 added
+# 60 s of game-observe. A future change to any phase budget widens the
+# bridge automatically because the default is derived from the sum.
+# ---------------------------------------------------------------------------
+
+
+def test_default_bridge_timeout_covers_inner_chain_phase_budgets():
+    """A second magic number (90) drifted below the inner chain's worst case
+    as soon as Task 6 added game-timeout + observe windows. The default must
+    always exceed the sum of phase budgets — that's what stops a Task-7
+    agent invocation from reporting 43 (bridge timeout) when the real
+    failure is a launcher that never showed up.
+    """
+    inner = launch_stellaris._INNER_CHAIN_BUDGET_S
+    default = launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S
+    assert default > inner, (default, inner)
+
+
+def test_default_bridge_timeout_reflects_every_phase_budget():
+    """If any phase budget widens the default must widen with it. Pin the
+    derivation so a future change to one of the constants without the other
+    fails the test loudly.
+    """
+    components = [
+        launch_stellaris._INNER_BUDGET_PREKILL_SPAWN_S,
+        launch_stellaris._INNER_BUDGET_STEAM_READY_S,
+        launch_stellaris._INNER_BUDGET_LAUNCHER_WAIT_S,
+        launch_stellaris._INNER_BUDGET_LAUNCHER_KEYBOARD_S,
+        launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S,
+    ]
+    assert sum(components) == launch_stellaris._INNER_CHAIN_BUDGET_S
+    assert launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S == (
+        launch_stellaris._INNER_CHAIN_BUDGET_S
+        + launch_stellaris._BRIDGE_TIMEOUT_MARGIN_S
+    )
+
+
+def test_arg_parser_bridge_timeout_uses_derived_default():
+    """The argparse default for --bridge-timeout-s must be the derived
+    constant — the brief's whole point is that no second magic number
+    lives in the parser.
+    """
+    args = build_arg_parser().parse_args([])
+    assert args.bridge_timeout_s == launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S
+    # The 90 s value is the one that drifted below 147 s. Keep it as a
+    # reference point so a regression to the old default shows up as a
+    # specific number, not a generic inequality.
+    assert args.bridge_timeout_s > 147
+    assert args.bridge_timeout_s != 90
 
 
 @patch("subprocess.run")

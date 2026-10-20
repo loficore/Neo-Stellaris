@@ -42,6 +42,25 @@ EXIT_INTERNAL = 99
 # 'cannot be more than 261 characters' error. Measured on Windows_Jiaolong.
 SCHTASKS_TR_LIMIT = 261
 
+# Inner chain worst-case phase budgets (seconds) — the bridge default is
+# derived from these so a future change to one of them widens the bridge
+# automatically. Update test_default_bridge_timeout_reflects_every_phase_budget
+# in lockstep with any change here.
+_INNER_BUDGET_PREKILL_SPAWN_S = 3     # prekill + steam_spawn worst case (spec §5)
+_INNER_BUDGET_STEAM_READY_S = 30      # = --launcher-timeout-s default
+_INNER_BUDGET_LAUNCHER_WAIT_S = 30    # = --launcher-timeout-s default
+_INNER_BUDGET_LAUNCHER_KEYBOARD_S = 24  # Enter + 3x Tab+Enter, 5s wait each
+_INNER_BUDGET_GAME_OBSERVE_S = 60     # = --game-timeout-s + --observe-s defaults (Task 6)
+_INNER_CHAIN_BUDGET_S = (
+    _INNER_BUDGET_PREKILL_SPAWN_S
+    + _INNER_BUDGET_STEAM_READY_S
+    + _INNER_BUDGET_LAUNCHER_WAIT_S
+    + _INNER_BUDGET_LAUNCHER_KEYBOARD_S
+    + _INNER_BUDGET_GAME_OBSERVE_S
+)  # 147s with all defaults
+_BRIDGE_TIMEOUT_MARGIN_S = 33          # slack for monitor jitter + log I/O
+DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 180s
+
 # Process images this chain looks for. Compared case-insensitively: Windows
 # file names are case-insensitive and psutil reports whatever the image has.
 LAUNCHER_IMAGE = "Paradox Launcher.exe"
@@ -88,7 +107,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--launcher-timeout-s", type=int, default=30)
     p.add_argument("--game-timeout-s", type=int, default=30)
     p.add_argument("--observe-s", type=int, default=30)
-    p.add_argument("--bridge-timeout-s", type=int, default=90)
+    p.add_argument("--bridge-timeout-s", type=int, default=DEFAULT_BRIDGE_TIMEOUT_S)
     p.add_argument("--inner", action="store_true",
                    help="(bridge only) skip session detection, run launch chain directly")
     p.add_argument("--marker", type=str, default=None,
