@@ -17,13 +17,17 @@ from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
                               EXIT_INTERNAL, EXIT_LAUNCHER_NO_ADVANCE,
                               EXIT_LAUNCHER_NO_FOCUS,
                               EXIT_LAUNCHER_WINDOW_MISSING, EXIT_OK,
-                              EXIT_PREKILL_PERMISSION, _enum_windows_owned_by,
-                              _poll_marker, _steam_has_window, _write_marker,
-                              bridge_to_interactive_session, build_arg_parser,
+                              EXIT_PREKILL_PERMISSION, VK_RETURN, VK_TAB,
+                              INPUT, INPUT_KEYBOARD, KEYBDINPUT,
+                              _enum_windows_owned_by, _handoff_observed,
+                              _hwnd_for_pid, _poll_marker, _steam_has_window,
+                              _write_marker, bridge_to_interactive_session,
+                              bring_to_foreground, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, build_inner_tr,
-                              prekill, steam_ready, steam_spawn,
-                              timeline_event)
+                              launcher_keyboard, launcher_wait, prekill,
+                              run_launch_chain, send_key, steam_ready,
+                              steam_spawn, timeline_event)
 
 
 def test_exit_codes_match_spec():
@@ -405,3 +409,331 @@ def test_inner_tr_omits_flags_the_user_did_not_set():
     assert "--verbose" not in tr
     assert "--inner" in tr and "--marker" in tr
 
+
+def test_input_struct_layout_matches_the_sendinput_abi():
+    """INPUT is 40 bytes on x64 and 28 on x86; SendInput rejects anything else.
+
+    The brief's version spells the fields ctypes.wintypes.WORD/DWORD, which are
+    c_ulong: 2 bytes and 8 bytes on this LP64 host but 2 and 4 on Windows. The
+    struct would therefore be a silently wrong cbsize on any non-Windows import
+    of this module. Fixed-width c_uint16/c_uint32 keeps one layout everywhere,
+    and this assertion is what stops a future 'cleanup' back to _wt.
+    """
+    is_64 = ctypes.sizeof(ctypes.c_void_p) == 8
+    assert ctypes.sizeof(KEYBDINPUT) == (24 if is_64 else 16)
+    assert ctypes.sizeof(INPUT) == (40 if is_64 else 28)
+
+
+def test_send_key_requests_one_keyboard_event_carrying_the_vk():
+    send_input = MagicMock(return_value=1)
+    with patch("launch_stellaris._input_fns",
+               return_value=(MagicMock(), MagicMock(), send_input)):
+        send_key(VK_RETURN)
+    send_input.assert_called_once()
+    n_inputs, p_inputs, cb_size = send_input.call_args[0]
+    assert n_inputs == 1
+    assert cb_size == ctypes.sizeof(INPUT)
+    sent = ctypes.cast(p_inputs, ctypes.POINTER(INPUT))[0]
+    assert sent.type == INPUT_KEYBOARD
+    assert sent.ki.wVk == VK_RETURN
+
+
+def test_send_key_raises_when_sendinput_delivers_nothing():
+    """SendInput returns 0 when the keystroke was blocked — UIPI against a
+    higher-integrity foreground window, typically. Swallowing that makes the
+    whole Tab/Enter sequence a silent no-op that still reports success."""
+    send_input = MagicMock(return_value=0)
+    with patch("launch_stellaris._input_fns",
+               return_value=(MagicMock(), MagicMock(), send_input)), \
+            pytest.raises(OSError):
+        send_key(VK_RETURN)
+
+
+@contextlib.contextmanager
+def _fake_pywinauto(elements=(), side_effect=None):
+    """Stand in for the pywinauto package _hwnd_for_pid imports.
+
+    Both keys are needed: `import pywinauto.findwindows` resolves the parent
+    package first, and patching only the submodule leaves the parent missing.
+    The yield value is the findwindows module stand-in, so find_elements can be
+    asserted on.
+    """
+    fake_fw = MagicMock()  # stands in for pywinauto.findwindows
+    if side_effect is not None:
+        fake_fw.find_elements.side_effect = side_effect
+    else:
+        fake_fw.find_elements.return_value = list(elements)
+    fake_parent = MagicMock()  # stands in for the pywinauto package
+    fake_parent.findwindows = fake_fw
+    with patch.dict(sys.modules, {"pywinauto": fake_parent,
+                                  "pywinauto.findwindows": fake_fw},
+                    clear=False):
+        yield fake_fw
+
+
+def test_hwnd_for_pid_returns_zero_when_the_lookup_fails():
+    """pywinauto raises for a process that died between the scan and the
+    lookup. A raise here kills launcher_wait's poll loop mid-budget and the
+    whole run ends at EXIT_LAUNCHER_WINDOW_MISSING (21)."""
+    with _fake_pywinauto(side_effect=RuntimeError("no such pid")):
+        assert _hwnd_for_pid(4242) == 0
+
+
+def test_hwnd_for_pid_returns_zero_for_a_process_with_no_window():
+    with _fake_pywinauto(elements=[]):
+        assert _hwnd_for_pid(4242) == 0
+
+
+def test_hwnd_for_pid_returns_the_first_window_handle():
+    with _fake_pywinauto(elements=[MagicMock(handle=12345)]) as fake_fw:
+        assert _hwnd_for_pid(4242) == 12345
+    fake_fw.find_elements.assert_called_once_with(process=4242)
+
+
+def test_hwnd_for_pid_absorbs_a_missing_pywinauto():
+    """pywinauto is a requirements.txt entry, not a hard dependency. Without it
+    every lookup returns 0 and the run dies at EXIT_LAUNCHER_WINDOW_MISSING
+    (21) — but crashing mid-poll would be worse than a clean 21."""
+    real_import = builtins.__import__
+
+    def no_pywinauto(name, *a, **kw):
+        if name.split(".")[0] == "pywinauto":
+            raise ModuleNotFoundError("No module named 'pywinauto'")
+        return real_import(name, *a, **kw)
+
+    with patch("builtins.__import__", side_effect=no_pywinauto):
+        assert _hwnd_for_pid(4242) == 0
+
+
+class _Clock:
+    """Fake _time: advances only when the code under test sleeps."""
+
+    def __init__(self):
+        self.t = 0.0
+        self.slept = []
+
+    def time(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.t += seconds
+
+
+@contextlib.contextmanager
+def _fake_clock():
+    clock = _Clock()
+    with patch("launch_stellaris._time", clock):
+        yield clock
+
+
+def _fake_proc(name, pid=1):
+    p = MagicMock()
+    p.info = {"name": name, "pid": pid}
+    return p
+
+
+@contextlib.contextmanager
+def _launcher_visible(name="Paradox Launcher.exe", pid=4242, hwnd=12345):
+    with _fake_clock(), \
+            patch("psutil.process_iter",
+                  return_value=[_fake_proc(name, pid)]), \
+            patch("launch_stellaris._hwnd_for_pid", return_value=hwnd):
+        yield
+
+
+def test_launcher_wait_returns_pid_and_hwnd():
+    with _launcher_visible():
+        assert launcher_wait(30) == (4242, 12345)
+
+
+def test_launcher_wait_matches_the_process_name_case_insensitively():
+    """Windows file names are case-insensitive and psutil reports whatever
+    the image has. 'paradox launcher.exe' vs 'Paradox Launcher.exe' must not
+    decide whether the run gets an HWND at all."""
+    with _launcher_visible(name="PARADOX LAUNCHER.EXE"):
+        assert launcher_wait(30) == (4242, 12345)
+
+
+def test_launcher_wait_returns_none_when_the_launcher_never_appears():
+    with _fake_clock(), patch("psutil.process_iter", return_value=[]):
+        assert launcher_wait(30) is None
+
+
+def test_launcher_wait_keeps_polling_until_the_window_shows_up():
+    """The Paradox Launcher process exists before its CEF window does. A
+    single-shot probe would report EXIT_LAUNCHER_WINDOW_MISSING on every real
+    launch, and a window-less launcher would hand a null HWND to SendInput."""
+    attempts = []
+
+    def hwnd_for_pid(pid):
+        attempts.append(pid)
+        return 777 if len(attempts) >= 3 else 0
+
+    with _fake_clock(), \
+            patch("psutil.process_iter",
+                  return_value=[_fake_proc("Paradox Launcher.exe", 4242)]), \
+            patch("launch_stellaris._hwnd_for_pid", side_effect=hwnd_for_pid):
+        assert launcher_wait(30) == (4242, 777)
+    assert attempts == [4242, 4242, 4242]
+
+
+def test_bring_to_foreground_succeeds_once_it_owns_the_foreground():
+    set_fg, get_fg = MagicMock(), MagicMock(return_value=4242)
+    with _fake_clock(), \
+            patch("launch_stellaris._input_fns",
+                  return_value=(set_fg, get_fg, MagicMock())):
+        assert bring_to_foreground(4242) is True
+    set_fg.assert_called_once_with(4242)
+
+
+def test_bring_to_foreground_gives_up_when_another_window_keeps_focus():
+    """Bring-to-front is refused across integrity levels and when the calling
+    process does not own the foreground. Keystrokes then land in whatever
+    window the user last touched."""
+    set_fg, get_fg = MagicMock(), MagicMock(return_value=9999)
+    with _fake_clock(), \
+            patch("launch_stellaris._input_fns",
+                  return_value=(set_fg, get_fg, MagicMock())):
+        assert bring_to_foreground(4242) is False
+
+
+def test_handoff_observed_when_the_launcher_exits():
+    with patch("psutil.process_iter", return_value=[_fake_proc("steam.exe", 1)]):
+        assert _handoff_observed() is True
+
+
+def test_handoff_observed_when_stellaris_appears_beside_the_launcher():
+    procs = [_fake_proc("Paradox Launcher.exe", 2), _fake_proc("stellaris.exe", 3)]
+    with patch("psutil.process_iter", return_value=procs):
+        assert _handoff_observed() is True
+
+
+def test_handoff_not_observed_while_only_the_launcher_is_alive():
+    """The launcher staying put means the keystrokes did not land. Reporting a
+    handoff here hands Task 6 a launcher window and no game."""
+    with patch("psutil.process_iter",
+               return_value=[_fake_proc("Paradox Launcher.exe", 2)]):
+        assert _handoff_observed() is False
+
+
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.send_key")
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+def test_launcher_keyboard_returns_22_when_focus_fails(mock_fg, mock_key, mock_sleep):
+    """Keystrokes sent to a window that is not foreground go to the window that
+    is. Refuse instead of typing into whatever the user had open."""
+    mock_fg.return_value = False
+    assert launcher_keyboard(4242) == EXIT_LAUNCHER_NO_FOCUS
+    mock_key.assert_not_called()
+
+
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.send_key", side_effect=OSError(5, "access denied"))
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+def test_launcher_keyboard_reports_no_focus_when_sendinput_is_blocked(
+        mock_fg, mock_key, mock_sleep):
+    """SendInput returning 0 means UIPI refused the keystroke. Letting that
+    OSError escape would exit main() with code 1 — undocumented, and worse, the
+    run returns before _write_marker, so the outer bridge never learns the inner
+    died and sits there until its own timeout, reporting 43 instead."""
+    assert launcher_keyboard(4242) == EXIT_LAUNCHER_NO_FOCUS
+
+
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.send_key")
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+@patch("launch_stellaris._handoff_observed", return_value=False)
+def test_launcher_keyboard_returns_23_after_exhausting_the_sequence(
+        mock_handoff, mock_fg, mock_key, mock_sleep):
+    assert launcher_keyboard(4242) == EXIT_LAUNCHER_NO_ADVANCE
+    # Enter, then Tab+Enter three times — the whole documented sequence, in order.
+    assert [c.args[0] for c in mock_key.call_args_list] == [
+        VK_RETURN, VK_TAB, VK_RETURN, VK_TAB, VK_RETURN, VK_TAB, VK_RETURN]
+    # One probe after Enter, one after each Tab+Enter: no probe is missing.
+    assert mock_handoff.call_count == 4
+
+
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.send_key")
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+@patch("launch_stellaris._handoff_observed", return_value=True)
+def test_launcher_keyboard_stops_when_plain_enter_is_enough(
+        mock_handoff, mock_fg, mock_key, mock_sleep):
+    """The launcher's default focus is the Play button. Every extra keystroke
+    after handoff types into a game that is already loading."""
+    assert launcher_keyboard(4242) == EXIT_OK
+    assert [c.args[0] for c in mock_key.call_args_list] == [VK_RETURN]
+    assert mock_handoff.call_count == 1
+
+
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.send_key")
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+@patch("launch_stellaris._handoff_observed", side_effect=[False, True])
+def test_launcher_keyboard_stops_at_the_first_tab_enter_that_works(
+        mock_handoff, mock_fg, mock_key, mock_sleep):
+    assert launcher_keyboard(4242) == EXIT_OK
+    assert [c.args[0] for c in mock_key.call_args_list] == [
+        VK_RETURN, VK_TAB, VK_RETURN]
+    assert mock_handoff.call_count == 2
+
+
+@patch("launch_stellaris.launcher_keyboard", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
+@patch("launch_stellaris.steam_ready", return_value=10748)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_run_launch_chain_waits_for_the_launcher_window_then_drives_it(
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_keyboard):
+    assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_OK
+    mock_wait.assert_called_once_with(30)  # --launcher-timeout-s default
+    mock_keyboard.assert_called_once_with(12345)
+
+
+@patch("launch_stellaris.launcher_keyboard", return_value=EXIT_LAUNCHER_NO_ADVANCE)
+@patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
+@patch("launch_stellaris.steam_ready", return_value=10748)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_run_launch_chain_propagates_a_keyboard_failure(
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_keyboard):
+    """The launcher's own exit code has to reach the bridge marker verbatim —
+    that DONE:<rc> is the only thing the outer process learns."""
+    assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_LAUNCHER_NO_ADVANCE
+
+
+@patch("launch_stellaris.launcher_wait", return_value=None)
+@patch("launch_stellaris.steam_ready", return_value=10748)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_run_launch_chain_returns_21_when_no_launcher_window_appears(
+        mock_prekill, mock_spawn, mock_ready, mock_wait):
+    assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_LAUNCHER_WINDOW_MISSING
+
+
+@patch("launch_stellaris.launcher_keyboard", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
+@patch("launch_stellaris.steam_ready", return_value=None)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_run_launch_chain_dry_run_skips_the_keyboard(
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_keyboard):
+    """--dry-run spawns no URI, so no launcher exists and there is no window to
+    type into. Typing anyway would hammer whatever window the user has open."""
+    args = build_arg_parser().parse_args(["--dry-run"])
+    assert run_launch_chain(args) == EXIT_OK
+    mock_keyboard.assert_not_called()
+
+
+@patch("launch_stellaris.launcher_wait", return_value=None)
+@patch("launch_stellaris.steam_ready", return_value=None)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_run_launch_chain_dry_run_tolerates_a_missing_launcher_window(
+        mock_prekill, mock_spawn, mock_ready, mock_wait):
+    """Same reasoning as the Steam-client branch above: a dry run legitimately
+    finds nothing, and reporting 21 there would make --dry-run unusable as the
+    pre-flight check it exists to be."""
+    args = build_arg_parser().parse_args(["--dry-run"])
+    assert run_launch_chain(args) == EXIT_OK

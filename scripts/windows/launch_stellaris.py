@@ -37,6 +37,25 @@ EXIT_BRIDGE_SCHTASKS_DENIED = 42
 EXIT_BRIDGE_TIMEOUT = 43
 EXIT_INTERNAL = 99
 
+# Process images this chain looks for. Compared case-insensitively: Windows
+# file names are case-insensitive and psutil reports whatever the image has.
+LAUNCHER_IMAGE = "Paradox Launcher.exe"
+GAME_IMAGE = "stellaris.exe"
+
+# Virtual keys for the launcher drive. Enter first — the launcher's default
+# focus is the Play button — then Tab to move focus, Enter to commit.
+VK_TAB = 0x09
+VK_RETURN = 0x0D
+
+INPUT_KEYBOARD = 1
+
+_FOREGROUND_TIMEOUT_S = 3.0
+_FOCUS_SETTLE_S = 1.0
+_KEY_SETTLE_S = 5.0
+_TAB_ENTER_ATTEMPTS = 3
+_POLL_S = 0.5
+
+
 def _last_error() -> int:
     """ctypes.get_last_error() on Windows, 0 everywhere else.
 
@@ -218,6 +237,195 @@ def steam_ready(timeout_s: int) -> int | None:
         _time.sleep(0.5)
     log_event("STEAM_READY", timeout=True)
     return None
+
+
+_input_fns_cache: tuple[Any, Any, Any] | None = None
+
+
+def _input_fns() -> tuple[Any, Any, Any]:
+    """Bind (SetForegroundWindow, GetForegroundWindow, SendInput).
+
+    Bound lazily, same reason as _user32_fns: ctypes.WinDLL does not exist on
+    Linux and this module has to import cleanly for the host-side tests.
+    """
+    global _input_fns_cache
+    if _input_fns_cache is None:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        set_foreground_window = user32.SetForegroundWindow
+        set_foreground_window.argtypes = [_wt.HWND]
+        set_foreground_window.restype = _wt.BOOL
+        get_foreground_window = user32.GetForegroundWindow
+        get_foreground_window.argtypes = []
+        get_foreground_window.restype = _wt.HWND
+        send_input = user32.SendInput
+        send_input.argtypes = [_wt.UINT, ctypes.POINTER(INPUT), _wt.INT]
+        send_input.restype = _wt.UINT
+        _input_fns_cache = (set_foreground_window, get_foreground_window,
+                            send_input)
+    return _input_fns_cache
+
+
+class KEYBDINPUT(ctypes.Structure):
+    """Win32 KEYBDINPUT.
+
+    Fixed-width c_uint16/c_uint32 rather than ctypes.wintypes.WORD/DWORD on
+    purpose: _wt.DWORD is c_ulong, which is 8 bytes on an LP64 host and 4 on
+    Windows, so a _wt-spelled struct is a silently wrong cbsize anywhere but
+    the box it is meant for. These keep one layout everywhere, and
+    test_input_struct_layout_matches_the_sendinput_abi pins it.
+    """
+
+    _fields_ = [
+        ("wVk", ctypes.c_uint16),
+        ("wScan", ctypes.c_uint16),
+        ("dwFlags", ctypes.c_uint32),
+        ("time", ctypes.c_uint32),
+        ("dwExtraInfo", ctypes.c_size_t),  # ULONG_PTR
+    ]
+
+
+class INPUT(ctypes.Structure):
+    """Win32 INPUT: a DWORD tag followed by the union's largest member.
+
+    Only KEYBDINPUT is populated; the trailing pad stands in for MOUSEINPUT
+    (32 bytes on x64, the real union size). 40 bytes total on x64.
+    """
+
+    _fields_ = [
+        ("type", ctypes.c_uint32),
+        ("ki", KEYBDINPUT),
+        ("_padding", ctypes.c_ubyte * 8),
+    ]
+
+
+def send_key(vk: int) -> None:
+    """Send one virtual-key down+up through SendInput.
+
+    Raises OSError when SendInput delivers 0 events, which is what happens when
+    the foreground window sits at a higher integrity level (UIPI). Swallowing
+    that would make the whole drive a silent no-op that still reports success.
+    """
+    _, _, send_input = _input_fns()
+    ki = KEYBDINPUT(wVk=vk, wScan=0, dwFlags=0, time=0, dwExtraInfo=0)
+    inp = INPUT(type=INPUT_KEYBOARD, ki=ki)
+    sent = send_input(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    if sent != 1:
+        raise OSError(_last_error(), f"SendInput delivered {sent}/1 events")
+
+
+def _hwnd_for_pid(pid: int) -> int:
+    """First top-level HWND owned by `pid`, or 0 when there is none.
+
+    pywinauto is imported inside the function: it is a Windows-only package and
+    this module has to import on Linux for the host-side tests. Failures — a
+    dead PID, a CEF window that is still spinning up, a missing pywinauto —
+    all mean "not yet", and all are logged rather than raised, because
+    launcher_wait polls for up to half a minute and a raise there aborts the
+    whole chain.
+    """
+    try:
+        import pywinauto.findwindows
+        wins = pywinauto.findwindows.find_elements(process=pid)
+        return int(wins[0].handle) if wins else 0
+    except Exception as e:  # noqa: BLE001 — "not ready yet", retried by the caller
+        log_event("LAUNCHER_WINDOW_LOOKUP", pid=pid, error=repr(e))
+        return 0
+
+
+def launcher_wait(timeout_s: int) -> tuple[int, int] | None:
+    """Wait for a Paradox Launcher process that owns a window. (pid, hwnd) or None.
+
+    Both halves matter. The process starts well before its CEF window does, and
+    on a box running several Paradox games other launchers are already up — so
+    a process-only match hands the drive a stale or absent HWND.
+    """
+    image = LAUNCHER_IMAGE.lower()
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        for p in psutil.process_iter(["name", "pid"]):
+            info = p.info
+            name = info.get("name")
+            if name and name.lower() == image:
+                hwnd = _hwnd_for_pid(info["pid"])
+                if hwnd:
+                    log_event("LAUNCHER_WAIT", pid=info["pid"], hwnd=hwnd)
+                    return info["pid"], hwnd
+        _time.sleep(_POLL_S)
+    log_event("LAUNCHER_WAIT", result="timeout", timeout_s=timeout_s)
+    return None
+
+
+def bring_to_foreground(hwnd: int) -> bool:
+    """Raise `hwnd` to the foreground. True once it actually owns it."""
+    set_foreground_window, get_foreground_window, _ = _input_fns()
+    deadline = _time.time() + _FOREGROUND_TIMEOUT_S
+    set_foreground_window(hwnd)
+    while _time.time() < deadline:
+        if get_foreground_window() == hwnd:
+            log_event("LAUNCHER_KEYBOARD", step="foreground_ok", hwnd=hwnd)
+            return True
+        _time.sleep(0.1)
+    log_event("LAUNCHER_KEYBOARD", step="foreground_fail", hwnd=hwnd)
+    return False
+
+
+def _handoff_observed() -> bool:
+    """True once the launcher has let go: it exited, or the game took over.
+
+    The launcher staying put is the *negative* signal — it means the keystrokes
+    did not land. Treating it as a handoff would hand the next phase a launcher
+    window and no game.
+    """
+    names = set()
+    for p in psutil.process_iter(["name"]):
+        name = p.info.get("name")
+        if name:
+            names.add(name.lower())
+    launcher_alive = LAUNCHER_IMAGE.lower() in names
+    game_alive = GAME_IMAGE.lower() in names
+    return (not launcher_alive) or game_alive
+
+
+def launcher_keyboard(hwnd: int) -> int:
+    """Drive the launcher with Enter, then Tab+Enter, until it hands off.
+
+    The launcher's UIA tree exposes no controls (CEF canvas), so keystrokes are
+    the only channel that does not depend on pixel coordinates. Returns
+    EXIT_OK on handoff, EXIT_LAUNCHER_NO_FOCUS if the window cannot be raised
+    or the keystrokes cannot be delivered, EXIT_LAUNCHER_NO_ADVANCE if the whole
+    sequence is spent without one.
+
+    A blocked SendInput (UIPI — a foreground window at a higher integrity
+    level) is reported as NO_FOCUS rather than allowed to escape: an OSError out
+    of here would exit main() with code 1, which is not a documented code, and
+    would return before _write_marker runs, so the outer bridge would learn
+    nothing and report its own timeout instead.
+    """
+    try:
+        if not bring_to_foreground(hwnd):
+            return EXIT_LAUNCHER_NO_FOCUS
+        _time.sleep(_FOCUS_SETTLE_S)
+
+        send_key(VK_RETURN)
+        log_event("LAUNCHER_KEYBOARD", step="enter_sent")
+        _time.sleep(_KEY_SETTLE_S)
+        if _handoff_observed():
+            log_event("LAUNCHER_KEYBOARD", step="handoff_after_enter")
+            return EXIT_OK
+
+        for attempt in range(1, _TAB_ENTER_ATTEMPTS + 1):
+            send_key(VK_TAB)
+            send_key(VK_RETURN)
+            log_event("LAUNCHER_KEYBOARD", step="tab_enter", attempt=attempt)
+            _time.sleep(_KEY_SETTLE_S)
+            if _handoff_observed():
+                log_event("LAUNCHER_KEYBOARD", step="handoff_after_tab_enter",
+                          attempt=attempt)
+                return EXIT_OK
+        return EXIT_LAUNCHER_NO_ADVANCE
+    except OSError as e:
+        log_event("LAUNCHER_KEYBOARD", step="send_input_blocked", error=repr(e))
+        return EXIT_LAUNCHER_NO_FOCUS
 
 
 _session_fns_cache: tuple[Any, Any, Any] | None = None
@@ -438,7 +646,7 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
 
 
 def run_launch_chain(args: argparse.Namespace) -> int:
-    """PREKILL .. GAME_OBSERVE. This is the inner's body; Tasks 5–6 extend it."""
+    """PREKILL .. LAUNCHER_KEYBOARD. This is the inner's body; Task 6 extends it."""
     rc = prekill(args.no_prekill)
     if rc != EXIT_OK:
         return rc
@@ -448,7 +656,16 @@ def run_launch_chain(args: argparse.Namespace) -> int:
     steam_pid = steam_ready(args.launcher_timeout_s)
     if steam_pid is None and not args.dry_run:
         return EXIT_STEAM_NO_CLIENT
-    return EXIT_OK
+    found = launcher_wait(args.launcher_timeout_s)
+    if found is None:
+        if not args.dry_run:
+            return EXIT_LAUNCHER_WINDOW_MISSING
+        return EXIT_OK
+    if args.dry_run:
+        # A dry run spawns no URI, so a launcher window here is some other
+        # game's. Never type into a window nobody asked us to touch.
+        return EXIT_OK
+    return launcher_keyboard(found[1])
 
 
 def main(argv: list[str] | None = None) -> int:
