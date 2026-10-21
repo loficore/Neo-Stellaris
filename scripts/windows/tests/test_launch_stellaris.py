@@ -668,11 +668,17 @@ def test_bridge_rejects_a_non_ascii_shim_payload():
     with patch("launch_stellaris.current_session_id", return_value=0), \
             patch("launch_stellaris.interactive_session_id", return_value=1), \
             patch("launch_stellaris.build_inner_tr", return_value=inner), \
+            patch("launch_stellaris.write_bridge_tr_shim") as mock_shim, \
             patch("subprocess.run") as mock_run:
         rc = bridge_to_interactive_session(args)
     assert rc == EXIT_BRIDGE_TR_TOO_LONG
     # Rejected before schtasks is ever invoked.
     mock_run.assert_not_called()
+    # ...and before the shim is written, not merely before schtasks. The
+    # guard and write_bridge_tr_shim are two adjacent statements; moving the
+    # validation below the write still passes every assertion above and leaks
+    # a .cmd into TEMP on every non-ASCII run.
+    mock_shim.assert_not_called()
 
 
 def test_bridge_accepts_an_ascii_shim_payload():
@@ -1617,6 +1623,23 @@ def test_main_inner_marker_carries_no_pid_when_the_chain_fails():
         assert _read_marker_pid(marker) is None
 
 
+@patch("launch_stellaris.prekill", side_effect=RuntimeError("psutil exploded"))
+def test_main_inner_marker_carries_the_guard_code_when_a_phase_raises(mock_prekill):
+    """M-1: the guard around the chain exists for one reason — to stop an
+    exception from returning out of main() *before* _write_marker runs, which
+    leaves the outer bridge burning its whole budget and reporting 43 with no
+    idea what happened. So the return value is not enough to prove the guard
+    works: 99 has to be the thing the outer actually reads. main()'s marker
+    write is the exact line the guard protects, and inspecting it is not the
+    same as exercising it."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        assert main(["--inner", "--marker", marker]) == EXIT_INTERNAL
+        assert _poll_marker(marker, timeout_s=1) == "DONE:99"
+        # No PID next to it: a 99 means the chain broke, not that a game is up.
+        assert _read_marker_pid(marker) is None
+
+
 @contextlib.contextmanager
 def _bridged(marker, content):
     """Run bridge_to_interactive_session against a marker the inner writes,
@@ -1740,3 +1763,147 @@ def test_bridge_clears_a_stale_marker_before_it_starts_polling(capsys):
     # the stale success the leftover claimed.
     assert rc == EXIT_BRIDGE_TIMEOUT
     assert capsys.readouterr().out == ""
+
+
+# ---------------------------------------------------------------------------
+# I-2: the inner's stderr timeline, carried across the bridge.
+#
+# Across the bridge the inner's stderr goes to the schtasks-spawned process
+# tree, so the caller saw BOOT + BRIDGE and no phase at all — not PREKILL, not
+# STEAM_READY, not the launcher drive, not GAME_OBSERVE. spec §5a step 4 has
+# claimed the marker receives the inner's stderr lines since Task 4; it did
+# not. The marker is the channel already proven to work, so the timeline rides
+# it too, and the outer mirrors it to its own stderr so the caller's log reads
+# as one continuous run.
+#
+# LOG: marks a carried line. The tag is what keeps a captured traceback that
+# happens to mention DONE:<rc> from being read back as the inner's exit code.
+# ---------------------------------------------------------------------------
+
+
+def test_marker_writes_the_timeline_above_pid_and_done():
+    """Order is the contract: LOG: lines, then PID:, then DONE: last. DONE:
+    has to stay last and keep its spelling — _poll_marker scans backwards for
+    it and the bridge splits its exit code on it."""
+    from launch_stellaris import _read_marker_timeline
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        _write_marker(marker, EXIT_OK, pid=5555,
+                      timeline=["ts  PREKILL  killed=[]", "ts  GAME_OBSERVE  step=ok"])
+        assert Path(marker).read_text(encoding="utf-8").splitlines() == [
+            "LOG:ts  PREKILL  killed=[]",
+            "LOG:ts  GAME_OBSERVE  step=ok",
+            "PID:5555",
+            "DONE:0",
+        ]
+        assert _poll_marker(marker, timeout_s=1) == "DONE:0"
+        assert _read_marker_pid(marker) == 5555
+        assert _read_marker_timeline(marker) == [
+            "ts  PREKILL  killed=[]", "ts  GAME_OBSERVE  step=ok"]
+
+
+def test_marker_timeline_lines_cannot_be_mistaken_for_the_exit_code():
+    """The tag exists for this: a carried line that happens to start with or
+    contain DONE: must not be read back as the inner's exit code."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        _write_marker(marker, EXIT_GAME_EXITED_EARLY,
+                      timeline=["ts  CHAIN  saw marker DONE:0 in a traceback"])
+        assert _poll_marker(marker, timeout_s=1) == "DONE:32"
+
+
+def test_captured_timeline_lines_are_flattened_to_one_line_each():
+    """A carried line that keeps an embedded newline writes a continuation
+    line into the marker that carries no LOG: tag — and if that continuation
+    happens to start with DONE:, _poll_marker's backward scan reads it as the
+    inner's exit code. Flatten on capture: one event, one line, same ' | '
+    join the chain guard already uses for its traceback."""
+    from launch_stellaris import _Timeline
+    tl = _Timeline(limit=10)
+    tl.add("ts  CHAIN  boom\nDONE:0")
+    assert tl.lines() == ["ts  CHAIN  boom | DONE:0"]
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        _write_marker(marker, EXIT_INTERNAL, timeline=tl.lines())
+        assert Path(marker).read_text(encoding="utf-8").splitlines() == [
+            "LOG:ts  CHAIN  boom | DONE:0", "DONE:99"]
+        assert _poll_marker(marker, timeout_s=1) == "DONE:99"
+
+
+def test_main_inner_marker_carries_the_phase_timeline(tmp_path):
+    """The inner half: what the chain logged has to reach the marker, or there
+    is nothing for the outer to mirror. Patching the phases out would leave
+    only BOOT, so let one of them fail for real — the guard's internal_error
+    line is exactly the diagnostic Task 7 needs and exactly what was missing."""
+    from launch_stellaris import _read_marker_timeline
+    marker = str(tmp_path / "inner.txt")
+    with patch("launch_stellaris.prekill",
+               side_effect=RuntimeError("psutil exploded")):
+        rc = main(["--inner", "--marker", marker])
+    assert rc == EXIT_INTERNAL
+    carried = _read_marker_timeline(marker)
+    assert any("internal_error" in line for line in carried), carried
+    assert any("BOOT" in line for line in carried), carried
+    assert _poll_marker(marker, timeout_s=1) == "DONE:99"
+
+
+def test_bridge_mirrors_the_inner_timeline_to_its_own_stderr(capsys):
+    """The outer half: the caller's log has to read as one continuous run, so
+    the carried lines are printed verbatim (de-tagged) and in order — not
+    summarised, not reordered after the BRIDGE result line."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        with _bridged(marker, "LOG:ts  PREKILL  killed=[]\n"
+                              "LOG:ts  GAME_OBSERVE  step=ok\nPID:5555\nDONE:0\n"):
+            assert bridge_to_interactive_session(args) == EXIT_OK
+    captured = capsys.readouterr()
+    carried = [ln for ln in captured.err.splitlines()
+               if "PREKILL" in ln or "GAME_OBSERVE" in ln]
+    assert carried == ["ts  PREKILL  killed=[]", "ts  GAME_OBSERVE  step=ok"]
+    # The stdout contract is unchanged by the timeline.
+    assert captured.out == "5555\n"
+
+
+def test_bridge_still_delivers_the_pid_from_a_timeline_free_marker(capsys):
+    """Degrade quietly: an inner that predates the timeline, or one whose
+    marker was written with none, still has to deliver its PID and its code.
+    Several tests pin exactly that shape."""
+    from launch_stellaris import _read_marker_timeline
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        with _bridged(marker, "PID:4242\nDONE:0\n"):
+            assert bridge_to_interactive_session(args) == EXIT_OK
+        assert _read_marker_timeline(marker) == []
+    assert capsys.readouterr().out == "4242\n"
+
+
+def test_marker_timeline_is_bounded_to_the_tail():
+    """The outer re-reads the whole marker on every 0.5 s poll tick, so the
+    carried lines cannot grow without limit — an inner that logs once per
+    observe tick would otherwise turn the marker into the largest thing on the
+    box. The tail is the part that diagnoses a run."""
+    from launch_stellaris import _Timeline
+    tl = _Timeline(limit=3)
+    for i in range(6):
+        tl.add(f"line{i}")
+    lines = tl.lines()
+    assert lines[-3:] == ["line3", "line4", "line5"], lines
+    assert len(lines) == 4, lines
+    assert "dropped" in lines[0], lines
+
+
+def test_marker_stays_small_for_a_realistic_inner_run():
+    """The practical bound, stated as a fact rather than left implicit: a full
+    chain run writes ~20 lines of ~120 chars, so the marker is a couple of KB
+    and the 200-line cap is roughly 10x headroom. Nothing here touches
+    schtasks — /tr carries only the shim path, not the marker."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        with _full_chain(game_pid=5555):
+            main(["--inner", "--marker", marker])
+        size = os.path.getsize(marker)
+    assert size < 8 * 1024, size

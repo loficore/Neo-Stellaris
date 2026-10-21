@@ -179,7 +179,9 @@ Optional flags (see §5 for defaults):
 ```
 
 A single integer PID, the PID of `stellaris.exe`, followed by `\n`. The
-caller parses this with `int(stdout.strip())`.
+caller parses this with `int(stdout.strip())`. `--dry-run` is the one
+exception: it launches nothing, exits 0, and writes nothing to stdout, so a
+caller must not treat empty stdout as a lost PID.
 
 ### stderr (always)
 
@@ -331,7 +333,14 @@ Otherwise the script:
    which is the only channel the SSH caller reads. The marker
    also receives an append of stderr lines from the inner run, so
    the outer can mirror them to its own stderr to preserve a
-   single timeline.
+   single timeline. Each carried line is written with a `LOG:`
+   prefix — one event per line, flattened, so a line that happens
+   to mention `DONE:<rc>` can never be read back as the inner's
+   exit code. The carried tail is capped (200 lines); it rides the
+   marker file, never `/tr`, so `schtasks`' 261-character ceiling
+   is unaffected. A marker with no `LOG:` lines — an inner that
+   predates this, or a truncated write — is still valid and still
+   delivers its PID and exit code.
 5. Cleans up: `schtasks /delete /tn <name> /f`, deletes the marker,
    exits with the inner's exit code.
 

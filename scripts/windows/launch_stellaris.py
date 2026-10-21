@@ -92,6 +92,22 @@ _OBSERVE_POLL_S = 1.0
 # looks like in practice.
 _GONE_STATUSES = ("zombie", "dead")
 
+# Marker protocol, for the one channel that survives the bridge. See spec §5a
+# step 4. The inner's stderr goes to the schtasks-spawned process tree, so
+# the phase timeline rides the marker alongside the exit code and the PID.
+#
+# LOG: marks a carried line, and that tag is load-bearing: a captured traceback
+# or log line that happens to mention DONE:<rc> must not be read back as the
+# inner's exit code, and a carried line must never be able to satisfy
+# _poll_marker's backward scan.
+_MARKER_LOG_PREFIX = "LOG:"
+# Bounded tail, not a full log. The outer re-reads the whole marker on every
+# 0.5 s poll tick, and the inner logs once per observe tick (30 by default), so
+# an unbounded capture turns the marker into the largest file on the box. A full
+# chain writes ~20 lines of ~120 chars, so the cap is roughly 10x headroom; the
+# tail is kept because the events that end a run are the ones that diagnose it.
+_MARKER_TIMELINE_MAX_LINES = 200
+
 # Crash-dialog signals. The title markers are substrings, matched
 # case-insensitively against both the window text and, when there is none, the
 # window class. The images are process names, matched case-insensitively the
@@ -121,7 +137,46 @@ def timeline_event(phase: str, **fields: Any) -> str:
 
 
 def log_event(phase: str, **fields: Any) -> None:
-    print(timeline_event(phase, **fields), file=sys.stderr, flush=True)
+    line = timeline_event(phase, **fields)
+    # Collected only while an inner is running (see main); the outer writes to
+    # the caller's stderr directly and needs no capture.
+    if _active_timeline is not None:
+        _active_timeline.add(line)
+    print(line, file=sys.stderr, flush=True)
+
+
+class _Timeline:
+    """Bounded tail of the events logged so far, for the marker to carry."""
+
+    def __init__(self, limit: int = _MARKER_TIMELINE_MAX_LINES) -> None:
+        self._lines: list[str] = []
+        self._limit = limit
+        self._dropped = 0
+
+    def add(self, line: str) -> None:
+        """Keep `line`, flattened to one line — the marker is a line protocol.
+
+        An embedded newline would write an untagged continuation line into the
+        marker, and a continuation that starts with DONE: is exactly what
+        _poll_marker's backward scan looks for. Flatten on the way in, with the
+        same ' | ' join run_launch_chain's guard uses for its traceback.
+        """
+        line = line.replace("\n", " | ").replace("\r", " | ")
+        if len(self._lines) >= self._limit:
+            self._lines.pop(0)
+            self._dropped += 1
+        self._lines.append(line)
+
+    def lines(self) -> list[str]:
+        """The carried lines, oldest first, with a note if any were dropped."""
+        if not self._dropped:
+            return list(self._lines)
+        return [f"... {self._dropped} earlier timeline line(s) dropped "
+                f"(cap {_MARKER_TIMELINE_MAX_LINES})"] + list(self._lines)
+
+
+# Set by main() while the inner chain runs, so log_event knows to collect.
+_active_timeline: _Timeline | None = None
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -901,23 +956,56 @@ def _read_marker_pid(marker: str) -> int | None:
     return None
 
 
-def _write_marker(marker: str, code: int, pid: int | None = None) -> None:
+def _read_marker_timeline(marker: str) -> list[str]:
+    """The inner's stderr lines the marker carries, de-tagged and in order.
+
+    Tolerates everything a legacy or hand-written marker can be: missing file
+    (OSError), no LOG: lines at all, a line the previous run truncated. The
+    outer mirrors whatever it gets, and none of those cases is a reason to
+    change the exit code the bridge already parsed.
+    """
+    try:
+        with open(marker, encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return []
+    return [line[len(_MARKER_LOG_PREFIX):]
+            for line in content.splitlines()
+            if line.startswith(_MARKER_LOG_PREFIX)]
+
+
+def _mirror_inner_timeline(marker: str) -> None:
+    """Print the carried timeline on the outer's stderr, verbatim.
+
+    Verbatim so the caller's log reads as one continuous run: the inner's own
+    timestamps interleave with the outer's BOOT/BRIDGE lines instead of the
+    phases appearing only as a summary, or not at all.
+    """
+    for line in _read_marker_timeline(marker):
+        print(line, file=sys.stderr, flush=True)
+
+
+def _write_marker(marker: str, code: int, pid: int | None = None,
+                  timeline: list[str] | tuple[str, ...] = ()) -> None:
     """Signal the waiting outer process that the inner chain finished.
 
-    Two lines: PID:<pid> when the chain has a game to hand back, then DONE:<rc>.
-    DONE: keeps its exact spelling and its position as the last line —
-    _poll_marker finds it with a backward scan and the bridge splits on it, so
-    neither its name nor its order may drift. PID: is additive, and
-    deliberately absent when there is no PID: "PID: present" has to keep
-    meaning "the game is up", which rules out writing one for a failed observe
-    window or a --dry-run.
+    Line order is the contract: LOG: lines first, then PID:<pid> when the chain
+    has a game to hand back, then DONE:<rc>. DONE: keeps its exact spelling and
+    its position as the last line — _poll_marker finds it with a backward scan
+    and the bridge splits on it, so neither its name nor its order may drift.
+    The LOG: tag is what keeps a carried line from ever satisfying that scan.
+    PID: is additive, and deliberately absent when there is no PID: "PID:
+    present" has to keep meaning "the game is up", which rules out writing one
+    for a failed observe window or a --dry-run.
 
-    Written last and through one open/close so the two lines land together; no
+    Written last and through one open/close so every line lands together; no
     DONE: line means timeout, which is the correct signal for an inner that
     died mid-chain.
     """
     try:
         with open(marker, "w", encoding="utf-8") as f:
+            for line in timeline:
+                f.write(f"{_MARKER_LOG_PREFIX}{line}\n")
             if pid is not None:
                 f.write(f"PID:{pid}\n")
             f.write(f"DONE:{code}\n")
@@ -1011,6 +1099,11 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
 
     log_event("BRIDGE", task=task_name, marker=marker, shim=shim_path)
     done = _poll_marker(marker, args.bridge_timeout_s)
+    # Mirror the inner's timeline before anything below deletes the marker:
+    # without it the caller sees BOOT + BRIDGE + MARKER and no phase at all
+    # (spec §5a step 4). Printed whether or not DONE: arrived — a run that died
+    # mid-chain is exactly when its phases are worth reading.
+    _mirror_inner_timeline(marker)
     # Read the PID before the cleanup below deletes the marker. DONE: is
     # written last, so _poll_marker returning means the marker is complete and
     # this read cannot race the inner's write.
@@ -1129,18 +1222,31 @@ def _run_launch_chain_phases(args: argparse.Namespace,
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _active_timeline
     args = build_arg_parser().parse_args(argv)
-    log_event("BOOT", app_id=args.app_id, argv=argv if argv is not None else "default")
-    if not args.inner:
-        # Outer: bridge into the logged-on user's session. Whatever it returns
-        # is the job's exit code — the inner already ran the chain and wrote
-        # the marker, so the outer must not run it again.
-        return bridge_to_interactive_session(args)
-    result = ChainResult()
-    rc = run_launch_chain(args, result)
-    if args.marker:
-        _write_marker(args.marker, rc, result.pid)
-    return rc
+    # An inner that writes a marker also has to hand its timeline over: across
+    # the bridge nothing else does. Installed before BOOT so the carried lines
+    # start where the outer's own stderr starts.
+    timeline = _Timeline() if (args.inner and args.marker) else None
+    previous = _active_timeline
+    _active_timeline = timeline
+    try:
+        log_event("BOOT", app_id=args.app_id, argv=argv if argv is not None else "default")
+        if not args.inner:
+            # Outer: bridge into the logged-on user's session. Whatever it returns
+            # is the job's exit code — the inner already ran the chain and wrote
+            # the marker, so the outer must not run it again.
+            return bridge_to_interactive_session(args)
+        result = ChainResult()
+        rc = run_launch_chain(args, result)
+        if args.marker:
+            _write_marker(args.marker, rc, result.pid,
+                          timeline=timeline.lines() if timeline else ())
+        return rc
+    finally:
+        # Restore rather than clear: main() is the whole run today, but a
+        # nested caller must not inherit a half-installed capture.
+        _active_timeline = previous
 
 
 if __name__ == "__main__":
