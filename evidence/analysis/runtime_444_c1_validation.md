@@ -1,4 +1,4 @@
-# 4.4.4 C1 validation and corrections — evidence (§24–§36)
+# 4.4.4 C1 validation and corrections — evidence (§24–§37)
 
 > **Volume 3 of 3.** This evidence log is split across three files; the `§` numbers are unique across them.
 > §1–§15 — `runtime_444_structures.md` (live hot path, detours, CEffect class map, the falsified registration chain).
@@ -7,6 +7,9 @@
 > backlog, the fallback settled as an error-view builder, and the token DB's `id → name` table).
 > §31–§36 — also this volume: the C2 QuickJS bootstrap (harness, the `heap_free` use-after-free, the
 > native Task 5/6 paths, and the 2026-10-21 live dispatch that ended with `C2Init rc = 3` and the game gone).
+> §37 — the fix for the two probe defects §36.4 recorded (disjoint return-code ranges, the exception
+> captured inside `JS_NewContextDiag`, a log read-back that re-runs nothing), natively proven but **not yet
+> dispatched live**.
 
 ## §24 The alias approach is a natively shipped shape — donor chosen (2026-09-29)
 
@@ -1753,3 +1756,151 @@ exception. Two facts fix that:
 **Counts for §36**: this section only. No `.zig`/`.c`/`.py` source was changed to produce these
 observations; `git diff --stat` against `worktree-c2-quickjs-bootstrap` for `src libs build.zig` is empty,
 which is the point of §36.1.
+
+## 37. The §36.4 probe defects are fixed and natively exercised — the next shot is decodable before it is fired (2026-10-21/22, host)
+
+§36.4 closed with two **probe** defects (not QuickJS findings) that made the authorized live shot
+unreadable, plus the observation that a pending exception could never have been read from outside.
+This section records the fix, the native evidence for it, and the artifact identity for the next shot.
+**Nothing here was run against the game** — the host is still down (§36.5) and no dispatch was made.
+
+### 37.1 The three changes, and one deviation from the proposal recorded in §36.5
+
+1. **Disjoint return-code ranges.** `C2TestQuickJS` and `C2DiagQuickJS` were two hand-copied sequences
+   that drifted apart (only the diag copy logged) and whose outer codes `10/11/2/3/4` collided with
+   `JS_NewContextDiag`'s inner `1..12`. They are now **one** C function,
+   `c2_diag_sequence()` (`src/dll/quickjs/quickjs_wrapper.c:269`), with the outer gates renumbered to
+   **100..104** (`:290, :292, :296, :303, :310`) and the inner steps left **1..12**
+   (`libs/quickjs/quickjs.c:2725-2735`). `0` success, `1..12` inner, `100..104` outer — the ranges do not
+   intersect, so an rc names its own path. `C2TestQuickJS` (`:327`) and `C2DiagQuickJS` (`:331`) are now
+   one-line wrappers over the shared sequence, which means **the C2Init path finally writes `g_diag_log`**
+   — the exact thing whose absence made tonight's `3` irreducible.
+2. **The pending exception is captured where it still exists.** `JS_NewContextDiag` takes
+   `(rt, out_ctx, err_buf, err_size)` now (`quickjs.c:2709`); every failing branch goes through
+   `JS_DIAG_FAIL` (`:2714-2719`) → `js_diag_capture_exception` (`:2663`), which runs
+   `JS_HasException` → `JS_GetException` → `JS_ToCString` → `JS_FreeCString` → `JS_FreeValue`
+   **before** `JS_FreeContext`, and writes `"<Stage>: <message>"` into the caller's buffer. The
+   wrapper surfaces it as ` err=[BaseObjects: InternalError: out of memory]`
+   (`quickjs_wrapper.c:318`). The buffer is optional: `err_buf == NULL` leaves the numeric answer
+   untouched, which is the pre-§36 calling convention (pinned natively, §37.2 test 4).
+   This is also the correction to the direction proposed in §36.4 — the API named there,
+   `JS_GetContextProtocol`, does not exist in this vendored copy; `JS_GetException`/`JS_HasException` do.
+3. **A read-back that touches no engine code.** New C symbol `C2CopyDiagLog(out)`
+   (`quickjs_wrapper.c:349`) — a memcpy of the static plus its length, no QuickJS call — exported over
+   the PE as `C2LogInto` (`src/dll/exports.zig:261`, single `lpParameter`, 512-byte contract baked in,
+   same shape as `C2QuickJSPointersInto`).
+
+**Deviation from the proposal, on record.** The proposal said the read-back should be "a new zero-arg
+export returning the log buffer's **RVA** so it fits the 32-bit thread exit code". Implemented as the
+pure copy instead: an RVA return still leaves the caller to compute `base + rva` and read 512 bytes,
+i.e. it keeps `VirtualAllocEx`/`read_memory` on the critical path while adding a *second* way to get the
+address wrong; the copy needs the same remote buffer it was going to need anyway and returns a length
+that cross-checks the text (`c2_task5_init.py:fetch_diag_log` warns on disagreement). Ruling P4 is
+satisfied either way; the copy is the smaller live surface.
+
+### 37.2 Native TDD transcript — RED, then the measured OOM band, then GREEN
+
+**RED** (tests written first, `src/dll/quickjs/c2_diag_test.zig:481, :499, :524, :546`; the two symbols
+did not exist yet):
+
+```
+error: undefined symbol: C2DiagNewContextUnderMemoryLimit
+    note: referenced by c2_diag_test.o:c2_diag_test.test.JS_NewContextDiag still reports the step when the caller passes no buffer
+    note: referenced by c2_diag_test.o:c2_diag_test.test.JS_NewContextDiag hands back the failing stage plus the pending exception text
+error: undefined symbol: C2CopyDiagLog
+    note: referenced by c2_diag_test.o:c2_diag_test.test.C2CopyDiagLog is a pure read: byte-identical to the buffer C2DiagQuickJS filled
+    note: referenced by c2_diag_test.o:c2_diag_test.test.C2TestQuickJS (the C2Init path) leaves a readable log — the §36.4 gap
+```
+
+The first draft of the OOM test assumed `JS_NewContextRaw` is cheap and set the limit to 64 KiB. It was
+**wrong about the engine**, and the wrongness is data, so the sweep that resolved it is kept here —
+**condensed, not verbatim**: the rows below are band edges from a 4 KiB-step loop (64 KiB → 140 KiB) plus
+a coarse pass (64/128/256 KiB … 32 MiB); the intermediate rows were measured but not transcribed. Native
+`zig cc` harness over `C2DiagNewContextUnderMemoryLimit`, glibc + our `heap_mf` allocator — the same
+`heap_malloc` limit check the Windows module uses (`quickjs_wrapper.c:165`):
+
+```
+limit=  64k rc= 1 log=[]
+limit=  92k rc= 1 log=[]
+limit=  96k rc= 2 log=[BaseObjects: InternalError: out of memory]
+limit= 100k rc= 2 log=[BaseObjects: InternalError: out of memory]
+limit= 104k rc= 2 log=[BaseObjects: InternalError: out of memory]
+limit= 108k rc= 2 log=[BaseObjects: null]
+limit= 112k rc= 2 log=[BaseObjects: (exception not convertible to a string)]
+limit= 116k rc= 2 log=[BaseObjects: InternalError: out of memory]
+limit= 120k rc= 3 log=[Date: null]
+limit= 128k rc=10 log=[TypedArrays: InternalError: out of memory]
+limit= 140k rc=11 log=[Promise: null]
+limit= 256k rc= 0 log=[]        (and 384k, 512k, 1M, 2M, 4M, 8M, 16M, 32M all rc=0)
+```
+
+Readings that matter:
+- **`JS_NewContextRaw` alone needs more than 92 KiB** of QuickJS-accounted heap; the full intrinsic run
+  fits in under 256 KiB. Our live module sets 256 MiB (`JS_SetMemoryLimit`, `quickjs_wrapper.c:306-307`),
+  so an OOM in the live process is **not** explainable by that limit — it would need the host's heap to
+  refuse ~100 KiB, which is a different claim than "the limit is too small" and would show up as
+  rc 1 / step-2-with-OOM text rather than silence.
+- The capture path is proven against three distinct exception shapes in one band: a normal
+  `InternalError: out of memory`, a **`null` exception value** (QuickJS genuinely had `null` pending),
+  and a value that **cannot be converted to a string** (the conversion itself failing, which is what a
+  starved heap does). The third one is the case a naive `JS_ToCString`-only implementation would have
+  reported as an empty message.
+- `OOM_MEM_LIMIT` in the test is therefore **100 KiB** (`c2_diag_test.zig:479`), the middle of the
+  step-2 band, so the assertion holds even if the per-step footprint shifts a little under another libc.
+
+**GREEN** after the implementation:
+
+```
+Build Summary: 22/25 steps succeeded (1 failed); 293/293 tests passed
+```
+
+The single failing step is the **pre-existing** exports-rooted link failure (8 errors: `CreateFileA`,
+`WriteFile`, `CloseHandle`, `GetModuleHandleA`, ruling P15) — unchanged in kind and count from §35/§36,
+and it is why the PE export names of the new `C2LogInto` are verified by re-parsing the built DLL
+(§37.3) rather than by a Zig test.
+
+Host-side suite: `python3 -m pytest scripts/test_c2_harness.py -q` → **37 passed** (was 32): the
+`decode_init_rc` range table plus five new tests pinning `fetch_diag_log`'s argument order/buffer size,
+its tolerance of a length disagreement, and `report_init_failure`'s three live shapes (inner code,
+unmapped code, dead host — the last must **not** dispatch into a gone process). `test_c2_harness.py`'s
+module docstring records the one deliberate exception to its "remote control flow is not mocked" rule.
+
+### 37.3 Artifact identity for the next shot
+
+Per §36.1 the hash is not an upload identity check (link is non-deterministic); identity is
+git-clean sources + export RVAs. Recorded anyway so the operator can tell "stale copy" from "wrong build":
+
+```
+zig build            -> zig-out/bin/stellaris_quickjs.dll  (7,157,760 bytes)
+sha256               -> ec5e157dab23670cdd01e194bdae29bf7ae5eadbd7b59c8001c64e9054ca2763
+C2Sanity                     0x44C250   C2Init                             0x44C1D0
+C2DiagQJS                    0x44C0D0   C2DiagQJSInto                      0x44C030
+C2LogInto (NEW)              0x44BFB0   C2QuickJSPointersInto              0x44BF90
+C2EvalProbeOnePlusOne        0x44BF00   C2TestQJS                          0x44EC50
+```
+
+`c2_task5_init.py` now reparses `C2LogInto` alongside the other two exports it needs, and
+`c2_task3_diag.py`'s derived tables carry the new 100..104 outer codes with the current source lines.
+
+### 37.4 What the next live shot can and cannot say
+
+- A nonzero `C2Init` rc now arrives with: which **range** it came from (outer gate vs intrinsic —
+  `decode_init_rc`), the shared step text (`rt=… raw_ok diag_rc=N ctx=…`), and, for an intrinsic
+  failure, the captured exception message. The §36.4 ambiguity is gone by construction, not by hope.
+- The read-back is dispatched **only on the failure path** (`c2_task5_init.py:239-246`), so a successful
+  init pays no extra remote call, and a host that died with the rc never gets a second dispatch aimed at
+  dead memory (`report_init_failure` reports "host gone before the read-back" instead).
+- **Unchanged**: the §36.3 standing hypothesis — QuickJS init inside the injected module is 2-for-2 on
+  calls that reach it, 0-for-2 on calls that don't — is still *inference, not measurement*. Nothing in
+  this section changes it; it changes only whether the next shot can be read if the host dies again. If
+  it dies, the log is now the discriminator: a shot that dies before writing `diag_rc=` is a different
+  failure than one that dies after `rc = 2 err=[BaseObjects: …]`.
+- Still **not** evidence: whether §35's cross-thread stack-guard defect is real live. Task 6 Steps 5/6
+  remain unrun, and they stay meaningless until `C2Init` returns 0 on the box.
+
+**Counts for §37**: `libs/quickjs/quickjs.c` (capture + signature), `src/dll/quickjs/quickjs_wrapper.c`
+(shared sequence, 100..104, `C2CopyDiagLog`, `C2DiagNewContextUnderMemoryLimit`),
+`src/dll/exports.zig` (`C2LogInto` + the code tables in the docs), `src/dll/quickjs/c2_diag_test.zig`
+(4 new tests), `scripts/c2_task5_init.py` (`fetch_diag_log`, `report_init_failure`, wired into `main`),
+`scripts/c2_task3_diag.py` (renumbered tables), `scripts/test_c2_harness.py` (5 new tests + docstring).
+No live dispatch, no game relaunch.

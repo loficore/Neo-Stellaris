@@ -42,32 +42,37 @@ from c2_harness import (
 )
 
 # ---------------------------------------------------------------------------
-# Derived decode tables — from quickjs_wrapper.c C2DiagQuickJS (outer path) and
-# libs/quickjs/quickjs.c JS_NewContextDiag (inner path). Codes 2,3,4,10,11 can
-# come from EITHER path; the LOG TEXT disambiguates (see decode()).
+# Derived decode tables — from quickjs_wrapper.c c2_diag_sequence (outer gates)
+# and libs/quickjs/quickjs.c JS_NewContextDiag (inner steps).
+#
+# §36: the two ranges are DISJOINT now. They used to share 2/3/4/10/11, which is
+# what made the 2026-10-21 live rc=3 undecodable; the outer gates moved to
+# 100..104. The log text still disambiguates the inner steps further — a failing
+# intrinsic now carries ` err=[<Stage>: <pending exception message>]`, captured
+# inside JS_NewContextDiag before the context was freed (quickjs.c:2663).
 # ---------------------------------------------------------------------------
 OUTER_SENTINELS = {
     # (substring in log) -> meaning, source line in quickjs_wrapper.c
-    "no_process_heap": "OUTER: GetProcessHeap() returned NULL  [rc 10, quickjs_wrapper.c:217]",
-    "heap_alloc_failed": "OUTER: test HeapAlloc(256) failed     [rc 11, quickjs_wrapper.c:219]",
-    "runtime2_null": "OUTER: JS_NewRuntime2 returned NULL        [rc 2, quickjs_wrapper.c:223]",
-    "opaque_mismatch": "OUTER: runtime opaque write+read mismatch   [rc 3, quickjs_wrapper.c:228-230]",
-    "raw_ctx_null": "OUTER: JS_NewContextRaw (standalone) NULL   [rc 4, quickjs_wrapper.c:236-237]",
+    "no_process_heap": "OUTER: GetProcessHeap() returned NULL  [rc 100, quickjs_wrapper.c:290]",
+    "heap_alloc_failed": "OUTER: test HeapAlloc(256) failed     [rc 101, quickjs_wrapper.c:292]",
+    "runtime2_null": "OUTER: JS_NewRuntime2 returned NULL        [rc 102, quickjs_wrapper.c:296]",
+    "opaque_mismatch": "OUTER: runtime opaque write+read mismatch   [rc 103, quickjs_wrapper.c:302-303]",
+    "raw_ctx_null": "OUTER: JS_NewContextRaw (standalone) NULL   [rc 104, quickjs_wrapper.c:310]",
 }
-DIAG = {  # JS_NewContextDiag return codes (quickjs.c:2669-2691)
-    0:  "OK: raw ctx + all 11 intrinsics succeeded, context created  [quickjs.c:2689-2690]",
-    1:  "DIAG: JS_NewContextRaw failed (allocation)                 [quickjs.c:2675]",
-    2:  "DIAG: JS_AddIntrinsicBaseObjects failed                    [quickjs.c:2677]",
-    3:  "DIAG: JS_AddIntrinsicDate failed                           [quickjs.c:2678]",
-    4:  "DIAG: JS_AddIntrinsicEval failed                           [quickjs.c:2679]",
-    5:  "DIAG: JS_AddIntrinsicStringNormalize failed                [quickjs.c:2680]",
-    6:  "DIAG: JS_AddIntrinsicRegExp failed                         [quickjs.c:2681]",
-    7:  "DIAG: JS_AddIntrinsicJSON failed                           [quickjs.c:2682]",
-    8:  "DIAG: JS_AddIntrinsicProxy failed                          [quickjs.c:2683]",
-    9:  "DIAG: JS_AddIntrinsicMapSet failed                         [quickjs.c:2684]",
-    10: "DIAG: JS_AddIntrinsicTypedArrays failed                    [quickjs.c:2685]",
-    11: "DIAG: JS_AddIntrinsicPromise failed                        [quickjs.c:2686]",
-    12: "DIAG: JS_AddIntrinsicWeakRef failed                        [quickjs.c:2687]",
+DIAG = {  # JS_NewContextDiag return codes (quickjs.c:2709-2740)
+    0:  "OK: raw ctx + all 11 intrinsics succeeded, context created  [quickjs.c:2739-2740]",
+    1:  "DIAG: JS_NewContextRaw failed (allocation)                 [quickjs.c:2723]",
+    2:  "DIAG: JS_AddIntrinsicBaseObjects failed                    [quickjs.c:2725]",
+    3:  "DIAG: JS_AddIntrinsicDate failed                           [quickjs.c:2726]",
+    4:  "DIAG: JS_AddIntrinsicEval failed                           [quickjs.c:2727]",
+    5:  "DIAG: JS_AddIntrinsicStringNormalize failed                [quickjs.c:2728]",
+    6:  "DIAG: JS_AddIntrinsicRegExp failed                         [quickjs.c:2729]",
+    7:  "DIAG: JS_AddIntrinsicJSON failed                           [quickjs.c:2730]",
+    8:  "DIAG: JS_AddIntrinsicProxy failed                          [quickjs.c:2731]",
+    9:  "DIAG: JS_AddIntrinsicMapSet failed                         [quickjs.c:2732]",
+    10: "DIAG: JS_AddIntrinsicTypedArrays failed                    [quickjs.c:2733]",
+    11: "DIAG: JS_AddIntrinsicPromise failed                        [quickjs.c:2734]",
+    12: "DIAG: JS_AddIntrinsicWeakRef failed                        [quickjs.c:2735]",
 }
 
 
@@ -95,7 +100,8 @@ def parse_ctx(log):
 
 
 def decode(rc, log):
-    """Interpret rc TOGETHER with the log text (codes overlap by value)."""
+    """Interpret rc TOGETHER with the log text (the ranges are disjoint since
+    §36, but the log is what carries the failing intrinsic's own message)."""
     for sentinel, meaning in OUTER_SENTINELS.items():
         if sentinel in log:
             return meaning

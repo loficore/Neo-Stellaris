@@ -47,7 +47,7 @@
 | ~~**C2 阻塞 2：`JS_NewContext` 返回 NULL**~~ **已被 2026-10-21 实机结果改写** | 那条来自 10-07 的 `C2TestQJS` 读数，`JS_NewContextDiag` 就是为了给它一个可判读的步骤号 | 实机打了 `C2Init`，回来的是 **`rc = 3`**，而 3 在这条路径上有两个互斥来源（`quickjs_wrapper.c:263` 的 opaque 读写不一致 vs `quickjs.c:2678` 的 `JS_AddIntrinsicDate` 失败），**且 `C2Init → C2TestQuickJS` 不写任何日志**，所以 §32 的「以日志文本为准」在这条路上不存在。判读前提 = 先把编码空间分开。详见 §36.4 |
 | ~~**C2 阻塞 3：`C2Init` 调 `C2TestQuickJS` 崩溃，但 `C2TestQJS` 调同一函数不崩**~~ **实机已确认不崩**（2026-10-21） | ~~C2Init 无法作为统一的初始化入口~~ | `C2Init` 的 dispatch **返回了**（`GetExitCodeThread` 拿到 rc=3），所以问题不在 file I/O 也不在 C2Init 自身崩溃 |
 | **C2 新阻塞（2026-10-21 实机）：进到 QuickJS init 的那次调用之后，宿主进程没了** | 一枪只换一个读数，且现场无 dump 可查 | `stellaris.exe` PID 18292 于 **21:57:15** 从 Steam 视角消失（`console_log.txt`），WER / `CrashDumps` / Application log / 游戏自己的 `error.log` **全部无记录**。harness 里没有任何 `FreeLibrary`/`TerminateProcess`，assert 只是 unwind。计数：**碰到 QuickJS init 的 2/2 次宿主死**（§32 的 `C2DiagQJSInto` + 本次 `C2Init`），**没碰到的 0/2 次活**（§31 与本次的 `LoadLibrary`+`C2Sanity`）。归因是**推断不是实测**（无退出码、无 dump，该机 WER 像是关的）。处置见 §36，下一步先做零实机改动的探针修复 |
-| **C2 探针自身有缺陷，单发不可判读** | 白烧一枪 + 一次游戏重启 | `C2TestQuickJS` 的 outer 码 2/3/4 与 inner 的 intrinsic 码 2/3/4 重叠；`JS_NewContextDiag` 每个失败分支都是 `{ JS_FreeContext(ctx); return N; }`，所以挂起异常在 rc 回到我们手上**之前**就被销毁了 —— 想读异常必须把探针写进 `quickjs.c` 失败分支内。（另记：这份 vendored QuickJS 里**没有** `JS_GetContextProtocol`，能用的是 `JS_GetException` @ `quickjs.h:669` / `JS_HasException` @ `quickjs.h:670`。） |
+| ~~**C2 探针自身有缺陷，单发不可判读**~~ **已修复（2026-10-22，§37；待实机复验）** | ~~白烧一枪 + 一次游戏重启~~ | 当时：`C2TestQuickJS` 的 outer 码 2/3/4 与 inner 的 intrinsic 码 2/3/4 重叠，且 `C2Init` 这条路根本不写日志；`JS_NewContextDiag` 每个失败分支都是 `{ JS_FreeContext(ctx); return N; }`，挂起异常在 rc 回到我们手上**之前**就被销毁 —— 想读异常必须把探针写进 `quickjs.c` 失败分支内。现在：outer 移 100..104、两条路合成一份 `c2_diag_sequence()`（永远写日志）、异常文本在 free 前抓进 `err_buf`、读取走纯拷贝导出 `C2LogInto`。宿主解码表 `decode_init_rc` + 失败即读日志已就位。（另记：这份 vendored QuickJS 里**没有** `JS_GetContextProtocol`，能用的是 `JS_GetException` @ `quickjs.h:669` / `JS_HasException` @ `quickjs.h:670`。） |
 
 ## 4. Phase A — 纯静态：把注册管线啃穿（本机就能做完）
 
@@ -268,6 +268,23 @@
 > 下一枪的前置（先离线做完，不烧实机）：把 outer/inner 的返回码分到不重叠的编码空间、在 `JS_NewContextDiag` 失败分支
 > 里 `JS_FreeContext` **之前**取 `JS_GetException` 文本、读取走「返回静态 buffer 的 RVA（32 位能过 exit code）」而不是
 > caller-supplied remote buffer（§32 死的那次走的正是后者）；然后用 `scripts/windows/launch_stellaris.py` 重开游戏。
+>
+> **2026-10-22 前置已完成（证据 §37，全部 native 验证，未实机）**：三条前置按上面做完，其中读取方式**改了做法** ——
+> 不再是「返回 RVA」，而是新增纯拷贝导出 `C2LogInto`（C 侧 `C2CopyDiagLog`：memcpy 一个静态、不碰任何 QuickJS 代码），
+> 因为 RVA 方案仍然要 caller 自己 `base+rva` 读 512 字节，remote buffer 一个都省不掉，只是多一条算错地址的路。
+> * outer 码 → **100..104**，inner 保持 **1..12**，`C2TestQuickJS`/`C2DiagQuickJS` 合并成一份
+>   `c2_diag_sequence()`（`quickjs_wrapper.c:269`），**C2Init 这条路终于写日志了**。
+> * `JS_NewContextDiag(rt, out_ctx, err_buf, err_size)`：失败分支经 `JS_DIAG_FAIL` 在 `JS_FreeContext`
+>   **之前**抓 `JS_HasException`/`JS_GetException`/`JS_ToCString`，日志里长这样
+>   `diag_rc=2 ctx=0 err=[BaseObjects: InternalError: out of memory]`。
+> * 新增 test-only `C2DiagNewContextUnderMemoryLimit`，用内存上限把 intrinsic 失败**在宿主上**逼出来。顺带量到
+>   一条与实机相关的数：`JS_NewContextRaw` 单独就要 >92 KiB QuickJS 记账堆，整套 intrinsic <256 KiB 装得下
+>   —— 我们实机设的是 256 MiB，所以实机的 OOM **不能**用「上限太小」解释（§37.2）。
+> * native `zig build test` **293/293**（仍是那 8 个既有 kernel32 链接错）、宿主 `test_c2_harness.py` **37 passed**
+>   （新增 5 个测读取回路的：参数顺序、512 buffer、长度不一致只告警不弃读、宿主已死时不再 dispatch）。
+>   新产物 `sha256 ec5e157d…`/7,157,760，导出 `C2LogInto 0x44BFB0`（RVA 表见 §37.3）。
+> 仍未解决、也不是这次修复针对的：**碰到 QuickJS init 就死宿主**（§36.3 的 2/2 vs 0/2 计数不变）。这次改的是
+> 「那一枪打完能不能读出」。
 >
 > **2026-10-07 状态（历史，其中"阻塞 2/3"的口径已被上面改写）：代码已写完，实机调试中。阻塞 3 已修复，阻塞 2 诊断已就位。**
 > 代码结构已就位：

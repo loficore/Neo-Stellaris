@@ -105,6 +105,7 @@ extern fn C2SanityCheck() c_int;
 extern fn C2TestQuickJS() c_int;
 extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2DiagGetLog() ?[*:0]const u8;
+extern fn C2CopyDiagLog(out: [*]u8) c_int;
 extern fn C2GetQuickJSPointers(out_rt: *?*anyopaque, out_ctx: *?*anyopaque) void;
 extern fn C2WriteQuickJSPointersInto(out16: [*]u8) void;
 extern fn C2EvalProbe(src: [*:0]const u8) c_int;
@@ -187,7 +188,12 @@ export fn C2Sanity() callconv(.c) i32 {
 /// C2: Initialize QuickJS, custom vtables, and predicate hooks.
 /// Must be called after C1Run. QuickJS init is done here (not DllMain) because
 /// DllMain runs under loader lock which can prevent QuickJS memory allocation.
-/// Returns 0 on success, negative on error.
+///
+/// Returns the C2Init/C2DiagQJS step code table (see C2DiagQJS below): 0 = OK,
+/// 1..12 = JS_NewContextDiag's inner step, 100..104 = quickjs_wrapper.c's outer
+/// gates. Since §36 this path ALSO fills `g_diag_log` — it used to return codes
+/// with no log at all, which is why the 2026-10-21 live `rc = 3` was unreadable.
+/// Read the text afterwards with C2LogInto, which re-runs nothing.
 ///
 /// NOTE: writeLogStatic removed (2026-10-07) — suspected of crashing C2Init
 /// while C2TestQJS (which also calls writeLogStatic but *after* the C fn) does not.
@@ -199,11 +205,12 @@ export fn C2Init() callconv(.c) i32 {
 }
 
 /// C2 extended diagnostic: narrows down why JS_NewContext returns NULL.
-/// Return codes come from two overlapping sites — C2DiagQuickJS's outer steps
-/// and JS_NewContextDiag's inner steps — so the log text is authoritative.
-/// Outer (quickjs_wrapper.c): 10 = no process heap, 11 = test HeapAlloc failed,
-///   2 = JS_NewRuntime2 NULL, 3 = runtime opaque mismatch, 4 = raw ctx NULL.
-/// Inner (JS_NewContextDiag, echoed once the outer steps pass):
+/// Return codes come from two sites that NO LONGER OVERLAP (the 2026-10-21 live
+/// shot could not be decoded because rc 2/3/4 meant two different things — §36.4):
+/// Outer (quickjs_wrapper.c's own gates): 100 = no process heap,
+///   101 = test HeapAlloc failed, 102 = JS_NewRuntime2 NULL,
+///   103 = runtime opaque mismatch, 104 = raw ctx NULL.
+/// Inner (JS_NewContextDiag, echoed once the outer gates pass):
 ///   0 = success, 1 = JS_NewContextRaw alloc fail,
 ///   2-12 = first failing intrinsic (BaseObjects, Date, Eval, StringNormalize,
 ///   RegExp, JSON, Proxy, MapSet, TypedArrays, Promise, WeakRef).
@@ -232,6 +239,27 @@ export fn C2DiagGetLogAddr() callconv(.c) usize {
 export fn C2DiagQJSInto(out_diag: [*]u8) callconv(.c) i32 {
     const r = C2DiagQuickJS(out_diag, 512);
     return @intCast(r);
+}
+
+/// §36 live read-back path: copy `g_diag_log` into a CALLER-SUPPLIED 512-byte
+/// remote buffer and return its length, WITHOUT running any QuickJS step.
+///
+/// Why this exists next to C2DiagQJSInto, which already fills a buffer: that one
+/// RE-RUNS the whole init sequence, so on the live host a "fetch the diagnostic"
+/// dispatch is secretly a second QuickJS init — and §36.3 recorded that 2 of 2
+/// shots which reached QuickJS init lost the game process. Reading the log must
+/// not be able to change anything, so this delegates to `C2CopyDiagLog`, which
+/// is a memcpy out of a static and touches no engine code (its native test asserts
+/// byte-identity with what the init path wrote, and that the runtime is still
+/// healthy afterwards).
+///
+/// `out` must be at least 512 bytes, allocated by the caller and passed as
+/// CreateRemoteThread lpParameter — one argument, the size baked into the
+/// contract, same shape as C2QuickJSPointersInto below (ruling P4: nothing
+/// 64-bit crosses the exit code; the returned length is 32-bit and only tells
+/// the caller how much of the buffer is text).
+export fn C2LogInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(C2CopyDiagLog(out));
 }
 
 /// C2 Task 5 observation export (ruling P4): writes the FULL native-width

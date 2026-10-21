@@ -436,3 +436,117 @@ test "C2EvalProbe on a lower-stack thread (runtime built on main) returns 11, no
     // The same context still serves afterwards (refresh left it usable):
     try std.testing.expectEqual(@as(c_int, 11), C2EvalProbe("1+1"));
 }
+
+// ---------------------------------------------------------------------------
+// §36 (2026-10-21 live) — the two probe defects that made the shot unreadable.
+//
+// The live `C2Init rc = 3` could not be decoded, for two independent reasons,
+// and both are pinned here:
+//   (a) C2TestQuickJS wrote NO log. Only C2DiagQuickJS filled g_diag_log, and
+//       C2Init does not go through it — so §32's "the log text is authoritative"
+//       had nothing to point at. The step sequence is now one shared function
+//       that always logs, and `C2CopyDiagLog` reads it back WITHOUT touching
+//       QuickJS (a live read must not be another init dispatch in disguise).
+//   (b) rc 2/3/4 meant two different things — the wrapper's own gates and
+//       JS_NewContextDiag's intrinsic steps shared the numbers. The outer gates
+//       moved to 100..104.
+//
+// Plus the reason the human partner asked about a pending exception: every
+// failure branch of JS_NewContextDiag was `{ JS_FreeContext(ctx); return N; }`,
+// so the context owning rt->current_exception was destroyed before any caller
+// could look. The message is now captured INTO the caller's buffer before the
+// free, and `C2DiagNewContextUnderMemoryLimit` exists so that path is testable
+// natively instead of only on a live game.
+// ---------------------------------------------------------------------------
+
+extern fn C2CopyDiagLog(out: [*]u8) c_int;
+extern fn C2DiagNewContextUnderMemoryLimit(mem_limit: usize, out_log: ?[*]u8, out_size: c_int) c_int;
+
+/// A memory limit that lets `JS_NewContextRaw` succeed but starves the
+/// evaluation of the base-object bootstrap source, so `JS_AddIntrinsicBaseObjects`
+/// is the first step to fail — inner step 2. Our own `heap_malloc`
+/// (quickjs_wrapper.c:162) returns NULL once `malloc_size + size > malloc_limit`,
+/// which is what QuickJS turns into an out-of-memory exception.
+///
+/// Measured, not guessed (native sweep over this exact function, 4 KiB steps):
+///   <= 92 KiB  step 1 — even JS_NewContextRaw cannot allocate
+///   96..104    step 2 "BaseObjects: InternalError: out of memory"
+///   108/112    step 2, tail "null" / "(exception not convertible to a string)"
+///   116        step 2 again;  120/124 step 3;  128..136 step 10;  140 step 11
+///   >= 256 KiB rc 0 (the whole intrinsic run fits)
+/// 100 KiB sits in the middle of the step-2 band, so the assertions below hold
+/// even if the allocator's per-step footprint shifts a little on another libc.
+const OOM_MEM_LIMIT: usize = 100 * 1024;
+
+test "C2TestQuickJS (the C2Init path) leaves a readable log — the §36.4 gap" {
+    // Before §36 this function returned step codes and wrote nothing; the live
+    // rc=3 therefore had no disambiguator. rc=0 still means success, and now the
+    // log carries the same step text C2DiagQuickJS produces.
+    try std.testing.expectEqual(@as(c_int, 0), C2TestQuickJS());
+
+    var buf: [512]u8 = undefined;
+    const n = C2CopyDiagLog(&buf);
+    try std.testing.expect(n > 0);
+
+    const log = std.mem.span(@as([*:0]const u8, @ptrCast(&buf)));
+    try std.testing.expect(log.len > 0);
+    // The success markers of the shared step sequence.
+    try std.testing.expect(std.mem.indexOf(u8, log, "rt=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, log, "raw_ok") != null);
+    try std.testing.expect(std.mem.indexOf(u8, log, "diag_rc=0") != null);
+}
+
+test "C2CopyDiagLog is a pure read: byte-identical to the buffer C2DiagQuickJS filled" {
+    // The live read path must not re-run any QuickJS step: C2DiagQuickJS writes
+    // out_diag from the same static this reads, so the two must agree exactly.
+    var diag: [512]u8 = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), C2DiagQuickJS(&diag, @intCast(diag.len)));
+    const from_call = std.mem.span(@as([*:0]const u8, @ptrCast(&diag)));
+
+    var buf: [512]u8 = undefined;
+    const n = C2CopyDiagLog(&buf);
+    try std.testing.expect(n > 0);
+    const from_read = std.mem.span(@as([*:0]const u8, @ptrCast(&buf)));
+
+    try std.testing.expectEqualStrings(from_call, from_read);
+    try std.testing.expectEqual(@as(c_int, @intCast(from_call.len)), n);
+
+    // And the read left the runtime/context alone — a probe that re-initialized
+    // would fail this, since re-init resets g_test_rt/g_test_ctx (§33/§34).
+    try assertRuntimeStillHealthy();
+    var rt: ?*anyopaque = null;
+    var ctx: ?*anyopaque = null;
+    C2GetQuickJSPointers(&rt, &ctx);
+    try std.testing.expect(rt != null);
+    try std.testing.expect(ctx != null);
+}
+
+test "JS_NewContextDiag hands back the failing stage plus the pending exception text" {
+    // This is the whole point of the signature change: the message must survive
+    // the JS_FreeContext in the failure branch.
+    var log: [256]u8 = undefined;
+    const rc = C2DiagNewContextUnderMemoryLimit(OOM_MEM_LIMIT, &log, @intCast(log.len));
+
+    // Inner step 2 = JS_AddIntrinsicBaseObjects: the run got PAST this file's
+    // outer gates (those read 100..104) and past step 1, the raw-context
+    // allocation itself.
+    try std.testing.expectEqual(@as(c_int, 2), rc);
+
+    const msg = std.mem.span(@as([*:0]const u8, @ptrCast(&log)));
+    try std.testing.expect(msg.len > 0);
+    try std.testing.expect(std.mem.startsWith(u8, msg, "BaseObjects: "));
+    // Non-empty tail = QuickJS really had a pending exception and we caught it
+    // before the context died. If the capture ran after JS_FreeContext, the tail
+    // is empty (or the sentinel below) and this fails.
+    const detail = msg["BaseObjects: ".len..];
+    try std.testing.expect(detail.len > 0);
+    try std.testing.expectEqual(@as(?usize, null), std.mem.indexOf(u8, detail, "(no pending exception)"));
+}
+
+test "JS_NewContextDiag still reports the step when the caller passes no buffer" {
+    // The capture must not be load-bearing: a NULL out_log is the pre-§36 calling
+    // convention (C2DiagQuickJS passes one, but a caller that cannot allocate a
+    // buffer must still get the numeric step back, and must not crash).
+    const rc = C2DiagNewContextUnderMemoryLimit(OOM_MEM_LIMIT, null, 0);
+    try std.testing.expectEqual(@as(c_int, 2), rc);
+}

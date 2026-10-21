@@ -111,7 +111,8 @@ extern void JS_SetMemoryLimit(JSRuntime *rt, size_t limit);
 extern void JS_UpdateStackTop(JSRuntime *rt);
 extern void *JS_GetRuntimeOpaque(JSRuntime *rt);
 extern void JS_SetRuntimeOpaque(JSRuntime *rt, void *opaque);
-extern int JS_NewContextDiag(JSRuntime *rt, JSContext **out_ctx);
+extern int JS_NewContextDiag(JSRuntime *rt, JSContext **out_ctx,
+                             char *err_buf, int err_size);
 
 // Wrapper implementations for static-inline functions
 /* Mirrors quickjs.h:687-695: non-refcounted tags are a no-op, and a refcounted
@@ -242,46 +243,36 @@ int C2SanityCheck(void) {
     return 42;
 }
 
-int C2TestQuickJS(void) {
-    g_test_rt = NULL;
-    g_test_ctx = NULL;
+/* ---------------------------------------------------------------------------
+ * §36 (2026-10-21 live) — one shared step sequence, always logged.
+ *
+ * Before this there were TWO copies of the sequence: C2TestQuickJS (what C2Init
+ * actually dispatches) returned step codes and wrote NOTHING, while
+ * C2DiagQuickJS filled g_diag_log. The live shot went through C2Init, so the rc
+ * arrived with no disambiguator at all. One function now serves both, so a live
+ * C2Init failure and a live C2DiagQJSInto failure are the same code path with
+ * the same text.
+ *
+ * Return-code ranges (the other §36 defect — 2/3/4 meant two different things,
+ * this file's own gates and JS_NewContextDiag's intrinsic steps shared them):
+ *   0          success
+ *   1..12      JS_NewContextDiag inner steps (quickjs.c): 1 = the raw-context
+ *              allocation, 2..12 = the first failing intrinsic
+ *   100..104   THIS file's outer gates: 100 no process heap, 101 test HeapAlloc
+ *              failed, 102 JS_NewRuntime2 NULL, 103 runtime opaque mismatch,
+ *              104 raw context NULL
+ * The two ranges no longer intersect, so an rc is decodable on its own; the log
+ * is still written because the inner codes carry the exception text.
+ * ------------------------------------------------------------------------- */
+#define C2_DIAG_ERR_SIZE 192
 
-    // Step 0: test heap
-    HANDLE heap = GetProcessHeap();
-    if (!heap) return 10;
-    void *test_p = HeapAlloc(heap, 0, 256);
-    if (!test_p) return 11;
-    HeapFree(heap, 0, test_p);
-
-    // Step 1: Create runtime with custom heap allocator
-    g_test_rt = JS_NewRuntime2(&heap_mf, NULL);
-    if (!g_test_rt) return 2;
-
-    // Step 2: Test opaque
-    JS_SetRuntimeOpaque(g_test_rt, (void *)(uintptr_t)0xDEADBEEF);
-    void *opaque = JS_GetRuntimeOpaque(g_test_rt);
-    if (opaque != (void *)(uintptr_t)0xDEADBEEF) return 3;
-
-    // Step 3: Configure
-    JS_SetMaxStackSize(g_test_rt, 1024 * 1024);
-    JS_SetMemoryLimit(g_test_rt, 256 * 1024 * 1024);
-
-    // Step 4: Try raw context
-    JSContext *raw_ctx = JS_NewContextRaw(g_test_rt);
-    if (!raw_ctx) return 4;
-    JS_FreeContext(raw_ctx);
-
-    // Step 5: Full context with diag
-    int diag_rc = JS_NewContextDiag(g_test_rt, &g_test_ctx);
-    return diag_rc;  // 0 = success, 1-12 = intrinsic failure
-}
-
-int C2DiagQuickJS(char *out_diag, int diag_size) {
+static int c2_diag_sequence(void) {
     g_test_rt = NULL;
     g_test_ctx = NULL;
     g_diag_log[0] = '\0';
     int result = 0;
     int pos = 0;
+    char err[C2_DIAG_ERR_SIZE];
     /* snprintf returns the WOULD-BE length, so an unguarded `pos +=` can
        overshoot 512; a later `512 - pos` would then be negative (huge size_t)
        and g_diag_log + pos would be past the end of the static. Clamp pos to
@@ -296,43 +287,103 @@ int C2DiagQuickJS(char *out_diag, int diag_size) {
     } while(0)
 
     HANDLE heap = GetProcessHeap();
-    if (!heap) { DLOG("no_process_heap"); result = 10; goto finish; }
+    if (!heap) { DLOG("no_process_heap"); result = 100; goto finish; }
     void *test_p = HeapAlloc(heap, 0, 256);
-    if (!test_p) { DLOG("heap_alloc_failed"); result = 11; goto finish; }
+    if (!test_p) { DLOG("heap_alloc_failed"); result = 101; goto finish; }
     HeapFree(heap, 0, test_p);
 
     g_test_rt = JS_NewRuntime2(&heap_mf, NULL);
-    if (!g_test_rt) { DLOG("runtime2_null"); result = 2; goto finish; }
+    if (!g_test_rt) { DLOG("runtime2_null"); result = 102; goto finish; }
     DLOG("rt=%p ", g_test_rt);
 
     JS_SetRuntimeOpaque(g_test_rt, (void *)(uintptr_t)0xDEADBEEF);
     void *opaque = JS_GetRuntimeOpaque(g_test_rt);
     if (opaque != (void *)(uintptr_t)0xDEADBEEF) {
         DLOG("opaque_mismatch got=%p", opaque);
-        result = 3; goto finish;
+        result = 103; goto finish;
     }
 
     JS_SetMaxStackSize(g_test_rt, 1024 * 1024);
     JS_SetMemoryLimit(g_test_rt, 256 * 1024 * 1024);
 
     JSContext *raw_ctx = JS_NewContextRaw(g_test_rt);
-    if (!raw_ctx) { DLOG("raw_ctx_null"); result = 4; goto finish; }
+    if (!raw_ctx) { DLOG("raw_ctx_null"); result = 104; goto finish; }
     JS_FreeContext(raw_ctx);
     DLOG("raw_ok ");
 
     {
-        int diag_rc = JS_NewContextDiag(g_test_rt, &g_test_ctx);
+        err[0] = '\0';
+        int diag_rc = JS_NewContextDiag(g_test_rt, &g_test_ctx, err, C2_DIAG_ERR_SIZE);
         DLOG("diag_rc=%d ctx=%p", diag_rc, g_test_ctx);
+        if (diag_rc != 0 && err[0] != '\0') DLOG(" err=[%s]", err);
         result = diag_rc;
     }
 
 finish:
+    #undef DLOG
+    return result;
+}
+
+int C2TestQuickJS(void) {
+    return c2_diag_sequence();
+}
+
+int C2DiagQuickJS(char *out_diag, int diag_size) {
+    int result = c2_diag_sequence();
     if (out_diag && diag_size > 0) {
         strncpy(out_diag, g_diag_log, diag_size - 1);
         out_diag[diag_size - 1] = '\0';
     }
     return result;
-    #undef DLOG
+}
+
+/* Pure read of g_diag_log — NO QuickJS call, no re-init, no state change. This
+ * is the live read-back path: the alternative (C2DiagQJSInto) re-runs the whole
+ * init sequence, so on a host where the init dispatch is itself suspect (§36.3:
+ * 2/2 of the shots that reached QuickJS init lost the process) a "read the log"
+ * step would be another init in disguise.
+ * `out` must be at least 512 bytes, byte-aligned (memcpy, not a pointer store);
+ * the size is baked into the contract and never passed, exactly like
+ * C2WriteQuickJSPointersInto below, because CreateRemoteThread passes exactly
+ * one lpParameter. Returns the string length written (excluding the NUL). */
+int C2CopyDiagLog(unsigned char *out) {
+    size_t n = strlen(g_diag_log);
+    if (n > 511) n = 511;
+    memcpy(out, g_diag_log, n);
+    out[n] = '\0';
+    return (int)n;
+}
+
+/* Test-only: force an intrinsic failure by starving the runtime of memory, so
+ * the §36 capture path (stage + pending-exception text) is exercised natively
+ * instead of only on a live game. It builds its OWN runtime and frees it, and
+ * never touches g_test_rt / g_test_ctx / g_diag_log — the globals the other
+ * tests observe must stay exactly as C2TestQuickJS left them.
+ * Copies the captured "<stage>: <message>" into out_log (out_size bytes, NUL
+ * terminated) and returns the JS_NewContextDiag step code. out_log may be NULL:
+ * the capture must not be load-bearing for the numeric answer. */
+int C2DiagNewContextUnderMemoryLimit(size_t mem_limit, char *out_log, int out_size) {
+    JSRuntime *rt = JS_NewRuntime2(&heap_mf, NULL);
+    char err[C2_DIAG_ERR_SIZE];
+    JSContext *ctx = NULL;
+    int rc;
+
+    if (!rt) return 102;
+
+    err[0] = '\0';
+    JS_SetMaxStackSize(rt, 1024 * 1024);
+    JS_SetMemoryLimit(rt, mem_limit);
+    rc = JS_NewContextDiag(rt, &ctx, err, C2_DIAG_ERR_SIZE);
+    if (ctx) JS_FreeContext(ctx);
+    /* JS_FreeRuntime releases a still-pending rt->current_exception
+       (quickjs.c:2410), so the failure path does not leak here. */
+    JS_FreeRuntime(rt);
+
+    if (out_log && out_size > 0) {
+        strncpy(out_log, err, out_size - 1);
+        out_log[out_size - 1] = '\0';
+    }
+    return rc;
 }
 
 void C2GetQuickJSPointers(void **out_rt, void **out_ctx) {
