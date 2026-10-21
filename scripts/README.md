@@ -44,7 +44,7 @@
 | `c1_remote.py` | 通用驱动器：取 `stellaris` PID、按模块名解析远程 base、调 `C1Run` 的 RVA |
 | `c1_verify_bst.py` | 判据③：走 trigger db 全局 `0x32611C8` 的 BST，验我们的 token 在树里、donor `class_info 0x269CAA8` 被指到 |
 | `c1_verify_reverse.py` | 判据的独立只读观测：读 token db 全局 `0x37347A0`，用 `0x1D12CD0` 那张反查表按 id 读回名字 |
-| `c2_test_sanity.py` / `c2_test_marker.py` | 早期最小验活：`C2Sanity` 返回 42 / 确认 `LoadLibrary` 真的把 DLL 挂上了。**注意 `c2_test_sanity.py` 写死了 v19 的 RVA，违反 P10**，现由 `c2_task2_load.py` + `list_exports` 取代，留在这里只为历史 |
+| `c2_test_sanity.py` / `c2_test_marker.py` | 早期最小验活：`C2Sanity` 返回 42 / 确认 `LoadLibrary` 真的把 DLL 挂上了。**RVA 每次由 `list_exports` 从注入的那份拷贝重解析（P10 已修，文件里没有内置地址表）**；`C2Sanity` 不是 42 就直接拒绝，任何后续派发都不会开始。会杀宿主的 diag 序列现在收在 **`--also-diag`** 之后（`C2DiagGetLogAddr` 只打印被截断的低 32 位、不解引用，补全地址要用另一份计划的 `log_rva_from_truncated`）。**推荐的加载器仍是 `c2_task2_load.py`**，这个 basename 只为 P5 的线上契约留着 |
 
 ## 实机注入通道：C2（现行主线）
 

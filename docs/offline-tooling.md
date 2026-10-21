@@ -160,6 +160,10 @@ The earlier `License not yet accepted, cannot run in batch mode` failure is **no
 `scripts/scratch/<批次>/<basename>`。** 取证记录不改写,对应关系靠 basename 一一对上;
 这批脚本移进来时**一个字都没改**,所以路径之外的任何"修复"都不构成重跑它们的理由。
 
+**`.py`↔`.js` 配对按「同目录内被引用」判定**(`scripts/test_scripts_layout.py` 的 `violates_pairing`,只扫顶层,
+所以上面这些 scratch 目录里的孤儿 `.js` 不算违规),`fridadis.py`↔`dis.js` 与 `scan444.py`↔`anchor444.js`
+是**刻意异名**(`C:\ns\` 是线上路径),不是待修的历史遗留。
+
 A 目录那批还依赖仓库外的现场文件:`C:\ns\deep.js`、`C:\ns\deep2.js`(以及 `cap2.py` 要 `C:\ns\cap.py`、
 `rtti_offline.py` 要 `C:\ns\spy4_table.txt`)——**这些 `.js` 不在仓库里**,只在当时那台机器上,
 所以现在直接跑会失败,这是预期而不是回归。

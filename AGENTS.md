@@ -18,7 +18,7 @@ registration pipeline and identify extension points for new effects/triggers.
 | 取证过程 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
 | 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性)+ §31–§37(C2 QuickJS bootstrap:harness、`heap_free` use-after-free、native Task 5/6、2026-10-21 实机 `C2Init rc=3` 与游戏退出、§37 探针双义缺陷的修复) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 离线脚本用法与判读陷阱 | `docs/offline-tooling.md` |
-| 脚本速查表(哪个读什么、产出哪个 artifact)+ 命名与目录约定 | `scripts/README.md`、本文件「scripts/ 命名与目录约定」 |
+| 脚本速查表(哪个读什么、产出哪个 artifact)+ 命名与目录约定 | `scripts/README.md`、`scripts/test_scripts_layout.py`(约定的执行者)、本文件「scripts/ 命名与目录约定」 |
 | 4.4.4 锚点全表(Frida 重锚定) | `evidence/xrefs/anchors_4_4_4.md` |
 | keyword→behaviour 机器可读转储(3,900 条) | `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`(`scripts/thunkarrays.py`) |
 | CEffect 类图(1,805 个 vtable,**是下限不是类数**,§14/§17) | `evidence/xrefs/ceffect_vtable_map_4_4_4.txt` |
@@ -83,6 +83,20 @@ All analysis artifacts go to `evidence/` at project root:
 `c1_*`/`c2_*` 的文件名还是 scp 到 `C:/temp/<name>.py` 的**线上契约**(裁定 P5),且
 `scripts/test_c2_harness.py` 用裸名 import 它们、按「上两级」定位 `zig-out/` 的 DLL —— 所以这一族既不能改名,
 也不能下沉一级目录。
+
+**这一节里可机械判定的部分现在是机器判据**,由 `python3 -m pytest scripts/test_scripts_layout.py -q` 执行;
+六条规则各是一个纯函数。`R-env` **`violates_env_var`** 只管**从磁盘读 `stellaris.exe`** 的脚本 —— 判据是行为
+(带 `CreateRemoteThread` 的实机脚本被排除),不看族名;缺的是 `NS_STELLARIS_EXE` 候选而非绝对路径本身,
+候选链旁边的 `D:\SteamLibrary\…` fallback(现 5 个)**是合规的,不是缺陷**。
+`R-pair` **`violates_pairing`** 只扫顶层,`scratch/` 里 `body.js` 那种历史孤儿由它自己的 README 解释。
+`R-suffix` **`violates_version_suffix`** 放行 `444` —— 那是游戏版本号,不是工具版本后缀。
+`R-depth` **`violates_family_depth`** 管 `c1_*`/`c2_*`/`test_c2_harness.py`,`windows/` 不在范围内。
+`R-rva` **`violates_hardcoded_rvas`** 就是 P10:模块级 `RVAS = {…}` 字面量一个都不许留。
+`R-refs` **`dangling_script_refs`** 要求 living docs(`AGENTS.md`、`PLAN.md`、`docs/**`,剔掉私有的
+`docs/superpowers/`)里写出的 `scripts/<path>` 解析得到,scratch 按 basename 兜底;`evidence/` 不可变,永不扫。
+**加豁免 = 把文件名写进那条规则函数的 docstring,不是 `xfail`** —— `xfail` 会藏掉这座围栏就是为了防的漂移,
+所以连 P10 都不给豁免。反过来,改名要写文档、每个维护中的工具在 `docs/offline-tooling.md` 有一节 —— 这两条
+**不在围栏里**,仍然只有人在读。
 
 ## IDA Pro MCP Workflow
 
