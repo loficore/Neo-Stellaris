@@ -44,8 +44,10 @@
 | ~~**C1 真正的门槛变了**：不再是「地址未知」，而是「对象必须well-formed」~~ **已解除**（C1 别名式完成） | ~~造出来的 `create` 返回值要经得起引擎写它~~ | 别名方案继承了官方对象的 well-formedness，引擎写入 `{id, name}` 后对象完全正常 |
 | ~~「那么我们自己造的这个对象长什么样？」~~ **已解除**（§24，决定 = 别名式 C1） | 不造对象，借官方 `class_info` | **别名是引擎自带的形态**：1,615 条 keyword 记录压在 1,605 个 class_info 上，其中 9 个服务 2-3 个 token id（`if`/`else_if`/`else` 共用 `0x269DC98`），而 1,605 个 `create` 体**互不相同** → 共享只发生在 class_info 层。每个 keyword 仍各自 `new(0x10)`，所以共享 deleter `0x34C090` 永远不会拿到同一块 → **没有 double-free 面**（这原本是别名唯一可能不成立的地方）。捐赠者选定：trigger `0x269CAA8`(new 0x80，本身已是 2-id 别名) / effect `0x2611070`(new 0xc0)。别名验的是管线，不是自定义行为——keyword 会按捐赠类的语义动作，这点写进 §24.5 |
 | **C2 阻塞 1：Zig `extern fn` 绑定 QuickJS C 函数时崩溃** | Zig 侧 `extern fn JS_NewRuntime()` 从 `CreateRemoteThread` 注入线程调用时 access violation | 临时绕过：所有 QuickJS 调用改走 `quickjs_wrapper.c` 的 C 包装函数。根因待查（ABI 不匹配？TLS 初始化？） |
-| ~~**C2 阻塞 2：`JS_NewContext` 返回 NULL**~~ **诊断已就位**（2026-10-07） | QuickJS runtime 创建成功但 context 创建失败 | `quickjs.c` 新增 `JS_NewContextDiag`（逐步执行 11 个 intrinsic，返回失败步骤编号）；`quickjs_wrapper.c` 新增 `C2DiagQuickJS`；`exports.zig` 新增 `C2DiagQJS` 导出。**待实机调用获取失败步骤编号后针对性修复** |
-| ~~**C2 阻塞 3：`C2Init` 调 `C2TestQuickJS` 崩溃，但 `C2TestQJS` 调同一函数不崩**~~ **已修复**（2026-10-07） | ~~C2Init 无法作为统一的初始化入口~~ | `C2Init` 已去掉 `writeLogStatic` 调用，现在只调 `C2TestQuickJS()` 并返回 int。**待实机确认不再崩溃** |
+| ~~**C2 阻塞 2：`JS_NewContext` 返回 NULL**~~ **已被 2026-10-21 实机结果改写** | 那条来自 10-07 的 `C2TestQJS` 读数，`JS_NewContextDiag` 就是为了给它一个可判读的步骤号 | 实机打了 `C2Init`，回来的是 **`rc = 3`**，而 3 在这条路径上有两个互斥来源（`quickjs_wrapper.c:263` 的 opaque 读写不一致 vs `quickjs.c:2678` 的 `JS_AddIntrinsicDate` 失败），**且 `C2Init → C2TestQuickJS` 不写任何日志**，所以 §32 的「以日志文本为准」在这条路上不存在。判读前提 = 先把编码空间分开。详见 §36.4 |
+| ~~**C2 阻塞 3：`C2Init` 调 `C2TestQuickJS` 崩溃，但 `C2TestQJS` 调同一函数不崩**~~ **实机已确认不崩**（2026-10-21） | ~~C2Init 无法作为统一的初始化入口~~ | `C2Init` 的 dispatch **返回了**（`GetExitCodeThread` 拿到 rc=3），所以问题不在 file I/O 也不在 C2Init 自身崩溃 |
+| **C2 新阻塞（2026-10-21 实机）：进到 QuickJS init 的那次调用之后，宿主进程没了** | 一枪只换一个读数，且现场无 dump 可查 | `stellaris.exe` PID 18292 于 **21:57:15** 从 Steam 视角消失（`console_log.txt`），WER / `CrashDumps` / Application log / 游戏自己的 `error.log` **全部无记录**。harness 里没有任何 `FreeLibrary`/`TerminateProcess`，assert 只是 unwind。计数：**碰到 QuickJS init 的 2/2 次宿主死**（§32 的 `C2DiagQJSInto` + 本次 `C2Init`），**没碰到的 0/2 次活**（§31 与本次的 `LoadLibrary`+`C2Sanity`）。归因是**推断不是实测**（无退出码、无 dump，该机 WER 像是关的）。处置见 §36，下一步先做零实机改动的探针修复 |
+| **C2 探针自身有缺陷，单发不可判读** | 白烧一枪 + 一次游戏重启 | `C2TestQuickJS` 的 outer 码 2/3/4 与 inner 的 intrinsic 码 2/3/4 重叠；`JS_NewContextDiag` 每个失败分支都是 `{ JS_FreeContext(ctx); return N; }`，所以挂起异常在 rc 回到我们手上**之前**就被销毁了 —— 想读异常必须把探针写进 `quickjs.c` 失败分支内。（另记：这份 vendored QuickJS 里**没有** `JS_GetContextProtocol`，能用的是 `JS_GetException` @ `quickjs.h:669` / `JS_HasException` @ `quickjs.h:670`。） |
 
 ## 4. Phase A — 纯静态：把注册管线啃穿（本机就能做完）
 
@@ -254,7 +256,20 @@
 
 **C2 — QuickJS 运行时单例 + 自定义 vtable + JS 分发**
 
-> **2026-10-07 状态：代码已写完，实机调试中。阻塞 3 已修复，阻塞 2 诊断已就位。**
+> **2026-10-21 状态（实机一枪，证据 §36）**：两条分叉线已合到 `c2-live-integration`（`worktree-c2-quickjs-bootstrap`
+> 的 §31–§35 C2 工作 × `launch-stellaris-bootstrap` 的 SSH launcher；两边自 `d443986` 起**改动文件零重叠**，合并无冲突，
+> `src libs build.zig` 与 C2 tip 逐字节相同）。native：`zig build test` 289/289（仍是那 8 个既有 kernel32 链接错）、
+> c2 harness 26 passed、launcher 169 passed。实机：Task 2 **PASS**（`C2Sanity -> 42`，base `0x7ffcd05c0000`），
+> Task 5 **FAILED** —— `C2Init rc = 3`，且 `stellaris.exe` 在同一次 dispatch 的窗口里没了（Steam 记 21:57:15 removed）。
+> Task 6 Step 5/6 **没跑**，现在跑也证明不了什么：`g_test_ctx` 为 NULL 时探针第一句就返回 0，那是守卫的预期输出而不是 eval 结果。
+> 顺带证伪一条操作约定：**§35 记的 sha256 不能当上传验真用** —— 同一份源码重链接得到 `4f2e49b2…`/7,154,176 而不是
+> `cef9fa05…`/7,156,736，但导出 RVA 一字不差（`C2Sanity 0x44bb30` / `C2Init 0x44bab0` / `C2QuickJSPointersInto 0x44b8f0` /
+> `C2EvalProbeOnePlusOne 0x44b860`）→ 身份 = 源码 + 导出 RVA，不是容器字节。
+> 下一枪的前置（先离线做完，不烧实机）：把 outer/inner 的返回码分到不重叠的编码空间、在 `JS_NewContextDiag` 失败分支
+> 里 `JS_FreeContext` **之前**取 `JS_GetException` 文本、读取走「返回静态 buffer 的 RVA（32 位能过 exit code）」而不是
+> caller-supplied remote buffer（§32 死的那次走的正是后者）；然后用 `scripts/windows/launch_stellaris.py` 重开游戏。
+>
+> **2026-10-07 状态（历史，其中"阻塞 2/3"的口径已被上面改写）：代码已写完，实机调试中。阻塞 3 已修复，阻塞 2 诊断已就位。**
 > 代码结构已就位：
 > * `src/dll/c2/vtable.zig` — 自定义 vtable 构建，从 donor vtable 复制全部槽位，
 >   覆写 `+0x10`(ExecuteActual) 指向 JS 分发桥。**已验证**：`C2TestVtable` 返回 0，

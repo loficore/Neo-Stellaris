@@ -1,10 +1,12 @@
-# 4.4.4 C1 validation and corrections — offline evidence (§24–§30)
+# 4.4.4 C1 validation and corrections — evidence (§24–§36)
 
 > **Volume 3 of 3.** This evidence log is split across three files; the `§` numbers are unique across them.
 > §1–§15 — `runtime_444_structures.md` (live hot path, detours, CEffect class map, the falsified registration chain).
 > §16–§23 — `runtime_444_keyword_pipeline.md` (the static registration pipeline: driver, descriptors, thunk arrays, token allocator, class_info, consumers).
-> §24–§30 — `runtime_444_c1_validation.md` (the alias/donor decision, A5 cross-validation, ABI corrections,
+> §24–§30 — this volume (the alias/donor decision, A5 cross-validation, ABI corrections,
 > backlog, the fallback settled as an error-view builder, and the token DB's `id → name` table).
+> §31–§36 — also this volume: the C2 QuickJS bootstrap (harness, the `heap_free` use-after-free, the
+> native Task 5/6 paths, and the 2026-10-21 live dispatch that ended with `C2Init rc = 3` and the game gone).
 
 ## §24 The alias approach is a natively shipped shape — donor chosen (2026-09-29)
 
@@ -1598,3 +1600,156 @@ run in an authorized live session.**
 `scripts/c2_task6_e2e.py`. No `.dll`/`.pdb`/`C:\temp\*` committed; `build.zig` and
 `scripts/c2_harness.py` unchanged; no new Zig `extern fn` bound to a QuickJS C symbol;
 `src/dll/scripted/**`, the C1 gate and the `0x5350D0` constraint untouched.
+
+## 36. The §35 live dispatch was finally run — Task 2 PASS, Task 5 rc=3, and the game exited (2026-10-21, live)
+
+**What was authorized and what was done.** The human partner asked to merge the two diverged lines and
+run the §35 queue on the real machine. This section records the **observed** output of that session and
+nothing else: no fix was implemented here, and the §35 stack-guard hypothesis was **neither confirmed nor
+refuted** — the shot never reached the eval probe.
+
+### 36.1 The merge, and why the §35 hash must not be used as the upload identity check (2026-10-21)
+
+Two lines had diverged from `d443986` (2026-10-08): `worktree-c2-quickjs-bootstrap` (9 commits, §31–§35,
+C2 up to the Task 6 native GREEN) and `launch-stellaris-bootstrap` (24 commits, `scripts/windows/`).
+
+**Observed**: `git diff --name-only d443986 <c2-tip>` and the same against `<launch-tip>` share **zero
+paths** — the C2 side owns `src/dll/**`, `build.zig`, `libs/quickjs/quickjs.c`, `evidence/**`, the
+`scripts/c2_*` probes; the launcher side owns `scripts/windows/**`, two docs and `.gitignore`. The merge
+(`48d4971`, branch `c2-live-integration`) was therefore a clean no-conflict join, and
+`git diff HEAD worktree-c2-quickjs-bootstrap -- src libs build.zig` is **empty**: the DLL source is
+byte-identical to the §35 tip, so the only thing the merge added to the module was nothing.
+
+Native state of the merged tree, run before touching the machine (verbatim tails):
+
+- `zig build` → exit 0; `zig-out/bin/stellaris_quickjs.dll` = **7,154,176 bytes**,
+  sha256 `4f2e49b289a3ae963cb1906ebf8bc6dc7fce23dce44933fa122b5f18890fbf9f`.
+- `zig build test` → `Build Summary: 22/25 steps succeeded (1 failed); 289/289 tests passed` — identical
+  to the §35 record, same single pre-existing exports-rooted link failure (8 errors, `CreateFileA`,
+  `WriteFile`, `CloseHandle`, `GetModuleHandleA`, ruling P15). No merge regression.
+- `python3 -m pytest scripts/test_c2_harness.py -q` → **26 passed**.
+- `cd scripts/windows && PYTHONPATH=. python3 -m pytest tests/test_launch_stellaris.py -q` → **169 passed**
+  on the Linux host.
+
+**The §35 recorded artifact and this rebuild do not match byte-for-byte, and that is expected.** §35 recorded
+`cef9fa056de2…` / 7,156,736 bytes for these same sources; tonight's rebuild is `4f2e49b2…` / 7,154,176.
+A host-side `c2_harness.list_exports` reparse of the new file gives **the exact RVAs §35 recorded**:
+31 exports, `C2Sanity = 0x44bb30`, `C2Init = 0x44bab0`, `C2QuickJSPointersInto = 0x44b8f0`,
+`C2EvalProbeOnePlusOne = 0x44b860`. Same code layout, different container bytes → the Zig/LLD COFF link
+is not reproducible (PE `TimeDateStamp`, debug-section sizing). **Consequence for every future live shot:
+§35's hash is dead as an upload check; identity is (git-identical sources) + (export RVAs), which is also
+what the probes themselves re-derive at run time (P10).**
+
+### 36.2 LIVE — Task 2 Step: load + sanity on the rebuilt bytes: PASS
+
+Remote state before the first dispatch: `stellaris.exe` PID **18292**, started 2026-10-21 **21:15:08**
+(Steam chain `dowser.exe` 16176 → 8472 → 18292, AppID 281990), sitting at the main menu — its last log
+write was `logs/time.log` at 21:15:39 (`Recalc cached data real time: 1028 ms`), i.e. ~40 min idle.
+
+Both copies uploaded as §35 prescribed (`C:\temp\sqjs_c5.dll` and the independent
+`C:\temp\sqjs_c5_noinit.dll`), and `certutil -hashfile … SHA256` on the Windows side returned
+`4f2e49b289a3ae963cb1906ebf8bc6dc7fce23dce44933fa122b5f18890fbf9f` for **both** — matching the local file.
+
+```
+> python C:\temp\c2_task2_load.py C:\temp\sqjs_c5.dll
+DLL base (real, 64-bit): 0x7ffcd05c0000
+MZ header at base OK
+C2Sanity RVA from PE reparse: 0x44bb30
+C2Sanity -> 42
+Task 2: PASS
+```
+
+This repeats §31's live result on new bytes: injection + `C2Sanity` is survivable.
+
+### 36.3 LIVE — Task 5: `C2Init` rc = 3, and the game process disappeared
+
+```
+> python C:\temp\c2_task5_init.py C:\temp\sqjs_c5.dll
+[task5] pid=18292  dll=C:\temp\sqjs_c5.dll
+[task5] sqjs_c5.dll base (64-bit): 0x7ffcd05c0000
+[task5] MZ header at base OK
+[task5] C2Init RVA from PE reparse:                  0x44bab0
+[task5] C2QuickJSPointersInto RVA from PE reparse:   0x44b8f0
+[task5] C2Sanity == 42, game alive — C2Init dispatch authorized
+Traceback (most recent call last):
+  File "C:\temp\c2_task5_init.py", line 145, in <module>
+    main()
+  File "C:\temp\c2_task5_init.py", line 110, in main
+    assert rc == 0, ...
+AssertionError: C2Init rc = 3 (nonzero = failing step code, see §32/§33 decode tables)
+```
+
+The dispatch **returned** (rc came back through `GetExitCodeThread`, so the injected thread completed and
+reported), the assert fired before `C2QuickJSPointersInto` was ever called, so **the rt/ctx pointer
+observation was not taken** — we do not know from this shot which globals were set.
+
+Then `stellaris.exe` was gone. Attribution, as observed evidence:
+
+| Fact | Source |
+|---|---|
+| `Game process removed: AppID 281990 "…\Stellaris\dowser.exe", ProcID 18292` at **21:57:15** | `C:\Program Files (x86)\Steam\logs\console_log.txt` |
+| `gameoverlay_ui.txt` / `gameoverlay_renderer.txt` last write 21:57:11 (overlay teardown) | same directory |
+| **No** `Application Error` / `Application Hang` / `Windows Error Reporting` event in the Application log for the window (queried all levels, −45 min) | `Get-WinEvent` |
+| **No** crash dump: `$env:LOCALAPPDATA\CrashDumps` empty in the window; no WER `ReportQueue`/`ReportArchive` directory for any app; no `WerFault` process | direct listing |
+| **No** new line in the game's own `error.log` (last entry 21:15:36, pre-injection) or `debug.log` (21:15:26) | log tails |
+| Nothing in the harness or `c2_task5_init.py` unloads or terminates: the only cleanup calls are `CloseHandle` on our own thread/process handles and `VirtualFreeEx` of our own remote buffer; no `FreeLibrary`, no `TerminateProcess`; the assert just unwinds | `scripts/c2_harness.py:378-495`, `scripts/c2_task5_init.py:77-144` |
+
+**Inference, explicitly not observed**: the only side effect inside the death window was the `C2Init`
+dispatch — `LoadLibrary` + `C2Sanity` had already been survived live twice (§31 and §36.2 above), and
+§32 recorded the sibling QuickJS-init path (`C2DiagQJSInto`) terminating the game the same way. So
+"QuickJS init inside the injected module kills the host on Windows" is the standing hypothesis, and it is
+now **2 for 2 on the calls that reach QuickJS, 0 for 2 on the calls that don't**. It is not proven: we
+have no exit code for PID 18292 and no dump, and WER appears to be disabled or its reports are elsewhere
+on this box, so the absence of crash records is *silence*, not *evidence of a clean exit*.
+
+### 36.4 The rc=3 we got cannot be decoded — and on this path there is no log to disambiguate it
+
+§32 (ruling P7) established that the `C2DiagQuickJS` outer and inner step codes overlap and that "the log
+text is authoritative". **That escape does not exist for `C2Init`**, which is the export the probe drives:
+`exports.zig:196 C2Init` → `C2TestQuickJS` (`quickjs_wrapper.c:245`), a function that returns step codes
+but **writes nothing into `g_diag_log`**. So tonight's `3` is irreducibly ambiguous between two mutually
+exclusive states:
+
+| Candidate | Site | Reached QuickJS state |
+|---|---|---|
+| runtime opaque write/read mismatch | `quickjs_wrapper.c:263` (`if (opaque != (void *)(uintptr_t)0xDEADBEEF) return 3;`) | returns **before** `JS_SetMaxStackSize`, `JS_SetMemoryLimit`, and any `JS_NewContextRaw` — **no context ever existed** |
+| `JS_AddIntrinsicDate` failure | `libs/quickjs/quickjs.c:2678` → `return diag_rc;` at `quickjs_wrapper.c:276` | runtime configured, one raw ctx created and freed, one full ctx created and **freed on the failure path** |
+
+`2` and `4` are ambiguous the same way (`JS_NewRuntime2` NULL vs BaseObjects; standalone raw-ctx NULL vs
+Eval). **This is a probe defect, not a QuickJS finding**: the single authorized shot landed on a code with
+two readings, exactly the failure mode §35 warned about for the sentinel `rc == 1`.
+
+Note the second row matters for the direction the human partner proposed — checking for a pending
+exception. Two facts fix that:
+
+- `JS_GetContextProtocol` **does not exist in this vendored QuickJS**: zero hits across
+  `libs/quickjs/quickjs.h` and `libs/quickjs/quickjs.c`. The APIs this tree has are
+  `JS_GetException` (`quickjs.h:669`, defined `quickjs.c:7406`) and `JS_HasException`
+  (`quickjs.h:670`, defined `quickjs.c:7415`).
+- A pending exception **cannot be read by the caller** even with the right API, because every failure
+  branch of `JS_NewContextDiag` is `{ JS_FreeContext(ctx); return N; }` — the context that owns
+  `rt->current_exception` is destroyed before any code outside can query it. Any exception capture must
+  therefore be inserted **inside `libs/quickjs/quickjs.c`, in the failing branch, before the free**.
+
+### 36.5 Session state at the end of this § — what is and is not closed
+
+- **Closed by observation**: Task 2 live on the merged, rebuilt bytes (sanity 42, base reparse, MZ check).
+- **Open**: Task 5 live (`rc == 3`, pointer observation never taken), Task 6 Steps 5 and 6 (the eval probe
+  and the `--noinit` guard) — **not run**. Running them now would prove nothing about §35's stack-guard
+  fix: with `g_test_ctx` NULL the probe's first statement returns 0, which is the guard's expected output,
+  not an eval result.
+- The §35 stack-cross-thread defect is **still unobserved live**, exactly as its own heading says
+  ("CONFIRMED BY CODE READING, NOT YET OBSERVED LIVE").
+- Machine state: `stellaris.exe` is **down**; `steam.exe` (PID 9072) is up. The next shot needs a relaunch,
+  which is precisely what `scripts/windows/launch_stellaris.py` was built for and what it did on
+  2026-10-21 (full bridge run, exit 0, live PID after ~30 s observe).
+- Remote scratch left in `C:\temp`: `sqjs_c5.dll`, `sqjs_c5_noinit.dll`, the five `c2_*.py` probes. The three
+  read-only PowerShell probes written this session (`probe_crash_20261021.ps1`, `probe2_20261021.ps1`,
+  `probe3_20261021.ps1`) were **deleted** once their output was transcribed above — they only ever read
+  event logs, directory listings and the Steam log. Nothing under `C:\temp` is committed, per the standing
+  rule; the DLL and the probes stay there because that is the session's working scratch and the next shot
+  reuses the same names.
+
+**Counts for §36**: this section only. No `.zig`/`.c`/`.py` source was changed to produce these
+observations; `git diff --stat` against `worktree-c2-quickjs-bootstrap` for `src libs build.zig` is empty,
+which is the point of §36.1.

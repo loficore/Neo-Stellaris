@@ -20,6 +20,8 @@ libs/quickjs/libquickjs.a
 # === Agent / tool state ===
 .omo/
 .playwright-mcp/
+.pi/
+.qoder/
 
 # === IDA Pro local artifacts ===
 evidence/session_id.txt

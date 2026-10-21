@@ -16,7 +16,7 @@ registration pipeline and identify extension points for new effects/triggers.
 |---|---|
 | 取证过程 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
 | 取证过程 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性)+ §31–§36(C2 QuickJS bootstrap:harness、`heap_free` use-after-free、native Task 5/6、2026-10-21 实机 `C2Init rc=3` 与游戏退出) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 离线脚本用法与判读陷阱 | `docs/offline-tooling.md` |
 | 4.4.4 锚点全表(Frida 重锚定) | `evidence/xrefs/anchors_4_4_4.md` |
 | keyword→behaviour 机器可读转储(3,900 条) | `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`(`scripts/thunkarrays.py`) |
