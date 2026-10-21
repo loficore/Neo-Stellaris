@@ -73,6 +73,23 @@ DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 1
 LAUNCHER_IMAGE = "Paradox Launcher.exe"
 GAME_IMAGE = "stellaris.exe"
 
+# taskkill exit codes, measured on Windows_Jiaolong with the argv _taskkill
+# builds. 0 is "killed"; the rest observed there:
+TASKKILL_NOT_FOUND_RC = 128
+#   128 - "no process with that image name". The accompanying text is English
+#         or cp936 depending only on how the process was launched (see
+#         prekill); the code is the same either way.
+#   255 - "could not be terminated": observed against csrss.exe, which taskkill
+#         refuses even for an administrator. A real failure, not an absence.
+#    1 - usage/parameter rejection, e.g. an invalid argument or a bad flag.
+# Every non-zero code other than 128 is a failure and is reported as
+# EXIT_PREKILL_PERMISSION, so a genuine permission problem is never mistaken
+# for "already gone".
+# A plain ACCESS DENIED from an unelevated token was NOT reproducible here:
+# both the SSH token and the bridge's /rl highest token are administrator on
+# this box (IsAdmin: True), so probing it risks killing the target process.
+# 255 is what taskkill returns for the "could not be terminated" family
+# whichever reason it prints.
 # Virtual keys for the launcher drive. Enter first — the launcher's default
 # focus is the Play button — then Tab to move focus, Enter to commit.
 VK_TAB = 0x09
@@ -226,6 +243,16 @@ def prekill(no_prekill: bool = False) -> int:
     """Kill any stale stellaris.exe and Paradox Launcher.exe. Re-entrant safe.
 
     Missing processes are OK. Permission errors return EXIT_PREKILL_PERMISSION.
+
+    The absent/killed distinction is made on taskkill's RETURN CODE, never on
+    its message. That text is localized, and the localization is not even a
+    property of the box: on Windows_Jiaolong one argv, one account and one
+    machine printed "ERROR: The process ... not found." when _taskkill ran from
+    an SSH shell, and the cp936 "错误: 没有找到进程" when the identical code ran
+    as a schtasks task in the bridged session. Matching on text therefore
+    depends on how the process happened to be launched, which is how a string
+    guessed during planning survived review and then ended the first
+    end-to-end run in this very phase. Exit codes do not move.
     """
     if no_prekill:
         log_event("PREKILL", skipped=True)
@@ -233,12 +260,12 @@ def prekill(no_prekill: bool = False) -> int:
     killed = []
     for image in ("stellaris.exe", "Paradox Launcher.exe"):
         r = _taskkill(image)
-        # rc=0 success; rc=128 with stderr containing 'not found' / '找不到' is OK
         if r.returncode == 0:
             killed.append(image)
             continue
-        # Treat "process not found" as success
-        if "not found" in r.stderr.lower() or "\u627e\u4e0d\u5230" in r.stderr:
+        if r.returncode == TASKKILL_NOT_FOUND_RC:
+            # The normal crash-recovery state: the game is not running, which is
+            # the precondition for relaunching it. Success.
             continue
         log_event("PREKILL", image=image, rc=r.returncode, stderr=r.stderr.strip())
         return EXIT_PREKILL_PERMISSION

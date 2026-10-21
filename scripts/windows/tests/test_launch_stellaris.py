@@ -106,9 +106,12 @@ def test_prekill_returns_2_on_permission_error(mock_run):
 
 @patch("subprocess.run")
 def test_prekill_treats_missing_process_as_success(mock_run):
-    """taskkill returns rc=128 with 'not found' in stderr when the process is
-    already gone. prekill must treat this as success — re-entrant safe
-    (spec §3 're-entrant safe').
+    """rc=128 is 'no such image', which for prekill is the desired end state —
+    re-entrant safe (spec §3).
+
+    The English rendering taskkill produced on this box when the probe ran from
+    an SSH shell. Only the return code is load-bearing here; see
+    test_prekill_checks_return_codes_not_localized_text.
     """
     mock_run.return_value = MagicMock(
         returncode=128, stdout="",
@@ -122,17 +125,126 @@ def test_prekill_treats_missing_process_as_success(mock_run):
 
 @patch("subprocess.run")
 def test_prekill_treats_missing_process_as_success_chinese(mock_run):
-    """Chinese-locale taskkill returns '找不到' (not found) on missing process.
+    """The zh-CN not-found message, decoded from bytes captured on the box.
 
-    The not-found check must match both English and Chinese localizations,
-    otherwise a CN-locale machine breaks the re-entrant safety contract.
+    Captured, not composed. The string this test used to assert was typed from
+    memory during planning and never run against the box. The real stderr,
+    captured from the bridged session, decodes from
+
+        b4edcef33a20c3bbd3d0d5d2b5bdbdf8b3cc20227374656c6c617269732e65786522a1a30d0a
+
+    under OEM codepage 936 as 错误: 没有找到进程 "stellaris.exe"。—
+    没有找到 (U+6CA1 U+6709 U+627E U+5230), not 找不到 (U+627E U+4E0D U+5230).
+    Both the implementation and this test asserted the same wrong substring,
+    which is why the first end-to-end smoke died in PREKILL on a box where
+    neither game process was running.
+
+    rc is 128 either way, so the fix branches on that. The fixture is decoded
+    from the captured hex rather than retyped, so it cannot drift away from
+    what the box actually produces.
+    """
+    captured = bytes.fromhex(
+        "b4edcef33a20c3bbd3d0d5d2b5bdbdf8b3cc20"
+        "227374656c6c617269732e65786522a1a30d0a").decode("gbk")
+    assert captured == '错误: 没有找到进程 "stellaris.exe"。\r\n'
+    # The string the first version of this test asserted is not in the real
+    # message. Pinned so the original defect cannot be reintroduced by editing
+    # a fixture back to it.
+    assert "找不到" not in captured
+    mock_run.return_value = MagicMock(
+        returncode=128, stdout="", stderr=captured)
+    assert prekill() == EXIT_OK
+    assert mock_run.call_count >= 1
+
+
+@patch("subprocess.run")
+def test_prekill_treats_rc_128_as_missing_whatever_the_message_says(mock_run):
+    """The decisive regression: rc 128 alone decides, message ignored.
+
+    A localized message is not a contract. taskkill emitted the English text
+    when the same Python probe ran from an SSH shell, and the cp936 Chinese
+    text when the identical code ran as a schtasks task in the bridged
+    session — same user, same box, same argv. Any check that reads the text
+    therefore passes or fails depending on how the process was launched, which
+    is exactly how a guessed string survived review and then broke a live run.
     """
     mock_run.return_value = MagicMock(
         returncode=128, stdout="",
-        stderr='\u9519\u8bef: \u627e\u4e0d\u5230\u8fdb\u7a0b "stellaris.exe"\u3002',
+        stderr="<a language this script has no string for>",
     )
     assert prekill() == EXIT_OK
-    assert mock_run.call_count >= 1
+
+
+@patch("subprocess.run")
+def test_prekill_reports_permission_for_the_cannot_terminate_code(mock_run):
+    """rc 255 is 'the process exists and could not be terminated'.
+
+    Measured on Windows_Jiaolong against csrss.exe: taskkill refuses a critical
+    system process even for an administrator. That is a real failure to kill,
+    not an absent process, so it must stay EXIT_PREKILL_PERMISSION — the fix
+    may not buy its robustness by swallowing every non-zero code.
+    """
+    mock_run.return_value = MagicMock(
+        returncode=255, stdout="",
+        stderr="ERROR: The process with PID 1060 could not be terminated.",
+    )
+    assert prekill() == EXIT_PREKILL_PERMISSION
+
+
+@patch("subprocess.run")
+def test_prekill_reports_permission_for_the_invalid_option_code(mock_run):
+    """rc 1 is a usage/parameter rejection, e.g. 'Invalid argument/option'.
+
+    Measured on Windows_Jiaolong by handing taskkill a malformed flag. Not an
+    absent process, so it must not be read as one.
+    """
+    mock_run.return_value = MagicMock(
+        returncode=1, stdout="",
+        stderr="ERROR: Invalid syntax. Neither /FI nor /PID nor /IM were specified.",
+    )
+    assert prekill() == EXIT_PREKILL_PERMISSION
+
+
+@patch("subprocess.run")
+def test_prekill_still_fails_when_the_second_image_cannot_be_killed(mock_run):
+    """A genuine failure on the *second* image must survive the first one's 128.
+
+    Both images missing is the state the smoke hit, so the missing-process path
+    now runs on every crash recovery — which is exactly the run in which a real
+    permission error on the launcher would be easiest to swallow.
+    """
+    calls = {"n": 0}
+
+    def _side_effect(args, **kwargs):
+        calls["n"] += 1
+        rc = 128 if calls["n"] == 1 else 255
+        return MagicMock(returncode=rc, stdout="", stderr="ERROR: denied")
+
+    mock_run.side_effect = _side_effect
+    assert prekill() == EXIT_PREKILL_PERMISSION
+
+
+@patch("subprocess.run")
+def test_prekill_checks_return_codes_not_localized_text(mock_run):
+    """Discipline guard: no hand-typed localized string may decide prekill.
+
+    Written against a defect this file itself encoded — a guessed CN substring
+    lived in both the implementation and its test, so the suite agreed with
+    itself while the box disagreed with both. A fixture genuinely decoded from
+    captured bytes is fine; a literal localized substring used as a *matcher*
+    is not.
+    """
+    code = source_of(prekill)
+    # The docstring is documentation and does quote the message on purpose; what
+    # must not exist is a localized literal the *decision* can read.
+    consts = [c for c in code.co_consts if c is not code.co_consts[0]]
+    matchers = [c for c in consts
+                if isinstance(c, str) and not c.isascii() and c.strip()]
+    assert matchers == [], (
+        f"prekill matches on localized text {matchers!r}; branch on the return "
+        f"code instead (taskkill's message language depends on how the process "
+        f"was launched)"
+    )
 
 
 @patch("subprocess.run")
@@ -1907,3 +2019,8 @@ def test_marker_stays_small_for_a_realistic_inner_run():
             main(["--inner", "--marker", marker])
         size = os.path.getsize(marker)
     assert size < 8 * 1024, size
+
+
+def source_of(func):
+    """Code object of `func`, for tests that assert on how it decides."""
+    return func.__code__
