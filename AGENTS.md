@@ -91,7 +91,8 @@ All analysis artifacts go to `evidence/` at project root:
 `R-pair` **`violates_pairing`** 只扫顶层,`scratch/` 里 `body.js` 那种历史孤儿由它自己的 README 解释。
 `R-suffix` **`violates_version_suffix`** 放行 `444` —— 那是游戏版本号,不是工具版本后缀。
 `R-depth` **`violates_family_depth`** 管 `c1_*`/`c2_*`/`test_c2_harness.py`,`windows/` 不在范围内。
-`R-rva` **`violates_hardcoded_rvas`** 就是 P10:模块级 `RVAS = {…}` 字面量一个都不许留。
+`R-rva` **`violates_hardcoded_rvas`** 就是 P10:和 `R-pair` 同一口径**只扫顶层** —— `scratch/` 是冻结的历史、
+`windows/` 是 launcher,都不在 `top_level_scripts` 范围内;顶层维护脚本里模块级 `RVAS = {…}` 字面量一个都不许留。
 `R-refs` **`dangling_script_refs`** 要求 living docs(`AGENTS.md`、`PLAN.md`、`docs/**`,剔掉私有的
 `docs/superpowers/`)里写出的 `scripts/<path>` 解析得到,scratch 按 basename 兜底;`evidence/` 不可变,永不扫。
 **加豁免 = 把文件名写进那条规则函数的 docstring,不是 `xfail`** —— `xfail` 会藏掉这座围栏就是为了防的漂移,

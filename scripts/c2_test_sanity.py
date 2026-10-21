@@ -17,9 +17,9 @@ base-resolution + C2Sanity flow is c2_task2_load.py's job; the optional diag
 dispatch is covered operationally by the watch channel. 历史名保留 = P5 的线上
 契约;能力已被 c2_task2_load.py + c2_control_watch.py 覆盖.
 
-The four defects of the old v19 version this rewrite fixes:
+The four defects of the previous build this rewrite fixes:
 
-  * P10 — the old file shipped a hard-coded RVA dict from build v19. All
+  * P10 — the old file shipped a hard-coded RVA dict from that build. All
     RVAs now come from ``list_exports(dll_path)``, re-parsed from the copy
     on disk; ``resolve_targets`` refuses stale names with a KeyError before
     anything is dispatched.
