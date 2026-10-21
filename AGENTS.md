@@ -18,6 +18,7 @@ registration pipeline and identify extension points for new effects/triggers.
 | 取证过程 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
 | 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性)+ §31–§37(C2 QuickJS bootstrap:harness、`heap_free` use-after-free、native Task 5/6、2026-10-21 实机 `C2Init rc=3` 与游戏退出、§37 探针双义缺陷的修复) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 离线脚本用法与判读陷阱 | `docs/offline-tooling.md` |
+| 脚本速查表(哪个读什么、产出哪个 artifact)+ 命名与目录约定 | `scripts/README.md`、本文件「scripts/ 命名与目录约定」 |
 | 4.4.4 锚点全表(Frida 重锚定) | `evidence/xrefs/anchors_4_4_4.md` |
 | keyword→behaviour 机器可读转储(3,900 条) | `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`(`scripts/thunkarrays.py`) |
 | CEffect 类图(1,805 个 vtable,**是下限不是类数**,§14/§17) | `evidence/xrefs/ceffect_vtable_map_4_4_4.txt` |
@@ -58,6 +59,30 @@ All analysis artifacts go to `evidence/` at project root:
 - `evidence/analysis/` — synthesis reports, extension point analysis
 
 **Naming convention**: `<component>_<finding>.md` (e.g., `effect_dispatch_switch_cases.md`)
+
+## scripts/ 命名与目录约定
+
+**顶层只放维护中的接口**:离线 PE 工具、`c1_*`/`c2_*` 实机注入通道、`windows/` launcher。一次性探针进
+`scripts/scratch/<年-月>_<主题>/`,判据两条:**只读 exe 拷贝 = 工具,需要进程 = 探针**;**有没有在用的
+东西依赖它**(文档、`src/` 注释、测试 import、产出的 artifact)。速查表在 `scripts/README.md`。
+
+**命名:`<通道或对象>_<动作或问题>.py`**,读名字就该知道它读什么、对谁动手(正例 `thunkarrays.py`、
+`createsites.py`、`c2_control_sleep.py`)。禁止 `2`/`final`/`new`/`misc` 这类版本后缀 —— 版本属于 git,
+不属于文件名。不要用 stdlib 模块名当 basename(`dis.py` 曾遮蔽 stdlib `dis`,已改名 `fridadis.py`,
+旧名记在它自己的 docstring 里)。
+
+**移入 scratch 的一次性脚本保留原 basename。** `evidence/` 三卷与 `evidence/logs/` 按 basename 记录出处
+(含字面的 `python3 scripts/<name>.py …` 命令行),改名等于让取证记录指向不存在的文件。
+
+**改维护中工具的名字是一个文档动作**,不是 `git mv` 就完:`evidence/` 里已有的引用**不改写**,新旧名映射
+记进 `docs/offline-tooling.md`,并在被改文件自己的 docstring 里留一句旧名 —— 这是本仓库的先例,不是可选项。
+
+**每个维护中的工具在 `docs/offline-tooling.md` 有一节**(用法 + 判读陷阱);新工具第一次被文档引用时就要
+补上那一节。**写死绝对路径的脚本不算维护中** —— 要么改成 `NS_STELLARIS_EXE`,要么进 `scratch/`。
+`.py` 驱动与同名 `.js` 是一对(驱动 + 注进去的脚本),移动必须成对。
+`c1_*`/`c2_*` 的文件名还是 scp 到 `C:/temp/<name>.py` 的**线上契约**(裁定 P5),且
+`scripts/test_c2_harness.py` 用裸名 import 它们、按「上两级」定位 `zig-out/` 的 DLL —— 所以这一族既不能改名,
+也不能下沉一级目录。
 
 ## IDA Pro MCP Workflow
 
