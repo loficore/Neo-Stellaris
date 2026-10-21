@@ -63,15 +63,15 @@ SCHTASKS_TR_LIMIT = 261
 _INNER_BUDGET_PREKILL_SPAWN_S = 3     # prekill + steam_spawn worst case (spec §5)
 _INNER_BUDGET_STEAM_READY_S = 30      # = --launcher-timeout-s default
 _INNER_BUDGET_LAUNCHER_WAIT_S = 30    # = --launcher-timeout-s default
-_INNER_BUDGET_LAUNCHER_KEYBOARD_S = 24  # Enter + 3x Tab+Enter, 5s wait each
+_INNER_BUDGET_LAUNCHER_CLICK_S = 19   # foreground + settle + 3 click/settle rounds
 _INNER_BUDGET_GAME_OBSERVE_S = 60     # = --game-timeout-s + --observe-s defaults
 _INNER_CHAIN_BUDGET_S = (
     _INNER_BUDGET_PREKILL_SPAWN_S
     + _INNER_BUDGET_STEAM_READY_S
     + _INNER_BUDGET_LAUNCHER_WAIT_S
-    + _INNER_BUDGET_LAUNCHER_KEYBOARD_S
+    + _INNER_BUDGET_LAUNCHER_CLICK_S
     + _INNER_BUDGET_GAME_OBSERVE_S
-)  # 147s with all defaults
+)  # 142s with all defaults
 _BRIDGE_TIMEOUT_MARGIN_S = 33          # slack for monitor jitter + log I/O
 DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 180s
 
@@ -97,17 +97,30 @@ TASKKILL_NOT_FOUND_RC = 128
 # this box (IsAdmin: True), so probing it risks killing the target process.
 # 255 is what taskkill returns for the "could not be terminated" family
 # whichever reason it prints.
-# Virtual keys for the launcher drive. Enter first — the launcher's default
-# focus is the Play button — then Tab to move focus, Enter to commit.
-VK_TAB = 0x09
-VK_RETURN = 0x0D
+# mouse_event flags for the left button. The launcher drive clicks, it does not
+# type — the CEF launcher (Chrome_WidgetWin_1) ignores Enter/Tab entirely, proven
+# on Windows_Jiaolong where the keyboard path always ended in exit 23. See
+# launcher_click.
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
 
-INPUT_KEYBOARD = 1
+# Where the 「继续」 (Continue) button sits, as a fraction of the launcher window
+# rect. The click point is recomputed from a fresh GetWindowRect on every attempt
+# so the drive survives the window moving or resizing — this is what makes it
+# robust where a raw absolute coordinate is not. Tuned on Windows_Jiaolong in the
+# script's own (DPI-aware, physical-pixel) frame against the real maximized
+# launcher rect (-11,0,2015,1020): 「继续」 is centered horizontally and sits at
+# ~1/3 height, i.e. screen ~(1006,339) = fx 0.502 / fy 0.333. A live click at
+# that point booted stellaris.exe within ~5 s. NOTE: once pywinauto/UIA
+# initializes, GetWindowRect returns physical pixels; measure fractions in that
+# same frame — a DPI-unaware screenshot gives a different (wrong) fraction.
+LAUNCHER_CONTINUE_FX = 0.502
+LAUNCHER_CONTINUE_FY = 0.333
+_CLICK_ATTEMPTS = 3
 
 _FOREGROUND_TIMEOUT_S = 3.0
 _FOCUS_SETTLE_S = 1.0
-_KEY_SETTLE_S = 5.0
-_TAB_ENTER_ATTEMPTS = 3
+_CLICK_SETTLE_S = 5.0
 _POLL_S = 0.5
 _OBSERVE_POLL_S = 1.0
 
@@ -397,11 +410,11 @@ def steam_ready(timeout_s: int) -> int | None:
     return None
 
 
-_input_fns_cache: tuple[Any, Any, Any] | None = None
+_input_fns_cache: tuple[Any, Any] | None = None
 
 
-def _input_fns() -> tuple[Any, Any, Any]:
-    """Bind (SetForegroundWindow, GetForegroundWindow, SendInput).
+def _input_fns() -> tuple[Any, Any]:
+    """Bind (SetForegroundWindow, GetForegroundWindow).
 
     Bound lazily, same reason as _user32_fns: ctypes.WinDLL does not exist on
     Linux and this module has to import cleanly for the host-side tests.
@@ -415,60 +428,75 @@ def _input_fns() -> tuple[Any, Any, Any]:
         get_foreground_window = user32.GetForegroundWindow
         get_foreground_window.argtypes = []
         get_foreground_window.restype = _wt.HWND
-        send_input = user32.SendInput
-        send_input.argtypes = [_wt.UINT, ctypes.POINTER(INPUT), _wt.INT]
-        send_input.restype = _wt.UINT
-        _input_fns_cache = (set_foreground_window, get_foreground_window,
-                            send_input)
+        _input_fns_cache = (set_foreground_window, get_foreground_window)
     return _input_fns_cache
 
 
-class KEYBDINPUT(ctypes.Structure):
-    """Win32 KEYBDINPUT.
-
-    Fixed-width c_uint16/c_uint32 rather than ctypes.wintypes.WORD/DWORD on
-    purpose: _wt.DWORD is c_ulong, which is 8 bytes on an LP64 host and 4 on
-    Windows, so a _wt-spelled struct is a silently wrong cbsize anywhere but
-    the box it is meant for. These keep one layout everywhere, and
-    test_input_struct_layout_matches_the_sendinput_abi pins it.
-    """
+class _RECT(ctypes.Structure):
+    """Win32 RECT. c_long on purpose: the field is a LONG (4 bytes) on every
+    Windows build, whereas ctypes.wintypes-based ints vary with the host."""
 
     _fields_ = [
-        ("wVk", ctypes.c_uint16),
-        ("wScan", ctypes.c_uint16),
-        ("dwFlags", ctypes.c_uint32),
-        ("time", ctypes.c_uint32),
-        ("dwExtraInfo", ctypes.c_size_t),  # ULONG_PTR
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
     ]
 
 
-class INPUT(ctypes.Structure):
-    """Win32 INPUT: a DWORD tag followed by the union's largest member.
+_cursor_fns_cache: tuple[Any, Any, Any] | None = None
 
-    Only KEYBDINPUT is populated; the trailing pad stands in for MOUSEINPUT
-    (32 bytes on x64, the real union size). 40 bytes total on x64.
+
+def _cursor_fns() -> tuple[Any, Any, Any]:
+    """Bind (GetWindowRect, SetCursorPos, mouse_event), lazily for import.
+
+    The launcher drive clicks rather than types (the CEF launcher ignores
+    keyboard input — see launcher_click), so it needs the cursor + rect trio
+    instead of SendInput.
     """
+    global _cursor_fns_cache
+    if _cursor_fns_cache is None:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        get_window_rect = user32.GetWindowRect
+        get_window_rect.argtypes = [_wt.HWND, ctypes.POINTER(_RECT)]
+        get_window_rect.restype = _wt.BOOL
+        set_cursor_pos = user32.SetCursorPos
+        set_cursor_pos.argtypes = [ctypes.c_int, ctypes.c_int]
+        set_cursor_pos.restype = _wt.BOOL
+        mouse_event = user32.mouse_event
+        mouse_event.argtypes = [_wt.DWORD, _wt.DWORD, _wt.DWORD,
+                               _wt.DWORD, ctypes.c_size_t]
+        mouse_event.restype = None
+        _cursor_fns_cache = (get_window_rect, set_cursor_pos, mouse_event)
+    return _cursor_fns_cache
 
-    _fields_ = [
-        ("type", ctypes.c_uint32),
-        ("ki", KEYBDINPUT),
-        ("_padding", ctypes.c_ubyte * 8),
-    ]
 
+def _window_rect(hwnd: int) -> tuple[int, int, int, int]:
+    """The launcher window's screen rect as (left, top, right, bottom).
 
-def send_key(vk: int) -> None:
-    """Send one virtual-key down+up through SendInput.
-
-    Raises OSError when SendInput delivers 0 events, which is what happens when
-    the foreground window sits at a higher integrity level (UIPI). Swallowing
-    that would make the whole drive a silent no-op that still reports success.
+    Raises OSError when GetWindowRect fails — a dead or off-screen hwnd. The
+    caller turns that into a typed no-focus code rather than letting it escape.
     """
-    _, _, send_input = _input_fns()
-    ki = KEYBDINPUT(wVk=vk, wScan=0, dwFlags=0, time=0, dwExtraInfo=0)
-    inp = INPUT(type=INPUT_KEYBOARD, ki=ki)
-    sent = send_input(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-    if sent != 1:
-        raise OSError(_last_error(), f"SendInput delivered {sent}/1 events")
+    get_window_rect, _, _ = _cursor_fns()
+    rect = _RECT()
+    if not get_window_rect(_wt.HWND(hwnd), ctypes.byref(rect)):
+        raise OSError(_last_error(), "GetWindowRect failed")
+    return (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
+
+
+def _click_at(x: int, y: int) -> None:
+    """Move the cursor to (x, y) and click the left button once.
+
+    SetCursorPos + mouse_event rather than SendInput: legacy, but the click a
+    synthetic launcher drive needs, with no INPUT-union layout to get wrong on a
+    non-Windows import. Raises OSError if SetCursorPos is refused, which is how a
+    UIPI-blocked click surfaces instead of becoming a silent no-op.
+    """
+    _, set_cursor_pos, mouse_event = _cursor_fns()
+    if not set_cursor_pos(x, y):
+        raise OSError(_last_error(), f"SetCursorPos({x}, {y}) refused")
+    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
 
 def _hwnd_for_pid(pid: int) -> int:
@@ -515,19 +543,19 @@ def launcher_wait(timeout_s: int) -> tuple[int, int] | None:
 
 def bring_to_foreground(hwnd: int) -> bool:
     """Raise `hwnd` to the foreground. True once it actually owns it."""
-    set_foreground_window, get_foreground_window, _ = _input_fns()
+    set_foreground_window, get_foreground_window = _input_fns()
     deadline = _time.time() + _FOREGROUND_TIMEOUT_S
     set_ok = set_foreground_window(hwnd)
     while _time.time() < deadline:
         if get_foreground_window() == hwnd:
-            log_event("LAUNCHER_KEYBOARD", step="foreground_ok", hwnd=hwnd)
+            log_event("LAUNCHER_CLICK", step="foreground_ok", hwnd=hwnd)
             return True
         _time.sleep(0.1)
     # A refusal (integrity level, wrong desktop, dead hwnd) and a plain
     # timeout are otherwise indistinguishable. SetForegroundWindow's return
     # value and GetLastError are the operator's only evidence, and the
     # locked-desktop case is exactly where they will be reading this line.
-    log_event("LAUNCHER_KEYBOARD", step="foreground_fail", hwnd=hwnd,
+    log_event("LAUNCHER_CLICK", step="foreground_fail", hwnd=hwnd,
               set_ok=int(set_ok), last_error=_last_error())
     return False
 
@@ -535,9 +563,9 @@ def bring_to_foreground(hwnd: int) -> bool:
 def _handoff_observed() -> bool:
     """True once the launcher has let go: it exited, or the game took over.
 
-    The launcher staying put is the *negative* signal — it means the keystrokes
-    did not land. Treating it as a handoff would hand the next phase a launcher
-    window and no game.
+    The launcher staying put is the *negative* signal — it means the click did
+    not land on the Continue button. Treating it as a handoff would hand the
+    next phase a launcher window and no game.
     """
     names = set()
     for p in psutil.process_iter(["name"]):
@@ -549,53 +577,53 @@ def _handoff_observed() -> bool:
     return (not launcher_alive) or game_alive
 
 
-def launcher_keyboard(hwnd: int) -> int:
-    """Drive the launcher with Enter, then Tab+Enter, until it hands off.
+def launcher_click(hwnd: int) -> int:
+    """Advance the launcher by clicking 「继续」 (Continue), anchored to the
+    window rect. Returns EXIT_OK on handoff, EXIT_LAUNCHER_NO_FOCUS if the window
+    cannot be raised or the click cannot be delivered, EXIT_LAUNCHER_NO_ADVANCE
+    if every attempt landed and none handed off.
 
-    The launcher's UIA tree exposes no controls (CEF canvas), so keystrokes are
-    the only channel that does not depend on pixel coordinates. Returns
-    EXIT_OK on handoff, EXIT_LAUNCHER_NO_FOCUS if the window cannot be raised
-    or the keystrokes cannot be delivered, EXIT_LAUNCHER_NO_ADVANCE if the whole
-    sequence is spent without one.
+    The launcher is a CEF canvas (Chrome_WidgetWin_1) whose UIA tree exposes a
+    single empty Pane — no controls to invoke — and it ignores Enter/Tab outright
+    (proven on Windows_Jiaolong, where the keyboard path always ended in 23). A
+    click is the only channel that works. To stay robust against the window
+    moving or being resized mid-run, the button is addressed as a fraction of the
+    window rect and the rect is re-read on every attempt: never a fixed screen
+    coordinate.
 
-    A blocked SendInput (UIPI — a foreground window at a higher integrity
-    level) is reported as NO_FOCUS rather than allowed to escape: an OSError out
-    of here would exit main() with code 1, which is not a documented code, and
-    would return before _write_marker runs, so the outer bridge would learn
-    nothing and report its own timeout instead.
+    An OSError from GetWindowRect or SetCursorPos (a dead hwnd, a UIPI-blocked
+    click) is reported as NO_FOCUS rather than allowed to escape: it would exit
+    main() with an undocumented code 1, and return before _write_marker runs, so
+    the outer bridge would learn nothing and report its own timeout instead.
     """
     try:
         if not bring_to_foreground(hwnd):
             return EXIT_LAUNCHER_NO_FOCUS
         _time.sleep(_FOCUS_SETTLE_S)
 
-        send_key(VK_RETURN)
-        log_event("LAUNCHER_KEYBOARD", step="enter_sent")
-        _time.sleep(_KEY_SETTLE_S)
-        if _handoff_observed():
-            log_event("LAUNCHER_KEYBOARD", step="handoff_after_enter")
-            return EXIT_OK
-
-        for attempt in range(1, _TAB_ENTER_ATTEMPTS + 1):
-            send_key(VK_TAB)
-            send_key(VK_RETURN)
-            log_event("LAUNCHER_KEYBOARD", step="tab_enter", attempt=attempt)
-            _time.sleep(_KEY_SETTLE_S)
+        for attempt in range(1, _CLICK_ATTEMPTS + 1):
+            left, top, right, bottom = _window_rect(hwnd)
+            x = int(left + LAUNCHER_CONTINUE_FX * (right - left))
+            y = int(top + LAUNCHER_CONTINUE_FY * (bottom - top))
+            _click_at(x, y)
+            log_event("LAUNCHER_CLICK", step="click", attempt=attempt,
+                      x=x, y=y, rect=(left, top, right, bottom))
+            _time.sleep(_CLICK_SETTLE_S)
             if _handoff_observed():
-                log_event("LAUNCHER_KEYBOARD", step="handoff_after_tab_enter",
+                log_event("LAUNCHER_CLICK", step="handoff_after_click",
                           attempt=attempt)
                 return EXIT_OK
         return EXIT_LAUNCHER_NO_ADVANCE
     except OSError as e:
-        log_event("LAUNCHER_KEYBOARD", step="send_input_blocked", error=repr(e))
+        log_event("LAUNCHER_CLICK", step="click_blocked", error=repr(e))
         return EXIT_LAUNCHER_NO_FOCUS
 
 
 def launcher_handoff(timeout_s: int) -> int | None:
     """Wait for the launcher to hand off to the game. Returns stellaris.exe's PID.
 
-    Separate from launcher_keyboard on purpose: that phase stops at the first
-    handoff *signal*, which launcher_keyboard's own _handoff_observed also
+    Separate from launcher_click on purpose: that phase stops at the first
+    handoff *signal*, which launcher_click's own _handoff_observed also
     fires on the launcher simply exiting. This one waits for the thing the
     caller actually needs — a PID it can watch.
     """
@@ -1393,12 +1421,12 @@ def _run_launch_chain_phases(args: argparse.Namespace,
         return EXIT_OK
     if args.dry_run:
         # A dry run spawns no URI, so a launcher window here is some other
-        # game's. Never type into a window nobody asked us to touch.
+        # game's. Never click into a window nobody asked us to touch.
         return EXIT_OK
 
     if abandoned():
         return EXIT_BRIDGE_ABANDONED
-    rc = launcher_keyboard(found[1])
+    rc = launcher_click(found[1])
     if rc != EXIT_OK:
         return rc
 

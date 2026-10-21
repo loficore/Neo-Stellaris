@@ -23,7 +23,9 @@ This design replaces the human side of that loop with a single CLI script
 that:
 
 1. starts the game through Steam (no coordinate clicking),
-2. drives the PDX Launcher UI via UI Automation (no coordinate clicking),
+2. drives the PDX Launcher UI via a window-rect-relative click on the
+   Continue button (UIA proven non-cooperative on this CEF launcher; see
+   §2 G3 / E8 and the LAUNCHER_CLICK phase),
 3. confirms that `stellaris.exe` has been alive and healthy for ≥ 30 s,
 4. prints the game PID on success, exits non-zero with a typed failure on
    anything else.
@@ -40,7 +42,15 @@ is **out of scope** and remains the responsibility of the calling agent.
   failure the agent can branch on.
 - **G2.** Launch reliability on a single, healthy box ≥ 95% over 50
   attempts in a row. (Goal, not acceptance — the agent loop is the truth.)
-- **G3.** No coordinate-based UI driving anywhere in the script.
+- **G3.** No raw absolute-coordinate or bitmap-based UI driving anywhere in
+  the script. The launcher drive clicks at a fraction of the launcher's own
+  window rect (`GetWindowRect`, re-read every attempt), so it survives the
+  window moving or resizing; hard-coded screen coordinates and image
+  recognition stay banned. *(Amended 2026-10: the original "no
+  coordinate-based UI driving at all" was premised on UIA being usable on
+  the launcher; UIA is proven non-cooperative on this CEF surface, so the
+  constraint now permits window-rect-relative clicking and still bans raw
+  absolute coordinates.)*
 - **G4.** Typed exit codes for every failure mode an unattended caller
   might want to branch on (Steam dead, login required, update required,
   launcher stuck, game crashed in window, JIT dialog, etc.).
@@ -66,7 +76,10 @@ is **out of scope** and remains the responsibility of the calling agent.
 ### Anti-Goals
 
 - **A1.** A pixel-perfect or image-recognition launcher. We are not going
-  to look at bitmaps. UIA is the only window-driving primitive.
+  to look at bitmaps. The window-driving primitive is a window-rect-relative
+  click (see G3): UIA was the intended primitive but is proven
+  non-cooperative on this launcher's CEF surface, and image recognition
+  remains banned.
 - **A2.** A daemon / always-running service. The script is invoked per
   launch and exits. State does not persist between invocations except
   through the OS process table.
@@ -108,15 +121,17 @@ assumes they hold)
   Launcher window from its own process. It must bridge into the user's
   logged-on interactive session before any UIA work; see §5a
   "Session bridging".
-- **E8.** **PDX Launcher must expose a UIA control tree on this box**
-  for the script to drive it. This has **not yet been verified** at
-  design time (Q2 answer: no prior inspection; user offered SSH access
-  to `Windows_Jiaolong`). Until verified on `Windows_Jiaolong`, the
-  UIA-based `LAUNCHER_DRIVE` phase is conditional. If PDX Launcher
-  turns out to use a CEF / Electron / owner-drawn surface, the spec
-  needs a different primitive (keyboard input to the launcher window,
-  image recognition, or the launcher config pre-load approach
-  originally considered) — flagged here so it does not get lost.
+- **E8.** **PDX Launcher does NOT expose a usable UIA control tree on this
+  box** — verified on `Windows_Jiaolong`: its window class is
+  `Chrome_WidgetWin_1` (CEF/Chromium) and UIA sees only a single empty
+  `Pane/RootView` control, no buttons, no Play, nothing to click. So the
+  original UIA-based `LAUNCHER_DRIVE` premise is falsified. The chosen
+  primitive is the window-rect-relative click on the Continue button (the
+  `LAUNCHER_CLICK` phase); keyboard input was tried first (the old
+  `LAUNCHER_KEYBOARD` phase) and is proven dead on this CEF surface —
+  Enter/Tab are ignored and the live run ended in exit 23. Image
+  recognition and the launcher-config pre-load approach remain rejected
+  (A1 / G3).
 
 ### Engineering constraints
 
@@ -215,8 +230,8 @@ Example:
 | 12 | Steam: Steam Guard / login required. Human action needed. |
 | 13 | Steam: Stellaris update required. Human action needed. |
 | 21 | Launcher: launcher window did not appear within `--launcher-timeout-s`. |
-| 22 | Launcher: required UIA control (Play, Skip, Accept, ...) not found in launcher window. UI changed or non-cooperative. |
-| 23 | Launcher: clicked a control and the launcher state did not progress within 10 s. |
+| 22 | Launcher: the launcher window could not be brought to foreground, or `GetWindowRect`/`SetCursorPos` was refused (UIPI). The click could not be delivered. |
+| 23 | Launcher: the rect-relative Continue click was delivered but the launcher state did not progress within the settle window (fractions mis-tuned for this window size, or a first-run screen replaced Continue). |
 | 24 | Launcher: launcher exited before reaching Play state. |
 | 31 | Game: `stellaris.exe` did not spawn within `--game-timeout-s` of launcher click. |
 | 32 | Game: `stellaris.exe` died within the observation window. stderr includes how long it lived and the exit code. |
@@ -395,54 +410,64 @@ process image name on this box is `Paradox Launcher.exe`). When found,
 attach to its main window via `pywinauto.Application(backend="uia")
 .connect(path="Paradox Launcher.exe")` — **the attach is for
 window-existence checks only; the control tree is not used** (see
-LAUNCHER_KEYBOARD below). Window must appear within 5 s of process
+LAUNCHER_CLICK below). Window must appear within 5 s of process
 appearance, otherwise exit 21.
 
-**LAUNCHER_KEYBOARD** — *(was LAUNCHER_DISCOVER + LAUNCHER_DRIVE;
-UIA-on-PDX-Launcher was verified non-cooperative on `Windows_Jiaolong`
-— the window class `Chrome_WidgetWin_1` exposes only a single empty
-`Pane/RootView` control to UIA; no buttons, no Play, nothing to click.
-CEF/Chromium surfaces like this only render to a single canvas and do
-not expose interactive elements to UIA. Falling back to coordinate clicks
-would violate G3; falling back to image recognition is a last resort.
-Keyboard input via the standard Windows message loop is well-defined
-on CEF and is the chosen path.)*
+**LAUNCHER_CLICK** — *(was LAUNCHER_DISCOVER → LAUNCHER_DRIVE →
+LAUNCHER_KEYBOARD. UIA-on-PDX-Launcher was verified non-cooperative on
+`Windows_Jiaolong` — the window class `Chrome_WidgetWin_1` exposes only a
+single empty `Pane/RootView` control to UIA; no buttons, no Play, nothing
+to click. CEF/Chromium surfaces like this render to a single canvas and do
+not expose interactive elements to UIA. The keyboard fallback
+(LAUNCHER_KEYBOARD) was then tried and is **proven dead on this box**: the
+CEF launcher ignores Enter/Tab entirely and the live run ended in exit 23.
+What actually works is a mouse click on the 「继续」 (Continue) button, so
+this phase clicks it — anchored to the launcher's own window rect rather
+than a raw screen coordinate, per G3.)*
 
 The phase:
 
-1. Bring the launcher window to foreground: `ctypes.windll.user32
-   .SetForegroundWindow(hwnd)`. If the call fails or `GetForegroundWindow`
-   does not return the launcher hwnd within 3 s, exit 22.
-2. Wait 1 s for keyboard focus to settle.
-3. Send `Enter` (vk=0x0D, key down + key up) via `ctypes.windll.user32
-   .SendInput(INPUT(...))`. Most Paradox Launcher instances
-   default-focus the Play button on first show, so this is the
-   cheapest attempt.
-5. Wait up to 5 s for the launcher to start handoff: either
-   `Paradox Launcher.exe` exits OR `stellaris.exe` appears.
-6. If still up at 5 s, send `Tab` (vk=0x09) once, then `Enter`. Wait
-   5 s again for handoff.
-7. Repeat step 6 up to 2 more times (3 total Tab+Enter attempts).
-8. If after the full sequence the launcher is still up and no
-   `stellaris.exe` appeared, exit 23 (key sequence did not advance
-   the launcher).
+1. Bring the launcher window to foreground: `bring_to_foreground(hwnd)`
+   (`SetForegroundWindow` + `GetForegroundWindow` confirmation within
+   `_FOREGROUND_TIMEOUT_S`). If it fails, exit 22.
+2. Wait `_FOCUS_SETTLE_S` for the window to settle.
+3. For each of `_CLICK_ATTEMPTS` (3) attempts:
+   1. Re-read the launcher window rect:
+      `left, top, right, bottom = _window_rect(hwnd)` via
+      `GetWindowRect`. Re-reading every attempt is the whole point — it
+      makes the click survive the user moving or resizing the window
+      between attempts.
+   2. Compute the click point as a fraction of that rect:
+      `x = left + LAUNCHER_CONTINUE_FX * (right - left)`,
+      `y = top  + LAUNCHER_CONTINUE_FY * (bottom - top)`.
+   3. Deliver the click: `_click_at(x, y)` = `SetCursorPos(x, y)` then
+      `mouse_event(MOUSEEVENTF_LEFTDOWN)` / `mouse_event(MOUSEEVENTF_LEFTUP)`.
+      Log `LAUNCHER_CLICK` with `rect`, `x`, `y`, `attempt` — this is the
+      evidence the operator reads when the fractions are off.
+   4. Wait `_CLICK_SETTLE_S` (5 s) for handoff: either `Paradox
+      Launcher.exe` exits OR `stellaris.exe` appears (`_handoff_observed()`).
+      If observed, exit 0 (success).
+4. If all attempts are exhausted with no handoff, exit 23 (the click did
+   not advance the launcher).
+5. If `GetWindowRect` or `SetCursorPos` raises (foreground lost, or UIPI
+   refuses synthetic input into this window), exit 22 — never let it
+   escape as an undocumented exit 1.
 
-The launcher has a small number of focusable elements and Play is one
-of them; Tab navigation reaches it deterministically within a few
-presses on a CEF surface. If the actual launcher variant on this box
-behaves differently, the builder's first run should observe what
-focused element Tab lands on (via `GetGUIThreadInfo`) and adjust the
-sequence — but the structural fallback (multiple Tab presses + Enter)
-should still recover. **Document whatever sequence actually works in
-D1 when the first successful run lands.**
+The Continue fraction (`LAUNCHER_CONTINUE_FX` / `LAUNCHER_CONTINUE_FY`) is
+initialized from the measured (1030, 340) proof-of-launch hit against the
+launcher rect, but **it is layout-sensitive** (maximized vs default window
+size). The live run must tune these against the real `GetWindowRect` on
+`Windows_Jiaolong` before the drive is trusted; whatever fractions land
+the click on 「继续」 get baked into the constants and recorded in D1.
 
 Failure modes:
-- Window exists but cannot be brought to foreground → exit 22.
-- Tab+Enter sequence exhausted without handoff → exit 23.
+- Window exists but cannot be brought to foreground, or the rect/click
+  call is refused → exit 22.
+- Clicks exhausted without handoff → exit 23.
 
 **LAUNCHER_HANDOFF** — wait for `Paradox Launcher.exe` to exit, OR
 for `stellaris.exe` to appear (whichever first). If neither within 10 s
-after the final `Enter` press, exit 24. Then if `stellaris.exe` did
+after the final Continue click, exit 24. Then if `stellaris.exe` did
 not appear within `--game-timeout-s` of `Paradox Launcher.exe`'s exit,
 exit 31.
 
@@ -480,8 +505,8 @@ Each row: detection signal → exit code → stderr message key.
 | UIA detects Steam login window | 12 | `steam_login_required` |
 | UIA detects Stellaris update dialog | 13 | `stellaris_update_required` |
 | `Paradox Launcher.exe` process appears but no window in 5 s | 21 | `launcher_window_missing` |
-| LAUNCHER_KEYBOARD: window cannot be brought to foreground | 22 | `launcher_no_focus` |
-| LAUNCHER_KEYBOARD: Tab+Enter sequence exhausted, no handoff | 23 | `launcher_no_advance` |
+| LAUNCHER_CLICK: window cannot be brought to foreground, or rect/click call refused | 22 | `launcher_no_focus` |
+| LAUNCHER_CLICK: Continue click delivered but launcher did not advance within the settle window | 23 | `launcher_no_advance` |
 | LAUNCHER_HANDOFF: launcher exited, no `stellaris.exe` in 30 s | 31 | `game_did_not_spawn` |
 | GAME_OBSERVE: `stellaris.exe` status != running | 32 | `game_exited_early` |
 | GAME_OBSERVE: JIT debugger window appeared | 33 | `jit_dialog` |
@@ -509,12 +534,26 @@ No build-time deps. No native extensions to compile.
 The following are deliberately **left to the builder**, per the
 brainstorm session that produced this spec:
 
-- **D1.** Exact Tab/Enter sequence that successfully triggers the
-  launcher handoff. The first run on `Windows_Jiaolong` should
-  observe what `GetGUIThreadInfo` reports about the focused element
-  after each Tab press and record the minimal sequence that works.
-  The spec assumes `Enter` alone is enough, then `Tab`+`Enter` up to
-  3 times; if a different sequence is required, update this section.
+- **D1.** The launcher is advanced by a window-rect-relative click on the
+  「继续」 (Continue) button, **not** by keyboard. The Tab/Enter keyboard
+  sequence this section previously assumed is proven dead on
+  `Windows_Jiaolong` (the CEF launcher ignores Enter/Tab; the live run
+  reached exit 23). What actually works on the box is `SetCursorPos` +
+  `mouse_event` at a fraction of `GetWindowRect`, re-read every attempt.
+  **Tuned and confirmed on `Windows_Jiaolong` (live): the launcher opens
+  maximized at physical rect `(-11, 0, 2015, 1020)`; 「继续」 is centered
+  horizontally and at ~1/3 height, so `LAUNCHER_CONTINUE_FX = 0.502`,
+  `LAUNCHER_CONTINUE_FY = 0.333` → click screen `(1006, 339)`, which booted
+  `stellaris.exe` within ~5 s.**
+  - **DPI caveat (learned the hard way):** once `pywinauto`/UIA initializes,
+    the script's process becomes DPI-aware and `GetWindowRect` returns
+    *physical* pixels. A fraction measured from a *DPI-unaware* screenshot
+    (which sees the same window at a virtualized 1351×680) is wrong — it put
+    the button at fx 0.724 / fy 0.50 and the click missed. Fractions must be
+    measured in the same physical-pixel frame the script clicks in.
+  - If a future first-run screen shows Play/news instead of 「继续」, or the
+    launcher stops opening maximized, that is a re-measure (in the physical
+    frame), not extra code.
 - **D2.** Whether to spawn the URI via `os.startfile`,
   `subprocess.Popen(['cmd','/c','start',...])`, or `subprocess.Popen(['powershell','Start-Process',...])`.
   All three use the same protocol handler; the builder picks.
@@ -536,12 +575,16 @@ brainstorm session that produced this spec:
   introducing a new dependency. If `schtasks /IT` fails on this box's
   Windows build for any reason, fall back to `psexec -i` if present,
   else exit 42.
-- **D8.** *(resolved 2026-09-29 verification on `Windows_Jiaolong`.)*
-  UIA on PDX Launcher is non-cooperative: window class
-  `Chrome_WidgetWin_1` exposes only `Pane/RootView` with no
-  child controls. The chosen fallback is **keyboard input via
-  `SendInput`** (LAUNCHER_KEYBOARD phase). Image recognition and
-  coordinate clicks remain off the table per G3.
+- **D8.** *(resolved 2026-09-29 verification on `Windows_Jiaolong`;
+  amended 2026-10.)* UIA on PDX Launcher is non-cooperative: window class
+  `Chrome_WidgetWin_1` exposes only `Pane/RootView` with no child controls.
+  The first fallback tried was **keyboard input via `SendInput`**
+  (LAUNCHER_KEYBOARD phase) — that too is now proven dead on this CEF
+  surface (Enter/Tab ignored, live run hit exit 23). The chosen primitive
+  is a **window-rect-relative click** on 「继续」 (`GetWindowRect` +
+  `SetCursorPos`/`mouse_event`, LAUNCHER_CLICK phase) — permitted by the
+  G3 amendment. Image recognition and raw absolute-coordinate clicks remain
+  off the table per G3/A1.
 
 ## 9. Open questions for the user
 
@@ -552,8 +595,9 @@ were resolved:
   SESSION_BRIDGE phase (§5a).
 - Q2: PDX Launcher UIA verified non-cooperative on
   `Windows_Jiaolong` (window class `Chrome_WidgetWin_1`, control tree
-  is just `Pane/RootView`). Drives the LAUNCHER_KEYBOARD phase
-  (§5) — keyboard fallback chosen, per user pick "A".
+  is just `Pane/RootView`). Drives the LAUNCHER_CLICK phase (§5) — the
+  window-rect-relative Continue click is the chosen primitive (keyboard
+  fallback tried first, proven dead).
 - Q5: Retry ownership = A (agent retries). Drives re-entrant safety
   on PREKILL (§5).
 - Q6: AppID 281990 confirmed. Drives the default value of
@@ -584,8 +628,11 @@ phases, this section is where they go.
      `lofibass\13229`.
    - **Launcher UIA**: PDX Launcher window class is `Chrome_WidgetWin_1`;
      UIA control tree is just `Pane/RootView` with no children. UIA
-     is non-cooperative. **Fallback: keyboard input via `SendInput`**
-     (LAUNCHER_KEYBOARD phase).
+     is non-cooperative. First fallback was keyboard input via
+     `SendInput` (LAUNCHER_KEYBOARD), also proven dead on this CEF
+     surface. **Chosen primitive: window-rect-relative click on
+     「继续」** (`GetWindowRect` + `SetCursorPos`/`mouse_event`,
+     LAUNCHER_CLICK phase).
    - **Process name**: launcher runs as `Paradox Launcher.exe`
      (multiple instances per launch), NOT `launcher.exe`.
    - **Steam client state**: `steam.exe` already running in session
@@ -599,8 +646,9 @@ phases, this section is where they go.
    `scripts/windows/requirements.txt`.
 5. First-run smoke on `Windows_Jiaolong`: dry-run (verify bridge +
    pre-kill + window-attach), then a real launch triggered **over SSH**
-   (the actual use case). The first real launch should record what
-   `GetGUIThreadInfo` reports about the focused element after each
-   Tab press, to pin down D1's exact Tab/Enter sequence.
+   (the actual use case). The first real launch should print the
+   launcher's `GetWindowRect` and tune `LAUNCHER_CONTINUE_FX` /
+   `LAUNCHER_CONTINUE_FY` so the rect-relative click lands on 「继续」,
+   to pin down D1's working fractions.
 6. After 50 successful unattended runs over SSH, this document is
    done.

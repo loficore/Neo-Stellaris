@@ -21,19 +21,20 @@ from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               EXIT_LAUNCHER_WINDOW_MISSING, EXIT_OK,
                               EXIT_PREKILL_PERMISSION,
                               EXIT_STEAM_LOGIN_REQUIRED, EXIT_WER_DIALOG,
-                              INPUT, INPUT_KEYBOARD, KEYBDINPUT, VK_RETURN,
-                              VK_TAB, ChainResult, _enum_windows_owned_by,
+                              LAUNCHER_CONTINUE_FX, LAUNCHER_CONTINUE_FY,
+                              MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+                              ChainResult, _click_at, _enum_windows_owned_by,
                               _handoff_observed, _hwnd_for_pid,
                               _is_jit_dialog_visible, _is_wer_dialog_visible,
                               _poll_marker, _read_marker_pid,
-                              _steam_has_window, _top_windows, _write_marker,
-                              bridge_to_interactive_session,
+                              _steam_has_window, _top_windows, _window_rect,
+                              _write_marker, bridge_to_interactive_session,
                               bring_to_foreground, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, build_inner_tr,
-                              game_observe, launcher_handoff,
-                              launcher_keyboard, launcher_wait, main, prekill,
-                              run_launch_chain, send_key, steam_ready,
+                              game_observe, launcher_click, launcher_handoff,
+                              launcher_wait, main, prekill,
+                              run_launch_chain, steam_ready,
                               steam_spawn, timeline_event)
 
 
@@ -661,11 +662,11 @@ def test_bridge_returns_44_when_shim_path_exceeds_schtasks_ceiling():
 #   prekill + steam_spawn   3s
 #   steam_ready            30s   (= --launcher-timeout-s)
 #   launcher_wait          30s   (= --launcher-timeout-s)
-#   launcher_keyboard      24s   (Enter + 3x Tab+Enter, 5s wait each)
+#   launcher_click         19s   (foreground + settle + 3 click/settle rounds)
 #   game_timeout           30s   (= --game-timeout-s, Task 6)
 #   observe                30s   (= --observe-s, Task 6)
 #                         ------
-#                          147s
+#                          142s
 #
 # The hard-coded 90 s default drifted below that as soon as Task 6 added
 # 60 s of game-observe. A future change to any phase budget widens the
@@ -694,7 +695,7 @@ def test_default_bridge_timeout_reflects_every_phase_budget():
         launch_stellaris._INNER_BUDGET_PREKILL_SPAWN_S,
         launch_stellaris._INNER_BUDGET_STEAM_READY_S,
         launch_stellaris._INNER_BUDGET_LAUNCHER_WAIT_S,
-        launch_stellaris._INNER_BUDGET_LAUNCHER_KEYBOARD_S,
+        launch_stellaris._INNER_BUDGET_LAUNCHER_CLICK_S,
         launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S,
     ]
     assert sum(components) == launch_stellaris._INNER_CHAIN_BUDGET_S
@@ -710,10 +711,10 @@ def test_inner_budget_table_tracks_the_argparse_defaults():
     derivation test above cannot fail unless someone edits the module. This
     one anchors them to build_arg_parser() instead: editing a CLI default
     without updating the table now fails here, instead of silently leaving the
-    bridge (180 s) shorter than the inner chain it has to contain.
+    bridge (175 s) shorter than the inner chain it has to contain.
 
     Reachable today: --launcher-timeout-s 90 makes the inner traverse ~269 s
-    against an unchanged 180 s bridge, so the outer reports a spurious 43.
+    against an unchanged 175 s bridge, so the outer reports a spurious 43.
     """
     args = build_arg_parser().parse_args([])
     assert args.launcher_timeout_s == launch_stellaris._INNER_BUDGET_STEAM_READY_S
@@ -722,15 +723,15 @@ def test_inner_budget_table_tracks_the_argparse_defaults():
         launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S)
 
 
-def test_inner_budget_keyboard_matches_the_key_sequence_it_covers():
-    """The keyboard budget has no CLI flag, so nothing else ties it to the
-    constants it is derived from: 1 focus settle, 1 Enter + 3x Tab+Enter, each
-    followed by _KEY_SETTLE_S, inside a _FOREGROUND_TIMEOUT_S bring-to-front."""
+def test_inner_budget_click_matches_the_click_sequence_it_covers():
+    """The click budget has no CLI flag, so nothing else ties it to the
+    constants it is derived from: a _FOREGROUND_TIMEOUT_S bring-to-front, one
+    focus settle, then _CLICK_ATTEMPTS clicks each followed by _CLICK_SETTLE_S."""
     assert (launch_stellaris._FOREGROUND_TIMEOUT_S
             + launch_stellaris._FOCUS_SETTLE_S
-            + launch_stellaris._KEY_SETTLE_S
-            * (launch_stellaris._TAB_ENTER_ATTEMPTS + 1)) == (
-        launch_stellaris._INNER_BUDGET_LAUNCHER_KEYBOARD_S)
+            + launch_stellaris._CLICK_SETTLE_S
+            * launch_stellaris._CLICK_ATTEMPTS) == (
+        launch_stellaris._INNER_BUDGET_LAUNCHER_CLICK_S)
 
 
 def test_phase_timeout_help_flags_the_bridge_coupling():
@@ -912,43 +913,44 @@ def test_inner_tr_omits_flags_the_user_did_not_set():
     assert "--inner" in tr and "--marker" in tr
 
 
-def test_input_struct_layout_matches_the_sendinput_abi():
-    """INPUT is 40 bytes on x64 and 28 on x86; SendInput rejects anything else.
+def test_window_rect_reads_the_four_edges_and_raises_on_failure():
+    """The click is anchored to the rect, so reading it wrong (or not at all)
+    silently clicks the desktop. GetWindowRect returning FALSE is that failure,
+    and _window_rect has to surface it rather than hand back a zero rect."""
+    with patch("launch_stellaris._cursor_fns",
+               return_value=(MagicMock(return_value=1), MagicMock(),
+                             MagicMock())):
+        edges = _window_rect(4242)
+    assert len(edges) == 4 and all(isinstance(v, int) for v in edges), edges
 
-    The brief's version spells the fields ctypes.wintypes.WORD/DWORD, which are
-    c_ulong: 2 bytes and 8 bytes on this LP64 host but 2 and 4 on Windows. The
-    struct would therefore be a silently wrong cbsize on any non-Windows import
-    of this module. Fixed-width c_uint16/c_uint32 keeps one layout everywhere,
-    and this assertion is what stops a future 'cleanup' back to _wt.
-    """
-    is_64 = ctypes.sizeof(ctypes.c_void_p) == 8
-    assert ctypes.sizeof(KEYBDINPUT) == (24 if is_64 else 16)
-    assert ctypes.sizeof(INPUT) == (40 if is_64 else 28)
-
-
-def test_send_key_requests_one_keyboard_event_carrying_the_vk():
-    send_input = MagicMock(return_value=1)
-    with patch("launch_stellaris._input_fns",
-               return_value=(MagicMock(), MagicMock(), send_input)):
-        send_key(VK_RETURN)
-    send_input.assert_called_once()
-    n_inputs, p_inputs, cb_size = send_input.call_args[0]
-    assert n_inputs == 1
-    assert cb_size == ctypes.sizeof(INPUT)
-    sent = ctypes.cast(p_inputs, ctypes.POINTER(INPUT))[0]
-    assert sent.type == INPUT_KEYBOARD
-    assert sent.ki.wVk == VK_RETURN
+    # GetWindowRect returning FALSE means the hwnd is dead or off-screen.
+    with patch("launch_stellaris._cursor_fns",
+               return_value=(MagicMock(return_value=0), MagicMock(),
+                             MagicMock())):
+        with pytest.raises(OSError):
+            _window_rect(4242)
 
 
-def test_send_key_raises_when_sendinput_delivers_nothing():
-    """SendInput returns 0 when the keystroke was blocked — UIPI against a
+def test_click_at_moves_the_cursor_then_clicks_left_down_and_up():
+    set_pos = MagicMock(return_value=1)
+    mouse = MagicMock()
+    with patch("launch_stellaris._cursor_fns",
+               return_value=(MagicMock(), set_pos, mouse)):
+        _click_at(640, 360)
+    set_pos.assert_called_once_with(640, 360)
+    flags = [c.args[0] for c in mouse.call_args_list]
+    assert flags == [MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP]
+
+
+def test_click_at_raises_when_setcursorpos_is_refused():
+    """SetCursorPos returning 0 means the click was blocked — UIPI against a
     higher-integrity foreground window, typically. Swallowing that makes the
-    whole Tab/Enter sequence a silent no-op that still reports success."""
-    send_input = MagicMock(return_value=0)
-    with patch("launch_stellaris._input_fns",
-               return_value=(MagicMock(), MagicMock(), send_input)), \
-            pytest.raises(OSError):
-        send_key(VK_RETURN)
+    whole drive a silent no-op that still reports success."""
+    with patch("launch_stellaris._cursor_fns",
+               return_value=(MagicMock(), MagicMock(return_value=0),
+                             MagicMock())):
+        with pytest.raises(OSError):
+            _click_at(640, 360)
 
 
 @contextlib.contextmanager
@@ -1084,7 +1086,7 @@ def test_bring_to_foreground_succeeds_once_it_owns_the_foreground():
     set_fg, get_fg = MagicMock(), MagicMock(return_value=4242)
     with _fake_clock(), \
             patch("launch_stellaris._input_fns",
-                  return_value=(set_fg, get_fg, MagicMock())):
+                  return_value=(set_fg, get_fg)):
         assert bring_to_foreground(4242) is True
     set_fg.assert_called_once_with(4242)
 
@@ -1096,7 +1098,7 @@ def test_bring_to_foreground_gives_up_when_another_window_keeps_focus():
     set_fg, get_fg = MagicMock(), MagicMock(return_value=9999)
     with _fake_clock(), \
             patch("launch_stellaris._input_fns",
-                  return_value=(set_fg, get_fg, MagicMock())):
+                  return_value=(set_fg, get_fg)):
         assert bring_to_foreground(4242) is False
 
 
@@ -1112,101 +1114,134 @@ def test_handoff_observed_when_stellaris_appears_beside_the_launcher():
 
 
 def test_handoff_not_observed_while_only_the_launcher_is_alive():
-    """The launcher staying put means the keystrokes did not land. Reporting a
-    handoff here hands Task 6 a launcher window and no game."""
+    """The launcher staying put means the click did not land on Continue.
+    Reporting a handoff here hands Task 6 a launcher window and no game."""
     with patch("psutil.process_iter",
                return_value=[_fake_proc("Paradox Launcher.exe", 2)]):
         assert _handoff_observed() is False
 
 
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect", return_value=(0, 0, 1000, 1000))
 @patch("launch_stellaris._time.sleep", return_value=None)
-@patch("launch_stellaris.send_key")
 @patch("launch_stellaris.bring_to_foreground", return_value=True)
-def test_launcher_keyboard_returns_22_when_focus_fails(mock_fg, mock_key, mock_sleep):
-    """Keystrokes sent to a window that is not foreground go to the window that
-    is. Refuse instead of typing into whatever the user had open."""
+def test_launcher_click_returns_22_when_focus_fails(mock_fg, mock_sleep,
+                                                     mock_rect, mock_click):
+    """A click lands wherever the cursor is, which is whatever window the user
+    last touched when the launcher is not foreground. Refuse before clicking."""
     mock_fg.return_value = False
-    assert launcher_keyboard(4242) == EXIT_LAUNCHER_NO_FOCUS
-    mock_key.assert_not_called()
+    assert launcher_click(4242) == EXIT_LAUNCHER_NO_FOCUS
+    mock_click.assert_not_called()
 
 
+@patch("launch_stellaris._click_at", side_effect=OSError(5, "access denied"))
+@patch("launch_stellaris._window_rect", return_value=(0, 0, 1000, 1000))
 @patch("launch_stellaris._time.sleep", return_value=None)
-@patch("launch_stellaris.send_key", side_effect=OSError(5, "access denied"))
 @patch("launch_stellaris.bring_to_foreground", return_value=True)
-def test_launcher_keyboard_reports_no_focus_when_sendinput_is_blocked(
-        mock_fg, mock_key, mock_sleep):
-    """SendInput returning 0 means UIPI refused the keystroke. Letting that
+def test_launcher_click_reports_no_focus_when_the_click_is_blocked(
+        mock_fg, mock_sleep, mock_rect, mock_click):
+    """SetCursorPos returning 0 means UIPI refused the click. Letting that
     OSError escape would exit main() with code 1 — undocumented, and worse, the
     run returns before _write_marker, so the outer bridge never learns the inner
     died and sits there until its own timeout, reporting 43 instead."""
-    assert launcher_keyboard(4242) == EXIT_LAUNCHER_NO_FOCUS
+    assert launcher_click(4242) == EXIT_LAUNCHER_NO_FOCUS
 
 
-@patch("launch_stellaris._time.sleep", return_value=None)
-@patch("launch_stellaris.send_key")
-@patch("launch_stellaris.bring_to_foreground", return_value=True)
 @patch("launch_stellaris._handoff_observed", return_value=False)
-def test_launcher_keyboard_returns_23_after_exhausting_the_sequence(
-        mock_handoff, mock_fg, mock_key, mock_sleep):
-    assert launcher_keyboard(4242) == EXIT_LAUNCHER_NO_ADVANCE
-    # Enter, then Tab+Enter three times — the whole documented sequence, in order.
-    assert [c.args[0] for c in mock_key.call_args_list] == [
-        VK_RETURN, VK_TAB, VK_RETURN, VK_TAB, VK_RETURN, VK_TAB, VK_RETURN]
-    # One probe after Enter, one after each Tab+Enter: no probe is missing.
-    assert mock_handoff.call_count == 4
-
-
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect", return_value=(0, 0, 1000, 1000))
 @patch("launch_stellaris._time.sleep", return_value=None)
-@patch("launch_stellaris.send_key")
 @patch("launch_stellaris.bring_to_foreground", return_value=True)
+def test_launcher_click_returns_23_after_exhausting_the_attempts(
+        mock_fg, mock_sleep, mock_rect, mock_click, mock_handoff):
+    """Every attempt landed on the Continue point and none handed off — the
+    button moved, or this launcher variant has no save to continue. That is the
+    documented 'click did not advance the launcher' failure, not a hang."""
+    assert launcher_click(4242) == EXIT_LAUNCHER_NO_ADVANCE
+    assert mock_click.call_count == launch_stellaris._CLICK_ATTEMPTS
+    assert mock_handoff.call_count == launch_stellaris._CLICK_ATTEMPTS
+
+
 @patch("launch_stellaris._handoff_observed", return_value=True)
-def test_launcher_keyboard_stops_when_plain_enter_is_enough(
-        mock_handoff, mock_fg, mock_key, mock_sleep):
-    """The launcher's default focus is the Play button. Every extra keystroke
-    after handoff types into a game that is already loading."""
-    assert launcher_keyboard(4242) == EXIT_OK
-    assert [c.args[0] for c in mock_key.call_args_list] == [VK_RETURN]
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect", return_value=(0, 0, 1000, 1000))
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+def test_launcher_click_stops_at_the_first_handoff(
+        mock_fg, mock_sleep, mock_rect, mock_click, mock_handoff):
+    """A second click after the game is launching would land in the loading
+    screen. The drive stops the moment the handoff signal fires."""
+    assert launcher_click(4242) == EXIT_OK
+    assert mock_click.call_count == 1
     assert mock_handoff.call_count == 1
 
 
+@patch("launch_stellaris._handoff_observed", return_value=False)
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect")
 @patch("launch_stellaris._time.sleep", return_value=None)
-@patch("launch_stellaris.send_key")
 @patch("launch_stellaris.bring_to_foreground", return_value=True)
-@patch("launch_stellaris._handoff_observed", side_effect=[False, True])
-def test_launcher_keyboard_stops_at_the_first_tab_enter_that_works(
-        mock_handoff, mock_fg, mock_key, mock_sleep):
-    assert launcher_keyboard(4242) == EXIT_OK
-    assert [c.args[0] for c in mock_key.call_args_list] == [
-        VK_RETURN, VK_TAB, VK_RETURN]
-    assert mock_handoff.call_count == 2
+def test_launcher_click_clicks_the_continue_fraction_of_the_rect(
+        mock_fg, mock_sleep, mock_rect, mock_click, mock_handoff):
+    """The button position is a fraction of the window rect, so a maximised
+    launcher and a floating one are both aimed correctly from the same code."""
+    mock_rect.return_value = (0, 0, 1000, 1000)
+    launcher_click(4242)
+    expected_x = int(0 + LAUNCHER_CONTINUE_FX * 1000)
+    expected_y = int(0 + LAUNCHER_CONTINUE_FY * 1000)
+    mock_click.assert_called_with(expected_x, expected_y)
+
+
+@patch("launch_stellaris._handoff_observed", return_value=False)
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect")
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+def test_launcher_click_re_reads_the_rect_every_attempt(
+        mock_fg, mock_sleep, mock_rect, mock_click, mock_handoff):
+    """Plan B's whole point: the user can move the launcher mid-drive, so the
+    rect is re-read per attempt and the click tracks it. A single startup read
+    would click the old position the moment the window moved."""
+    mock_rect.side_effect = [(0, 0, 1000, 1000), (1000, 1000, 2000, 2000),
+                             (500, 0, 1500, 1000)]
+    launcher_click(4242)
+    assert mock_rect.call_count == launch_stellaris._CLICK_ATTEMPTS
+    coords = [c.args[0:2] for c in mock_click.call_args_list]
+    fx = LAUNCHER_CONTINUE_FX
+    fy = LAUNCHER_CONTINUE_FY
+    assert coords == [
+        (int(fx * 1000), int(fy * 1000)),
+        (int(1000 + fx * 1000), int(1000 + fy * 1000)),
+        (int(500 + fx * 1000), int(fy * 1000)),
+    ], coords
 
 
 @patch("launch_stellaris.game_observe", return_value=EXIT_OK)
 @patch("launch_stellaris.launcher_handoff", return_value=5555)
-@patch("launch_stellaris.launcher_keyboard", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_click", return_value=EXIT_OK)
 @patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
 @patch("launch_stellaris.steam_ready", return_value=10748)
 @patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
 @patch("launch_stellaris.prekill", return_value=EXIT_OK)
 def test_run_launch_chain_waits_for_the_launcher_window_then_drives_it(
-        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_keyboard,
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click,
         mock_handoff, mock_observe):
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_OK
     mock_wait.assert_called_once_with(30)  # --launcher-timeout-s default
-    mock_keyboard.assert_called_once_with(12345)
+    mock_click.assert_called_once_with(12345)
     # Task 6: the drive is not the end of the chain — the game has to appear
     # and then survive its observation window.
     mock_handoff.assert_called_once_with(30)  # --game-timeout-s default
     mock_observe.assert_called_once_with(5555, 30)  # --observe-s default
 
 
-@patch("launch_stellaris.launcher_keyboard", return_value=EXIT_LAUNCHER_NO_ADVANCE)
+@patch("launch_stellaris.launcher_click", return_value=EXIT_LAUNCHER_NO_ADVANCE)
 @patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
 @patch("launch_stellaris.steam_ready", return_value=10748)
 @patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
 @patch("launch_stellaris.prekill", return_value=EXIT_OK)
-def test_run_launch_chain_propagates_a_keyboard_failure(
-        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_keyboard):
+def test_run_launch_chain_propagates_a_click_failure(
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click):
     """The launcher's own exit code has to reach the bridge marker verbatim —
     that DONE:<rc> is the only thing the outer process learns."""
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_LAUNCHER_NO_ADVANCE
@@ -1221,18 +1256,18 @@ def test_run_launch_chain_returns_21_when_no_launcher_window_appears(
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_LAUNCHER_WINDOW_MISSING
 
 
-@patch("launch_stellaris.launcher_keyboard", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_click", return_value=EXIT_OK)
 @patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
 @patch("launch_stellaris.steam_ready", return_value=None)
 @patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
 @patch("launch_stellaris.prekill", return_value=EXIT_OK)
-def test_run_launch_chain_dry_run_skips_the_keyboard(
-        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_keyboard):
+def test_run_launch_chain_dry_run_skips_the_click(
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click):
     """--dry-run spawns no URI, so no launcher exists and there is no window to
-    type into. Typing anyway would hammer whatever window the user has open."""
+    click into. Clicking anyway would hammer whatever window the user has open."""
     args = build_arg_parser().parse_args(["--dry-run"])
     assert run_launch_chain(args) == EXIT_OK
-    mock_keyboard.assert_not_called()
+    mock_click.assert_not_called()
 
 
 @patch("launch_stellaris.launcher_wait", return_value=None)
@@ -1252,7 +1287,7 @@ def test_run_launch_chain_dry_run_tolerates_a_missing_launcher_window(
 # Task 6: LAUNCHER_HANDOFF + GAME_OBSERVE.
 #
 # The launcher drive is not the end of the chain. These two phases turn
-# "we pressed some keys" into "here is a PID you can watch", and that PID
+# "we clicked Continue" into "here is a PID you can watch", and that PID
 # into a typed verdict.
 # ---------------------------------------------------------------------------
 
@@ -1288,7 +1323,7 @@ def test_launcher_handoff_returns_none_when_the_game_never_appears():
 
 
 def test_launcher_handoff_keeps_polling_until_the_game_appears():
-    """launcher_keyboard stops at the first handoff *signal*, which also fires
+    """launcher_click stops at the first handoff *signal*, which also fires
     when the launcher merely exits. The game can lag that by seconds — a
     single-shot probe reports 31 on every real launch."""
     scans = []
@@ -1651,7 +1686,7 @@ def _full_chain(game_pid=5555, handoff_rc=_HANDOFF_DEFAULT, observe_rc=EXIT_OK):
         patch("launch_stellaris.steam_spawn", return_value=EXIT_OK),
         patch("launch_stellaris.steam_ready", return_value=10748),
         patch("launch_stellaris.launcher_wait", return_value=(4242, 12345)),
-        patch("launch_stellaris.launcher_keyboard", return_value=EXIT_OK),
+        patch("launch_stellaris.launcher_click", return_value=EXIT_OK),
         patch("launch_stellaris.launcher_handoff",
               return_value=game_pid if handoff_rc is _HANDOFF_DEFAULT
               else handoff_rc),
@@ -1717,7 +1752,7 @@ def test_run_launch_chain_does_not_drive_or_wait_in_a_dry_run():
     args = build_arg_parser().parse_args(["--dry-run"])
     with _full_chain() as mocks:
         assert run_launch_chain(args) == EXIT_OK
-    mocks[4].assert_not_called()  # launcher_keyboard
+    mocks[4].assert_not_called()  # launcher_click
     mocks[5].assert_not_called()  # launcher_handoff
     mocks[6].assert_not_called()  # game_observe
 
@@ -2185,7 +2220,7 @@ def test_bring_to_foreground_logs_why_the_foreground_was_refused(capsys):
     get_fg = MagicMock(return_value=9999)
     with _fake_clock(), \
             patch("launch_stellaris._input_fns",
-                  return_value=(set_fg, get_fg, MagicMock())), \
+                  return_value=(set_fg, get_fg)), \
             patch("launch_stellaris._last_error", return_value=5):
         assert bring_to_foreground(4242) is False
     err = capsys.readouterr().err
@@ -2303,7 +2338,7 @@ def test_inner_aborts_between_phases_when_the_lease_disappears():
     """Checking once at startup would only cover the phases that do no harm.
     The check runs again before every phase, so a lease removed while PREKILL
     was running still stops the run before STEAM_SPAWN and, crucially, before
-    any keystroke."""
+    any click into the launcher."""
     with tempfile.TemporaryDirectory() as td:
         lease = Path(td) / "live.lease"
         lease.write_text("", encoding="utf-8")
