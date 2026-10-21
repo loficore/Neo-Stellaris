@@ -1619,14 +1619,22 @@ def test_main_inner_marker_carries_no_pid_when_the_chain_fails():
 
 @contextlib.contextmanager
 def _bridged(marker, content):
-    """Run bridge_to_interactive_session against a marker that is already
-    written, as if the inner had finished. Yields the mocked subprocess.run.
+    """Run bridge_to_interactive_session against a marker the inner writes,
+    as if a real inner had finished. Yields the mocked subprocess.run.
 
-    The marker is pre-written rather than produced by a real inner: the bridge
-    only needs it to exist by the time _poll_marker looks, and this keeps the
-    test to the one hop that is actually under test — marker file to stdout."""
-    Path(marker).write_text(content, encoding="utf-8")
-    mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
+    The marker is written from inside the mocked `schtasks /run` call, not
+    before the bridge starts: the bridge clears any pre-existing marker
+    (I-1, a leftover from a killed outer would otherwise hand the caller a
+    stale DONE:/PID: pair), so a helper that pre-wrote the file would be
+    describing a state the bridge is required to destroy."""
+    mock_run = MagicMock()
+
+    def _fake_run(cmd, *a, **kw):
+        if isinstance(cmd, list) and "/run" in cmd:
+            Path(marker).write_text(content, encoding="utf-8")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    mock_run.side_effect = _fake_run
     with patch("subprocess.run", mock_run), \
             patch("launch_stellaris.current_session_id", return_value=0), \
             patch("launch_stellaris.interactive_session_id", return_value=1):
@@ -1695,3 +1703,40 @@ def test_bridge_reads_the_pid_before_deleting_the_marker(capsys):
             assert bridge_to_interactive_session(args) == EXIT_OK
         assert not os.path.exists(marker)  # cleanup still happens
     assert capsys.readouterr().out == "4242\n"
+
+
+def test_bridge_clears_a_stale_marker_before_it_starts_polling(capsys):
+    """I-1: a marker left behind by a killed outer, landing on a path a reused
+    PID hands to a new one, makes _poll_marker return the *old* DONE: line on
+    its first tick. Before the PID: line that was exit 0 with empty stdout;
+    now it is exit 0 plus a stale PID — and that PID is the value the agent
+    feeds to the DLL attach. A wrong PID fails later and further from the
+    cause than a missing one, and may name an unrelated process.
+
+    So the bridge has to destroy anything at that path before it schedules the
+    inner, not just after it finishes. Both halves are asserted: the file is
+    gone by the time `schtasks /create` runs, and the poll then waits for a
+    fresh write instead of accepting the leftover."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        Path(marker).write_text("PID:31337\nDONE:0\n", encoding="utf-8")
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        marker_existed = []
+
+        def _fake_run(cmd, *a, **kw):
+            if isinstance(cmd, list) and "/create" in cmd:
+                marker_existed.append(os.path.exists(marker))
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=_fake_run), \
+                patch("launch_stellaris.current_session_id", return_value=0), \
+                patch("launch_stellaris.interactive_session_id", return_value=1):
+            rc = bridge_to_interactive_session(args)
+
+    assert marker_existed == [False], (
+        "the stale marker survived until /create — the poll would accept it")
+    # No inner wrote anything, so there is nothing to report: a timeout, not
+    # the stale success the leftover claimed.
+    assert rc == EXIT_BRIDGE_TIMEOUT
+    assert capsys.readouterr().out == ""

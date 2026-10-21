@@ -949,6 +949,22 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     task_name = f"stellaris-launch-{pid}-{ts}"
     marker = args.marker or _default_marker_path(pid)
 
+    # Destroy anything already at the marker path *before* scheduling the
+    # inner, not just after it finishes. A marker leaked by a killed outer
+    # plus Windows PID reuse puts the new outer's path on the old file, and
+    # _poll_marker would then read the old DONE: on its first tick — exit 0
+    # carrying the previous run's PID, which is the value the caller feeds to
+    # the DLL attach. Cleared here rather than at poll time so every exit path
+    # below leaves no stale marker for the next run to trip over.
+    #
+    # A nonce in the default path would not cover this: --marker is part of
+    # the documented CLI, and a caller-supplied path is the one that needs the
+    # guarantee most.
+    if os.path.exists(marker):
+        log_event("BRIDGE", step="stale_marker_cleared", marker=marker)
+        with contextlib.suppress(OSError):
+            os.remove(marker)
+
     # Build the inner command line and write the /tr shim. schtasks refuses
     # /tr values > 261 chars; the inline command is 276 chars by default and
     # 309 with --no-prekill --dry-run --verbose — both over. The shim replaces
