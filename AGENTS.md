@@ -96,7 +96,7 @@ All analysis artifacts go to `evidence/` at project root:
 `docs/superpowers/`)里写出的 `scripts/<path>` 解析得到,scratch 按 basename 兜底;`evidence/` 不可变,永不扫。
 **加豁免 = 把文件名写进那条规则函数的 docstring,不是 `xfail`** —— `xfail` 会藏掉这座围栏就是为了防的漂移,
 所以连 P10 都不给豁免。反过来,改名要写文档、每个维护中的工具在 `docs/offline-tooling.md` 有一节 —— 这两条
-**不在围栏里**,仍然只有人在读。
+**不在围栏里**(改名留下的死引用只被 `R-refs` 兜住一半:它只看 living docs,不看 `evidence/`),仍然只有人在读。
 
 ## IDA Pro MCP Workflow
 
