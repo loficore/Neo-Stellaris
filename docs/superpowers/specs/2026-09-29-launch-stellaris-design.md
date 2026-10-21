@@ -220,6 +220,7 @@ Example:
 | 32 | Game: `stellaris.exe` died within the observation window. stderr includes how long it lived and the exit code. |
 | 33 | Game: JIT debugger dialog detected during observation. E4 was violated; human action needed. |
 | 34 | Game: Windows Error Reporting dialog detected during observation. Human action needed. |
+| 44 | Bridge: the `/tr` shim cannot be delivered — its payload exceeds schtasks' 261-character ceiling, or is not representable in the OEM codepage `cmd.exe` parses `.cmd` files in. Detected before `schtasks` is invoked; a `schtasks` rejection of either would surface as the misleading 42. |
 | 99 | Internal: unexpected exception. stderr includes the traceback. |
 
 Codes 12, 13, 33, 34 are "go look at the box" failures — the script
@@ -322,10 +323,15 @@ Otherwise the script:
    working: the inner process lands in session 1 as user
    `lofibass\13229`, not in the SSH caller's session 0.
 4. Polls the marker file every 0.5 s, up to `--bridge-timeout-s`
-   (default 90), for a final `DONE:<exitcode>` line. The marker also
-   receives an append of stderr lines from the inner run, so the
-   outer can mirror them to its own stderr to preserve a single
-   timeline.
+   (default 90), for a final `DONE:<exitcode>` line. On a clean
+   run the marker also carries `PID:<pid>` — written just above
+   the `DONE:` line — because the inner's stdout goes to the
+   schtasks-spawned process tree and never reaches the caller.
+   The outer reads it back and prints the PID on **its** stdout,
+   which is the only channel the SSH caller reads. The marker
+   also receives an append of stderr lines from the inner run, so
+   the outer can mirror them to its own stderr to preserve a
+   single timeline.
 5. Cleans up: `schtasks /delete /tn <name> /f`, deletes the marker,
    exits with the inner's exit code.
 
@@ -459,6 +465,7 @@ Each row: detection signal → exit code → stderr message key.
 | No logged-on interactive session (SSH context, headless box) | 41 | `no_interactive_session` |
 | `schtasks` unavailable or permission denied | 42 | `schtasks_denied` |
 | Inner invocation did not complete in `--bridge-timeout-s` | 43 | `bridge_timeout` |
+| `/tr` shim payload over the 261-char ceiling, or not OEM-codepage representable | 44 | `tr_too_long` / `shim_payload_non_ascii` |
 | `taskkill` fails with permission error | 2 | `prekill_permission` |
 | `steam://` URI does not produce Steam process within 15 s | 11 | `steam_no_client` |
 | UIA detects Steam login window | 12 | `steam_login_required` |

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import launch_stellaris
 import psutil
 import pytest
-from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
+from launch_stellaris import (ChainResult, EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
                               EXIT_BRIDGE_TR_TOO_LONG, EXIT_GAME_DID_NOT_SPAWN,
                               EXIT_GAME_EXITED_EARLY, EXIT_INTERNAL,
@@ -25,13 +25,14 @@ from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
                               VK_TAB, _enum_windows_owned_by,
                               _handoff_observed, _hwnd_for_pid,
                               _is_jit_dialog_visible, _is_wer_dialog_visible,
-                              _poll_marker, _steam_has_window, _top_windows,
+                              _poll_marker, _read_marker_pid,
+                              _steam_has_window, _top_windows,
                               _write_marker, bridge_to_interactive_session,
                               bring_to_foreground, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, build_inner_tr,
                               game_observe, launcher_handoff,
-                              launcher_keyboard, launcher_wait, prekill,
+                              launcher_keyboard, launcher_wait, main, prekill,
                               run_launch_chain, send_key, steam_ready,
                               steam_spawn, timeline_event)
 
@@ -1273,6 +1274,33 @@ def test_is_jit_dialog_visible_matches_the_dialog_title():
         assert _is_jit_dialog_visible() is True
 
 
+def test_is_jit_dialog_visible_matches_the_vsjitdebugger_process():
+    """The process is the locale-independent signal, exactly as WerFault.exe is
+    for WER. The title match alone only works on an English VS: the box this
+    script targets runs a zh-CN Windows, where the dialog's own title is
+    localized and the substring never matches.
+
+    Verified on Windows_Jiaolong rather than assumed: HKLM\\SOFTWARE\\Microsoft\\
+    Windows NT\\CurrentVersion\\AeDebug\\Debugger is
+        "C:\\Windows\\system32\\vsjitdebugger.exe" -p %ld -e %ld -j 0x%p
+    and launching that image with those arguments leaves the process alive
+    (the OS spawns it only on an unhandled exception, so it is a JIT event and
+    nothing else). psutil's name is the image basename, matching WerFault."""
+    with patch("psutil.process_iter",
+               return_value=[_fake_proc("vsjitdebugger.exe", 4123)]), \
+            patch("launch_stellaris._top_windows", return_value=[]):
+        assert _is_jit_dialog_visible() is True
+
+
+def test_is_jit_dialog_visible_ignores_unrelated_processes():
+    """The process check must not widen into "some debugger is installed"."""
+    procs = [_fake_proc("steam.exe", 1), _fake_proc("stellaris.exe", 5555),
+             _fake_proc("devenv.exe", 900)]
+    with patch("psutil.process_iter", return_value=procs), \
+            patch("launch_stellaris._top_windows", return_value=[]):
+        assert _is_jit_dialog_visible() is False
+
+
 def test_is_jit_dialog_visible_ignores_ordinary_windows():
     """A false positive here ends a healthy run at EXIT_JIT_DIALOG (33),
     telling the agent the game crashed while it is loading perfectly well."""
@@ -1492,3 +1520,178 @@ def test_run_launch_chain_does_not_drive_or_wait_in_a_dry_run():
     mocks[4].assert_not_called()  # launcher_keyboard
     mocks[5].assert_not_called()  # launcher_handoff
     mocks[6].assert_not_called()  # game_observe
+
+
+# ---------------------------------------------------------------------------
+# The PID channel across the bridge.
+#
+# spec §4: on success stdout carries a bare `<pid>\n` and the caller parses it
+# with int(stdout.strip()). In a bridged run the inner's stdout goes to the
+# schtasks-spawned process tree, so the PID has to travel the marker file —
+# the only channel that already works — and the outer has to print it. Before
+# this, a fully successful bridged launch returned 0 with an empty stdout: the
+# agent that called the script got no PID to re-attach the DLL to.
+
+
+def test_marker_carries_the_pid_alongside_the_done_line():
+    """Both lines, or the PID has nowhere to go. DONE: stays last and keeps
+    its exact spelling — _poll_marker scans backwards for it and the bridge's
+    exit-code split depends on it."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        _write_marker(marker, EXIT_OK, pid=5555)
+        assert _poll_marker(marker, timeout_s=1) == "DONE:0"
+        assert _read_marker_pid(marker) == 5555
+
+
+def test_marker_omits_the_pid_line_when_there_is_no_pid():
+    """A failed run has no PID worth carrying, and a PID line on a non-zero
+    DONE: would invite a caller to read a dead game's handle as success."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        _write_marker(marker, EXIT_WER_DIALOG)
+        assert _poll_marker(marker, timeout_s=1) == "DONE:34"
+        assert _read_marker_pid(marker) is None
+
+
+def test_read_marker_pid_returns_none_for_a_torn_pid_line():
+    """int() on a half-written "PID:" raises. A marker we cannot read is a
+    marker with no PID, not an exception out of the bridge."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        Path(marker).write_text("PID:\nDONE:0\n", encoding="utf-8")
+        assert _read_marker_pid(marker) is None
+
+
+def test_read_marker_pid_returns_none_when_the_marker_is_missing():
+    with tempfile.TemporaryDirectory() as td:
+        assert _read_marker_pid(str(Path(td) / "never-written.txt")) is None
+
+
+def test_run_launch_chain_reports_the_game_pid_on_its_result():
+    """run_launch_chain still returns an EXIT_* int — 100+ tests and the
+    marker write in main() depend on that — so the PID rides out on a result
+    object rather than by changing the return type."""
+    result = ChainResult()
+    with _full_chain(game_pid=5555):
+        assert run_launch_chain(build_arg_parser().parse_args([]), result) == EXIT_OK
+    assert result.pid == 5555
+
+
+def test_run_launch_chain_leaves_the_pid_unset_when_observe_fails():
+    """The PID is only meaningful if the run succeeded. Carrying it on a 33
+    would make "PID present" stop meaning "healthy"."""
+    result = ChainResult()
+    with _full_chain(game_pid=5555, observe_rc=EXIT_JIT_DIALOG):
+        assert run_launch_chain(build_arg_parser().parse_args([]), result) == EXIT_JIT_DIALOG
+    assert result.pid is None
+
+
+def test_run_launch_chain_leaves_the_pid_unset_on_a_dry_run():
+    """--dry-run launches no game, so there is no PID to report."""
+    result = ChainResult()
+    with _full_chain():
+        assert run_launch_chain(
+            build_arg_parser().parse_args(["--dry-run"]), result) == EXIT_OK
+    assert result.pid is None
+
+
+def test_main_inner_writes_the_game_pid_into_the_marker():
+    """The whole inner half of the contract: chain -> result -> marker, so the
+    PID survives the hop the caller cannot see stdout across."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        with _full_chain(game_pid=5555):
+            rc = main(["--inner", "--marker", marker])
+        assert rc == EXIT_OK
+        assert _poll_marker(marker, timeout_s=1) == "DONE:0"
+        assert _read_marker_pid(marker) == 5555
+
+
+def test_main_inner_marker_carries_no_pid_when_the_chain_fails():
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        with _full_chain(game_pid=5555, observe_rc=EXIT_GAME_EXITED_EARLY):
+            assert main(["--inner", "--marker", marker]) == EXIT_GAME_EXITED_EARLY
+        assert _poll_marker(marker, timeout_s=1) == "DONE:32"
+        assert _read_marker_pid(marker) is None
+
+
+@contextlib.contextmanager
+def _bridged(marker, content):
+    """Run bridge_to_interactive_session against a marker that is already
+    written, as if the inner had finished. Yields the mocked subprocess.run.
+
+    The marker is pre-written rather than produced by a real inner: the bridge
+    only needs it to exist by the time _poll_marker looks, and this keeps the
+    test to the one hop that is actually under test — marker file to stdout."""
+    Path(marker).write_text(content, encoding="utf-8")
+    mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
+    with patch("subprocess.run", mock_run), \
+            patch("launch_stellaris.current_session_id", return_value=0), \
+            patch("launch_stellaris.interactive_session_id", return_value=1):
+        yield mock_run
+
+
+def test_bridge_prints_the_game_pid_from_the_marker_on_success(capsys):
+    """The contract the SSH caller actually parses: a bare integer, nothing
+    else, so int(stdout.strip()) works."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        with _bridged(marker, "PID:5555\nDONE:0\n"):
+            assert bridge_to_interactive_session(args) == EXIT_OK
+    out = capsys.readouterr().out
+    assert out == "5555\n", repr(out)
+    assert int(out.strip()) == 5555
+
+
+def test_bridge_prints_nothing_when_the_inner_reported_a_failure(capsys):
+    """A failed launch must not put a PID on stdout: the caller's parse would
+    happily hand the agent a handle to a dead or never-started process."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        with _bridged(marker, "DONE:31\n"):
+            assert bridge_to_interactive_session(args) == EXIT_GAME_DID_NOT_SPAWN
+    assert capsys.readouterr().out == ""
+
+
+def test_bridge_prints_nothing_when_the_marker_has_no_pid(capsys):
+    """rc 0 with no PID line: either an older inner or a dry run. Empty stdout
+    is the honest answer — the caller gets a ValueError, which it can act on,
+    instead of a plausible-looking wrong PID."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        with _bridged(marker, "DONE:0\n"):
+            assert bridge_to_interactive_session(args) == EXIT_OK
+    assert capsys.readouterr().out == ""
+
+
+def test_bridge_prints_no_pid_for_a_dry_run(capsys):
+    """--dry-run reaches EXIT_OK through the chain, not through a launch. It
+    must look like any other rc-0-with-no-PID run, not like a game started."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--dry-run", "--bridge-timeout-s", "1"])
+        with _bridged(marker, "DONE:0\n"):
+            assert bridge_to_interactive_session(args) == EXIT_OK
+    assert capsys.readouterr().out == ""
+
+
+def test_bridge_reads_the_pid_before_deleting_the_marker(capsys):
+    """Regression guard for the ordering: cleanup removes the marker file, so a
+    PID read after it would come back empty on every single run."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        with _bridged(marker, "PID:4242\nDONE:0\n"):
+            assert bridge_to_interactive_session(args) == EXIT_OK
+        assert not os.path.exists(marker)  # cleanup still happens
+    assert capsys.readouterr().out == "4242\n"

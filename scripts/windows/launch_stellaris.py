@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import ctypes
 import ctypes.wintypes as _wt
+import dataclasses
 import datetime as _dt
 import os
 import subprocess
@@ -91,12 +92,14 @@ _OBSERVE_POLL_S = 1.0
 # looks like in practice.
 _GONE_STATUSES = ("zombie", "dead")
 
-# Substrings that mark a crash dialog among the desktop's top-level windows.
-# Matched case-insensitively against both the window text and, when there is
-# none, the window class.
+# Crash-dialog signals. The title markers are substrings, matched
+# case-insensitively against both the window text and, when there is none, the
+# window class. The images are process names, matched case-insensitively the
+# same way psutil reports them.
 _JIT_TITLE_MARKERS = ("just-in-time debugger", "jit debugger",
                       "just in time debugger")
 _WER_TITLE_MARKERS = ("problem reporting", "werfault")
+_JIT_IMAGE = "vsjitdebugger.exe"
 _WER_IMAGE = "werfault.exe"
 
 
@@ -556,10 +559,39 @@ def _top_windows() -> list[tuple[int, str]]:
 def _is_jit_dialog_visible(windows: list[tuple[int, str]] | None = None) -> bool:
     """True if a Just-In-Time debugger dialog is up.
 
-    `windows` is the caller's snapshot for this tick. Optional so the
-    predicate stands alone; game_observe passes one desktop scan to both
-    predicates rather than paying for two.
+    The vsjitdebugger.exe process is the primary, locale-independent signal —
+    the same reasoning as WerFault.exe below. A title match cannot carry this
+    check on its own: the target box is zh-CN, the JIT dialog's title is
+    localized with the Visual Studio UI language, and "just-in-time debugger"
+    never appears in it.
+
+    Verified on Windows_Jiaolong rather than assumed: HKLM\\SOFTWARE\\Microsoft\\
+    Windows NT\\CurrentVersion\\AeDebug\\Debugger is
+        "C:\\Windows\\system32\\vsjitdebugger.exe" -p %ld -e %ld -j 0x%p
+    and running that image with those arguments leaves the process alive. The
+    OS spawns it only when a process takes an unhandled exception, so its
+    presence means a JIT event and nothing else — no "a debugger is installed"
+    false positive the way devenv.exe would be.
+
+    The title match stays as a fallback for a dialog hosted in some other
+    process, and so the check still fires on a box whose AeDebug points at a
+    different debugger image.
+
+    A vsjitdebugger.exe left over from an unrelated earlier crash is a false
+    positive that costs one spurious EXIT_JIT_DIALOG — the same cheap
+    direction the WER check already fails in, because the alternative is
+    reporting a crashed game as a healthy one. PREKILL does not reap it, on
+    the same footing as WerFault.exe.
+
+    `windows` is the caller's snapshot for this tick, and covers the title
+    half only. Optional so the predicate stands alone; game_observe passes one
+    desktop scan to both predicates rather than paying for two. The process
+    half scans on its own either way, for the same reason WerFault.exe does.
     """
+    for p in psutil.process_iter(["name"]):
+        name = p.info.get("name")
+        if name and name.lower() == _JIT_IMAGE:
+            return True
     for _, title in _top_windows() if windows is None else windows:
         lowered = title.lower()
         if any(m in lowered for m in _JIT_TITLE_MARKERS):
@@ -841,15 +873,53 @@ def _poll_marker(marker: str, timeout_s: float) -> str | None:
     return None
 
 
-def _write_marker(marker: str, code: int) -> None:
+def _read_marker_pid(marker: str) -> int | None:
+    """The game's PID from the marker's PID: line, or None when there is none.
+
+    A separate read from _poll_marker rather than a richer return, because
+    test_marker_round_trip_carries_inner_exit_code pins _poll_marker to the
+    bare 'DONE:<rc>' string and the bridge's exit-code split depends on it.
+
+    A missing marker, a torn 'PID:' line, a marker written by a failed inner
+    and a marker with no PID: line at all all mean the same thing — no PID to
+    report — so none of them raise. 0 is rejected for the same reason: it is
+    never a real process, and handing it to the caller would parse cleanly
+    while naming nothing.
+    """
+    try:
+        with open(marker, encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return None
+    for line in reversed(content.splitlines()):
+        if line.startswith("PID:"):
+            try:
+                pid = int(line.split(":", 1)[1])
+            except ValueError:
+                return None
+            return pid if pid > 0 else None
+    return None
+
+
+def _write_marker(marker: str, code: int, pid: int | None = None) -> None:
     """Signal the waiting outer process that the inner chain finished.
 
-    Written last and with a single write so a torn read by _poll_marker is
-    impossible in practice; no DONE: line means timeout, which is the correct
-    signal for an inner that died mid-chain.
+    Two lines: PID:<pid> when the chain has a game to hand back, then DONE:<rc>.
+    DONE: keeps its exact spelling and its position as the last line —
+    _poll_marker finds it with a backward scan and the bridge splits on it, so
+    neither its name nor its order may drift. PID: is additive, and
+    deliberately absent when there is no PID: "PID: present" has to keep
+    meaning "the game is up", which rules out writing one for a failed observe
+    window or a --dry-run.
+
+    Written last and through one open/close so the two lines land together; no
+    DONE: line means timeout, which is the correct signal for an inner that
+    died mid-chain.
     """
     try:
         with open(marker, "w", encoding="utf-8") as f:
+            if pid is not None:
+                f.write(f"PID:{pid}\n")
             f.write(f"DONE:{code}\n")
     except OSError as e:
         log_event("MARKER", error=str(e))
@@ -925,6 +995,10 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
 
     log_event("BRIDGE", task=task_name, marker=marker, shim=shim_path)
     done = _poll_marker(marker, args.bridge_timeout_s)
+    # Read the PID before the cleanup below deletes the marker. DONE: is
+    # written last, so _poll_marker returning means the marker is complete and
+    # this read cannot race the inner's write.
+    pid = _read_marker_pid(marker) if done else None
     _delete_bridge_task(task_name)
     _delete_bridge_shim(shim_path)
     with contextlib.suppress(OSError):
@@ -941,14 +1015,45 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
         log_event("BRIDGE", result="corrupt_marker", line=done)
         return EXIT_BRIDGE_TIMEOUT
     log_event("BRIDGE", result="inner_exit", code=code)
+    if code == EXIT_OK and pid is not None:
+        # spec §4: the caller parses stdout with int(stdout.strip()). The
+        # inner's own stdout went to the schtasks-spawned process tree and is
+        # gone by now, so this — the marker, read back — is the only channel
+        # left that reaches the process the SSH caller is actually talking to.
+        print(pid, flush=True)
+    elif code == EXIT_OK:
+        # rc 0 with no PID: an inner that launched nothing (--dry-run) or one
+        # that predates the PID: line. Both look identical to the caller —
+        # empty stdout, then a ValueError — so stderr is where the distinction
+        # goes.
+        log_event("BRIDGE", result="no_pid_in_marker", dry_run=args.dry_run)
     return code
 
 
-def run_launch_chain(args: argparse.Namespace) -> int:
+@dataclasses.dataclass
+class ChainResult:
+    """What run_launch_chain learned besides its exit code.
+
+    The PID cannot ride in the return value: that is an EXIT_* int, compared
+    against EXIT_OK by main()'s marker write and by every caller and test of
+    the chain. So the chain takes an optional result object, fills in the one
+    field it has, and main() reads it back to write the PID: line. Optional
+    because the callers that only want the exit code — the same-session
+    inline path, the tests — should not have to know the channel exists.
+    """
+
+    pid: int | None = None
+
+
+def run_launch_chain(args: argparse.Namespace,
+                     result: ChainResult | None = None) -> int:
     """PREKILL .. GAME_OBSERVE. This is the inner's body.
 
     On success the game's PID goes to stdout as `<pid>\\n` and nothing else —
     the caller parses it with int(stdout.strip()). Diagnostics are stderr only.
+    That stdout print only reaches the caller when the chain runs inline in the
+    user's session; across the bridge it dies with the schtasks process tree,
+    which is why `result` carries the same PID for the marker to hand back.
 
     Blanket guard around the whole chain. An exception escaping here returns
     from main() *before* _write_marker runs, so the outer bridge never learns
@@ -960,7 +1065,7 @@ def run_launch_chain(args: argparse.Namespace) -> int:
     detection, schtasks, marker polling) stays outside it.
     """
     try:
-        return _run_launch_chain_phases(args)
+        return _run_launch_chain_phases(args, result)
     except Exception as e:  # noqa: BLE001 — propagating is the failure mode
         # format_exc is multi-line; the timeline is one line per event.
         log_event("CHAIN", step="internal_error",
@@ -969,7 +1074,8 @@ def run_launch_chain(args: argparse.Namespace) -> int:
         return EXIT_INTERNAL
 
 
-def _run_launch_chain_phases(args: argparse.Namespace) -> int:
+def _run_launch_chain_phases(args: argparse.Namespace,
+                             result: ChainResult | None = None) -> int:
     rc = prekill(args.no_prekill)
     if rc != EXIT_OK:
         return rc
@@ -997,6 +1103,11 @@ def _run_launch_chain_phases(args: argparse.Namespace) -> int:
     rc = game_observe(game_pid, args.observe_s)
     if rc != EXIT_OK:
         return rc
+    if result is not None:
+        # Clean run only. A PID next to a non-zero DONE: would tell the outer
+        # the game is up when the observe window just said otherwise, and the
+        # outer prints on EXIT_OK alone.
+        result.pid = game_pid
     print(game_pid, flush=True)
     return EXIT_OK
 
@@ -1009,9 +1120,10 @@ def main(argv: list[str] | None = None) -> int:
         # is the job's exit code — the inner already ran the chain and wrote
         # the marker, so the outer must not run it again.
         return bridge_to_interactive_session(args)
-    rc = run_launch_chain(args)
+    result = ChainResult()
+    rc = run_launch_chain(args, result)
     if args.marker:
-        _write_marker(args.marker, rc)
+        _write_marker(args.marker, rc, result.pid)
     return rc
 
 
