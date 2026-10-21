@@ -60,7 +60,8 @@ USAGE = (
     "               code; a truncated log address must be recovered by\n"
     "               log_rva_from_truncated, never read at the low-32 value\n"
     "               (ruling P4), so this script prints it but never\n"
-    "               dereferences it."
+    "               dereferences it — the print exists only as input to\n"
+    "               log_rva_from_truncated, never as an address to read at."
 )
 
 

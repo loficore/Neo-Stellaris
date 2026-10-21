@@ -82,7 +82,11 @@ def violates_pairing(scripts_dir):
     ``2026-09_frida_hot_site_spies/body.js`` is explained by its own README).
     """
     out = []
-    drivers = [_read(p) for p in sorted(scripts_dir.glob("*.py"))]
+    # A guard that discusses its subjects must not vouch for them: test_* files
+    # are excluded from the driver set, else this fence's own docstring would
+    # pair an orphaned .js after its real driver is renamed or moved.
+    drivers = [_read(p) for p in sorted(scripts_dir.glob("*.py"))
+               if not p.name.startswith("test_")]
     for js in sorted(scripts_dir.glob("*.js")):
         if not any(js.stem in src for src in drivers):
             out.append(f"{js.name}: no .py in this directory references it "
@@ -150,8 +154,16 @@ def test_env_var_rule_names_a_disk_reader_without_the_var(tmp_path):
     good.write_text("_cands = [os.environ.get('NS_STELLARIS_EXE'),\n"
                     "  r'D:\\SteamLibrary\\steamapps\\common\\Stellaris\\stellaris.exe']\n"
                     "f = open(next(c for c in _cands if os.path.exists(c)), 'rb')\n")
-    assert violates_env_var([bad, good]) == ["peek.py: reads stellaris.exe from disk "
-                                             "with no NS_STELLARIS_EXE candidate"]
+    # regex branch: the exe-opening call itself matches, no SteamLibrary literal
+    regex_bad = tmp_path / "regex_peek.py"
+    regex_bad.write_text("f = open('/opt/game/stellaris.exe', 'rb')\n")
+    # exclusion branch: a live-channel script (CreateRemoteThread) is out of scope
+    live_ok = tmp_path / "live.py"
+    live_ok.write_text("f = open('/opt/game/stellaris.exe', 'rb')\n"
+                       "kernel32.CreateRemoteThread(pid, None, 0, addr, None, 0, None)\n")
+    assert violates_env_var([bad, good, regex_bad, live_ok]) == [
+        "peek.py: reads stellaris.exe from disk with no NS_STELLARIS_EXE candidate",
+        "regex_peek.py: reads stellaris.exe from disk with no NS_STELLARIS_EXE candidate"]
 
 def test_real_tree_has_no_env_var_violation():
     assert violates_env_var(top_level_scripts(SCRIPTS)) == []
@@ -191,6 +203,10 @@ def test_family_depth_rule_flags_a_nested_c2_script(tmp_path):
     (tmp_path / "c2_task5_init.py").write_text("")
     (tmp_path / "windows").mkdir()
     (tmp_path / "windows" / "launch_stellaris.py").write_text("")
+    # Family-named file under windows/: pins the exclusion itself — without
+    # it, deleting the windows skip in violates_family_depth changes nothing
+    # anyone can observe (a mutation-surviving branch).
+    (tmp_path / "windows" / "c2_helper.py").write_text("")
     assert violates_family_depth(tmp_path) == ["c2_harness.py: must sit directly "
                                                "under scripts/ (bare-name imports + "
                                                "C:/temp wire contract)"]
