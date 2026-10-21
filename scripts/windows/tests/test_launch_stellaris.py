@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import launch_stellaris
 import psutil
 import pytest
-from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
+from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
                               EXIT_BRIDGE_TR_TOO_LONG, EXIT_GAME_DID_NOT_SPAWN,
                               EXIT_GAME_EXITED_EARLY, EXIT_INTERNAL,
@@ -2106,3 +2106,372 @@ def test_marker_stays_small_for_a_realistic_inner_run():
 def source_of(func):
     """Code object of `func`, for tests that assert on how it decides."""
     return func.__code__
+
+
+# ---------------------------------------------------------------------------
+# Final whole-branch review fixes.
+#
+# A1  a bridge timeout must not orphan a live inner (schtasks /end, a per-run
+#     marker nonce, and a lease file the inner watches).
+# A2  argparse usage errors must not exit 2 — 2 is EXIT_PREKILL_PERMISSION.
+# A3  an outer-side exception must become 99 and leave no shim behind.
+# A4  0xFFFFFFFF is "nobody is on the console", not a session to bridge into.
+# A5  --dry-run must not kill the running game.
+# A6  bring_to_foreground must say why it failed.
+# ---------------------------------------------------------------------------
+
+def test_usage_error_exits_99_not_prekill_permission(capsys):
+    """A2: argparse exits 2 on a bad command line, and 2 is
+    EXIT_PREKILL_PERMISSION — "permission wall, retrying will not help". The
+    agent builds this command line itself, so a typo would stop the retry loop
+    for a reason that has nothing to do with the game."""
+    assert main(["--bogus-flag"]) == EXIT_INTERNAL
+    err = capsys.readouterr().err
+    assert "usage" in err.lower()
+    assert "--bogus-flag" in err
+    assert EXIT_INTERNAL != EXIT_PREKILL_PERMISSION
+
+
+def test_help_still_exits_zero(capsys):
+    """The usage-error override must not swallow argparse's help path, which
+    exits 0 through a different method."""
+    assert main(["--help"]) == EXIT_OK
+    assert "usage" in capsys.readouterr().out.lower()
+
+
+def test_no_console_session_reports_41_without_scheduling_anything():
+    """A4: WTSGetActiveConsoleSessionId returns 0xFFFFFFFF — not 0 — when
+    nothing is attached to the console. That is the post-reboot,
+    nobody-logged-in box, i.e. exactly the overnight case this script exists
+    for. Reading it as a real session id sends the run down the scheduling
+    path, where it burns the whole --bridge-timeout-s and reports 43
+    (timeout) instead of 41 (no session)."""
+    args = build_arg_parser().parse_args(["--bridge-timeout-s", "1"])
+    with patch("launch_stellaris.current_session_id", return_value=0), \
+            patch("launch_stellaris.interactive_session_id",
+                  return_value=0xFFFFFFFF), \
+            patch("subprocess.run") as mock_run:
+        assert bridge_to_interactive_session(args) == EXIT_BRIDGE_NO_SESSION
+    mock_run.assert_not_called()
+
+
+def test_session_zero_also_reports_41():
+    """0 is the services window station, which no window can ever be raised
+    from. Both spellings of "no interactive session" have to land on 41."""
+    args = build_arg_parser().parse_args(["--bridge-timeout-s", "1"])
+    with patch("launch_stellaris.current_session_id", return_value=0), \
+            patch("launch_stellaris.interactive_session_id", return_value=0), \
+            patch("subprocess.run") as mock_run:
+        assert bridge_to_interactive_session(args) == EXIT_BRIDGE_NO_SESSION
+    mock_run.assert_not_called()
+
+
+def test_run_launch_chain_dry_run_never_kills_anything():
+    """A5: spec D4 says a dry run does everything except the URI spawn *and
+    the kill*. Running PREKILL anyway means the pre-flight check a person
+    runs before trusting the script kills their unsaved game and exits 0."""
+    args = build_arg_parser().parse_args(["--dry-run"])
+    with _full_chain() as mocks:
+        assert run_launch_chain(args) == EXIT_OK
+    mocks[0].assert_not_called()  # prekill
+
+
+def test_bring_to_foreground_logs_why_the_foreground_was_refused(capsys):
+    """A6: a refusal (integrity level, wrong desktop, dead hwnd) and a plain
+    timeout are indistinguishable without SetForegroundWindow's return value
+    and GetLastError. This line is the operator's only evidence, and the
+    locked-desktop case is exactly where they will be reading it."""
+    set_fg = MagicMock(return_value=0)
+    get_fg = MagicMock(return_value=9999)
+    with _fake_clock(), \
+            patch("launch_stellaris._input_fns",
+                  return_value=(set_fg, get_fg, MagicMock())), \
+            patch("launch_stellaris._last_error", return_value=5):
+        assert bring_to_foreground(4242) is False
+    err = capsys.readouterr().err
+    assert "foreground_fail" in err
+    assert "set_ok=0" in err
+    assert "last_error=5" in err
+
+
+@patch("subprocess.run")
+def test_delete_bridge_task_ends_a_running_instance_before_deleting(mock_run):
+    """A1: /delete /f removes the task *definition*, not a running instance.
+    A task already started keeps running as an orphan — which then walks its
+    own PREKILL (killing whatever the caller's retry just started) and types
+    into whatever window the retry is driving. /end is what stops it."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    launch_stellaris._delete_bridge_task("ls_t")
+    cmds = [" ".join(c.args[0]) for c in mock_run.call_args_list]
+    assert len(cmds) == 2, cmds
+    assert "/end" in cmds[0], cmds
+    assert "/delete" in cmds[1], cmds
+
+
+@patch("subprocess.run")
+def test_bridge_cleanup_survives_a_missing_schtasks(mock_run):
+    """Cleanup is best effort: it runs on the exception path too, and a second
+    exception out of it would replace the real cause with a traceback."""
+    mock_run.side_effect = OSError("schtasks is not on PATH")
+    launch_stellaris._delete_bridge_task("ls_t")  # must not raise
+
+
+def test_default_marker_path_is_unique_per_run():
+    """A1: keying the marker on the outer PID alone lets a recycled PID put a
+    new run on an old file. A per-run nonce makes the path unique regardless
+    of what the OS reuses."""
+    a = launch_stellaris._default_marker_path(12345)
+    b = launch_stellaris._default_marker_path(12345)
+    assert a != b, (a, b)
+    name = os.path.basename(a)
+    assert re.fullmatch(r"ls_12345_[0-9a-f]{6}\.txt", name), name
+
+
+def test_marker_nonce_keeps_the_shim_path_within_the_ceiling():
+    """The nonce rides into the shim *body*, never into /tr, but the shim path
+    still has to fit — it is what /tr carries."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = launch_stellaris._default_marker_path(os.getpid())
+        assert len(marker) < 120, marker
+        shim = launch_stellaris.write_bridge_tr_shim(
+            "stellaris-launch-12345-1760000000",
+            launch_stellaris.build_inner_tr(
+                build_arg_parser().parse_args([]), marker=marker),
+            tempdir=td)
+    assert len(shim) <= launch_stellaris.SCHTASKS_TR_LIMIT, (len(shim), shim)
+
+
+def test_bridge_creates_the_lease_before_it_schedules_and_removes_it(capsys):
+    """A1: the lease is the inner's only proof that someone is still
+    listening. It has to exist before the task can start, and it has to be
+    gone once the outer returns — the disappearance is the signal."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        lease = launch_stellaris._lease_path(marker)
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        seen = {}
+
+        def _fake_run(cmd, *a, **kw):
+            if isinstance(cmd, list) and "/create" in cmd:
+                seen["lease_at_create"] = os.path.exists(lease)
+            if isinstance(cmd, list) and "/run" in cmd:
+                Path(marker).write_text("PID:5555\nDONE:0\n", encoding="utf-8")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=_fake_run), \
+                patch("launch_stellaris.current_session_id", return_value=0), \
+                patch("launch_stellaris.interactive_session_id", return_value=1):
+            assert bridge_to_interactive_session(args) == EXIT_OK
+        assert seen["lease_at_create"] is True
+        assert not os.path.exists(lease)
+    assert capsys.readouterr().out == "5555\n"
+
+
+def test_bridge_timeout_ends_the_task_and_removes_the_lease():
+    """The 43 path is where the orphan is created. Both halves of A1 have to
+    fire there: /end stops the instance, and the vanished lease stops it
+    again before its next phase if it somehow survived."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        lease = launch_stellaris._lease_path(marker)
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        with patch("subprocess.run",
+                   return_value=MagicMock(returncode=0, stdout="", stderr="")) as run, \
+                patch("launch_stellaris.current_session_id", return_value=0), \
+                patch("launch_stellaris.interactive_session_id", return_value=1):
+            assert bridge_to_interactive_session(args) == EXIT_BRIDGE_TIMEOUT
+        cmds = [" ".join(c.args[0]) for c in run.call_args_list]
+        assert any("/end" in c for c in cmds), cmds
+        assert not os.path.exists(lease)
+
+
+def test_inner_aborts_before_prekill_when_the_lease_is_gone():
+    """A1: an orphaned inner whose outer gave up must stop before its next
+    phase. PREKILL is the phase that does harm — it would kill whatever the
+    caller's retry just started."""
+    with tempfile.TemporaryDirectory() as td:
+        lease = str(Path(td) / "never-created.lease")
+        args = build_arg_parser().parse_args(["--inner", "--lease", lease])
+        with patch("launch_stellaris.prekill") as mock_prekill:
+            assert run_launch_chain(args) == EXIT_BRIDGE_ABANDONED
+        mock_prekill.assert_not_called()
+
+
+def test_inner_aborts_between_phases_when_the_lease_disappears():
+    """Checking once at startup would only cover the phases that do no harm.
+    The check runs again before every phase, so a lease removed while PREKILL
+    was running still stops the run before STEAM_SPAWN and, crucially, before
+    any keystroke."""
+    with tempfile.TemporaryDirectory() as td:
+        lease = Path(td) / "live.lease"
+        lease.write_text("", encoding="utf-8")
+        args = build_arg_parser().parse_args(["--inner", "--lease", str(lease)])
+        with _full_chain() as mocks:
+            def _prekill(*a, **kw):
+                lease.unlink()
+                return EXIT_OK
+            mocks[0].side_effect = _prekill
+            assert run_launch_chain(args) == EXIT_BRIDGE_ABANDONED
+        mocks[1].assert_not_called()  # steam_spawn
+
+
+def test_inner_runs_normally_while_the_lease_exists():
+    with tempfile.TemporaryDirectory() as td:
+        lease = Path(td) / "live.lease"
+        lease.write_text("", encoding="utf-8")
+        args = build_arg_parser().parse_args(["--inner", "--lease", str(lease)])
+        with _full_chain():
+            assert run_launch_chain(args) == EXIT_OK
+
+
+def test_inner_without_a_lease_never_checks_one():
+    """`--inner --marker` on its own is a documented debug path and nothing
+    creates a lease for it, so nothing may be enforced."""
+    args = build_arg_parser().parse_args(["--inner"])
+    with _full_chain():
+        assert run_launch_chain(args) == EXIT_OK
+
+
+def test_abandoned_inner_writes_no_marker():
+    """The marker is the channel to the outer. When the outer is gone there is
+    nobody to tell, and leaving a DONE: file behind would litter TEMP with a
+    line that a future run could read."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        lease = str(Path(td) / "never-created.lease")
+        with _full_chain():
+            rc = main(["--inner", "--marker", marker, "--lease", lease])
+        assert rc == EXIT_BRIDGE_ABANDONED
+        assert not os.path.exists(marker)
+
+
+def _shim_in(directory, name, command):
+    """Write the shim into a tempdir the test owns, so a leak is observable."""
+    path = os.path.join(directory, f"{name}.cmd")
+    Path(path).write_text("@echo off\r\n" + command + "\r\n", encoding="utf-8")
+    return path
+
+
+def test_bridge_side_oserror_becomes_99_and_leaves_no_shim():
+    """A3: the inner has a blanket guard; the outer did not. A missing
+    schtasks, an unwritable tempdir or any other OSError out of subprocess.run
+    escaped main() as an undocumented exit 1 and leaked the .cmd shim into
+    TEMP. The caller has to get a documented code."""
+    with tempfile.TemporaryDirectory() as td:
+        marker = str(Path(td) / "inner.txt")
+        before = set(os.listdir(td))
+        args = build_arg_parser().parse_args(
+            ["--marker", marker, "--bridge-timeout-s", "1"])
+        with patch("subprocess.run", side_effect=OSError("no schtasks")), \
+                patch("launch_stellaris.current_session_id", return_value=0), \
+                patch("launch_stellaris.interactive_session_id", return_value=1), \
+                patch("launch_stellaris.write_bridge_tr_shim",
+                      side_effect=lambda name, cmd, tempdir=None:
+                          _shim_in(td, name, cmd)):
+            assert bridge_to_interactive_session(args) == EXIT_INTERNAL
+        assert set(os.listdir(td)) == before, os.listdir(td)
+
+
+class _Parser:
+    """A parser whose parse_args always returns the given namespace."""
+
+    def __init__(self, args):
+        self._args = args
+
+    def parse_args(self, argv=None):
+        return self._args
+
+
+def test_main_outer_path_returns_the_bridge_exit_code():
+    """main() was only ever tested with --inner. The outer path is the one the
+    SSH caller actually takes, and its whole contract is 'return what the
+    bridge returned'."""
+    args = build_arg_parser().parse_args([])
+    with patch("launch_stellaris.build_arg_parser",
+               return_value=_Parser(args)), \
+            patch("launch_stellaris.bridge_to_interactive_session",
+                  return_value=EXIT_BRIDGE_NO_SESSION) as mock_bridge:
+        assert main([]) == EXIT_BRIDGE_NO_SESSION
+    mock_bridge.assert_called_once()
+
+
+def test_main_outer_path_converts_an_unexpected_exception_to_99():
+    """A3: an exception out of session detection happens before the shim
+    exists, so bridge_to_interactive_session's own guard cannot cover it. The
+    caller must still get a documented code rather than exit 1."""
+    args = build_arg_parser().parse_args([])
+    with patch("launch_stellaris.build_arg_parser",
+               return_value=_Parser(args)), \
+            patch("launch_stellaris.bridge_to_interactive_session",
+                  side_effect=RuntimeError("session probe exploded")):
+        assert main([]) == EXIT_INTERNAL
+
+
+def test_every_exit_constant_is_returned_somewhere():
+    """A constant nobody returns is a code a caller can branch on that can
+    never arrive — worse than no code, because it reads as a handled case.
+
+    12, 13 and 24 are deliberately unreachable and named below: 12/13 need
+    live Steam modal state to detect (spec §4 marks them reserved) and 24 is
+    superseded by launcher_handoff's own timeout (spec §6). A new constant
+    with no return, or a reserved code that quietly starts being returned
+    without this list changing, fails here."""
+    reserved = {
+        12: "Steam login modal is not detected (spec §4, reserved)",
+        13: "Stellaris update modal is not detected (spec §4, reserved)",
+        24: "superseded by launcher_handoff's timeout (spec §6)",
+    }
+    source = Path(launch_stellaris.__file__).read_text(encoding="utf-8")
+    module = vars(launch_stellaris)
+    dead = sorted(
+        name for name, value in module.items()
+        if name.startswith("EXIT_") and isinstance(value, int)
+        and value not in reserved
+        # 1 = the definition itself, so 2+ means something returns or raises it.
+        and source.count(name) < 2
+    )
+    assert not dead, dead
+
+
+def test_build_bridge_account_fails_loudly_rather_than_guessing():
+    """M-5: the fallback used to be this box's literal identity
+    (`lofibass` / `13229`) baked into a general script, which on any other box
+    schedules a task as a principal that does not exist — and schtasks reports
+    that much later as 'No mapping between account names and security IDs'."""
+    with patch.dict(os.environ, {}, clear=True), \
+            patch("launch_stellaris._login_user", return_value=""), \
+            patch("platform.node", return_value=""):
+        with pytest.raises(ValueError):
+            build_bridge_account()
+
+
+def test_pid_is_not_recorded_when_the_stdout_write_fails():
+    """M-2: result.pid used to be set *before* print(game_pid). If the print
+    raises, the guard turns the run into 99 — and the marker would then carry
+    PID: next to DONE:99, which is the one combination _write_marker's
+    docstring says must never happen."""
+    result = ChainResult()
+
+    def _print(*args, **kwargs):
+        if kwargs.get("file") is None:
+            raise OSError("stdout is gone")
+        return None
+
+    with _full_chain(game_pid=5555), \
+            patch("builtins.print", side_effect=_print):
+        assert run_launch_chain(
+            build_arg_parser().parse_args([]), result) == EXIT_INTERNAL
+    assert result.pid is None
+
+
+def test_write_bridge_tr_shim_docstring_states_a_measurable_basis():
+    """M-6: the docstring claimed '276 chars by default and 309 with
+    --no-prekill --dry-run --verbose'. The second number is gone with the flag,
+    and neither number is a property of this file — the length is dominated by
+    two absolute paths. What matters is that it says so."""
+    doc = launch_stellaris.write_bridge_tr_shim.__doc__ or ""
+    assert "276" not in doc, doc
+    assert "309" not in doc, doc
+    assert "261" in doc, doc

@@ -11,6 +11,7 @@ import ctypes.wintypes as _wt
 import dataclasses
 import datetime as _dt
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,12 @@ EXIT_BRIDGE_TIMEOUT = 43
 # reject either produces the opaque 42, and letting cmd.exe misread one
 # produces a bare 43.
 EXIT_BRIDGE_TR_TOO_LONG = 44
+# The inner detected its own outer had stopped listening (the bridge lease file
+# vanished) and abandoned the run before doing more harm — see _lease_path.
+# Distinct from 43: 43 is the outer giving up on a silent inner, 45 is the
+# inner giving up once the outer is provably gone. The abandoned inner writes
+# no marker, so this code reaches only the same-session / debug caller.
+EXIT_BRIDGE_ABANDONED = 45
 EXIT_INTERNAL = 99
 
 # schtasks /create rejects /tr values longer than this with an opaque
@@ -225,6 +232,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="(bridge only) skip session detection, run launch chain directly")
     p.add_argument("--marker", type=str, default=None,
                    help="(bridge only) path to completion marker file")
+    p.add_argument("--lease", type=str, default=None,
+                   help="(bridge only) path the outer watches; when it vanishes "
+                        "the inner has lost its listener and abandons before the "
+                        "next phase. See _lease_path.")
     p.add_argument("--no-prekill", action="store_true", help="debug: skip PREKILL")
     p.add_argument("--dry-run", action="store_true",
                    help="debug: do everything except spawn the URI and click Play")
@@ -506,13 +517,18 @@ def bring_to_foreground(hwnd: int) -> bool:
     """Raise `hwnd` to the foreground. True once it actually owns it."""
     set_foreground_window, get_foreground_window, _ = _input_fns()
     deadline = _time.time() + _FOREGROUND_TIMEOUT_S
-    set_foreground_window(hwnd)
+    set_ok = set_foreground_window(hwnd)
     while _time.time() < deadline:
         if get_foreground_window() == hwnd:
             log_event("LAUNCHER_KEYBOARD", step="foreground_ok", hwnd=hwnd)
             return True
         _time.sleep(0.1)
-    log_event("LAUNCHER_KEYBOARD", step="foreground_fail", hwnd=hwnd)
+    # A refusal (integrity level, wrong desktop, dead hwnd) and a plain
+    # timeout are otherwise indistinguishable. SetForegroundWindow's return
+    # value and GetLastError are the operator's only evidence, and the
+    # locked-desktop case is exactly where they will be reading this line.
+    log_event("LAUNCHER_KEYBOARD", step="foreground_fail", hwnd=hwnd,
+              set_ok=int(set_ok), last_error=_last_error())
     return False
 
 
@@ -789,6 +805,25 @@ def interactive_session_id() -> int:
     return int(_session_fns()[2]())
 
 
+def _login_user() -> str:
+    """The interactive user from the OS, when $USERNAME is not set.
+
+    GetUserNameW returns the user of the calling thread's access token. Empty
+    string on any failure — including the non-Windows import path, where
+    ctypes.windll does not exist. The caller turns that into a loud ValueError
+    rather than a guessed principal.
+    """
+    try:
+        advapi32 = ctypes.windll.advapi32
+        size = _wt.DWORD(256)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if advapi32.GetUserNameW(buf, ctypes.byref(size)):
+            return buf.value or ""
+    except Exception:  # noqa: BLE001 — no windll on the host, no name on failure
+        return ""
+    return ""
+
+
 def build_bridge_account(computer: str | None = None, user: str | None = None) -> str:
     """The run-as account for the bridge task: <machine>\\<user>.
 
@@ -796,10 +831,26 @@ def build_bridge_account(computer: str | None = None, user: str | None = None) -
     the workgroup name (WORKGROUP on Windows_Jiaolong), which schtasks cannot
     resolve to a SID — it rejects it with 'No mapping between account names and
     security IDs'. COMPUTERNAME is the prefix `whoami` prints, so it resolves.
+
+    There is no fallback identity. A guessed `machine\\user` that does not exist
+    on the box schedules a task whose principal cannot be resolved, and schtasks
+    reports that much later and opaquely; failing here, before any task is
+    created, names the real problem.
     """
     computer = (computer or os.environ.get("COMPUTERNAME")
-                or os.environ.get("USERDOMAIN") or "lofibass")
-    user = user or os.environ.get("USERNAME") or "13229"
+                or os.environ.get("USERDOMAIN") or platform.node())
+    # USERNAME is what Windows sets; USER/LOGNAME is what a POSIX login sets.
+    # Reading the ambient environment is not the guessed identity M-5 removed —
+    # it is the real one the shell already carries. On the overnight box USERNAME
+    # is always present, so the POSIX names only ever resolve on a host running
+    # these unit tests.
+    user = (user or os.environ.get("USERNAME") or os.environ.get("USER")
+            or os.environ.get("LOGNAME") or _login_user())
+    if not computer or not user:
+        raise ValueError(
+            "cannot determine the bridge run-as account: "
+            f"computer={computer!r} user={user!r}; set COMPUTERNAME and USERNAME "
+            "(or run where GetUserNameW can resolve the interactive user).")
     return f"{computer}\\{user}"
 
 
@@ -825,28 +876,69 @@ def build_bridge_run_command(task_name: str) -> list[str]:
 
 
 def _delete_bridge_task(task_name: str) -> None:
-    """Remove the one-shot task. Best effort: a leftover entry is a nuisance,
-    never a reason to fail a launch."""
-    subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"],
-                   capture_output=True, text=True)
+    """Stop and remove the one-shot task. Best effort on both halves.
+
+    /delete removes the task *definition*, not a running instance: a task that
+    has already started keeps running as an orphan, and that orphan then walks
+    its own PREKILL (killing whatever the caller's retry just started) and types
+    into the retry's window. /end is what stops the live instance, so it goes
+    first. Each call swallows OSError — schtasks may be missing, and a second
+    exception out of a cleanup path would replace the real cause with a
+    traceback.
+    """
+    for verb in ("/end", "/delete"):
+        with contextlib.suppress(OSError):
+            subprocess.run(["schtasks", verb, "/tn", task_name, "/f"],
+                           capture_output=True, text=True)
 
 
 def _default_marker_path(pid: int) -> str:
     """Path of the completion marker file. Short by design: this string gets
     forwarded into the inner command line and carried into /tr, where every
     character counts toward schtasks' 261-char ceiling.
+
+    The 6-hex-char nonce is what stops a recycled PID from landing a new run on
+    a stillborn run's DONE: file. It stays 3 bytes precisely so the marker path
+    — which is what /tr carries, via the shim — keeps well under the ceiling.
     """
-    return os.path.join(tempfile.gettempdir(), f"ls_{pid}.txt")
+    return os.path.join(
+        tempfile.gettempdir(), f"ls_{pid}_{os.urandom(3).hex()}.txt")
+
+
+def _lease_path(marker: str) -> str:
+    """The outer's liveness signal, alongside the marker it is derived from.
+
+    The inner cannot see the outer's process (it lives in the bridged session's
+    schtasks tree), so the outer creates this file before it schedules the task
+    and removes it on every return path. Its disappearance is the only thing
+    the inner can poll to learn the outer gave up — see
+    _run_launch_chain_phases for the abandonment check.
+    """
+    return marker + ".lease"
+
+
+def _create_lease(lease: str) -> None:
+    with open(lease, "w", encoding="utf-8"):
+        pass
+
+
+def _remove_lease(lease: str) -> None:
+    """Best effort: the file is already gone on the paths that matter (the
+    inner saw it vanish), so a second removal failing is not a reason to fail
+    the run — but on the timeout path this is what makes the orphan stop."""
+    with contextlib.suppress(OSError):
+        os.remove(lease)
 
 
 def write_bridge_tr_shim(task_name: str, inner_command: str,
                          tempdir: str | None = None) -> str:
     """Write the /tr shim: a .cmd file that runs `inner_command`.
 
-    schtasks rejects /tr values longer than 261 characters. With the
-    forwarded flag set, the inline command line is 276 chars by default and
-    309 with --no-prekill --dry-run --verbose — both well over the limit.
-    Pointing /tr at a short path to a .cmd shim sidesteps the ceiling.
+    schtasks rejects a /tr value over 261 characters. The inline inner command
+    line is far longer than that, but its length is not a property of this file:
+    it is dominated by two absolute paths — the python interpreter and this
+    script — so a literal character count here would be wrong on the next box.
+    Pointing /tr at a short path to a .cmd shim sidesteps the ceiling entirely.
 
     The shim starts with `@echo off` so cmd.exe's own banner doesn't drown
     the inner chain's stderr timeline. Returns the shim path; the caller is
@@ -904,7 +996,8 @@ def _validate_shim_payload(inner_command: str) -> int | None:
 
 def build_inner_tr(args: argparse.Namespace, marker: str,
                    python: str | None = None,
-                   script: str | None = None) -> str:
+                   script: str | None = None,
+                   lease: str | None = None) -> str:
     """The inner command line — the *body* of the /tr shim, not the /tr value.
 
     /tr itself receives a short path to a .cmd file (see
@@ -939,6 +1032,9 @@ def build_inner_tr(args: argparse.Namespace, marker: str,
         parts.append("--dry-run")
     if args.verbose:
         parts.append("--verbose")
+    if lease is not None:
+        parts.append("--lease")
+        parts.append(f'"{lease}"')
     return " ".join(parts)
 
 
@@ -1054,8 +1150,13 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     """
     my_sid = current_session_id()
     target_sid = interactive_session_id()
-    if target_sid == 0:
-        log_event("BRIDGE", result="no_interactive_session")
+    # Two spellings of "nobody to bridge into": 0 is the services window
+    # station, 0xFFFFFFFF is WTSGetActiveConsoleSessionId's "no console session
+    # at all" — the post-reboot, nobody-logged-in box. Reading the latter as a
+    # real session id would schedule into nothing and burn --bridge-timeout-s
+    # before reporting 43 instead of 41.
+    if target_sid == 0 or target_sid == 0xFFFFFFFF:
+        log_event("BRIDGE", result="no_interactive_session", target_sid=target_sid)
         return EXIT_BRIDGE_NO_SESSION
     if my_sid == target_sid:
         log_event("BRIDGE", result="noop", sid=target_sid)
@@ -1067,6 +1168,7 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     ts = int(_time.time())
     task_name = f"stellaris-launch-{pid}-{ts}"
     marker = args.marker or _default_marker_path(pid)
+    lease = _lease_path(marker)
 
     # Destroy anything already at the marker path *before* scheduling the
     # inner, not just after it finishes. A marker leaked by a killed outer
@@ -1084,12 +1186,10 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
         with contextlib.suppress(OSError):
             os.remove(marker)
 
-    # Build the inner command line and write the /tr shim. schtasks refuses
-    # /tr values > 261 chars; the inline command is 276 chars by default and
-    # 309 with --no-prekill --dry-run --verbose — both over. The shim replaces
-    # the inline command with a short path that points at a .cmd file holding
-    # the same command.
-    inner_command = build_inner_tr(args, marker)
+    # Build the inner command line and write the /tr shim. schtasks refuses a
+    # /tr over 261 chars; the inline command is longer than that on any real
+    # box, so /tr carries a short path to a .cmd shim holding the same command.
+    inner_command = build_inner_tr(args, marker, lease=lease)
     # Pre-flight: the shim body has to survive cmd.exe's OEM codepage round
     # trip, or the inner silently never runs and we report a bare 43.
     if (bad_payload := _validate_shim_payload(inner_command)) is not None:
@@ -1109,65 +1209,95 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     st_str = future.strftime("%H:%M")
     ru = build_bridge_account()
 
-    create = subprocess.run(
-        build_bridge_task_command(task_name, shim_path, st_str, ru),
-        capture_output=True, text=True,
-    )
-    if create.returncode != 0:
-        log_event("BRIDGE", step="create", rc=create.returncode, stderr=create.stderr.strip())
-        # A /create that fails partway can still have registered the task.
-        # Mirror the run-failure branch below: clean up before returning.
-        _delete_bridge_task(task_name)
-        _delete_bridge_shim(shim_path)
-        return EXIT_BRIDGE_SCHTASKS_DENIED
-
-    run = subprocess.run(build_bridge_run_command(task_name), capture_output=True, text=True)
-    if run.returncode != 0:
-        log_event("BRIDGE", step="run", rc=run.returncode, stderr=run.stderr.strip())
-        _delete_bridge_task(task_name)
-        _delete_bridge_shim(shim_path)
-        return EXIT_BRIDGE_SCHTASKS_DENIED
-
-    log_event("BRIDGE", task=task_name, marker=marker, shim=shim_path)
-    done = _poll_marker(marker, args.bridge_timeout_s)
-    # Mirror the inner's timeline before anything below deletes the marker:
-    # without it the caller sees BOOT + BRIDGE + MARKER and no phase at all
-    # (spec §5a step 4). Printed whether or not DONE: arrived — a run that died
-    # mid-chain is exactly when its phases are worth reading.
-    _mirror_inner_timeline(marker)
-    # Read the PID before the cleanup below deletes the marker. DONE: is
-    # written last, so _poll_marker returning means the marker is complete and
-    # this read cannot race the inner's write.
-    pid = _read_marker_pid(marker) if done else None
-    _delete_bridge_task(task_name)
-    _delete_bridge_shim(shim_path)
-    with contextlib.suppress(OSError):
-        os.remove(marker)
-
-    if not done:
-        log_event("BRIDGE", result="timeout")
-        return EXIT_BRIDGE_TIMEOUT
+    # A1: the lease is the inner's only proof that someone is still listening.
+    # Create it now — after every pre-flight bail above (none of which may leave
+    # a lease behind) and before the task can start (so no phase ever runs
+    # without one) — and remove it in the finally below, which fires on every
+    # path including a timeout. A vanished lease then unambiguously means "the
+    # outer gave up", which is what stops an orphaned inner before its next
+    # harmful phase.
+    _create_lease(lease)
+    task_scheduled = False
     try:
-        code = int(done.split(":", 1)[1])
-    except (IndexError, ValueError):
-        # A torn or truncated marker is unreadable, which is a timeout — not a
-        # reason to escape with an undocumented exit code 1.
-        log_event("BRIDGE", result="corrupt_marker", line=done)
-        return EXIT_BRIDGE_TIMEOUT
-    log_event("BRIDGE", result="inner_exit", code=code)
-    if code == EXIT_OK and pid is not None:
-        # spec §4: the caller parses stdout with int(stdout.strip()). The
-        # inner's own stdout went to the schtasks-spawned process tree and is
-        # gone by now, so this — the marker, read back — is the only channel
-        # left that reaches the process the SSH caller is actually talking to.
-        print(pid, flush=True)
-    elif code == EXIT_OK:
-        # rc 0 with no PID: an inner that launched nothing (--dry-run) or one
-        # that predates the PID: line. Both look identical to the caller —
-        # empty stdout, then a ValueError — so stderr is where the distinction
-        # goes.
-        log_event("BRIDGE", result="no_pid_in_marker", dry_run=args.dry_run)
-    return code
+        create = subprocess.run(
+            build_bridge_task_command(task_name, shim_path, st_str, ru),
+            capture_output=True, text=True,
+        )
+        if create.returncode != 0:
+            log_event("BRIDGE", step="create", rc=create.returncode,
+                      stderr=create.stderr.strip())
+            # A /create that fails partway can still have registered the task.
+            # Mirror the run-failure branch below: clean up before returning.
+            _delete_bridge_task(task_name)
+            return EXIT_BRIDGE_SCHTASKS_DENIED
+
+        task_scheduled = True
+        run = subprocess.run(build_bridge_run_command(task_name),
+                             capture_output=True, text=True)
+        if run.returncode != 0:
+            log_event("BRIDGE", step="run", rc=run.returncode,
+                      stderr=run.stderr.strip())
+            _delete_bridge_task(task_name)
+            return EXIT_BRIDGE_SCHTASKS_DENIED
+
+        log_event("BRIDGE", task=task_name, marker=marker, shim=shim_path)
+        done = _poll_marker(marker, args.bridge_timeout_s)
+        # Mirror the inner's timeline before anything below deletes the marker:
+        # without it the caller sees BOOT + BRIDGE + MARKER and no phase at all
+        # (spec §5a step 4). Printed whether or not DONE: arrived — a run that
+        # died mid-chain is exactly when its phases are worth reading.
+        _mirror_inner_timeline(marker)
+        # Read the PID before the cleanup below deletes the marker. DONE: is
+        # written last, so _poll_marker returning means the marker is complete
+        # and this read cannot race the inner's write.
+        game_pid = _read_marker_pid(marker) if done else None
+        _delete_bridge_task(task_name)
+        with contextlib.suppress(OSError):
+            os.remove(marker)
+
+        if not done:
+            log_event("BRIDGE", result="timeout")
+            return EXIT_BRIDGE_TIMEOUT
+        try:
+            code = int(done.split(":", 1)[1])
+        except (IndexError, ValueError):
+            # A torn or truncated marker is unreadable, which is a timeout —
+            # not a reason to escape with an undocumented exit code 1.
+            log_event("BRIDGE", result="corrupt_marker", line=done)
+            return EXIT_BRIDGE_TIMEOUT
+        log_event("BRIDGE", result="inner_exit", code=code)
+        if code == EXIT_OK and game_pid is not None:
+            # spec §4: the caller parses stdout with int(stdout.strip()). The
+            # inner's own stdout went to the schtasks-spawned process tree and
+            # is gone by now, so this — the marker, read back — is the only
+            # channel left that reaches the process the SSH caller is actually
+            # talking to.
+            print(game_pid, flush=True)
+        elif code == EXIT_OK:
+            # rc 0 with no PID: an inner that launched nothing (--dry-run) or
+            # one that predates the PID: line. Both look identical to the
+            # caller — empty stdout, then a ValueError — so stderr is where the
+            # distinction goes.
+            log_event("BRIDGE", result="no_pid_in_marker", dry_run=args.dry_run)
+        return code
+    except Exception as e:  # noqa: BLE001 — the outer needs a blanket guard too
+        # A3: session detection and the shim path pre-flight are outside this
+        # try, but a missing schtasks, an unwritable tempdir, or any OSError out
+        # of subprocess.run is not. Letting it escape made main() die with an
+        # undocumented exit 1 and leaked the shim into TEMP. Same contract as
+        # the inner's guard: a real cause becomes 99, and cleanup still runs.
+        log_event("BRIDGE", step="internal_error", error=f"{type(e).__name__}: {e}",
+                  traceback=" | ".join(traceback.format_exc().splitlines()))
+        if task_scheduled:
+            with contextlib.suppress(OSError):
+                _delete_bridge_task(task_name)
+        return EXIT_INTERNAL
+    finally:
+        # Runs on every path, including the except above. The shim and lease are
+        # the outer's own files; the timeout path in particular must drop the
+        # lease so the orphaned inner sees it vanish before its next phase.
+        _delete_bridge_shim(shim_path)
+        _remove_lease(lease)
 
 
 @dataclasses.dataclass
@@ -1216,15 +1346,46 @@ def run_launch_chain(args: argparse.Namespace,
 
 def _run_launch_chain_phases(args: argparse.Namespace,
                              result: ChainResult | None = None) -> int:
-    rc = prekill(args.no_prekill)
-    if rc != EXIT_OK:
-        return rc
+    # A1: the lease is the outer's liveness signal. When the outer stopped
+    # listening (a timeout, or a bridge-side crash) it removed the lease, and
+    # that disappearance is the only thing an orphaned inner can see. The check
+    # runs before *every* phase, not just at startup: the phases that do harm
+    # (PREKILL kills whatever a retry just started, the keystrokes drive a
+    # window nobody asked us to touch) are the later ones. No --lease is the
+    # documented same-session / debug path, where there is no outer and nothing
+    # to enforce.
+    lease = getattr(args, "lease", None)
+
+    def abandoned() -> bool:
+        if lease is not None and not os.path.exists(lease):
+            log_event("LEASE", step="abandoned", lease=lease)
+            return True
+        return False
+
+    if abandoned():
+        return EXIT_BRIDGE_ABANDONED
+    # A5: spec D4 — a dry run does everything except the URI spawn *and the
+    # kill*. Running PREKILL anyway would let the pre-flight check a person runs
+    # before trusting the script kill their unsaved game and still exit 0.
+    if not args.dry_run:
+        rc = prekill(args.no_prekill)
+        if rc != EXIT_OK:
+            return rc
+
+    if abandoned():
+        return EXIT_BRIDGE_ABANDONED
     rc = steam_spawn(args.app_id, args.dry_run)
     if rc != EXIT_OK:
         return rc
+
+    if abandoned():
+        return EXIT_BRIDGE_ABANDONED
     steam_pid = steam_ready(args.launcher_timeout_s)
     if steam_pid is None and not args.dry_run:
         return EXIT_STEAM_NO_CLIENT
+
+    if abandoned():
+        return EXIT_BRIDGE_ABANDONED
     found = launcher_wait(args.launcher_timeout_s)
     if found is None:
         if not args.dry_run:
@@ -1234,27 +1395,51 @@ def _run_launch_chain_phases(args: argparse.Namespace,
         # A dry run spawns no URI, so a launcher window here is some other
         # game's. Never type into a window nobody asked us to touch.
         return EXIT_OK
+
+    if abandoned():
+        return EXIT_BRIDGE_ABANDONED
     rc = launcher_keyboard(found[1])
     if rc != EXIT_OK:
         return rc
+
+    if abandoned():
+        return EXIT_BRIDGE_ABANDONED
     game_pid = launcher_handoff(args.game_timeout_s)
     if game_pid is None:
         return EXIT_GAME_DID_NOT_SPAWN
+
+    if abandoned():
+        return EXIT_BRIDGE_ABANDONED
     rc = game_observe(game_pid, args.observe_s)
     if rc != EXIT_OK:
         return rc
+
+    # M-2: stdout first, result.pid second. If the write fails (the SSH pipe
+    # closed), the blanket guard turns the run into 99 — and if result.pid were
+    # already set, the marker would carry PID: next to DONE:99, the one
+    # combination _write_marker's docstring says must never happen. A PID that
+    # reached the caller is a PID whose marker also claims success.
+    print(game_pid, flush=True)
     if result is not None:
         # Clean run only. A PID next to a non-zero DONE: would tell the outer
         # the game is up when the observe window just said otherwise, and the
         # outer prints on EXIT_OK alone.
         result.pid = game_pid
-    print(game_pid, flush=True)
     return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
     global _active_timeline
-    args = build_arg_parser().parse_args(argv)
+    try:
+        args = build_arg_parser().parse_args(argv)
+    except SystemExit as e:
+        # A2: argparse exits 2 on a bad command line, and 2 is
+        # EXIT_PREKILL_PERMISSION — "permission wall, retrying will not help".
+        # The agent builds this command line itself, so a typo would stop the
+        # retry loop for a reason that has nothing to do with the game. Help
+        # exits 0 and must stay 0; every other usage error is internal (99).
+        code = e.code
+        return EXIT_OK if code == 0 else EXIT_INTERNAL
     # An inner that writes a marker also has to hand its timeline over: across
     # the bridge nothing else does. Installed before BOOT so the carried lines
     # start where the outer's own stderr starts.
@@ -1264,13 +1449,24 @@ def main(argv: list[str] | None = None) -> int:
     try:
         log_event("BOOT", app_id=args.app_id, argv=argv if argv is not None else "default")
         if not args.inner:
-            # Outer: bridge into the logged-on user's session. Whatever it returns
-            # is the job's exit code — the inner already ran the chain and wrote
-            # the marker, so the outer must not run it again.
-            return bridge_to_interactive_session(args)
+            # Outer: bridge into the logged-on user's session. Whatever it
+            # returns is the job's exit code — the inner already ran the chain
+            # and wrote the marker, so the outer must not run it again. A3: an
+            # exception out of session detection happens before the shim exists,
+            # so the bridge's own guard cannot cover it; the caller still needs a
+            # documented code, not exit 1.
+            try:
+                return bridge_to_interactive_session(args)
+            except Exception as e:  # noqa: BLE001 — main is the last documented-code gate
+                log_event("BRIDGE", step="internal_error",
+                          error=f"{type(e).__name__}: {e}",
+                          traceback=" | ".join(traceback.format_exc().splitlines()))
+                return EXIT_INTERNAL
         result = ChainResult()
         rc = run_launch_chain(args, result)
-        if args.marker:
+        # An abandoned inner has no outer to tell, so a DONE: file left behind is
+        # only litter a future run could read. Skip the marker on that code alone.
+        if args.marker and rc != EXIT_BRIDGE_ABANDONED:
             _write_marker(args.marker, rc, result.pid,
                           timeline=timeline.lines() if timeline else ())
         return rc
