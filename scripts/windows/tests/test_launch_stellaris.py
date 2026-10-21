@@ -14,17 +14,19 @@ import psutil
 import pytest
 from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
-                              EXIT_GAME_DID_NOT_SPAWN, EXIT_GAME_EXITED_EARLY,
-                              EXIT_INTERNAL, EXIT_JIT_DIALOG,
-                              EXIT_LAUNCHER_NO_ADVANCE, EXIT_LAUNCHER_NO_FOCUS,
+                              EXIT_BRIDGE_TR_TOO_LONG, EXIT_GAME_DID_NOT_SPAWN,
+                              EXIT_GAME_EXITED_EARLY, EXIT_INTERNAL,
+                              EXIT_JIT_DIALOG, EXIT_LAUNCHER_NO_ADVANCE,
+                              EXIT_LAUNCHER_NO_FOCUS,
                               EXIT_LAUNCHER_WINDOW_MISSING, EXIT_OK,
-                              EXIT_PREKILL_PERMISSION, EXIT_WER_DIALOG, INPUT,
-                              INPUT_KEYBOARD, KEYBDINPUT, VK_RETURN, VK_TAB,
-                              _enum_windows_owned_by, _handoff_observed,
-                              _hwnd_for_pid, _is_jit_dialog_visible,
-                              _is_wer_dialog_visible, _poll_marker,
-                              _steam_has_window, _top_windows, _write_marker,
-                              bridge_to_interactive_session,
+                              EXIT_PREKILL_PERMISSION,
+                              EXIT_STEAM_LOGIN_REQUIRED, EXIT_WER_DIALOG,
+                              INPUT, INPUT_KEYBOARD, KEYBDINPUT, VK_RETURN,
+                              VK_TAB, _enum_windows_owned_by,
+                              _handoff_observed, _hwnd_for_pid,
+                              _is_jit_dialog_visible, _is_wer_dialog_visible,
+                              _poll_marker, _steam_has_window, _top_windows,
+                              _write_marker, bridge_to_interactive_session,
                               bring_to_foreground, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, build_inner_tr,
@@ -40,6 +42,7 @@ def test_exit_codes_match_spec():
     assert EXIT_BRIDGE_NO_SESSION == 41
     assert EXIT_BRIDGE_SCHTASKS_DENIED == 42
     assert EXIT_BRIDGE_TIMEOUT == 43
+    assert EXIT_BRIDGE_TR_TOO_LONG == 44
     assert EXIT_INTERNAL == 99
 
 
@@ -586,6 +589,136 @@ def test_default_bridge_timeout_reflects_every_phase_budget():
         launch_stellaris._INNER_CHAIN_BUDGET_S
         + launch_stellaris._BRIDGE_TIMEOUT_MARGIN_S
     )
+
+
+def test_inner_budget_table_tracks_the_argparse_defaults():
+    """The budget constants are hand-written literals that *mirror* the CLI
+    defaults, so summing them is self-consistent by construction — the
+    derivation test above cannot fail unless someone edits the module. This
+    one anchors them to build_arg_parser() instead: editing a CLI default
+    without updating the table now fails here, instead of silently leaving the
+    bridge (180 s) shorter than the inner chain it has to contain.
+
+    Reachable today: --launcher-timeout-s 90 makes the inner traverse ~269 s
+    against an unchanged 180 s bridge, so the outer reports a spurious 43.
+    """
+    args = build_arg_parser().parse_args([])
+    assert args.launcher_timeout_s == launch_stellaris._INNER_BUDGET_STEAM_READY_S
+    assert args.launcher_timeout_s == launch_stellaris._INNER_BUDGET_LAUNCHER_WAIT_S
+    assert (args.game_timeout_s + args.observe_s) == (
+        launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S)
+
+
+def test_inner_budget_keyboard_matches_the_key_sequence_it_covers():
+    """The keyboard budget has no CLI flag, so nothing else ties it to the
+    constants it is derived from: 1 focus settle, 1 Enter + 3x Tab+Enter, each
+    followed by _KEY_SETTLE_S, inside a _FOREGROUND_TIMEOUT_S bring-to-front."""
+    assert (launch_stellaris._FOREGROUND_TIMEOUT_S
+            + launch_stellaris._FOCUS_SETTLE_S
+            + launch_stellaris._KEY_SETTLE_S
+            * (launch_stellaris._TAB_ENTER_ATTEMPTS + 1)) == (
+        launch_stellaris._INNER_BUDGET_LAUNCHER_KEYBOARD_S)
+
+
+def test_phase_timeout_help_flags_the_bridge_coupling():
+    """--bridge-timeout-s is derived from the CLI defaults at import time, not
+    recomputed from whatever the inner will actually do. Overriding a phase
+    timeout past its default can therefore outlive the bridge, and the only
+    hint the operator gets is a 43 that names nothing. Say so in --help.
+
+    Read the action help rather than format_help(): the rendered output wraps
+    to the terminal width, so a flag name can straddle a line break and make
+    this pass or fail with the COLUMNS the suite happens to run under."""
+    helps = {a.dest: a.help for a in build_arg_parser()._actions if a.help}
+    # Each phase flag points at the bridge flag...
+    for dest in ("launcher_timeout_s", "game_timeout_s", "observe_s"):
+        assert "--bridge-timeout-s" in helps[dest], (dest, helps.get(dest))
+    # ...and the bridge flag names the flags that can outrun it.
+    for flag in ("--launcher-timeout-s", "--game-timeout-s", "--observe-s"):
+        assert flag in helps["bridge_timeout_s"], (flag, helps["bridge_timeout_s"])
+
+
+def test_build_inner_tr_docstring_documents_the_shim_not_the_tr_payload():
+    """build_inner_tr returns the *shim body*; /tr receives the shim's path.
+
+    The stale wording — "The /tr payload: the exact command line the inner
+    will run" — reads as though this string is what schtasks length-checks,
+    which invites "fixing" the 261-char ceiling by trimming forwarded flags.
+    That is the exact regression the shim exists to prevent.
+    """
+    doc = build_inner_tr.__doc__ or ""
+    assert "The /tr payload: the exact command line" not in doc
+    assert "shim" in doc.lower(), doc
+
+
+def test_bridge_rejects_a_non_ascii_shim_payload():
+    """cmd.exe parses a .cmd shim in the OEM codepage (cp936 on the target
+    box), not the utf-8 write_bridge_tr_shim uses. A CJK character in the
+    python path, script path or marker path becomes mojibake, the inner never
+    runs, and the run ends as a bare EXIT_BRIDGE_TIMEOUT (43) that names none
+    of the real cause. Fail loudly and typed instead.
+
+    Current paths are ASCII, so this does not bite yet — it is one line of
+    guard against a box whose TEMP or checkout path is not."""
+    args = build_arg_parser().parse_args(["--bridge-timeout-s", "1"])
+    inner = (r'"C:\Python\python.exe" "D:\项目\scripts\launch_stellaris.py" '
+             r'--inner --marker "C:\Users\用户\AppData\Local\Temp\ls_1.txt"')
+    assert not inner.isascii()
+    with patch("launch_stellaris.current_session_id", return_value=0), \
+            patch("launch_stellaris.interactive_session_id", return_value=1), \
+            patch("launch_stellaris.build_inner_tr", return_value=inner), \
+            patch("subprocess.run") as mock_run:
+        rc = bridge_to_interactive_session(args)
+    assert rc == EXIT_BRIDGE_TR_TOO_LONG
+    # Rejected before schtasks is ever invoked.
+    mock_run.assert_not_called()
+
+
+def test_bridge_accepts_an_ascii_shim_payload():
+    """The guard must not reject the shape every real run uses."""
+    args = build_arg_parser().parse_args(["--bridge-timeout-s", "1"])
+    assert build_inner_tr(args, marker=r"C:\TEMP\m.txt",
+                          python=r"C:\Python\python.exe",
+                          script=r"D:\work\launch_stellaris.py").isascii()
+
+
+@patch("launch_stellaris.prekill", side_effect=RuntimeError("psutil exploded"))
+def test_run_launch_chain_converts_unexpected_exceptions_to_99(mock_prekill, capsys):
+    """Carried in from the Task 5 review. Task 6 adds psutil and pywinauto
+    calls that can raise; letting one escape returns from main() before
+    _write_marker runs, so the outer bridge never learns the inner died, burns
+    its whole budget, and reports 43 — hiding the real cause behind a timeout
+    that means something else entirely."""
+    assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_INTERNAL
+    err = capsys.readouterr().err
+    assert "internal_error" in err
+    # The traceback has to be logged, not swallowed into a bare 99.
+    assert "psutil exploded" in err
+    assert "_run_launch_chain_phases" in err
+
+
+@patch("launch_stellaris.prekill", side_effect=RuntimeError("psutil exploded"))
+def test_run_launch_chain_guard_logs_one_line_per_event(mock_prekill, capsys):
+    """The stderr timeline is one line per event; log_event joins fields with
+    spaces, so a raw traceback would turn one broken run into a dozen
+    unparseable lines for whoever is tailing the log."""
+    run_launch_chain(build_arg_parser().parse_args([]))
+    events = [ln for ln in capsys.readouterr().err.splitlines()
+              if "internal_error" in ln]
+    assert len(events) == 1, events
+
+
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_STEAM_LOGIN_REQUIRED)
+def test_run_launch_chain_guard_leaves_typed_failures_alone(
+        mock_prekill, mock_spawn, capsys):
+    """The guard catches exceptions, not non-zero returns. A typed phase code
+    must still reach the marker verbatim — DONE:<rc> is the only thing the
+    outer process learns about the inner."""
+    rc = run_launch_chain(build_arg_parser().parse_args([]))
+    assert rc == EXIT_STEAM_LOGIN_REQUIRED
+    assert "internal_error" not in capsys.readouterr().err
+    mock_spawn.assert_not_called()
 
 
 def test_arg_parser_bridge_timeout_uses_derived_default():

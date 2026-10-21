@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time as _time
+import traceback
 from typing import Any
 
 import psutil
@@ -35,6 +36,11 @@ EXIT_WER_DIALOG = 34
 EXIT_BRIDGE_NO_SESSION = 41
 EXIT_BRIDGE_SCHTASKS_DENIED = 42
 EXIT_BRIDGE_TIMEOUT = 43
+# One code for "the /tr shim payload cannot be delivered to schtasks/cmd":
+# over the 261-char ceiling, or not representable in the OEM codepage cmd.exe
+# parses .cmd files in. Both are pre-flight checks below — letting schtasks
+# reject either produces the opaque 42, and letting cmd.exe misread one
+# produces a bare 43.
 EXIT_BRIDGE_TR_TOO_LONG = 44
 EXIT_INTERNAL = 99
 
@@ -50,7 +56,7 @@ _INNER_BUDGET_PREKILL_SPAWN_S = 3     # prekill + steam_spawn worst case (spec �
 _INNER_BUDGET_STEAM_READY_S = 30      # = --launcher-timeout-s default
 _INNER_BUDGET_LAUNCHER_WAIT_S = 30    # = --launcher-timeout-s default
 _INNER_BUDGET_LAUNCHER_KEYBOARD_S = 24  # Enter + 3x Tab+Enter, 5s wait each
-_INNER_BUDGET_GAME_OBSERVE_S = 60     # = --game-timeout-s + --observe-s defaults (Task 6)
+_INNER_BUDGET_GAME_OBSERVE_S = 60     # = --game-timeout-s + --observe-s defaults
 _INNER_CHAIN_BUDGET_S = (
     _INNER_BUDGET_PREKILL_SPAWN_S
     + _INNER_BUDGET_STEAM_READY_S
@@ -118,10 +124,28 @@ def log_event(phase: str, **fields: Any) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="launch_stellaris")
     p.add_argument("--app-id", type=int, default=281990)
-    p.add_argument("--launcher-timeout-s", type=int, default=30)
-    p.add_argument("--game-timeout-s", type=int, default=30)
-    p.add_argument("--observe-s", type=int, default=30)
-    p.add_argument("--bridge-timeout-s", type=int, default=DEFAULT_BRIDGE_TIMEOUT_S)
+    p.add_argument("--launcher-timeout-s", type=int, default=30,
+                   help="Steam-ready and launcher-window budget (default 30). "
+                        "Raising it above the default may require raising "
+                        "--bridge-timeout-s too: the outer derives its own "
+                        "budget from the defaults at import time and cannot "
+                        "see a non-default inner.")
+    p.add_argument("--game-timeout-s", type=int, default=30,
+                   help="How long to wait for stellaris.exe to appear after "
+                        "the launcher handoff (default 30). Raising it above "
+                        "the default may require raising --bridge-timeout-s "
+                        "too.")
+    p.add_argument("--observe-s", type=int, default=30,
+                   help="Post-spawn health observation window (default 30). "
+                        "Raising it above the default may require raising "
+                        "--bridge-timeout-s too.")
+    p.add_argument("--bridge-timeout-s", type=int, default=DEFAULT_BRIDGE_TIMEOUT_S,
+                   help="How long the outer waits for the inner's completion "
+                        f"marker (default {DEFAULT_BRIDGE_TIMEOUT_S}, derived "
+                        "from the phase budgets above it). Raise this whenever "
+                        "--launcher-timeout-s, --game-timeout-s or "
+                        "--observe-s is raised past its default, or the outer "
+                        "reports 43 before the inner is done.")
     p.add_argument("--inner", action="store_true",
                    help="(bridge only) skip session detection, run launch chain directly")
     p.add_argument("--marker", type=str, default=None,
@@ -743,10 +767,32 @@ def _validate_tr_length(tr: str) -> int | None:
     return None
 
 
+def _validate_shim_payload(inner_command: str) -> int | None:
+    """Reject a shim body cmd.exe cannot read back byte-for-byte.
+
+    write_bridge_tr_shim writes UTF-8 with no BOM, but cmd.exe parses a .cmd
+    in the OEM codepage — cp936 on the target box. A CJK character in the
+    python path, the script path or the marker path arrives as mojibake, the
+    inner never runs, and the run ends as a bare EXIT_BRIDGE_TIMEOUT (43)
+    naming none of the real cause. Returns None when the payload is plain
+    ASCII, otherwise the typed EXIT_BRIDGE_TR_TOO_LONG (44).
+    """
+    if not inner_command.isascii():
+        log_event("BRIDGE", step="shim_payload_non_ascii",
+                  length=len(inner_command))
+        return EXIT_BRIDGE_TR_TOO_LONG
+    return None
+
+
 def build_inner_tr(args: argparse.Namespace, marker: str,
                    python: str | None = None,
                    script: str | None = None) -> str:
-    """The /tr payload: the exact command line the inner will run.
+    """The inner command line — the *body* of the /tr shim, not the /tr value.
+
+    /tr itself receives a short path to a .cmd file (see
+    write_bridge_tr_shim); schtasks rejects a /tr over 261 characters and
+    this string is 276 by default. Do not "fix" that ceiling by trimming
+    flags out of this string — the shim exists precisely so they can all stay.
 
     The inner is a *separate process* and only knows the flags spelled out
     here. Forwarding every user-settable flag — not just the three that were
@@ -839,6 +885,10 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     # the inline command with a short path that points at a .cmd file holding
     # the same command.
     inner_command = build_inner_tr(args, marker)
+    # Pre-flight: the shim body has to survive cmd.exe's OEM codepage round
+    # trip, or the inner silently never runs and we report a bare 43.
+    if (bad_payload := _validate_shim_payload(inner_command)) is not None:
+        return bad_payload
     shim_path = write_bridge_tr_shim(task_name, inner_command)
 
     # Pre-flight: if the shim path is still over the 261-char ceiling (only
@@ -899,7 +949,27 @@ def run_launch_chain(args: argparse.Namespace) -> int:
 
     On success the game's PID goes to stdout as `<pid>\\n` and nothing else —
     the caller parses it with int(stdout.strip()). Diagnostics are stderr only.
+
+    Blanket guard around the whole chain. An exception escaping here returns
+    from main() *before* _write_marker runs, so the outer bridge never learns
+    the inner died — it sits there until its own timeout and reports 43,
+    which names none of the real cause. Typed non-zero returns pass through
+    untouched; only unexpected exceptions become EXIT_INTERNAL (99).
+
+    Scoped to the inner's chain on purpose: the bridge's own logic (session
+    detection, schtasks, marker polling) stays outside it.
     """
+    try:
+        return _run_launch_chain_phases(args)
+    except Exception as e:  # noqa: BLE001 — propagating is the failure mode
+        # format_exc is multi-line; the timeline is one line per event.
+        log_event("CHAIN", step="internal_error",
+                  error=f"{type(e).__name__}: {e}",
+                  traceback=" | ".join(traceback.format_exc().splitlines()))
+        return EXIT_INTERNAL
+
+
+def _run_launch_chain_phases(args: argparse.Namespace) -> int:
     rc = prekill(args.no_prekill)
     if rc != EXIT_OK:
         return rc
