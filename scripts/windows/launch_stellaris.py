@@ -125,12 +125,12 @@ _MARKER_LOG_PREFIX = "LOG:"
 # tail is kept because the events that end a run are the ones that diagnose it.
 _MARKER_TIMELINE_MAX_LINES = 200
 
-# Crash-dialog signals. The title markers are substrings, matched
+# Crash-dialog signals. WER's title markers are substrings, matched
 # case-insensitively against both the window text and, when there is none, the
 # window class. The images are process names, matched case-insensitively the
 # same way psutil reports them.
-_JIT_TITLE_MARKERS = ("just-in-time debugger", "jit debugger",
-                      "just in time debugger")
+#
+# There is deliberately no JIT title marker. See _is_jit_dialog_visible.
 _WER_TITLE_MARKERS = ("problem reporting", "werfault")
 _JIT_IMAGE = "vsjitdebugger.exe"
 _WER_IMAGE = "werfault.exe"
@@ -638,14 +638,12 @@ def _top_windows() -> list[tuple[int, str]]:
         return []
 
 
-def _is_jit_dialog_visible(windows: list[tuple[int, str]] | None = None) -> bool:
-    """True if a Just-In-Time debugger dialog is up.
+def _is_jit_dialog_visible() -> bool:
+    """True if a Just-In-Time debugger is running — i.e. a crash dialog is up.
 
-    The vsjitdebugger.exe process is the primary, locale-independent signal —
-    the same reasoning as WerFault.exe below. A title match cannot carry this
-    check on its own: the target box is zh-CN, the JIT dialog's title is
-    localized with the Visual Studio UI language, and "just-in-time debugger"
-    never appears in it.
+    The vsjitdebugger.exe process is the whole of this check. It is the only
+    signal that is both locale-independent and tied to something alive, and a
+    title is neither.
 
     Verified on Windows_Jiaolong rather than assumed: HKLM\\SOFTWARE\\Microsoft\\
     Windows NT\\CurrentVersion\\AeDebug\\Debugger is
@@ -653,30 +651,35 @@ def _is_jit_dialog_visible(windows: list[tuple[int, str]] | None = None) -> bool
     and running that image with those arguments leaves the process alive. The
     OS spawns it only when a process takes an unhandled exception, so its
     presence means a JIT event and nothing else — no "a debugger is installed"
-    false positive the way devenv.exe would be.
+    false positive the way devenv.exe would be. It is also not localized: on
+    this zh-CN box the dialog's own title is rendered in the Visual Studio UI
+    language and never contains "just-in-time debugger".
 
-    The title match stays as a fallback for a dialog hosted in some other
-    process, and so the check still fires on a box whose AeDebug points at a
-    different debugger image.
+    WHY THERE IS NO TITLE FALLBACK ANY MORE. There was one, and it fired on a
+    healthy launch. csrss.exe hosts the window, and it outlives whatever drew
+    the title, so once the debugger process behind a prompt is gone the window
+    remains, still titled "Visual Studio Just-In-Time Debugger", owned by pid
+    1176 on this box with no vsjitdebugger.exe anywhere. On the first
+    game_observe tick that returned EXIT_JIT_DIALOG — the agent told the game
+    had crashed while it was loading perfectly well, with the PID withheld.
+    Spec §4 gives 33 the meaning "a crash dialog is up right now, refuse and
+    report", and an orphaned shell of one is not that.
+
+    The capability the fallback was meant to buy — a box whose AeDebug points at
+    some other debugger image — is genuinely given up, because a window owned by
+    a different image is indistinguishable from the orphan above without
+    guessing. The process name stays a named constant, so pointing it at
+    another image is a one-line change.
 
     A vsjitdebugger.exe left over from an unrelated earlier crash is a false
     positive that costs one spurious EXIT_JIT_DIALOG — the same cheap
     direction the WER check already fails in, because the alternative is
     reporting a crashed game as a healthy one. PREKILL does not reap it, on
     the same footing as WerFault.exe.
-
-    `windows` is the caller's snapshot for this tick, and covers the title
-    half only. Optional so the predicate stands alone; game_observe passes one
-    desktop scan to both predicates rather than paying for two. The process
-    half scans on its own either way, for the same reason WerFault.exe does.
     """
     for p in psutil.process_iter(["name"]):
         name = p.info.get("name")
         if name and name.lower() == _JIT_IMAGE:
-            return True
-    for _, title in _top_windows() if windows is None else windows:
-        lowered = title.lower()
-        if any(m in lowered for m in _JIT_TITLE_MARKERS):
             return True
     return False
 
@@ -732,12 +735,13 @@ def game_observe(pid: int, observe_s: int) -> int:
         if not alive or status in _GONE_STATUSES:
             log_event("GAME_OBSERVE", step="exited", status=status)
             return EXIT_GAME_EXITED_EARLY
-        # One desktop scan serves both dialog probes; see _is_jit_dialog_visible.
-        windows = _top_windows()
-        if _is_jit_dialog_visible(windows):
+        # The JIT probe is process-based and scans on its own — see
+        # _is_jit_dialog_visible, which no longer reads the desktop. Only WER
+        # still needs a snapshot, and it takes exactly one per tick.
+        if _is_jit_dialog_visible():
             log_event("GAME_OBSERVE", step="jit_dialog")
             return EXIT_JIT_DIALOG
-        if _is_wer_dialog_visible(windows):
+        if _is_wer_dialog_visible(_top_windows()):
             log_event("GAME_OBSERVE", step="wer_dialog")
             return EXIT_WER_DIALOG
         _time.sleep(_OBSERVE_POLL_S)

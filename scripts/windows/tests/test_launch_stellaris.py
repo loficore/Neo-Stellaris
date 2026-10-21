@@ -1387,9 +1387,86 @@ def test_top_windows_absorbs_a_missing_pywinauto():
         assert _top_windows() == []
 
 
-def test_is_jit_dialog_visible_matches_the_dialog_title():
-    with _fake_desktop([_fake_window(7, "Visual Studio Just-In-Time Debugger")]):
+def test_is_jit_dialog_visible_matches_a_dialog_owned_by_the_debugger_process():
+    """A JIT-dialog title is only evidence when the debugger process owns it.
+
+    Restated rather than kept as a bare title match: see the orphan-window tests
+    below for why the title alone cannot decide this.
+    """
+    with patch("psutil.process_iter",
+               return_value=[_fake_proc("vsjitdebugger.exe", 4123)]), \
+            _fake_desktop([_fake_window(4123, "Visual Studio Just-In-Time Debugger")]):
         assert _is_jit_dialog_visible() is True
+
+
+# The exact window observed on Windows_Jiaolong, captured from the bridged
+# session's pywinauto UIA scan while no vsjitdebugger.exe process was running:
+#     pid=1176  'Visual Studio Just-In-Time Debugger'   (csrss.exe)
+# An orphan like this ends a healthy run at EXIT_JIT_DIALOG (33) — the agent is
+# told the game crashed while it is loading perfectly well — so the predicate has
+# to look past the title at who owns the window.
+_ORPHAN_JIT_WINDOW = (1176, "Visual Studio Just-In-Time Debugger")
+
+
+def test_is_jit_dialog_visible_ignores_an_orphan_window_with_a_jit_title():
+    """A JIT-looking title on csrss.exe with no vsjitdebugger.exe is not a dialog.
+
+    csrss.exe is the process that *hosts* the window, and it outlives whatever
+    drew the title: once the debugger process behind the prompt is gone the
+    window remains, still titled as a JIT dialog, with nothing left to attach
+    to. Spec §4 gives exit 33 the meaning "a crash dialog is up right now,
+    refuse and report", which an orphaned shell of one is not.
+    """
+    with patch("psutil.process_iter", return_value=[_fake_proc("csrss.exe", 1176)]), \
+            _fake_desktop([_fake_window(*_ORPHAN_JIT_WINDOW)]):
+        assert _is_jit_dialog_visible() is False
+
+
+@contextlib.contextmanager
+def _observing_real_probes(windows, procs):
+    """game_observe with the real _is_jit_dialog_visible driving the decision.
+
+    _observing() stubs both dialog predicates, so it cannot catch a predicate
+    that is wrong. This leaves _is_jit_dialog_visible alone and feeds it the same
+    two inputs the box produces — a desktop snapshot and a process list — so the
+    exit code under test is the one the real predicate produces.
+    """
+    proc = MagicMock()
+    proc.status.return_value = "running"
+    proc.is_running.return_value = True
+    with _fake_clock(), \
+            patch("psutil.Process", return_value=proc), \
+            patch("launch_stellaris._top_windows", return_value=list(windows)), \
+            patch("psutil.process_iter", return_value=list(procs)), \
+            patch("launch_stellaris._is_wer_dialog_visible", return_value=False):
+        yield proc
+
+
+def test_game_observe_does_not_report_33_for_the_orphan_csrss_jit_window():
+    """The end-to-end regression: a healthy game must observe clean.
+
+    Same window, same process list as the box showed — a csrss.exe-hosted
+    "Visual Studio Just-In-Time Debugger" and no vsjitdebugger.exe. Before the
+    fix the first observe tick returned 33, which would have turned the first
+    green end-to-end run into a reported crash with the PID withheld.
+    """
+    with _observing_real_probes([_ORPHAN_JIT_WINDOW],
+                                [_fake_proc("csrss.exe", 1176),
+                                 _fake_proc("stellaris.exe", 5555)]):
+        assert game_observe(5555, 30) == EXIT_OK
+
+
+def test_game_observe_still_reports_33_for_a_real_vsjitdebugger_process():
+    """Dropping the title fallback must not blind the check to a real prompt.
+
+    The process half is the signal that survives, so it has to end the observe
+    window on its own — with a desktop full of ordinary windows and no JIT title
+    anywhere.
+    """
+    with _observing_real_probes([(10748, "Steam"), (4242, "Paradox Launcher")],
+                                [_fake_proc("vsjitdebugger.exe", 4123),
+                                 _fake_proc("stellaris.exe", 5555)]):
+        assert game_observe(5555, 30) == EXIT_JIT_DIALOG
 
 
 def test_is_jit_dialog_visible_matches_the_vsjitdebugger_process():
@@ -1524,19 +1601,24 @@ def test_game_observe_prefers_the_dead_process_over_the_dialog():
 
 
 def test_game_observe_scans_the_desktop_once_per_tick():
-    """UIA top-level enumeration is the most expensive thing in this loop and
-    both dialog probes need the same snapshot. Two scans a second for 30 s is
-    a wasted desktop walk on every single launch."""
+    """UIA top-level enumeration is the most expensive thing in this loop. Two
+    scans a second for 30 s is a wasted desktop walk on every single launch.
+
+    WER is the only probe left that reads the desktop — the JIT probe is
+    process-based and no longer takes a snapshot — so the budget this pins is
+    one scan per tick for it, not one shared between two.
+    """
     with _observing(), \
             patch("launch_stellaris._top_windows", return_value=[]) as scan, \
             patch("launch_stellaris._is_jit_dialog_visible",
-                  side_effect=lambda wins: False) as jit, \
+                  return_value=False), \
             patch("launch_stellaris._is_wer_dialog_visible",
                   side_effect=lambda wins: False) as wer:
         assert game_observe(5555, 5) == EXIT_OK
     assert scan.call_count == 5, scan.call_count  # t=0,1,2,3,4
-    # Both predicates saw the same snapshot rather than forcing fresh scans.
-    assert jit.call_args_list == wer.call_args_list
+    # Every scan fed the WER probe from the same tick rather than a second walk.
+    assert wer.call_count == 5, wer.call_count
+    assert wer.call_args_list == [((scan.return_value,),)] * 5
 
 
 def test_game_observe_actually_waits_the_whole_window():
