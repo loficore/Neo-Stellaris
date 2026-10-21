@@ -2649,6 +2649,97 @@ JSContext *JS_NewContext(JSRuntime *rt)
     return ctx;
 }
 
+/* §36 (2026-10-21 live) — every failure branch used to be `{ JS_FreeContext(ctx);
+ * return N; }`, which destroyed the context owning rt->current_exception — the
+ * actual reason the intrinsic failed — before any caller could look at it. The
+ * step number alone was unreadable.
+ *
+ * Capture "<stage>: <message>" into the caller's buffer BEFORE the free. The
+ * buffer is optional (err_buf NULL / err_size <= 0): a caller that cannot
+ * allocate one still gets the numeric step, exactly the pre-§36 convention, and
+ * must not crash. JS_GetException clears the slot and returns the value, so this
+ * is the only chance to see it; the value is freed here so the exception does
+ * not leak (quickjs.c:7406-7413). */
+static void js_diag_capture_exception(JSContext *ctx, const char *stage,
+                                      char *err_buf, int err_size)
+{
+    JSValue exc;
+    const char *msg;
+
+    if (!err_buf || err_size <= 0)
+        return;
+    if (!JS_HasException(ctx)) {
+        snprintf(err_buf, err_size, "%s: (no pending exception)", stage);
+        return;
+    }
+    exc = JS_GetException(ctx);
+    msg = JS_ToCString(ctx, exc);
+    if (msg) {
+        snprintf(err_buf, err_size, "%s: %s", stage, msg);
+        JS_FreeCString(ctx, msg);
+    } else {
+        snprintf(err_buf, err_size, "%s: (exception not convertible to a string)", stage);
+    }
+    JS_FreeValue(ctx, exc);
+}
+
+/* Diagnostic: step-by-step JS_NewContext to find which intrinsic fails.
+ * Returns 0 on success, or a code indicating which step failed:
+ *   1 = JS_NewContextRaw failed (allocation)
+ *   2 = JS_AddIntrinsicBaseObjects failed
+ *   3 = JS_AddIntrinsicDate failed
+ *   4 = JS_AddIntrinsicEval failed
+ *   5 = JS_AddIntrinsicStringNormalize failed
+ *   6 = JS_AddIntrinsicRegExp failed
+ *   7 = JS_AddIntrinsicJSON failed
+ *   8 = JS_AddIntrinsicProxy failed
+ *   9 = JS_AddIntrinsicMapSet failed
+ *  10 = JS_AddIntrinsicTypedArrays failed
+ *  11 = JS_AddIntrinsicPromise failed
+ *  12 = JS_AddIntrinsicWeakRef failed
+ * On success, *out_ctx is set to the new context.
+ * On failure, the partial context is freed and *out_ctx is set to NULL.
+ *
+ * `err_buf` (optional, err_size bytes) receives "<stage>: <pending exception
+ * message>" for the failing intrinsic, captured before the context is freed —
+ * stage strings: BaseObjects, Date, Eval, StringNormalize, RegExp, JSON, Proxy,
+ * MapSet, TypedArrays, Promise, WeakRef. Step 1 has no context to read an
+ * exception from, so err_buf is left empty there.
+ */
+int JS_NewContextDiag(JSRuntime *rt, JSContext **out_ctx,
+                      char *err_buf, int err_size)
+{
+    JSContext *ctx;
+
+#define JS_DIAG_FAIL(the_ctx, stage, code)                            \
+    do {                                                              \
+        js_diag_capture_exception(the_ctx, stage, err_buf, err_size);  \
+        JS_FreeContext(the_ctx);                                      \
+        return (code);                                                \
+    } while (0)
+
+    *out_ctx = NULL;
+    ctx = JS_NewContextRaw(rt);
+    if (!ctx) return 1;
+
+    if (JS_AddIntrinsicBaseObjects(ctx)) JS_DIAG_FAIL(ctx, "BaseObjects", 2);
+    if (JS_AddIntrinsicDate(ctx)) JS_DIAG_FAIL(ctx, "Date", 3);
+    if (JS_AddIntrinsicEval(ctx)) JS_DIAG_FAIL(ctx, "Eval", 4);
+    if (JS_AddIntrinsicStringNormalize(ctx)) JS_DIAG_FAIL(ctx, "StringNormalize", 5);
+    if (JS_AddIntrinsicRegExp(ctx)) JS_DIAG_FAIL(ctx, "RegExp", 6);
+    if (JS_AddIntrinsicJSON(ctx)) JS_DIAG_FAIL(ctx, "JSON", 7);
+    if (JS_AddIntrinsicProxy(ctx)) JS_DIAG_FAIL(ctx, "Proxy", 8);
+    if (JS_AddIntrinsicMapSet(ctx)) JS_DIAG_FAIL(ctx, "MapSet", 9);
+    if (JS_AddIntrinsicTypedArrays(ctx)) JS_DIAG_FAIL(ctx, "TypedArrays", 10);
+    if (JS_AddIntrinsicPromise(ctx)) JS_DIAG_FAIL(ctx, "Promise", 11);
+    if (JS_AddIntrinsicWeakRef(ctx)) JS_DIAG_FAIL(ctx, "WeakRef", 12);
+
+#undef JS_DIAG_FAIL
+
+    *out_ctx = ctx;
+    return 0;
+}
+
 void *JS_GetContextOpaque(JSContext *ctx)
 {
     return ctx->user_opaque;

@@ -31,9 +31,23 @@ pub const scripted = @import("scripted/lookup_hook.zig");
 // (ExecHookInstall/Uninstall/Drain/Histogram/Stats/Reset) are injector-facing.
 pub const exec_hook = @import("scripted/exec_hook.zig");
 
+// C1 keyword registration — mints a new token id and inserts into the engine's BST.
+// Gated by authorize.c1_registration; the export fn C1Run in exports.zig is the
+// injector-facing trigger.
+pub const keyword_registry = @import("scripted/keyword_registry.zig");
+
+// C2: QuickJS runtime integration — custom vtables + JS dispatch for registered keywords.
+pub const c2_handler = @import("c2/handler.zig");
+pub const c2_vtable = @import("c2/vtable.zig");
+pub const c2_predicate_hook = @import("c2/predicate_hook.zig");
+
 comptime {
     _ = scripted;
     _ = exec_hook;
+    _ = keyword_registry;
+    _ = c2_handler;
+    _ = c2_vtable;
+    _ = c2_predicate_hook;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,7 +55,7 @@ comptime {
 // ---------------------------------------------------------------------------
 
 /// Global QuickJS runtime instance.
-var js_runtime: ?quickjs.Runtime = null;
+pub var js_runtime: ?quickjs.Runtime = null;
 
 /// Initialize QuickJS and register all Stellaris API functions.
 /// Called from DllMain DLL_PROCESS_ATTACH.

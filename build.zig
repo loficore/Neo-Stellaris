@@ -117,6 +117,18 @@ pub fn build(b: *std.Build) void {
     });
     linkQuickjs(b, qjs_tests.root_module);
 
+    // C2 native bootstrap-sequence test: runs the exact step sequence that
+    // crashed the live game (evidence §32/§33) against the real vendored
+    // QuickJS on this host, through quickjs_wrapper.c's own C2DiagQuickJS.
+    const c2_diag_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dll/quickjs/c2_diag_test.zig"),
+            .target = native,
+            .optimize = optimize,
+        }),
+    });
+    linkQuickjs(b, c2_diag_tests.root_module);
+
     // Offsets validation tests.
     const offsets_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -126,15 +138,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Keyword registry — the 0x120 descriptor builder, checked byte-for-byte against
-    // vectors produced by running the engine's own writers (scripts/emu_desc.py).
-    const keyword_registry_mod = b.createModule(.{
-        .root_source_file = b.path("src/dll/scripted/keyword_registry.zig"),
-        .target = native,
-        .optimize = optimize,
-    });
-    keyword_registry_mod.addImport("offsets", offsets_mod);
-    const keyword_registry_tests = b.addTest(.{ .root_module = keyword_registry_mod });
+    // Keyword registry tests run via the exports.zig test root (main.zig imports
+    // keyword_registry), so no standalone test module is needed here.
 
     // Hooking framework tests (detour + windows wrappers).
     const windows_mod = b.createModule(.{
@@ -248,11 +253,11 @@ pub fn build(b: *std.Build) void {
     const run_qjs_tests = b.addRunArtifact(qjs_tests);
     run_qjs_tests.skip_foreign_checks = true;
 
+    const run_c2_diag_tests = b.addRunArtifact(c2_diag_tests);
+    run_c2_diag_tests.skip_foreign_checks = true;
+
     const run_offsets_tests = b.addRunArtifact(offsets_tests);
     run_offsets_tests.skip_foreign_checks = true;
-
-    const run_keyword_registry_tests = b.addRunArtifact(keyword_registry_tests);
-    run_keyword_registry_tests.skip_foreign_checks = true;
 
     const run_detour_tests = b.addRunArtifact(detour_tests);
     run_detour_tests.skip_foreign_checks = true;
@@ -281,8 +286,8 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_qjs_tests.step);
+    test_step.dependOn(&run_c2_diag_tests.step);
     test_step.dependOn(&run_offsets_tests.step);
-    test_step.dependOn(&run_keyword_registry_tests.step);
     test_step.dependOn(&run_detour_tests.step);
     test_step.dependOn(&run_api_gamestate_tests.step);
     // NOTE: scope.zig standalone test disabled — pre-existing "import of file outside

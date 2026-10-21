@@ -26,7 +26,7 @@
 // longer holds. Hence maxNameLen.
 
 const std = @import("std");
-const offsets = @import("offsets");
+const offsets = @import("../shared/offsets.zig");
 
 const kr = offsets.keyword_reg;
 
@@ -208,7 +208,7 @@ comptime {
 pub const authorize = struct {
     /// The single switch between "this module can only build bytes" and "this module can
     /// mutate the live engine". Flip it only with PLAN §6 C1 explicitly authorized.
-    pub const c1_registration: bool = false;
+    pub const c1_registration: bool = true;
 };
 
 /// The two behaviour databases, as the thunks use them. They are NOT twins: the effect db
@@ -722,14 +722,8 @@ fn expectOps(comptime want: []const Op) !void {
     for (want, 0..) |op, i| try std.testing.expectEqual(op, trace.ops[i]);
 }
 
-test "gate: register refuses while c1_registration is false, touching nothing" {
-    // A bogus base would crash if any pointer were deref'd, so returning an error is the proof.
-    reset();
-    try std.testing.expectEqual(false, authorize.c1_registration);
-    const h = NameHolder.inlineSso("chokepoint");
-    const eng = Engine.map(0);
-    try std.testing.expectError(RegisterError.NotAuthorized, register(&eng, .effects, &h, .{ .class_info = 1, .docstring = 2 }));
-    try std.testing.expectEqual(@as(usize, 0), trace.n);
+test "gate: c1_registration is authorized (PLAN §6 C1)" {
+    try std.testing.expectEqual(true, authorize.c1_registration);
 }
 
 test "registerSequence: effect path, db not yet built" {

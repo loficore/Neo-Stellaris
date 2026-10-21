@@ -6,6 +6,10 @@ zig-out/
 .zig-cache/
 **/__pycache__/
 
+# === Python tool caches ===
+.pytest_cache/
+.ruff_cache/
+
 # === QuickJS build artifacts ===
 libs/quickjs/.obj/
 libs/quickjs/libquickjs.a
@@ -16,6 +20,8 @@ libs/quickjs/libquickjs.a
 # === Agent / tool state ===
 .omo/
 .playwright-mcp/
+.pi/
+.qoder/
 
 # === IDA Pro local artifacts ===
 evidence/session_id.txt
@@ -36,3 +42,6 @@ Desktop.ini
 # === Regenerable oversized evidence artifacts ===
 # 25 MB id-usage census; regenerate offline with scripts/idscan.py / scripts/idregistry.py.
 evidence/xrefs/token_id_use_sites_4_4_4.tsv
+
+# === Private planning folder (superpowers plans/specs), never tracked ===
+docs/superpowers/

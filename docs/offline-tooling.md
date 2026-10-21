@@ -144,7 +144,26 @@ The earlier `License not yet accepted, cannot run in batch mode` failure is **no
 
 ## 一次性探测脚本
 
-`scripts/` 下 `body*.py`、`spy*.py`/`spy*.js`、`fs*.py`、`strs*.py`、`callscan*.py`、`vt*.py`、
-`prol_*`、`peekexec.py`、`verify_base.py` 等是历次取证的一次性探针,结论已进 `evidence/` 与
-`runtime_444_*.md` 三卷对应 §,**不作为接口维护**——可以失效,但不要在新结论上重犯它们已踩过的口径错误
-(见各节"陷阱"段)。
+历次取证的一次性探针已经不在 `scripts/` 顶层,按取证批次归进三个目录,每个目录自带 README
+(逐行列出「这个文件当时在回答哪个问题」):
+
+| 目录 | 内容 | 判据 |
+|---|---|---|
+| `scripts/scratch/2026-09_frida_hot_site_spies/` | `fs*.py`、`body*.py`/`body.js`、`spy*.{py,js}`、`strs*.py`、`kv*.py`、`vt.py`/`vtlive.{py,js}`、`walkdb.*`、`prologue.*`、`caller*.py`、`regfn.py`、`missstr.py`、`strdump.py` | 需要运行中的游戏 + Frida |
+| `scripts/scratch/2026-09_offline_hardcoded_oneshots/` | `callscan*.py`、`prol_exec*.py`、`rtti_check*.py`、`rtti_offline.py`、`refscan.py`、`sec.py`、`pedump.py`、`verify_base.py`、`dumpvt.py`、`vtcheck.py`、`kwmeta.py`、`cap2.py` | 只读 exe 拷贝,但**路径写死成 `D:\SteamLibrary\…`** |
+| `scripts/scratch/2026-09_frida_detour_era/` | `restoreexec.py`、`nsunload.py`、`peekexec.py`、`read_remote_mem.py` | detour 路线的善后 |
+
+它们**不作为接口维护**——可以失效,但不要在新结论上重犯它们已踩过的口径错误(见各节"陷阱"段)。
+结论已进 `evidence/` 与 `runtime_444_*.md` 三卷对应 §。
+
+**`evidence/` 里按 `scripts/<name>` 记的出处指的就是这些文件,现在同一个 basename 在
+`scripts/scratch/<批次>/<basename>`。** 取证记录不改写,对应关系靠 basename 一一对上;
+这批脚本移进来时**一个字都没改**,所以路径之外的任何"修复"都不构成重跑它们的理由。
+
+**`.py`↔`.js` 配对按「同目录内被引用」判定**(`scripts/test_scripts_layout.py` 的 `violates_pairing`,只扫顶层,
+所以上面这些 scratch 目录里的孤儿 `.js` 不算违规),`fridadis.py`↔`dis.js` 与 `scan444.py`↔`anchor444.js`
+是**刻意异名**(`C:\ns\` 是线上路径),不是待修的历史遗留。
+
+A 目录那批还依赖仓库外的现场文件:`C:\ns\deep.js`、`C:\ns\deep2.js`(以及 `cap2.py` 要 `C:\ns\cap.py`、
+`rtti_offline.py` 要 `C:\ns\spy4_table.txt`)——**这些 `.js` 不在仓库里**,只在当时那台机器上,
+所以现在直接跑会失败,这是预期而不是回归。
