@@ -78,6 +78,20 @@ _FOCUS_SETTLE_S = 1.0
 _KEY_SETTLE_S = 5.0
 _TAB_ENTER_ATTEMPTS = 3
 _POLL_S = 0.5
+_OBSERVE_POLL_S = 1.0
+
+# psutil status strings that mean the process is no longer running the game.
+# 'zombie' is the one psutil actually reports; 'dead' is what a lost handle
+# looks like in practice.
+_GONE_STATUSES = ("zombie", "dead")
+
+# Substrings that mark a crash dialog among the desktop's top-level windows.
+# Matched case-insensitively against both the window text and, when there is
+# none, the window class.
+_JIT_TITLE_MARKERS = ("just-in-time debugger", "jit debugger",
+                      "just in time debugger")
+_WER_TITLE_MARKERS = ("problem reporting", "werfault")
+_WER_IMAGE = "werfault.exe"
 
 
 def _last_error() -> int:
@@ -452,6 +466,147 @@ def launcher_keyboard(hwnd: int) -> int:
         return EXIT_LAUNCHER_NO_FOCUS
 
 
+def launcher_handoff(timeout_s: int) -> int | None:
+    """Wait for the launcher to hand off to the game. Returns stellaris.exe's PID.
+
+    Separate from launcher_keyboard on purpose: that phase stops at the first
+    handoff *signal*, which launcher_keyboard's own _handoff_observed also
+    fires on the launcher simply exiting. This one waits for the thing the
+    caller actually needs — a PID it can watch.
+    """
+    image = GAME_IMAGE.lower()
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        for p in psutil.process_iter(["name", "pid"]):
+            name = p.info.get("name")
+            if name and name.lower() == image:
+                log_event("LAUNCHER_HANDOFF", stellaris_pid=p.info["pid"])
+                return p.info["pid"]
+        _time.sleep(_POLL_S)
+    log_event("LAUNCHER_HANDOFF", result="timeout", timeout_s=timeout_s)
+    return None
+
+
+def _top_windows() -> list[tuple[int, str]]:
+    """[(pid, window title or class), ...] for top-level windows on the desktop.
+
+    Uses pywinauto's UIA Desktop rather than an EnumWindows walk because it
+    spans processes: the dialogs we hunt for (JIT, WER) are owned by processes
+    this chain knows nothing about.
+
+    INVARIANT — this returns [] from session 0 and real windows only from the
+    interactive window station. Session 0 has its own window station and sees
+    none of the user's desktop, which is why every call here happens inside
+    the bridged inner. Do not "optimize" this into an EnumWindows call that
+    looks tidier and returns nothing: that is exactly the failure already
+    fixed for _enum_windows_owned_by.
+
+    Fails soft to [] — pywinauto is a Windows-only package and this module
+    has to import on Linux for the host-side suite, so a missing package or a
+    dead handle must not abort the observe loop.
+    """
+    try:
+        from pywinauto import Desktop
+        out = []
+        skipped = 0
+        for w in Desktop(backend="uia").windows():
+            try:
+                out.append((w.process_id(), w.window_text() or w.class_name()))
+            except Exception as e:  # noqa: BLE001 — one dead handle must not end the scan
+                skipped += 1
+                if skipped == 1:
+                    # Log the first, not every: a window that closes between
+                    # enumeration and access is routine on a live desktop, and
+                    # per-window logging would drown the observe timeline.
+                    log_event("GAME_WINDOWS", step="window_skipped", error=repr(e))
+                continue
+        if skipped:
+            log_event("GAME_WINDOWS", step="scan_complete", windows=len(out),
+                      skipped=skipped)
+        return out
+    except Exception as e:  # noqa: BLE001 — "nothing observable", retried by the caller
+        log_event("GAME_WINDOWS", error=repr(e))
+        return []
+
+
+def _is_jit_dialog_visible(windows: list[tuple[int, str]] | None = None) -> bool:
+    """True if a Just-In-Time debugger dialog is up.
+
+    `windows` is the caller's snapshot for this tick. Optional so the
+    predicate stands alone; game_observe passes one desktop scan to both
+    predicates rather than paying for two.
+    """
+    for _, title in _top_windows() if windows is None else windows:
+        lowered = title.lower()
+        if any(m in lowered for m in _JIT_TITLE_MARKERS):
+            return True
+    return False
+
+
+def _is_wer_dialog_visible(windows: list[tuple[int, str]] | None = None) -> bool:
+    """True if Windows Error Reporting is up. The WerFault.exe process is the
+    locale-independent signal; the title match is a fallback for a report
+    dialog hosted inside another process.
+
+    A WerFault.exe left over from an unrelated earlier crash is a false
+    positive, and costs one spurious EXIT_WER_DIALOG. That is the cheap
+    direction to fail in: the alternative is reporting a crashed game as a
+    healthy one.
+    """
+    for p in psutil.process_iter(["name"]):
+        name = p.info.get("name")
+        if name and name.lower() == _WER_IMAGE:
+            return True
+    for _, title in _top_windows() if windows is None else windows:
+        lowered = title.lower()
+        if any(m in lowered for m in _WER_TITLE_MARKERS):
+            return True
+    return False
+
+
+def game_observe(pid: int, observe_s: int) -> int:
+    """Watch the game for observe_s seconds. Returns a typed exit code.
+
+    "Healthy" is process-still-running with no JIT or WER dialog — the spec's
+    definition, deliberately not a CPU-time delta: Stellaris sits still for
+    5-10 s while loading, and a CPU check would call a healthy load a crash.
+
+    Does not raise. Every psutil and pywinauto call in here can fail on a
+    process that dies mid-sample, and an exception escaping would be caught by
+    run_launch_chain's blanket guard and reported as EXIT_INTERNAL — losing
+    the real cause. A dead process is 32, not 99.
+    """
+    try:
+        proc = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        # Died between handoff and the first sample. 32, not 99.
+        log_event("GAME_OBSERVE", step="no_such_process", pid=pid)
+        return EXIT_GAME_EXITED_EARLY
+
+    deadline = _time.time() + observe_s
+    while _time.time() < deadline:
+        try:
+            status = proc.status()
+            alive = proc.is_running()
+        except psutil.NoSuchProcess:
+            log_event("GAME_OBSERVE", step="no_such_process", pid=pid)
+            return EXIT_GAME_EXITED_EARLY
+        if not alive or status in _GONE_STATUSES:
+            log_event("GAME_OBSERVE", step="exited", status=status)
+            return EXIT_GAME_EXITED_EARLY
+        # One desktop scan serves both dialog probes; see _is_jit_dialog_visible.
+        windows = _top_windows()
+        if _is_jit_dialog_visible(windows):
+            log_event("GAME_OBSERVE", step="jit_dialog")
+            return EXIT_JIT_DIALOG
+        if _is_wer_dialog_visible(windows):
+            log_event("GAME_OBSERVE", step="wer_dialog")
+            return EXIT_WER_DIALOG
+        _time.sleep(_OBSERVE_POLL_S)
+    log_event("GAME_OBSERVE", step="ok", pid=pid, alive_s=observe_s)
+    return EXIT_OK
+
+
 _session_fns_cache: tuple[Any, Any, Any] | None = None
 
 
@@ -740,7 +895,11 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
 
 
 def run_launch_chain(args: argparse.Namespace) -> int:
-    """PREKILL .. LAUNCHER_KEYBOARD. This is the inner's body; Task 6 extends it."""
+    """PREKILL .. GAME_OBSERVE. This is the inner's body.
+
+    On success the game's PID goes to stdout as `<pid>\\n` and nothing else —
+    the caller parses it with int(stdout.strip()). Diagnostics are stderr only.
+    """
     rc = prekill(args.no_prekill)
     if rc != EXIT_OK:
         return rc
@@ -759,7 +918,17 @@ def run_launch_chain(args: argparse.Namespace) -> int:
         # A dry run spawns no URI, so a launcher window here is some other
         # game's. Never type into a window nobody asked us to touch.
         return EXIT_OK
-    return launcher_keyboard(found[1])
+    rc = launcher_keyboard(found[1])
+    if rc != EXIT_OK:
+        return rc
+    game_pid = launcher_handoff(args.game_timeout_s)
+    if game_pid is None:
+        return EXIT_GAME_DID_NOT_SPAWN
+    rc = game_observe(game_pid, args.observe_s)
+    if rc != EXIT_OK:
+        return rc
+    print(game_pid, flush=True)
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:

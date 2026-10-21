@@ -10,20 +10,25 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import launch_stellaris
+import psutil
 import pytest
 from launch_stellaris import (EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
-                              EXIT_INTERNAL, EXIT_LAUNCHER_NO_ADVANCE,
-                              EXIT_LAUNCHER_NO_FOCUS,
+                              EXIT_GAME_DID_NOT_SPAWN, EXIT_GAME_EXITED_EARLY,
+                              EXIT_INTERNAL, EXIT_JIT_DIALOG,
+                              EXIT_LAUNCHER_NO_ADVANCE, EXIT_LAUNCHER_NO_FOCUS,
                               EXIT_LAUNCHER_WINDOW_MISSING, EXIT_OK,
-                              EXIT_PREKILL_PERMISSION, INPUT, INPUT_KEYBOARD,
-                              KEYBDINPUT, VK_RETURN, VK_TAB,
+                              EXIT_PREKILL_PERMISSION, EXIT_WER_DIALOG, INPUT,
+                              INPUT_KEYBOARD, KEYBDINPUT, VK_RETURN, VK_TAB,
                               _enum_windows_owned_by, _handoff_observed,
-                              _hwnd_for_pid, _poll_marker, _steam_has_window,
-                              _write_marker, bridge_to_interactive_session,
+                              _hwnd_for_pid, _is_jit_dialog_visible,
+                              _is_wer_dialog_visible, _poll_marker,
+                              _steam_has_window, _top_windows, _write_marker,
+                              bridge_to_interactive_session,
                               bring_to_foreground, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, build_inner_tr,
+                              game_observe, launcher_handoff,
                               launcher_keyboard, launcher_wait, prekill,
                               run_launch_chain, send_key, steam_ready,
                               steam_spawn, timeline_event)
@@ -924,16 +929,23 @@ def test_launcher_keyboard_stops_at_the_first_tab_enter_that_works(
     assert mock_handoff.call_count == 2
 
 
+@patch("launch_stellaris.game_observe", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_handoff", return_value=5555)
 @patch("launch_stellaris.launcher_keyboard", return_value=EXIT_OK)
 @patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
 @patch("launch_stellaris.steam_ready", return_value=10748)
 @patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
 @patch("launch_stellaris.prekill", return_value=EXIT_OK)
 def test_run_launch_chain_waits_for_the_launcher_window_then_drives_it(
-        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_keyboard):
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_keyboard,
+        mock_handoff, mock_observe):
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_OK
     mock_wait.assert_called_once_with(30)  # --launcher-timeout-s default
     mock_keyboard.assert_called_once_with(12345)
+    # Task 6: the drive is not the end of the chain — the game has to appear
+    # and then survive its observation window.
+    mock_handoff.assert_called_once_with(30)  # --game-timeout-s default
+    mock_observe.assert_called_once_with(5555, 30)  # --observe-s default
 
 
 @patch("launch_stellaris.launcher_keyboard", return_value=EXIT_LAUNCHER_NO_ADVANCE)
@@ -982,3 +994,368 @@ def test_run_launch_chain_dry_run_tolerates_a_missing_launcher_window(
     pre-flight check it exists to be."""
     args = build_arg_parser().parse_args(["--dry-run"])
     assert run_launch_chain(args) == EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# Task 6: LAUNCHER_HANDOFF + GAME_OBSERVE.
+#
+# The launcher drive is not the end of the chain. These two phases turn
+# "we pressed some keys" into "here is a PID you can watch", and that PID
+# into a typed verdict.
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _game_spawning(game_name="stellaris.exe", pid=5555, other_name="steam.exe"):
+    """A desktop where `game_name` is present from the very first poll."""
+    procs = [_fake_proc(other_name, 1)]
+    if game_name:
+        procs.append(_fake_proc(game_name, pid))
+    with _fake_clock(), patch("psutil.process_iter", return_value=procs):
+        yield
+
+
+def test_launcher_handoff_returns_the_stellaris_pid():
+    with _game_spawning():
+        assert launcher_handoff(30) == 5555
+
+
+def test_launcher_handoff_matches_the_game_image_case_insensitively():
+    """Windows image names are case-insensitive and psutil reports whatever
+    the process has. A case-sensitive match here is EXIT_GAME_DID_NOT_SPAWN
+    (31) on a real run, for no reason at all."""
+    with _game_spawning(game_name="STELLARIS.EXE"):
+        assert launcher_handoff(30) == 5555
+
+
+def test_launcher_handoff_returns_none_when_the_game_never_appears():
+    """The launcher exited without ever producing a game. 31, not a hang —
+    --game-timeout-s exists precisely so this terminates."""
+    with _fake_clock(), patch("psutil.process_iter", return_value=[]):
+        assert launcher_handoff(30) is None
+
+
+def test_launcher_handoff_keeps_polling_until_the_game_appears():
+    """launcher_keyboard stops at the first handoff *signal*, which also fires
+    when the launcher merely exits. The game can lag that by seconds — a
+    single-shot probe reports 31 on every real launch."""
+    scans = []
+
+    def process_iter(*_a, **_kw):
+        scans.append(1)
+        return [_fake_proc("stellaris.exe", 5555)] if len(scans) >= 3 else []
+
+    with _fake_clock(), patch("psutil.process_iter", side_effect=process_iter):
+        assert launcher_handoff(30) == 5555
+    assert len(scans) == 3, scans
+
+
+def test_launcher_handoff_ignores_a_still_running_launcher():
+    """The launcher outliving its own window is normal — it is the *game's*
+    appearance that ends this phase, not the launcher's absence."""
+    procs = [_fake_proc("Paradox Launcher.exe", 4242),
+             _fake_proc("stellaris.exe", 5555)]
+    with _fake_clock(), patch("psutil.process_iter", return_value=procs):
+        assert launcher_handoff(30) == 5555
+
+
+def test_launcher_handoff_stops_polling_within_its_budget():
+    """A spent budget must terminate the phase rather than spin — this loop
+    is one of the terms the bridge timeout is derived from."""
+    with _fake_clock() as clock, patch("psutil.process_iter", return_value=[]):
+        assert launcher_handoff(30) is None
+    assert clock.t <= 30, clock.t
+
+
+def _fake_window(pid=100, text="Steam", cls="#32770"):
+    w = MagicMock()
+    w.process_id.return_value = pid
+    w.window_text.return_value = text
+    w.class_name.return_value = cls
+    return w
+
+
+@contextlib.contextmanager
+def _fake_desktop(windows=(), side_effect=None):
+    """Stand in for the `pywinauto` package _top_windows imports."""
+    fake = MagicMock()  # stands in for the pywinauto package
+    if side_effect is not None:
+        fake.Desktop.side_effect = side_effect
+    else:
+        fake.Desktop.return_value.windows.return_value = list(windows)
+    with patch.dict(sys.modules, {"pywinauto": fake}, clear=False):
+        yield fake
+
+
+def test_top_windows_returns_pid_and_title_pairs():
+    with _fake_desktop([_fake_window(10748, "Steam"),
+                        _fake_window(4242, "Paradox Launcher")]):
+        assert _top_windows() == [(10748, "Steam"), (4242, "Paradox Launcher")]
+
+
+def test_top_windows_falls_back_to_the_class_when_there_is_no_title():
+    """A dialog with an empty window text still has a class, and a JIT or WER
+    dialog routinely has one. Dropping it loses the match entirely."""
+    with _fake_desktop([_fake_window(7, text="", cls="#32770")]):
+        assert _top_windows() == [(7, "#32770")]
+
+
+def test_top_windows_uses_the_uia_backend():
+    """UIA is the only backend that spans processes — the JIT and WER dialogs
+    belong to processes this chain knows nothing about."""
+    with _fake_desktop([]) as fake:
+        _top_windows()
+    fake.Desktop.assert_called_once_with(backend="uia")
+
+
+def test_top_windows_survives_one_window_dying_mid_scan():
+    """A window can close between enumeration and access. One dead handle
+    must not truncate the scan — that is how a crash dialog sitting *after*
+    it in the list gets missed, which is the one false negative that matters
+    here."""
+    alive = _fake_window(4242, "WerFault.exe")
+    dead = MagicMock()
+    dead.process_id.side_effect = RuntimeError("handle is gone")
+    with _fake_desktop([dead, alive]):
+        assert _top_windows() == [(4242, "WerFault.exe")]
+
+
+def test_top_windows_absorbs_a_missing_pywinauto():
+    """pywinauto is a requirements.txt entry, not a hard dependency. Raising
+    here escapes game_observe and surfaces as EXIT_INTERNAL (99), blaming our
+    own code for a perfectly healthy game."""
+    real_import = builtins.__import__
+
+    def no_pywinauto(name, *a, **kw):
+        if name.split(".")[0] == "pywinauto":
+            raise ModuleNotFoundError("No module named 'pywinauto'")
+        return real_import(name, *a, **kw)
+
+    with patch("builtins.__import__", side_effect=no_pywinauto):
+        assert _top_windows() == []
+
+
+def test_is_jit_dialog_visible_matches_the_dialog_title():
+    with _fake_desktop([_fake_window(7, "Visual Studio Just-In-Time Debugger")]):
+        assert _is_jit_dialog_visible() is True
+
+
+def test_is_jit_dialog_visible_ignores_ordinary_windows():
+    """A false positive here ends a healthy run at EXIT_JIT_DIALOG (33),
+    telling the agent the game crashed while it is loading perfectly well."""
+    with _fake_desktop([_fake_window(10748, "Steam"),
+                        _fake_window(4242, "Paradox Launcher"),
+                        _fake_window(5555, "stellaris.exe")]):
+        assert _is_jit_dialog_visible() is False
+
+
+def test_is_wer_dialog_visible_matches_the_werfault_process():
+    """The process is the locale-independent signal — a CN-locale box never
+    says "problem reporting" in the title."""
+    with patch("psutil.process_iter", return_value=[_fake_proc("WerFault.exe", 900)]):
+        assert _is_wer_dialog_visible() is True
+
+
+def test_is_wer_dialog_visible_matches_a_report_dialog_title():
+    with _fake_desktop([_fake_window(9, "Problem Reporting")]), \
+            patch("psutil.process_iter", return_value=[]):
+        assert _is_wer_dialog_visible() is True
+
+
+def test_is_wer_dialog_visible_is_false_for_a_clean_desktop():
+    procs = [_fake_proc("steam.exe", 1), _fake_proc("stellaris.exe", 5555)]
+    with _fake_desktop([_fake_window(5555, "stellaris.exe")]), \
+            patch("psutil.process_iter", return_value=procs):
+        assert _is_wer_dialog_visible() is False
+
+
+@contextlib.contextmanager
+def _observing(status="running", alive=True):
+    """A game process with fixed status()/is_running(), and a clean desktop."""
+    proc = MagicMock()
+    proc.status.return_value = status
+    proc.is_running.return_value = alive
+    with _fake_clock(), \
+            patch("psutil.Process", return_value=proc), \
+            patch("launch_stellaris._top_windows", return_value=[]), \
+            patch("launch_stellaris._is_jit_dialog_visible", return_value=False), \
+            patch("launch_stellaris._is_wer_dialog_visible", return_value=False):
+        yield proc
+
+
+def test_game_observe_passes_when_the_game_survives_the_window():
+    with _observing():
+        assert game_observe(5555, 30) == EXIT_OK
+
+
+def test_game_observe_exits_32_when_the_process_dies():
+    with _observing(status="dead", alive=False):
+        assert game_observe(5555, 30) == EXIT_GAME_EXITED_EARLY
+
+
+def test_game_observe_exits_32_for_a_zombie():
+    """A zombie still answers psutil.Process and still owns a PID, so
+    is_running() can be True while the game itself is long gone."""
+    with _observing(status="zombie", alive=True):
+        assert game_observe(5555, 30) == EXIT_GAME_EXITED_EARLY
+
+
+def test_game_observe_exits_32_when_the_process_is_already_gone():
+    """psutil.Process() itself raises here, *outside* the brief's try block.
+    Letting that escape becomes EXIT_INTERNAL (99) via the chain guard, which
+    blames our own code for a game that merely died on its own."""
+    with _fake_clock(), patch("psutil.Process", side_effect=psutil.NoSuchProcess(5555)):
+        assert game_observe(5555, 30) == EXIT_GAME_EXITED_EARLY
+
+
+def test_game_observe_exits_32_when_the_process_dies_mid_sample():
+    proc = MagicMock()
+    proc.status.side_effect = psutil.NoSuchProcess(5555)
+    with _fake_clock(), patch("psutil.Process", return_value=proc):
+        assert game_observe(5555, 30) == EXIT_GAME_EXITED_EARLY
+
+
+def test_game_observe_exits_33_on_a_jit_dialog():
+    with _observing(), \
+            patch("launch_stellaris._is_jit_dialog_visible", return_value=True):
+        assert game_observe(5555, 30) == EXIT_JIT_DIALOG
+
+
+def test_game_observe_exits_34_on_a_wer_dialog():
+    with _observing(), \
+            patch("launch_stellaris._is_wer_dialog_visible", return_value=True):
+        assert game_observe(5555, 30) == EXIT_WER_DIALOG
+
+
+def test_game_observe_prefers_the_dead_process_over_the_dialog():
+    """Both true: the game died AND a dialog is up. 32 is the root cause; 33
+    or 34 would send the agent chasing a debugger that is not the problem."""
+    proc = MagicMock()
+    proc.status.return_value = "dead"
+    proc.is_running.return_value = False
+    with _fake_clock(), \
+            patch("psutil.Process", return_value=proc), \
+            patch("launch_stellaris._is_jit_dialog_visible",
+                  return_value=True) as jit, \
+            patch("launch_stellaris._is_wer_dialog_visible",
+                  return_value=True) as wer:
+        assert game_observe(5555, 30) == EXIT_GAME_EXITED_EARLY
+    jit.assert_not_called()
+    wer.assert_not_called()
+
+
+def test_game_observe_scans_the_desktop_once_per_tick():
+    """UIA top-level enumeration is the most expensive thing in this loop and
+    both dialog probes need the same snapshot. Two scans a second for 30 s is
+    a wasted desktop walk on every single launch."""
+    with _observing(), \
+            patch("launch_stellaris._top_windows", return_value=[]) as scan, \
+            patch("launch_stellaris._is_jit_dialog_visible",
+                  side_effect=lambda wins: False) as jit, \
+            patch("launch_stellaris._is_wer_dialog_visible",
+                  side_effect=lambda wins: False) as wer:
+        assert game_observe(5555, 5) == EXIT_OK
+    assert scan.call_count == 5, scan.call_count  # t=0,1,2,3,4
+    # Both predicates saw the same snapshot rather than forcing fresh scans.
+    assert jit.call_args_list == wer.call_args_list
+
+
+def test_game_observe_actually_waits_the_whole_window():
+    """observe_s is the contract with the agent — "up for half a minute and
+    nothing is wrong". Returning early hands back a PID for a game that dies
+    two seconds later."""
+    with _observing(), _fake_clock() as clock:
+        assert game_observe(5555, 10) == EXIT_OK
+    assert clock.t >= 10, clock.t
+
+
+def test_game_observe_zero_window_succeeds_immediately():
+    with _observing():
+        assert game_observe(5555, 0) == EXIT_OK
+
+
+_HANDOFF_DEFAULT = object()
+
+
+@contextlib.contextmanager
+def _full_chain(game_pid=5555, handoff_rc=_HANDOFF_DEFAULT, observe_rc=EXIT_OK):
+    """Patch every phase up to and including Task 6; yields the mocks in
+    chain order (prekill, spawn, ready, wait, keyboard, handoff, observe).
+
+    handoff_rc=None is a meaningful value — launcher_handoff returning None is
+    the EXIT_GAME_DID_NOT_SPAWN case — so the default needs a sentinel
+    distinct from None rather than `handoff_rc or game_pid`."""
+    specs = [
+        patch("launch_stellaris.prekill", return_value=EXIT_OK),
+        patch("launch_stellaris.steam_spawn", return_value=EXIT_OK),
+        patch("launch_stellaris.steam_ready", return_value=10748),
+        patch("launch_stellaris.launcher_wait", return_value=(4242, 12345)),
+        patch("launch_stellaris.launcher_keyboard", return_value=EXIT_OK),
+        patch("launch_stellaris.launcher_handoff",
+              return_value=game_pid if handoff_rc is _HANDOFF_DEFAULT
+              else handoff_rc),
+        patch("launch_stellaris.game_observe", return_value=observe_rc),
+    ]
+    mocks = [s.start() for s in specs]
+    try:
+        yield mocks
+    finally:
+        for s in specs:
+            s.stop()
+
+
+def test_run_launch_chain_prints_the_game_pid_and_nothing_else(capsys):
+    """The stdout contract: `<pid>\\n`, parseable with int(stdout.strip()).
+    Any diagnostic leaking onto stdout breaks the caller's parse."""
+    with _full_chain(game_pid=5555):
+        rc = run_launch_chain(build_arg_parser().parse_args([]))
+    captured = capsys.readouterr()
+    assert rc == EXIT_OK
+    assert captured.out == "5555\n", repr(captured.out)
+    assert int(captured.out.strip()) == 5555
+
+
+def test_run_launch_chain_returns_31_when_the_game_never_spawns():
+    with _full_chain(handoff_rc=None):
+        assert run_launch_chain(
+            build_arg_parser().parse_args([])) == EXIT_GAME_DID_NOT_SPAWN
+
+
+def test_run_launch_chain_does_not_observe_when_the_game_never_spawns():
+    with _full_chain(handoff_rc=None) as mocks:
+        run_launch_chain(build_arg_parser().parse_args([]))
+    mocks[6].assert_not_called()
+
+
+def test_run_launch_chain_propagates_an_observe_failure(capsys):
+    """32/33/34 have to reach the marker verbatim — DONE:<rc> is the only
+    thing the outer process learns about the inner."""
+    with _full_chain(game_pid=5555, observe_rc=EXIT_JIT_DIALOG):
+        assert run_launch_chain(
+            build_arg_parser().parse_args([])) == EXIT_JIT_DIALOG
+    # A failed run must not also claim success on stdout.
+    assert capsys.readouterr().out == ""
+
+
+def test_run_launch_chain_honours_non_default_game_windows():
+    """The inner is a separate process: --game-timeout-s / --observe-s reach
+    it only because the chain reads them off args. Hardcoded 30s here would
+    make an agent's --observe-s 120 a silent no-op."""
+    args = build_arg_parser().parse_args(
+        ["--game-timeout-s", "90", "--observe-s", "120"])
+    with _full_chain(game_pid=5555) as mocks:
+        assert run_launch_chain(args) == EXIT_OK
+    mocks[5].assert_called_once_with(90)
+    mocks[6].assert_called_once_with(5555, 120)
+
+
+def test_run_launch_chain_does_not_drive_or_wait_in_a_dry_run():
+    """--dry-run spawns no URI, so there is no launcher and no game. The
+    handoff and observe phases must not run: a 30 s poll for a game that was
+    never asked to start is a hang, not a dry run."""
+    args = build_arg_parser().parse_args(["--dry-run"])
+    with _full_chain() as mocks:
+        assert run_launch_chain(args) == EXIT_OK
+    mocks[4].assert_not_called()  # launcher_keyboard
+    mocks[5].assert_not_called()  # launcher_handoff
+    mocks[6].assert_not_called()  # game_observe
