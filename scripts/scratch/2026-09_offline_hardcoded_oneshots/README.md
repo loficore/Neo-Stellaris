@@ -24,6 +24,6 @@
 | `vtcheck.py` | 读 `33720E8`（generic keyword vtable）与 `1D08520` 的裸字节，判 slot 布局 |
 | `rtti_check.py` | 用 `vtable-8` 的 ColPack 指针解 3 个 vtable 的类名（§14 的 RTTI 试验） |
 | `rtti_check2.py` | 验 `24B1990` 处 `vtable[-8]`/`[-16]` 到底是什么，并在 `.rdata`/`.data` 里搜 `535070` 的两种编码 |
-| `rtti_offline.py` | 对 `spy4.js` 采到的 vtable 列表做离线 RTTI 取名（要 `C:\ns\spy4_table.txt`） |
+| `rtti_offline.py` | 对 `spy4.js`(在 `../2026-09_frida_hot_site_spies/`)采到的 vtable 列表做离线 RTTI 取名（要 `C:\ns\spy4_table.txt`） |
 | `kwmeta.py` | 抽 per-keyword 元数据表，写 `keyword_meta_registry_4_4_4.tsv` —— **该产物并不在 `evidence/xrefs/` 里**，悬空 |
 | `cap2.py` | `exec` 现场机器上 `C:\ns\cap.py` 的前半，再 dis `0xE88500`（`kw_add_entry`）；依赖仓库外文件 |

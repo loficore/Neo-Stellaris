@@ -12,7 +12,8 @@
   registrar —— 三条都被证伪）。
 - **跑不起来是常态**：需要一个能 attach 的 `frida-server`（`docs/frida-setup.md`）、游戏在跑、
   且 `C:\ns\deep.js` / `C:\ns\deep2.js` 已上传 —— **这两个 `.js` 不在仓库里**，只存在于当时那台机器。
-  同理 `cap2.py` 依赖 `C:\ns\cap.py`，`rtti_offline.py` 依赖 `C:\ns\spy4_table.txt`。
+  B 目录的 `cap2.py` 依赖同理（`C:\ns\cap.py`），`rtti_offline.py` 依赖 `C:\ns\spy4_table.txt`
+  （那张表是本目录 `spy4.js` 的产物）。
 
 `*.py` 与同名 `*.js` 是一对（py 是驱动，js 是注进去的脚本），必须同名同目录。
 
