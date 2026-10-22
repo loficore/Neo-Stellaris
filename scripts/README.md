@@ -18,7 +18,7 @@
 | `fastcalls.py` | 字节级定位对某 RVA 的所有直接 call/jmp，按 `.pdata` 函数分桶并贴来源文件名 | `callers_0x<rva>_buckets.tsv` |
 | `disrva.py` | 反汇编一个 RVA 区间，标注每个 rip 操作数解析到的 RVA 与每个 call 目标 | — |
 | `cap.py` | 同样的反汇编，走 `.text` 手解 + capstone（`disrva.py` 的前身，仍在用） | — |
-| `pe_disrva.py` | 反汇编**任一份 PE**（路径必填；本仓库用它读自己的 `stellaris_quickjs.dll`，不是 `stellaris.exe`）的 RVA 区间，标注 call 目标与 rip 操作数解析到的 RVA，只解码可执行段；结束 RVA 不含，或传指令条数 | —（`js_rc` trap：131 字节 / 40 条） |
+| `pe_disrva.py` | 反汇编**任一份 PE**（路径必填；本仓库用它读自己的 `stellaris_quickjs.dll`，不是 `stellaris.exe`）的 RVA 区间，标注 call 目标与 rip 操作数解析到的 RVA，只解码可执行段；结束 RVA 不含，或传指令条数 | —（示例：§48 产物的 `js_rc` 97 字节 / 29 条；区间随重链移动，测试从 `quickjs.c:1494:12` 记录反查） |
 | `pdata.py` | x64 `.pdata`(RUNTIME_FUNCTION) → 精确函数边界，无需分析 | — |
 | `pestr.py` | 读某 RVA 的字节 / C 串 | — |
 | `strfind.py` | 按名字定位镜像里的精确 C 串 | — |

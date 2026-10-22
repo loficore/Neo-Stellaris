@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <stddef.h> /* MinGW defines no offsetof; the fallback below is a null member access */
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
