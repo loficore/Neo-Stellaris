@@ -15,7 +15,8 @@ import pytest
 from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
                               EXIT_BRIDGE_TR_TOO_LONG, EXIT_GAME_DID_NOT_SPAWN,
-                              EXIT_GAME_EXITED_EARLY, EXIT_INTERNAL,
+                              EXIT_GAME_EXITED_EARLY, EXIT_GAME_UNPAUSE_FAILED,
+                              EXIT_INTERNAL,
                               EXIT_JIT_DIALOG, EXIT_LAUNCHER_NO_ADVANCE,
                               EXIT_LAUNCHER_NO_FOCUS,
                               EXIT_LAUNCHER_WINDOW_MISSING, EXIT_OK,
@@ -32,7 +33,7 @@ from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               bring_to_foreground, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, build_inner_tr,
-                              game_observe, launcher_click, launcher_handoff,
+                              game_observe, game_unpause, launcher_click, launcher_handoff,
                               launcher_wait, main, prekill,
                               run_launch_chain, steam_ready,
                               steam_spawn, timeline_event)
@@ -697,6 +698,7 @@ def test_default_bridge_timeout_reflects_every_phase_budget():
         launch_stellaris._INNER_BUDGET_LAUNCHER_WAIT_S,
         launch_stellaris._INNER_BUDGET_LAUNCHER_CLICK_S,
         launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S,
+        launch_stellaris._INNER_BUDGET_UNPAUSE_S,
     ]
     assert sum(components) == launch_stellaris._INNER_CHAIN_BUDGET_S
     assert launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S == (
@@ -721,6 +723,8 @@ def test_inner_budget_table_tracks_the_argparse_defaults():
     assert args.launcher_timeout_s == launch_stellaris._INNER_BUDGET_LAUNCHER_WAIT_S
     assert (args.game_timeout_s + args.observe_s) == (
         launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S)
+    assert (args.unpause_delay_s + launch_stellaris._UNPAUSE_SETTLE_S) == (
+        launch_stellaris._INNER_BUDGET_UNPAUSE_S)
 
 
 def test_inner_budget_click_matches_the_click_sequence_it_covers():
@@ -1743,6 +1747,94 @@ def test_run_launch_chain_honours_non_default_game_windows():
         assert run_launch_chain(args) == EXIT_OK
     mocks[5].assert_called_once_with(90)
     mocks[6].assert_called_once_with(5555, 120)
+
+
+def test_unpause_flag_defaults_off():
+    """Loading a save lands paused; leaving it to the caller's hands was the
+    behavior before this flag existed. It stays the default so a launcher run
+    never injects a keystroke nobody asked for."""
+    args = build_arg_parser().parse_args([])
+    assert args.unpause is False
+    assert args.unpause_delay_s == 30
+
+
+def test_unpause_flag_and_delay_are_settable():
+    args = build_arg_parser().parse_args(
+        ["--unpause", "--unpause-delay-s", "45"])
+    assert args.unpause is True
+    assert args.unpause_delay_s == 45
+
+
+def test_inner_tr_forwards_unpause():
+    """The inner is a separate process: a flag dropped here makes
+    `--unpause` a silent no-op in the bridged run."""
+    args = build_arg_parser().parse_args(
+        ["--unpause", "--unpause-delay-s", "45"])
+    tr = build_inner_tr(args, marker=r"C:\TEMP\m.txt",
+                        python=r"C:\py\python.exe",
+                        script=r"C:\work\launch_stellaris.py")
+    tokens = tr.split()
+    assert "--unpause" in tokens
+    assert "--unpause-delay-s 45" in tr
+
+
+def test_inner_tr_omits_unpause_when_not_requested():
+    args = build_arg_parser().parse_args([])
+    tr = build_inner_tr(args, marker=r"C:\TEMP\m.txt")
+    assert "--unpause" not in tr.split()
+
+
+def test_unpause_waits_then_focuses_and_sends_space():
+    with patch("launch_stellaris._time.sleep") as sleep, \
+            patch("launch_stellaris._hwnd_for_pid", return_value=4242), \
+            patch("launch_stellaris.bring_to_foreground",
+                  return_value=True) as foreground, \
+            patch("launch_stellaris._send_space", return_value=True) as send:
+        rc = game_unpause(5555, 45)
+    assert rc == EXIT_OK
+    sleep.assert_any_call(45)
+    foreground.assert_called_once_with(4242, tag="GAME_UNPAUSE")
+    send.assert_called_once_with()
+
+
+def test_unpause_without_a_game_window_fails_typed():
+    with patch("launch_stellaris._time.sleep"), \
+            patch("launch_stellaris._hwnd_for_pid", return_value=0):
+        assert game_unpause(5555, 0) == EXIT_GAME_UNPAUSE_FAILED
+
+
+def test_unpause_reports_a_blocked_keystroke():
+    with patch("launch_stellaris._time.sleep"), \
+            patch("launch_stellaris._hwnd_for_pid", return_value=4242), \
+            patch("launch_stellaris.bring_to_foreground", return_value=True), \
+            patch("launch_stellaris._send_space", return_value=False):
+        assert game_unpause(5555, 0) == EXIT_GAME_UNPAUSE_FAILED
+
+
+def test_run_launch_chain_unpauses_after_observe_when_requested(capsys):
+    args = build_arg_parser().parse_args(
+        ["--unpause", "--unpause-delay-s", "45"])
+    with _full_chain(game_pid=5555), \
+            patch("launch_stellaris.game_unpause", return_value=EXIT_OK) as unpause:
+        assert run_launch_chain(args) == EXIT_OK
+    unpause.assert_called_once_with(5555, 45)
+    assert capsys.readouterr().out == "5555\n"
+
+
+def test_run_launch_chain_skips_unpause_by_default():
+    with _full_chain(game_pid=5555), \
+            patch("launch_stellaris.game_unpause") as unpause:
+        assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_OK
+    unpause.assert_not_called()
+
+
+def test_run_launch_chain_propagates_unpause_failure(capsys):
+    args = build_arg_parser().parse_args(["--unpause"])
+    with _full_chain(game_pid=5555), \
+            patch("launch_stellaris.game_unpause",
+                  return_value=EXIT_GAME_UNPAUSE_FAILED):
+        assert run_launch_chain(args) == EXIT_GAME_UNPAUSE_FAILED
+    assert capsys.readouterr().out == ""
 
 
 def test_run_launch_chain_does_not_drive_or_wait_in_a_dry_run():

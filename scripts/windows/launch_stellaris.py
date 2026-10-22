@@ -35,6 +35,10 @@ EXIT_GAME_DID_NOT_SPAWN = 31
 EXIT_GAME_EXITED_EARLY = 32
 EXIT_JIT_DIALOG = 33
 EXIT_WER_DIALOG = 34
+# --unpause was requested but the game window could not be found/focused, or
+# the Space keystroke was refused (UIPI). The game itself is fine; only the
+# optional convenience step failed.
+EXIT_GAME_UNPAUSE_FAILED = 35
 EXIT_BRIDGE_NO_SESSION = 41
 EXIT_BRIDGE_SCHTASKS_DENIED = 42
 EXIT_BRIDGE_TIMEOUT = 43
@@ -65,15 +69,17 @@ _INNER_BUDGET_STEAM_READY_S = 30      # = --launcher-timeout-s default
 _INNER_BUDGET_LAUNCHER_WAIT_S = 30    # = --launcher-timeout-s default
 _INNER_BUDGET_LAUNCHER_CLICK_S = 19   # foreground + settle + 3 click/settle rounds
 _INNER_BUDGET_GAME_OBSERVE_S = 60     # = --game-timeout-s + --observe-s defaults
+_INNER_BUDGET_UNPAUSE_S = 35          # = --unpause-delay-s default + _UNPAUSE_SETTLE_S
 _INNER_CHAIN_BUDGET_S = (
     _INNER_BUDGET_PREKILL_SPAWN_S
     + _INNER_BUDGET_STEAM_READY_S
     + _INNER_BUDGET_LAUNCHER_WAIT_S
     + _INNER_BUDGET_LAUNCHER_CLICK_S
     + _INNER_BUDGET_GAME_OBSERVE_S
-)  # 142s with all defaults
+    + _INNER_BUDGET_UNPAUSE_S
+)  # 177s with all defaults
 _BRIDGE_TIMEOUT_MARGIN_S = 33          # slack for monitor jitter + log I/O
-DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 180s
+DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 210s
 
 # Process images this chain looks for. Compared case-insensitively: Windows
 # file names are case-insensitive and psutil reports whatever the image has.
@@ -121,8 +127,15 @@ _CLICK_ATTEMPTS = 3
 _FOREGROUND_TIMEOUT_S = 3.0
 _FOCUS_SETTLE_S = 1.0
 _CLICK_SETTLE_S = 5.0
+# A save load lands paused and waits for a keypress. After focusing the game
+# window, give the focus a beat to register before the Space goes in.
+_UNPAUSE_SETTLE_S = 5.0
 _POLL_S = 0.5
 _OBSERVE_POLL_S = 1.0
+
+VK_SPACE = 0x20
+KEYEVENTF_KEYUP = 0x0002
+INPUT_KEYBOARD = 1
 
 # psutil status strings that mean the process is no longer running the game.
 # 'zombie' is the one psutil actually reports; 'dead' is what a lost handle
@@ -234,13 +247,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Post-spawn health observation window (default 30). "
                         "Raising it above the default may require raising "
                         "--bridge-timeout-s too.")
+    p.add_argument("--unpause", action="store_true",
+                   help="After the observe window, focus the game and press "
+                        "Space once. A loaded save starts paused; this is the "
+                        "unpause a person would otherwise do by hand. Off by "
+                        "default: the keystroke goes to whatever owns the "
+                        "foreground.")
+    p.add_argument("--unpause-delay-s", type=int, default=30,
+                   help="How long to wait after the observe window before the "
+                        "unpause keystroke (default 30). Only used with "
+                        "--unpause. Raising it above the default may require "
+                        "raising --bridge-timeout-s too.")
     p.add_argument("--bridge-timeout-s", type=int, default=DEFAULT_BRIDGE_TIMEOUT_S,
                    help="How long the outer waits for the inner's completion "
                         f"marker (default {DEFAULT_BRIDGE_TIMEOUT_S}, derived "
                         "from the phase budgets above it). Raise this whenever "
-                        "--launcher-timeout-s, --game-timeout-s or "
-                        "--observe-s is raised past its default, or the outer "
-                        "reports 43 before the inner is done.")
+                        "--launcher-timeout-s, --game-timeout-s, --observe-s "
+                        "or --unpause-delay-s is raised past its default, or "
+                        "the outer reports 43 before the inner is done.")
     p.add_argument("--inner", action="store_true",
                    help="(bridge only) skip session detection, run launch chain directly")
     p.add_argument("--marker", type=str, default=None,
@@ -499,6 +523,65 @@ def _click_at(x: int, y: int) -> None:
     mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
 
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouseData", _wt.DWORD),
+        ("dwFlags", _wt.DWORD),
+        ("time", _wt.DWORD),
+        ("dwExtraInfo", ctypes.c_void_p),
+    ]
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", _wt.WORD),
+        ("wScan", _wt.WORD),
+        ("dwFlags", _wt.DWORD),
+        ("time", _wt.DWORD),
+        ("dwExtraInfo", ctypes.c_void_p),
+    ]
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", _wt.DWORD),
+        ("wParamL", _wt.WORD),
+        ("wParamH", _wt.WORD),
+    ]
+
+
+class _INPUTUNION(ctypes.Union):
+    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT), ("hi", _HARDWAREINPUT)]
+
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", _wt.DWORD), ("u", _INPUTUNION)]
+
+
+def _send_space() -> bool:
+    """Press and release Space. True when both events were accepted.
+
+    SendInput rather than keybd_event because its return value counts the
+    events the input queue took: a UIPI- or desktop-blocked keystroke then
+    surfaces as False instead of a silent no-op. Bound lazily — WinDLL does
+    not exist on Linux, where this module must still import for the tests.
+    """
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    send_input = user32.SendInput
+    send_input.argtypes = [_wt.UINT, ctypes.POINTER(_INPUT), ctypes.c_int]
+    send_input.restype = _wt.UINT
+    events = (_INPUT * 2)()
+    events[0].type = INPUT_KEYBOARD
+    events[0].u.ki = _KEYBDINPUT(wVk=VK_SPACE, wScan=0, dwFlags=0, time=0,
+                                 dwExtraInfo=None)
+    events[1].type = INPUT_KEYBOARD
+    events[1].u.ki = _KEYBDINPUT(wVk=VK_SPACE, wScan=0, dwFlags=KEYEVENTF_KEYUP,
+                                 time=0, dwExtraInfo=None)
+    return send_input(2, events, ctypes.sizeof(_INPUT)) == 2
+
+
 def _hwnd_for_pid(pid: int) -> int:
     """First top-level HWND owned by `pid`, or 0 when there is none.
 
@@ -541,21 +624,26 @@ def launcher_wait(timeout_s: int) -> tuple[int, int] | None:
     return None
 
 
-def bring_to_foreground(hwnd: int) -> bool:
-    """Raise `hwnd` to the foreground. True once it actually owns it."""
+def bring_to_foreground(hwnd: int, tag: str = "LAUNCHER_CLICK") -> bool:
+    """Raise `hwnd` to the foreground. True once it actually owns it.
+
+    `tag` names the log lines so the launcher click and the game unpause do
+    not look alike in the timeline; the default keeps launcher_click's lines
+    as they were.
+    """
     set_foreground_window, get_foreground_window = _input_fns()
     deadline = _time.time() + _FOREGROUND_TIMEOUT_S
     set_ok = set_foreground_window(hwnd)
     while _time.time() < deadline:
         if get_foreground_window() == hwnd:
-            log_event("LAUNCHER_CLICK", step="foreground_ok", hwnd=hwnd)
+            log_event(tag, step="foreground_ok", hwnd=hwnd)
             return True
         _time.sleep(0.1)
     # A refusal (integrity level, wrong desktop, dead hwnd) and a plain
     # timeout are otherwise indistinguishable. SetForegroundWindow's return
     # value and GetLastError are the operator's only evidence, and the
     # locked-desktop case is exactly where they will be reading this line.
-    log_event("LAUNCHER_CLICK", step="foreground_fail", hwnd=hwnd,
+    log_event(tag, step="foreground_fail", hwnd=hwnd,
               set_ok=int(set_ok), last_error=_last_error())
     return False
 
@@ -790,6 +878,36 @@ def game_observe(pid: int, observe_s: int) -> int:
             return EXIT_WER_DIALOG
         _time.sleep(_OBSERVE_POLL_S)
     log_event("GAME_OBSERVE", step="ok", pid=pid, alive_s=observe_s)
+    return EXIT_OK
+
+
+def game_unpause(pid: int, delay_s: int) -> int:
+    """Focus the running game and press Space once to leave the paused state.
+
+    Loading a save through the launcher lands paused. This step is opt-in
+    (--unpause): the keystroke goes to whatever owns the foreground, so it
+    must never be part of a default launch. Waits delay_s first — the game
+    keeps streaming during load, and a keypress into the loading screen does
+    not reach the game's pause toggle.
+
+    Returns EXIT_OK or EXIT_GAME_UNPAUSE_FAILED; never raises. A missing
+    window, a refused focus and a blocked SendInput are the three ways this
+    fails, and each is logged before the typed code goes back.
+    """
+    _time.sleep(delay_s)
+    hwnd = _hwnd_for_pid(pid)
+    if not hwnd:
+        log_event("GAME_UNPAUSE", step="no_window", pid=pid)
+        return EXIT_GAME_UNPAUSE_FAILED
+    if not bring_to_foreground(hwnd, tag="GAME_UNPAUSE"):
+        log_event("GAME_UNPAUSE", step="no_focus", pid=pid, hwnd=hwnd)
+        return EXIT_GAME_UNPAUSE_FAILED
+    _time.sleep(_UNPAUSE_SETTLE_S)
+    if not _send_space():
+        log_event("GAME_UNPAUSE", step="keystroke_refused", pid=pid, hwnd=hwnd,
+                  last_error=_last_error())
+        return EXIT_GAME_UNPAUSE_FAILED
+    log_event("GAME_UNPAUSE", step="ok", pid=pid, hwnd=hwnd)
     return EXIT_OK
 
 
@@ -1030,8 +1148,9 @@ def build_inner_tr(args: argparse.Namespace, marker: str,
 
     /tr itself receives a short path to a .cmd file (see
     write_bridge_tr_shim); schtasks rejects a /tr over 261 characters and
-    this string is 276 by default. Do not "fix" that ceiling by trimming
-    flags out of this string — the shim exists precisely so they can all stay.
+    this string exceeds that by default. Do not "fix" that ceiling by
+    trimming flags out of this string — the shim exists precisely so they
+    can all stay.
 
     The inner is a *separate process* and only knows the flags spelled out
     here. Forwarding every user-settable flag — not just the three that were
@@ -1050,10 +1169,15 @@ def build_inner_tr(args: argparse.Namespace, marker: str,
         "--launcher-timeout-s", str(args.launcher_timeout_s),
         "--game-timeout-s", str(args.game_timeout_s),
         "--observe-s", str(args.observe_s),
+        # Forwarded with its default too, for the same pinned-view reason as
+        # the timeouts; --unpause itself only when requested.
+        "--unpause-delay-s", str(args.unpause_delay_s),
         # The inner never bridges, so this one is inert there; forwarding it
         # anyway means a future inner-side bridge needs no change here.
         "--bridge-timeout-s", str(args.bridge_timeout_s),
     ]
+    if args.unpause:
+        parts.append("--unpause")
     if args.no_prekill:
         parts.append("--no-prekill")
     if args.dry_run:
@@ -1441,6 +1565,13 @@ def _run_launch_chain_phases(args: argparse.Namespace,
     rc = game_observe(game_pid, args.observe_s)
     if rc != EXIT_OK:
         return rc
+
+    if args.unpause:
+        if abandoned():
+            return EXIT_BRIDGE_ABANDONED
+        rc = game_unpause(game_pid, args.unpause_delay_s)
+        if rc != EXIT_OK:
+            return rc
 
     # M-2: stdout first, result.pid second. If the write fails (the SSH pipe
     # closed), the blanket guard turns the run into 99 — and if result.pid were
