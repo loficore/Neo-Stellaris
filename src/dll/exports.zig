@@ -109,6 +109,7 @@ extern fn C2CopyDiagLog(out: [*]u8) c_int;
 extern fn C2GetQuickJSPointers(out_rt: *?*anyopaque, out_ctx: *?*anyopaque) void;
 extern fn C2WriteQuickJSPointersInto(out16: [*]u8) void;
 extern fn C2EvalProbe(src: [*:0]const u8) c_int;
+extern fn C2EvalStress() c_int;
 extern fn C2DiagMfRecords(out: [*]u8, out_size: c_int) c_int;
 
 /// C2 diagnostic: test QuickJS init from C side. Returns 0=OK, 1=malloc fail, 2=runtime fail, 3=context fail.
@@ -330,6 +331,18 @@ export fn C2QuickJSPointersInto(out16: [*]u8) callconv(.c) void {
 export fn C2EvalProbeOnePlusOne() callconv(.c) i32 {
     const probe = "1+1"; // fixed string; no remote marshalling needed at this gate
     return @intCast(C2EvalProbe(probe.ptr));
+}
+
+/// §50 diagnostic export: evaluate the fixed stress script defined in
+/// quickjs_wrapper.c (`C2EvalStress`) and return the same `n*4+3` encoding as
+/// C2EvalProbeOnePlusOne. The script exercises the allocator paths §48
+/// un-instrumented but no live probe had run — string-builder and array growth
+/// (js_realloc2 → __js_realloc/__js_malloc_usable_size) plus per-round
+/// refcount drops (__js_free). Expected result: n = 15904 → rc 63619, pinned by
+/// the native test that calls C2EvalStress directly (the script lives in C
+/// once). Same single-run/C2Init-first contract as the Task 6 gate.
+export fn C2EvalStressOne() callconv(.c) i32 {
+    return @intCast(C2EvalStress());
 }
 
 /// C2 test: only build vtables, no hooks. For debugging.

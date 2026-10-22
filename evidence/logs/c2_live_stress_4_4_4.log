@@ -1,0 +1,172 @@
+# C2 live stress (§50) — evidence
+
+# Purpose: §48 removed UBSan instrumentation from the eight fallback `container_of`
+# expressions; only `js_rc` (quickjs.c:1494) was exercised by the §49 live shot. This
+# run drives the other seven — the free/realloc/usable-size sites — through a fixed JS
+# stress script executed by the vendored QuickJS inside the game process, then checks
+# the host survived the churn. This is the last unexercised risk surface of the §48 fix.
+# Authorization: the human partner's standing "继续实机调试,之后不用问权限" (no per-shot
+# prompt). Windows-side actions: scp, Get-FileHash, python — no debugger, no hooks, no
+# byte edits, no game-file changes.
+# exe identity: stellaris.exe 4.4.4 sha256
+#   9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56 — same session as
+#   §49 (pid 9932, main menu, never restarted, and left running after this shot).
+# Artifact of record: stellaris_quickjs.dll sha256
+#   938b6e15e0759d4fd8f5d47ae921550adeb3e5b762a17a2d6497a97a8fcd7777, deployed as
+#   C:\temp\sqjs_s50.dll; remote Get-FileHash matched
+#   938B6E15E0759D4FD8F5D47AE921550ADEB3E5B762A17A2D6497A97A8FCD7777.
+# Probe: scripts/scratch/2026-10_c2_stress/quickjs_stress_live.py (one-off scratch; the
+#   first run used its pre-rename remote name C:\temp\c2_stress_live.py, identical bytes).
+
+## (1) The change
+
+Four source/test edits, no build-system change:
+
+    src/dll/quickjs/quickjs_wrapper.c     + c2_stress_script[] and int C2EvalStress(void)
+    src/dll/exports.zig                   + extern fn C2EvalStress() c_int;
+                                          + export fn C2EvalStressOne() = n*4+3 encoding
+    src/dll/quickjs/c2_diag_test.zig      + native test calling C2EvalStress directly
+    scripts/test_c2_harness.py            + "C2EvalStressOne" in the known-export tuple
+
+`C2EvalStress` is a thin wrapper over the existing `C2EvalProbe`: one fixed script text,
+one evaluation, the same `n*4+3` thread-exit-code encoding. The script lives once, in C;
+the native test calls the same symbol instead of copying the text.
+
+## (2) The script and the paths it drives
+
+    (function(){
+    var acc=0;
+    for(var r=0;r<8;r++){
+    var s='';
+    for(var i=0;i<2000;i++)s+='abcdefgh'+i;
+    acc=(acc+s.length)&0xffff;
+    var a=[];
+    for(var j=0;j<4000;j++)a.push({k:j,v:'v'+j});
+    acc=(acc+a.length+a[3999].v.length)&0xffff;
+    var t=JSON.stringify(a);
+    acc=(acc+t.length)&0xffff;
+    }
+    return acc;
+    })()
+
+Vendored-QuickJS call sites behind each construct (quickjs.c):
+
+    4146 / 4177   string builder growth      js_realloc2 -> js_realloc_rt
+    9622          array growth               js_realloc2 -> js_realloc_rt
+    1880          the realloc/usable path    js_malloc_usable_size_rt -> __js_malloc_usable_size
+    various       per-round refcount drops   __js_free
+
+The 8 fallback `container_of` expressions §48 removed instrumentation from are
+quickjs.c:1494 (`js_rc`) plus 1601/1607 (`__js_free`), 1645/1651/1684 (`__js_realloc`)
+and 1704/1711 (`__js_malloc_usable_size`). Only 1494 was on the §49 path. The arithmetic
+uses only lengths, integer string digits and insertion-order JSON, so its result is a
+deterministic int32; the expected value 15904 was computed independently with Node from
+the same source text, and pinning it in the native test makes a divergence loud.
+
+## (3) Offline verification before the shot
+
+    $ zig build --summary all
+    Build Summary: 5/5 steps succeeded
+    ...
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll
+    938b6e15e0759d4fd8f5d47ae921550adeb3e5b762a17a2d6497a97a8fcd7777
+
+    $ zig build test --summary all   # tail
+    Build Summary: 24/27 steps succeeded (1 failed); 315/315 tests passed
+
+The one failed step is the known `exports.zig` kernel32 undefined-symbol Linux link
+environment fact (unchanged from §48/§49); the 315 includes the new
+"C2EvalStress exercises realloc/usable-size/free and returns 15904 (rc 63619)" test.
+
+    $ python3 -m pytest scripts/test_scripts_layout.py scripts/test_c2_harness.py \
+        scripts/test_pe_disrva.py -q
+    163 passed in 2.72s
+
+## (4) Deployment
+
+    $ scp zig-out/bin/stellaris_quickjs.dll Windows_Jiaolong:C:/temp/sqjs_s50.dll
+    $ ssh Windows_Jiaolong "(Get-FileHash C:\temp\sqjs_s50.dll -Algorithm SHA256).Hash.ToLower()"
+    938b6e15e0759d4fd8f5d47ae921550adeb3e5b762a17a2d6497a97a8fcd7777
+
+## (5) The live stress shot
+
+Run 1, verbatim parent output (the em dash renders as two replacement glyphs under the
+SSH console codepage; the probe's text is U+2014):
+
+    $ ssh Windows_Jiaolong "python C:\temp\c2_stress_live.py C:\temp\sqjs_s50.dll"
+    [stress] pid=9932  dll=C:\temp\sqjs_s50.dll
+    [stress] sqjs_s50.dll base (64-bit): 0x7ffc12da0000
+    [stress] MZ header at base OK
+    [stress] C2Init RVA from PE reparse:         0x44dbc0
+    [stress] C2EvalStressOne RVA from PE reparse: 0x44d800
+    [stress] C2Sanity == 42, game alive — dispatch authorized
+    [stress] C2Init rc == 0, game alive
+    [stress] C2EvalStressOne rc = 63619 (expected 63619)
+    [stress] decoded n = 15904; host alive after the churn
+    §50: stress script evaluated; realloc/usable-size/free paths survived live
+
+Run 2, same artifact bytes, fresh module copy; the probe file was renamed out of the
+`c2_*` family between runs (see boundary note), remote name follows:
+
+    $ ssh Windows_Jiaolong "python C:\temp\quickjs_stress_live.py C:\temp\sqjs_s50.dll"
+    [stress] pid=9932  dll=C:\temp\sqjs_s50.dll
+    [stress] sqjs_s50.dll base (64-bit): 0x7ffc12da0000
+    [stress] MZ header at base OK
+    [stress] C2Init RVA from PE reparse:         0x44dbc0
+    [stress] C2EvalStressOne RVA from PE reparse: 0x44d800
+    [stress] C2Sanity == 42, game alive — dispatch authorized
+    [stress] C2Init rc == 0, game alive
+    [stress] C2EvalStressOne rc = 63619 (expected 63619)
+    [stress] decoded n = 15904; host alive after the churn
+    §50: stress script evaluated; realloc/usable-size/free paths survived live
+
+Host after both runs: pid 9932, `(Get-Process stellaris).Responding` → True.
+
+## (6) Judgment
+
+- The in-game result equals the independently computed expectation: `rc=63619` →
+  n = (63619-3)/4 = 15904. A corrupted context, a short-circuit, or engine-divergent
+  semantics (different number formatting or JSON key order) would have produced a
+  different int32; none did.
+- The churn is allocator-heavy: 8 rounds × (2000 string concatenations growing the
+  builder, 4000 object pushes growing the array, `JSON.stringify` of a 4000-element
+  array), with each round dropping its strings/array/JSON text. Every allocation, growth
+  and free goes through our `heap_mf`/HeapAlloc. If any of the seven un-instrumented
+  `container_of` sites still aborted, the remote thread would have died with status 3
+  and the host would be gone — the §45/§49 signature. It is not.
+- Two runs, two module copies, same artifact: the outcome does not depend on the
+  allocator layout or ASLR base. §48's one-include repair now has live evidence on the
+  exact seven sites it was meant to protect, not only on `js_rc`.
+
+## (7) Boundaries
+
+- Fixed script only. This is not a general evaluation API and does not lift the P21/C3
+  boundary (caller-supplied JS text stays deferred).
+- Main menu, no scene load, no mod script evaluation. QuickJS evaluates our script via
+  the DLL's own `JS_Eval`; the engine's script parser is not involved. C3 (routing) and
+  C4 (visible effect) are untouched.
+- The script's constructs imply the realloc/usable-size/free paths by source reading;
+  the run is not instrumented per call site, so it cannot claim each of the seven ran
+  individually (e.g. an in-place grow that skips usable-size would not be counted). What
+  it proves is that a large allocator churn on the repaired artifact does not abort.
+- One game session and one artifact; two module copies. The known per-copy QuickJS
+  runtime leak (reset without free) still applies and was not observable here.
+- Fence lesson recorded: a new scratch probe named `c2_stress_live.py` violated R-depth
+  (the `c2_*` prefix is reserved for the maintained top-level family and the `C:/temp`
+  wire contract). It was renamed to `quickjs_stress_live.py`; the first shot used the old
+  remote name with identical bytes.
+- The game was left running; no detour was installed.
+
+## (8) Read-only self-attestation
+
+    - no hook/Interceptor/patchCode/writeByteArray/Memory.protect; no debugger attach;
+      no game-file changes; no byte edits.
+    - Windows host ran only scp/Get-FileHash and `python` probes.
+    - the artifact was built locally by Zig and transferred without modification.
+
+## (9) Counts for §50
+
+1 game session (pid 9932, reused from §49, never restarted); 2 injected module copies
+(one per run); 6 dispatches (2 × [C2Sanity, C2Init, C2EvalStressOne]); 0 hooks, 0 byte
+edits, 0 game files changed; 2 deterministic live results with identical `rc=63619`;
+1 new evidence log.
