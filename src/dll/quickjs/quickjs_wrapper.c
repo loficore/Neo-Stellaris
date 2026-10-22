@@ -187,15 +187,32 @@ static void mf_tag(char c) {
     }
 }
 
+/* heap_malloc leaves a matched pair of read-only markers so the LIVE witness can
+   tell WHICH phase of a single allocation the host died in — the one seam §41
+   could not split. 'M' = entered the callback (what §41 alone recorded); the char
+   that follows is how the call ENDED:
+     'm' = HeapAlloc returned a block (allocation completed)
+     '!' = returned NULL (size 0 / malloc_limit reject / HeapAlloc failed)
+     <dangling 'M', nothing follows> = the call never returned ⇒ death was inside
+     GetProcessHeap()/HeapAlloc, not in QuickJS's own code.
+   §41 only tagged entry, so `new_rt MMM` read the same for "died between two
+   mallocs inside JS_NewRuntime2" and "died inside the 3rd HeapAlloc". These are
+   §36's two hypotheses (engine-side vs heap/environment-side) and this decides
+   them. Both markers are just writes to our OWN g_diag_log — no hook, detour,
+   patchCode, or new capability, the same authorization level as §41's tags.
+   g_mf_malloc_tagged increments once per CALL, so MF_TAG_CAP bounds the number
+   of allocation LIFECYCLES shown (up to 2 chars each), not raw chars. */
 static void *heap_malloc(JSMallocState *s, size_t size) {
-    if (g_mf_malloc_tagged < MF_TAG_CAP) { mf_tag('M'); g_mf_malloc_tagged++; }
-    if (size == 0) return NULL;
-    if (s->malloc_size + size > s->malloc_limit) return NULL;
-    
+    int tag_this_call = (g_mf_malloc_tagged < MF_TAG_CAP);
+    if (tag_this_call) { mf_tag('M'); g_mf_malloc_tagged++; }
+    if (size == 0) { if (tag_this_call) mf_tag('!'); return NULL; }
+    if (s->malloc_size + size > s->malloc_limit) { if (tag_this_call) mf_tag('!'); return NULL; }
+
     HANDLE heap = GetProcessHeap();
     AllocHeader *h = (AllocHeader *)HeapAlloc(heap, 0, sizeof(AllocHeader) + size);
-    if (!h) return NULL;
-    
+    if (!h) { if (tag_this_call) mf_tag('!'); return NULL; }
+    if (tag_this_call) mf_tag('m');
+
     h->size = size;
     s->malloc_count++;
     s->malloc_size += size;
