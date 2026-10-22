@@ -23,7 +23,7 @@
 // scope pointers. No shared state is accessed.
 
 const std = @import("std");
-const offsets = @import("../shared/offsets.zig");
+const offsets = @import("offsets");
 
 // ---------------------------------------------------------------------------
 // Constants (3.x values, unconfirmed — see the header note before trusting any of them)
@@ -263,4 +263,8 @@ test "ScopeTypeName.name: correct strings" {
 test "c_event_scope: our reader matches our own constants (layout unconfirmed, §26)" {
     try std.testing.expectEqual(@as(usize, 8), OFFSET_SCOPE_TYPE);
     try std.testing.expectEqual(@as(usize, 16), OFFSET_OBJECT_ID);
+}
+
+test "c_event_scope layout is not confirmed (roadmap 段4 owner must flip this with live proof)" {
+    try std.testing.expect(!offsets.c_event_scope.LAYOUT_CONFIRMED);
 }

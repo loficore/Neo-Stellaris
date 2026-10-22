@@ -11,7 +11,8 @@
 (`src/dll/shared/offsets.zig:273-285`)的位标值保持 `[UNVERIFIED 3.x]`,不在这 16 行里(它不经这四个
 getter)。表中的行号是 2026-10-22 标注动作**之后**重跑 grep 得到的真实行号。
 
-处置列的合法取值只有 `改掉` / `标注未确认` / `待 Task 2`(最后一个只允许 build.zig 那一行)。
+处置列的合法取值只有 `改掉` / `标注未确认` / `待 Task 2`(第三个曾经只允许 build.zig 那一行,Task 2 执行
+完已无行使用它)。
 行数判据:
 
 ```bash
@@ -37,6 +38,14 @@ grep -cE '^\| `build\.zig' docs/scope-read-points.md    # 1
 | `src/dll/api/bridge.zig:390` | `test "api_functions: expected names present"` 的 body 只做三次 `std.mem.eql`(`getCountry`、`setVariable`、`getScopeType`),scope 四名里只有 `getScopeType` 被守住 —— 另外三个改名或删除都不会变红,所以"测试没红"不是"表面没动"的证据 | 标注未确认 | §26 |
 | `src/dll/shared/offsets.zig:266` | `OFFSET_SCOPE_TYPE: usize = 8`,行尾已带 `[FALSIFIED for Execute's arg2, §26]`;但改动前 struct 体内没有一个调用方可读的编译期标志 | 标注未确认 | §26 |
 | `src/dll/shared/offsets.zig:267` | `OFFSET_OBJECT_ID: usize = 16`,行尾已带 `[UNVERIFIED 3.x]` | 标注未确认 | §26 |
-| `build.zig:293` | `:293-295` 的 NOTE 记下 `import of file outside module path`,`:296` 的 `test_step.dependOn(&run_api_scope_tests.step);` 仍是注释 —— `scope.zig` 的 8 条 `test` block 今天根本不在 test 图里 | 待 Task 2 | §26 |
+| `build.zig:293` | 改动前:`:293-295` 的 NOTE 记下 `import of file outside module path`,`:296` 的 `test_step.dependOn(&run_api_scope_tests.step);` 仍是注释 —— `scope.zig` 的 8 条 `test` block 当时根本不在 test 图里 | 改掉 | §26 |
 
 ## 计数
+
+P15 的绿定义在本计划里被改动一次,两句都记在这里,免得下一个 clone 只能靠猜:
+
+- **旧(2026-10-22 实测,Task 1 之后一字未变)**:`Build Summary: 22/25 steps succeeded (1 failed); 296/296 tests passed`。`296` 是图里 **11 个 `run test` 步**的 pass 数之和:`21 + 21 + 15 + 42 + 11 + 21 + 16 + 31 + 18 + 21 + 79`。
+- **新(Task 2 Step 5 实测,启用 scope 独立测试步之后)**:`Build Summary: 24/27 steps succeeded (1 failed); 305/305 tests passed`。`run test` 步从 **11 → 12**,与预测逐字一致。
+- **增量来源**:`+2 step` = `build.zig:295` 的 `test_step.dependOn(&run_api_scope_tests.step);` 由注释变成活代码,带来 `api_scope_tests` 的 compile 步与 `run_api_scope_tests` 的 run 步各一个;`+9 test` = `src/dll/api/scope.zig` 的 9 条 `test` block —— 其中 8 条改动前就写在文件里但**不在 test 图内**,第 9 条是本 Task 新增的 `scope.zig:268`(钉住 `LAYOUT_CONFIRMED == false`)。
+- **那 1 个 failed 未变**:仍是 `exports.zig` 根步骤的 8 条 kernel32 undefined-symbol(`CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`)—— ELF 主机上的环境事实,种类与条数都与本计划无关,依 ruling P15 不「顺手修」。
+- **围栏**:`python3 -m pytest scripts/test_scripts_layout.py -q` 实测 **23 passed**(2026-10-22;commit `6459731` 加进第八条规则 `violates_missing_roadmap_header` 之后的数,此前该处的记录是 22)。本清单只引它作执行者,不对它做任何改动。
