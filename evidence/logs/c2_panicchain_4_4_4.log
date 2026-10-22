@@ -299,12 +299,12 @@ inferred"):
      (`c2_selfabort_4_4_4.log:163-166`) is not a property of those bytes and not a difference between
      the two builds — it is contradicted by its own artifact. This is also **not** explained by a tool
      version: the frozen original and the maintained tool share the same `.pdata` walk
-     (`scripts/scratch/2026-10_abortexit/ubsan_site.py:119-131` and `scripts/dll_ubsan_site.py:211-223`
+     (`scripts/scratch/2026-10_abortexit/ubsan_site.py:119-131` and `scripts/dll_ubsan_site.py:213-225`
      are the same `size // 12` loop with the same `0 < begin < end` filter), and running the frozen
      original on the §45 bytes reproduces the span and the six records. No `func 0xeede3` invocation is
      recorded in §45 — the claim appears only as prose — so there is no old bound computation to blame.
      The only parsing bound that changed after §45 is `iter_records`' scan end (`end - 32` →
-     `end - RECORD_READ_SIZE + 1`, `scripts/dll_ubsan_site.py:190`, commit 26589ac), which governs
+     `end - RECORD_READ_SIZE + 1`, `scripts/dll_ubsan_site.py:192`, commit 26589ac), which governs
      which *records* a `site` scan can see, not which function spans exist. On the bytes read here —
      and on §45's — the middle of the chain is attributed, not inferred.
   2. `__JS_NewAtomInit`'s span on §46 bytes is `0x1ebb0..0x1eda4` — numerically identical to §45's
