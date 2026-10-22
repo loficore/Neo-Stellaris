@@ -230,6 +230,12 @@ def extract_hypergraph(
             f"{len(conflicts)} conflicting length(s) for one edge, e.g. {a}-{b}: {first} vs {second}"
         )
 
+    if not declaration:
+        raise ValueError(
+            "galactic_object: empty hyperlane graph "
+            f"(systems={len(system_ids)}, undirected_edges=0)"
+        )
+
     adjacency: dict[int, dict[int, float]] = {system_id: {} for system_id in system_ids}
     for (a, b), length in declaration.items():
         adjacency[a][b] = length
@@ -282,6 +288,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     except ValueError as exc:
         print(f"save_hypergraph: {exc}", file=sys.stderr)
         raise SystemExit(2)
+
+    if stats["isolates"]:
+        print(
+            f"save_hypergraph: warning: {stats['isolates']} isolated system(s) have "
+            "no hyperlane; they are absent from the edge table, so downstream "
+            "chokepoint scores normalize over connected systems only",
+            file=sys.stderr,
+        )
 
     lines = []
     for a in sorted(adjacency):

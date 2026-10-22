@@ -118,6 +118,10 @@ def test_extract_hypergraph_from_synthetic_save(tmp_path):
     assert stats["conflicting_edges"] == 0
     assert stats["replacement_chars"] == 0
 
+    empty = parse_clausewitz('version="Pegasus v4.4.4"\ngalactic_object=\n{\n}\n')
+    with pytest.raises(ValueError, match="empty hyperlane graph"):
+        extract_hypergraph(empty)
+
 
 def test_asymmetric_edge_is_hard_error():
     text = GAMESTATE.replace("\t\t\t{ to=0 length=10 }\n", "")
@@ -168,3 +172,17 @@ def test_cli_rejects_missing_gamestate(tmp_path, capsys):
         save_hypergraph.main([str(path), "--edges", str(tmp_path / "out.tsv")])
     assert excinfo.value.code == 2
     assert capsys.readouterr().err.strip()
+
+    isolated = (
+        'version="Pegasus v4.4.4"\n'
+        "galactic_object=\n{\n"
+        "\t0=\n\t{\n\t\thyperlane={ { to=1 length=1 } }\n\t}\n"
+        "\t1=\n\t{\n\t\thyperlane={ { to=0 length=1 } }\n\t}\n"
+        '\t2=\n\t{\n\t\tname={ key="C" }\n\t}\n'
+        "}\n"
+    )
+    path = _save(tmp_path, isolated, name="isolated.sav")
+    out = tmp_path / "isolated.tsv"
+    assert save_hypergraph.main([str(path), "--edges", str(out)]) == 0
+    assert "isolated" in capsys.readouterr().err
+    assert out.read_text(encoding="utf-8") == "0\t1\t1\n"
