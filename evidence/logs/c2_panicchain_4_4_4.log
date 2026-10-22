@@ -773,7 +773,7 @@ both. The real artifact's output is byte-identical before/after on `0xbd70..0xbd
 
 Item 3: review said the two `dll_ubsan_site.py` refs were one line low at `bb5c2b4` (`:214-226`,
 `:193`). The five-line section-range guard above sits in `parse`, so in this commit's tree the same
-`.pdata` loop is `:219-231` and the `RECORD_READ_SIZE + 1` bound is `:198`; (1) cites those.
+`.pdata` loop is `:219-231` and the `RECORD_READ_SIZE + 1` bound is `:198`; (4) cites those.
 Item 4: the forward pointer is in (6), and (8) now says the two exit-1 messages "keep distinct
 meanings" instead of "stay exactly as they were". Item 5: §47.5 says "**tests** `str` for null".
 Item 6: the `e371c30` ledger line names `evidence/disasm/js_rc_trap_77c0c35e.md` and
