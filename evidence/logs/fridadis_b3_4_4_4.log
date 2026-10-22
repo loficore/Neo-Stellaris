@@ -1,0 +1,119 @@
+# B3 fridadis bring-up (4.4.4)
+
+# Target: read-only linear disassembly of a live stellaris.exe (pid 13076) at RVA 0x1D08520
+# (CEffect::Execute base, §26). Driver scripts/fridadis.py + injected scripts/dis.js, both
+# landed at C:\ns\ on the Windows host. Authorization level: READ-ONLY, no detour, no
+# Interceptor, no patchCode. Evidence produced by scripts/fridadis.py (live attach).
+# exe identity: stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56 (46,253,688 bytes).
+
+## (1) Step 1 — environment probe (game running + frida reachable)
+
+$ ssh Windows_Jiaolong "frida-ps | findstr /i stellaris"
+13076  stellaris.exe
+
+## (2) Step 2 — read-only self-attestation recheck (before upload AND after the fix)
+
+$ grep -nE "Interceptor|patchCode|writeByteArray|writePointer|Memory\.protect" scripts/fridadis.py scripts/dis.js
+scripts/fridadis.py:6:Read-only (no Interceptor, no Memory.patchCode), so it is safe against an unpaused game.
+scripts/dis.js:4:  Read-only: it never writes memory and never attaches an Interceptor, so it is safe against
+
+Exactly 2 hits, both comment lines. No code line carries a banned write/hook symbol.
+NOTE: dis.js now reads the decoded byte span via p.readByteArray(insn.size) — a READ, not
+writeByteArray — so the fix did not add any capability; the grep above proves it.
+
+## (3) Step 3 — paired upload, sha256 both sides must match verbatim
+
+local:
+bbc2966a1a5a43335daca3fb711f5161e0e7148f9a88e5bcdb9f2e0b00483aaf  scripts/fridadis.py
+11525826f36ecb0723b2fadbe4e2cc5fa2f653866a83c4c2f7fec8556c3db116  scripts/dis.js
+remote (certutil -hashfile C:\ns\<name> SHA256):
+11525826f36ecb0723b2fadbe4e2cc5fa2f653866a83c4c2f7fec8556c3db116  (C:\ns\dis.js)
+bbc2966a1a5a43335daca3fb711f5161e0e7148f9a88e5bcdb9f2e0b00483aaf  (C:\ns\fridadis.py)
+
+dis.js local == remote, fridadis.py local == remote. Pair intact.
+
+## (3b) provenance: first Step 4 shot crashed on a tool bug, then fixed and re-fired
+
+The first execution of this Step-4 command against pid 13076 raised:
+  frida.RPCException: TypeError: cannot read property 'Symbol.iterator' of undefined at dis (/script1.js:76)
+Root cause: scripts/dis.js:76 rendered the hex column with Array.from(insn.bytes), but Frida's
+Instruction object exposes no .bytes property (this was dis.js's first-ever live run).
+Fix applied to scripts/dis.js (read-only, no new capability — see section 2):
+  const hex = Array.from(new Uint8Array(p.readByteArray(insn.size)))
+      .map(b => b.toString(16).padStart(2, '0')).join(' ');
+Re-uploaded to C:\ns\, sha re-verified (section 3), then the same command re-fired. The output in
+section 4 is from that second, successful shot. Deviation from the plan's "一行都不改" note on
+dis.js is recorded here: dis.js WAS changed (one line) and the change was authorized out-of-band.
+
+## (4) Step 4 — single live linear disassembly: 0x1D08520, 40 instructions (full stdout)
+
+$ ssh Windows_Jiaolong "python C:/ns/fridadis.py 0x1D08520 40"
+# disassembled 40 instructions from RVA 0x1d08520, 0 decode failures
++0x0000  48 89 5c 24 08      mov qword ptr [rsp + 8], rbx
++0x0005  57                  push rdi
++0x0006  48 83 ec 20         sub rsp, 0x20
++0x000a  8b 42 08            mov eax, dword ptr [rdx + 8]
++0x000d  48 8b da            mov rbx, rdx
++0x0010  48 8b f9            mov rdi, rcx
++0x0013  85 c0               test eax, eax
++0x0015  78 32               js 0x7ff7d9ac8569
++0x0017  ba 10 00 00 00      mov edx, 0x10
++0x001c  48 8b cb            mov rcx, rbx
++0x001f  e8 7c 78 46 fe      call 0x7ff7d7f2fdc0
++0x0024  48 8b cb            mov rcx, rbx
++0x0027  e8 54 91 00 00      call 0x7ff7d9ad16a0
++0x002c  ba 03 00 00 00      mov edx, 3
++0x0031  48 8b cb            mov rcx, rbx
++0x0034  e8 67 78 46 fe      call 0x7ff7d7f2fdc0
++0x0039  ba 10 00 00 00      mov edx, 0x10
++0x003e  48 8b cb            mov rcx, rbx
++0x0041  e8 5a 78 46 fe      call 0x7ff7d7f2fdc0
++0x0046  8b 43 08            mov eax, dword ptr [rbx + 8]
++0x0049  ff c0               inc eax
++0x004b  48 8b d3            mov rdx, rbx
++0x004e  89 43 08            mov dword ptr [rbx + 8], eax
++0x0051  48 8b cf            mov rcx, rdi
++0x0054  48 8b 07            mov rax, qword ptr [rdi]
++0x0057  ff 50 10            call qword ptr [rax + 0x10]
++0x005a  ff 4b 08            dec dword ptr [rbx + 8]
++0x005d  48 8b cb            mov rcx, rbx
++0x0060  e8 1b 91 00 00      call 0x7ff7d9ad16a0
++0x0065  83 7b 08 00         cmp dword ptr [rbx + 8], 0
++0x0069  7c 1a               jl 0x7ff7d9ac85a5
++0x006b  ba 04 00 00 00      mov edx, 4
++0x0070  48 8b cb            mov rcx, rbx
++0x0073  e8 28 78 46 fe      call 0x7ff7d7f2fdc0
++0x0078  ba 10 00 00 00      mov edx, 0x10
++0x007d  48 8b cb            mov rcx, rbx
++0x0080  e8 1b 78 46 fe      call 0x7ff7d7f2fdc0
++0x0085  48 8b 5c 24 30      mov rbx, qword ptr [rsp + 0x30]
++0x008a  48 83 c4 20         add rsp, 0x20
++0x008e  5f                  pop rdi
+
+N = 40 (the window ran to completion; the sole ret lives at +0x008f, outside).
+The call target line is at +0x0057 = 0x1d08577 - 0x1d08520, as derived from the format string.
+
+## (5) Step 5 — cross-validation live <-> offline (the real acceptance)
+
+offline same window (count read as hex on this side, so 0x28 = 40 insns):
+$ python3 scripts/disrva.py 0x1D08520 0x28
+; stellaris.exe  .text RVA 0x1d08520  (40 insns)
+  ...
+  01d08577  call    qword ptr [rax + 0x10]
+  01d0857a  dec     dword ptr [rbx + 8]
+  ...
+  01d085aa  add     rsp, 0x20
+  01d085ae  pop     rdi
+
+grep counts (all four must be 1):
+  live  call [rax+0x10] : 1
+  off   call [rax+0x10] : 1
+  live  dec  [rbx+8]    : 1
+  off   dec  [rbx+8]    : 1
+
+live and offline meet on the same two instructions §26 quotes. Renderers differ (live prints a
+byte-offset column + single-space mnemonic; offline prints absolute RVA + mnemonic padded to 7),
+and the count bases differ (fridadis.py reads decimal, disrva.py reads hex) — hence whitespace-
+tolerant grep -E, not a verbatim diff. Offline 0 decode failures.
+
+## (6) read-only: Interceptor/patchCode/write* zero code-line hits (Step 2)
