@@ -117,9 +117,9 @@ _SCRIPT_REF_RE = re.compile(r"(?:^|[\s`(])scripts/([A-Za-z0-9_./-]+\.(?:py|js|sh
 
 # The living docs named by the convention (``AGENTS.md`` 「scripts/ 命名与目录约定」,
 # R-refs).  Single source of truth: both the R-refs scan and
-# test_named_living_docs_exist read this, so when a later task retires PLAN.md it
-# is removed *here* once and the existence assertion follows — a test that pinned
-# ``REPO / "PLAN.md"`` in its body would block that deletion.
+# test_named_living_docs_exist read this constant, so retiring a named doc is a
+# one-line change *here* and the existence assertion follows — a test that pinned
+# the doc's path in its own body would block that deletion.
 LIVING_DOCS_NAMED = [REPO / "AGENTS.md"]
 
 def dangling_script_refs(doc_paths):
@@ -153,7 +153,7 @@ def _roadmap_cells(line):
 
 def violates_roadmap_shape(roadmap_path):
     """R-roadmap: ``docs/roadmap.md`` must stay a slim index, not re-inflate into
-    a PLAN.md.  Total line count is capped; the 阶段状态表 (the one table whose
+    a second narrative roadmap document.  Total line count is capped; the 阶段状态表 (the one table whose
     header carries all five column names — located *by header name, not position*,
     so a differently-shaped sibling table above it is not policed) must use a
     status from the vocabulary and fill its evidence/plan cell per status; no
