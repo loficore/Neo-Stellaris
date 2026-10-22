@@ -37,6 +37,9 @@ extern fn JS_NewString(ctx: ?*qjs.JSContext, str: [*:0]const u8) qjs.JSValue;
 // Task 6: our own wrapper symbol (quickjs_wrapper.c), never a QuickJS C symbol.
 extern fn C2EvalProbe(src: [*:0]const u8) c_int;
 
+// §50: fixed stress script (defined once in quickjs_wrapper.c).
+extern fn C2EvalStress() c_int;
+
 // Task 1 (allocator-record discrimination): the C ring recorder's renderer
 // symbol (quickjs_wrapper.c), again OUR own symbol, never a QuickJS C symbol.
 extern fn C2DiagMfRecords(out: [*]u8, out_size: c_int) c_int;
@@ -383,6 +386,26 @@ test "C2EvalProbe on a value JS_ToInt32 cannot convert returns 2" {
     // JS_ToInt32 returns -1 and the probe reports "not an int32" (rc 2) after
     // releasing the refcounted object (tag -1) it was handed.
     try std.testing.expectEqual(@as(c_int, 2), C2EvalProbe("({ valueOf() { throw 1; } })"));
+    try std.testing.expectEqual(@as(c_int, 11), C2EvalProbe("1+1"));
+}
+
+// §50 — the fixed stress script (quickjs_wrapper.c: c2_stress_script). §48 removed
+// UBSan instrumentation from eight fallback `container_of` expressions; only `js_rc`
+// was exercised by Task 5/6. This script drives the other paths through ordinary JS:
+// string-builder growth and array growth (js_realloc2 -> __js_realloc +
+// __js_malloc_usable_size) and per-round refcount drops (__js_free). The expected
+// int32 15904 is computed independently with Node from the same source text; the
+// encode is 15904*4+3 = 63619.
+test "C2EvalStress exercises realloc/usable-size/free and returns 15904 (rc 63619)" {
+    var diag: [512]u8 = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), C2DiagQuickJS(&diag, @intCast(diag.len)));
+
+    const rc = C2EvalStress();
+    try std.testing.expectEqual(@as(c_int, 63619), rc);
+    try std.testing.expectEqual(@as(c_int, 15904), @divTrunc(rc - 3, 4));
+    try std.testing.expectEqual(@as(c_int, 3), @mod(rc, 4));
+
+    // The context must still be usable after the churn (no corrupted free list).
     try std.testing.expectEqual(@as(c_int, 11), C2EvalProbe("1+1"));
 }
 

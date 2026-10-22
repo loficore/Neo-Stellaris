@@ -900,3 +900,44 @@ int C2EvalProbe(const char *src) {
        (P20 deferred minor). */
     return (int)((uint32_t)n * 4u + 3u);
 }
+
+/* §50 diagnostic — fixed stress script for the allocator paths §48 un-instrumented.
+ *
+ * §48 removed the fallback `container_of` from eight expressions. Only `js_rc`
+ * (quickjs.c:1494) was on the Task 5/6 path; the free/realloc/usable-size sites
+ * (1601/1607/1645/1651/1684/1704/1711) never ran under any live probe. This
+ * script drives them through ordinary JS:
+ *   - `s += ...` repeatedly grows the string builder, which uses js_realloc2
+ *     (quickjs.c:4146/4177) -> js_realloc_rt (__js_realloc) + js_malloc_usable_size_rt
+ *     (__js_malloc_usable_size) and frees the old buffer (__js_free);
+ *   - `a.push(...)` grows the property array via js_realloc2 (quickjs.c:9622);
+ *   - each round drops `s`, `a` and `t`, so refcounted strings/objects/arrays are
+ *     freed (__js_free) while the next round reuses the allocator.
+ * The arithmetic only uses engine-stable semantics (lengths, integer digits,
+ * insertion-order JSON), so the result is a deterministic int32; the expected
+ * value `15904` (rc 63619) is computed with Node and pinned by the native test
+ * in c2_diag_test.zig, which calls this same C symbol — the script lives here
+ * once, not copied into the test.
+ *
+ * Not a general evaluation API: the source is fixed (the P21/C3 boundary — caller
+ * JS text stays deferred). Dispatched remotely through the C2EvalStressOne PE
+ * export, which reads the encoding back through the thread exit code. */
+static const char c2_stress_script[] =
+    "(function(){"
+    "var acc=0;"
+    "for(var r=0;r<8;r++){"
+    "var s='';"
+    "for(var i=0;i<2000;i++)s+='abcdefgh'+i;"
+    "acc=(acc+s.length)&0xffff;"
+    "var a=[];"
+    "for(var j=0;j<4000;j++)a.push({k:j,v:'v'+j});"
+    "acc=(acc+a.length+a[3999].v.length)&0xffff;"
+    "var t=JSON.stringify(a);"
+    "acc=(acc+t.length)&0xffff;"
+    "}"
+    "return acc;"
+    "})()";
+
+int C2EvalStress(void) {
+    return C2EvalProbe(c2_stress_script);
+}

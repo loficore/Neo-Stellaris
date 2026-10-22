@@ -3194,3 +3194,75 @@ window, no `SuspendThread gle=5` signature.
 the same bytes (Task 5, Task 6, Task 6-noinit); 5 dispatches (`C2DiagQJSInto` ×1, `C2Init` ×2,
 `C2EvalProbeOnePlusOne` ×2 — the Task 6 pair includes the noinit call); 3 `rc=0` lines in the disk
 log; 0 debugger attaches, 0 hooks, 0 byte edits, 0 game-file changes; 1 new evidence log.
+
+---
+
+## §50 — the seven unexercised `container_of` sites, exercised live
+
+### 50.1 What §48 left untested, and the probe built for it
+
+§48 removed UBSan instrumentation from eight fallback `container_of` expressions. Only
+`js_rc` (quickjs.c:1494) was on the §49 path; the free/realloc/usable-size sites
+(1601/1607, 1645/1651/1684, 1704/1711) never ran under any live probe. §50 adds one
+fixed stress script and one export rather than a general evaluation API (P21/C3 stays
+deferred):
+
+    src/dll/quickjs/quickjs_wrapper.c   c2_stress_script[]; C2EvalStress() = C2EvalProbe(script)
+    src/dll/exports.zig                 C2EvalStressOne() -> same n*4+3 encoding
+    src/dll/quickjs/c2_diag_test.zig    native test calling C2EvalStress directly
+    scripts/test_c2_harness.py          "C2EvalStressOne" added to the known-export tuple
+
+The script (8 rounds of 2000 string concatenations, 4000 object pushes and one
+`JSON.stringify`) drives string-builder/array growth through `js_realloc2` →
+`js_realloc_rt` → `__js_realloc` + `__js_malloc_usable_size`, and per-round refcount
+drops through `__js_free`. Its value uses only lengths, integer digits and insertion
+order, so 15904 was computed independently with Node; the native test pins rc 63619.
+
+### 50.2 Offline gate before the shot
+
+    artifact sha256  938b6e15e0759d4fd8f5d47ae921550adeb3e5b762a17a2d6497a97a8fcd7777
+    zig build test   24/27 steps succeeded (1 failed); 315/315 tests passed
+                     (the 1 failure is the known exports.zig kernel32 Linux link fact)
+    Python fences    163 passed
+    PE export        C2EvalStressOne rva=0x44d800; C2Init rva=0x44dbc0
+
+The artifact was deployed as `C:\temp\sqjs_s50.dll`; the remote `Get-FileHash` matched
+the local sha. Same game session as §49 (pid 9932, main menu, never restarted).
+
+### 50.3 The live shot, twice
+
+Run 1, verbatim key lines (em dash shown as the console renders it):
+
+    [stress] pid=9932  dll=C:\temp\sqjs_s50.dll
+    [stress] sqjs_s50.dll base (64-bit): 0x7ffc12da0000
+    [stress] MZ header at base OK
+    [stress] C2Sanity == 42, game alive — dispatch authorized
+    [stress] C2Init rc == 0, game alive
+    [stress] C2EvalStressOne rc = 63619 (expected 63619)
+    [stress] decoded n = 15904; host alive after the churn
+
+Run 2 (same artifact bytes, fresh module copy, probe renamed out of the `c2_*` family
+to satisfy R-depth): identical line for line, `rc = 63619`, host alive. `Get-Process
+stellaris` after both: pid 9932, `Responding=True`.
+
+### 50.4 What this settles and what it does not
+
+- (§48 fix, extended) The in-game result equals the independently computed expectation
+  on an allocator-heavy churn, on the exact seven sites the fix removed instrumentation
+  from. If any of them still aborted, the remote thread would have died with status 3
+  and the host would be gone — the §45/§49 signature.
+- (Determinism) Two module copies, one artifact, identical result — no dependence on
+  allocator layout or ASLR base.
+- **(Not claimed)** Per-call-site coverage. The script implies the realloc/usable-size/
+  free paths from the vendored source; the run is not instrumented per site, so it
+  cannot say each of the seven executed individually.
+- **(Not claimed)** Anything beyond the main menu: no scene load, no mod script
+  evaluation, no `CEffect::Execute`. C3 (keyword→JS routing) and C4 (visible effect)
+  remain untouched, and caller-supplied JS text stays deferred (P21).
+
+### 50.5 Counts for §50
+
+1 game session (pid 9932, reused, never restarted); 2 injected module copies (one per
+run); 6 dispatches (2 × [`C2Sanity`, `C2Init`, `C2EvalStressOne`]); 2 identical
+deterministic results (`rc=63619`); 0 debugger attaches, 0 hooks, 0 byte edits, 0
+game-file changes; 1 new evidence log (`evidence/logs/c2_live_stress_4_4_4.log`).
