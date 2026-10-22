@@ -213,6 +213,21 @@ pub const keyword_reg = struct {
     /// `0x3B01A0` does NOT call this slot; §23.1 originally conflated the two.
     pub const EFFECT_VTBL_READ_CHILDREN: usize = 0x70;
 
+    /// slot[1]: the virtual Execute entry `0x3B01A0` calls after the predicate.
+    /// Base Execute `0x1D08520` is this slot's DEFAULT body; donor classes such as
+    /// hidden_effect replace it (`0x3AFD30`). NOT slot[2] (+0x10) — that is base
+    /// Execute's per-class child/instantiate helper.
+    pub const EFFECT_VTBL_EXECUTE: usize = 0x08;
+    pub const EFFECT_VTBL_INSTANTIATE: usize = 0x10;
+    /// Raw qword read of donor vtable `0x2606FE0`: slots through +0xC0 are valid, so
+    /// copying 25 preserves donor slots [20..24] as well as the predicate at [19].
+    /// A safe lower bound — NOT "through +0x98" (that would be 20 slots).
+    pub const EFFECT_VTBL_COPY_SLOTS: usize = 25;
+    /// hidden_effect's own `[vptr+0x08]` — the chain target, kept OFF live (§52).
+    pub const RVA_EFFECT_DONOR_EXECUTE: usize = 0x3AFD30;
+    /// effect `[vptr+0x98]` base predicate: 21-byte prologue, two args (child, parent).
+    pub const RVA_EFFECT_PREDICATE: usize = 0x3B1420;
+
     /// §24 — C1 borrows an official `class_info` instead of fabricating an object, so these two
     /// donors are data, not code we write. Aliasing is a shape the shipped game already uses: 9
     /// keyword `class_info`s serve 2-3 token ids each (`if`/`else_if`/`else` on `0x269DC98`), every
@@ -494,4 +509,23 @@ test "keyword_reg: holder exposes only the std::string at +0x10" {
     try std.testing.expect(keyword_reg.HOLDER_NAME + 0x20 <= keyword_reg.HOLDER_SIZE);
     // An SSO string's chars live in the buffer field itself, so +0x10..+0x1F doubles as data.
     try std.testing.expect(keyword_reg.SSO_MAX < keyword_reg.HOLDER_SIZE - keyword_reg.HOLDER_NAME);
+}
+
+test "C4 execution-path constants are pinned" {
+    const k = keyword_reg;
+    try std.testing.expectEqual(@as(usize, 0x08), k.EFFECT_VTBL_EXECUTE);
+    try std.testing.expectEqual(@as(usize, 0x10), k.EFFECT_VTBL_INSTANTIATE);
+    try std.testing.expectEqual(@as(usize, 25), k.EFFECT_VTBL_COPY_SLOTS);
+    try std.testing.expect(k.EFFECT_VTBL_EXECUTE != k.EFFECT_VTBL_INSTANTIATE);
+    // 25 slots reach +0xC0 (slot[24]); they cover the predicate at +0x98 (slot[19]).
+    // Do NOT assert (25-1)*8 == 0x98 — that is false (24*8 == 0xC0).
+    try std.testing.expectEqual(@as(usize, 19), k.EFFECT_VTBL_INSTANTIATE_PREDICATE / 8);
+    try std.testing.expect(k.EFFECT_VTBL_COPY_SLOTS > k.EFFECT_VTBL_INSTANTIATE_PREDICATE / 8);
+    try std.testing.expectEqual(@as(usize, 200), k.EFFECT_VTBL_COPY_SLOTS * 8);
+    try std.testing.expectEqual(@as(usize, 0x3AFD30), k.RVA_EFFECT_DONOR_EXECUTE);
+    try std.testing.expectEqual(@as(usize, 0x3B1420), k.RVA_EFFECT_PREDICATE);
+    try std.testing.expect(k.RVA_EFFECT_DONOR_EXECUTE != k.RVA_EFFECT_PREDICATE);
+    const text_end: usize = 0x2392000;
+    try std.testing.expect(k.RVA_EFFECT_DONOR_EXECUTE < text_end);
+    try std.testing.expect(k.RVA_EFFECT_PREDICATE < text_end);
 }
