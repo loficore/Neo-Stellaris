@@ -351,8 +351,10 @@ pub fn fingerprintMatches() bool {
     return true;
 }
 
-/// Install the base-Execute detour against a confirmed 4.4.4 build.
-pub fn install() !void {
+/// Install the base-Execute detour with an injector-supplied detour function.
+/// `install()` keeps the log-only execDetour; live_probe.zig supplies its own
+/// so one hook can serve both observation and the one-shot instantiate trigger.
+pub fn installWith(detour: *anyopaque) !void {
     if (state.installed) return;
 
     const target = try windows.moduleFunction(RVA_BASE_EXECUTE);
@@ -373,10 +375,31 @@ pub fn install() !void {
     // them position-independent, so exactly those 16 land in the trampoline. `&orig` is armed
     // inside installHookArmed before the patch goes in, so the forward path exists from the
     // first intercepted call.
-    const hook = try detour_mod.installHookArmed(target, @ptrCast(@constCast(&execDetour)), &orig);
+    const hook = try detour_mod.installHookArmed(target, detour, &orig);
     if (hook.patch_size > saved_code.len) return error.PatchTooWide;
     stats.patch_size = hook.patch_size;
     state = .{ .hook = hook, .installed = true };
+}
+
+pub fn install() !void {
+    try installWith(@ptrCast(@constCast(&execDetour)));
+}
+
+/// The trampoline into the engine's base Execute. Valid only while installed.
+pub fn original() ?*anyopaque {
+    return orig;
+}
+
+pub fn patchSize() u32 {
+    return @intCast(stats.patch_size);
+}
+
+/// 0 = the engine's bytes are intact at the target, -1 = fingerprint mismatch,
+/// -2 = non-Windows, -3 = the target was never resolved this session.
+pub fn verifyState() i32 {
+    if (!is_windows) return -2;
+    if (target_addr == 0) return -3;
+    return if (fingerprintMatches()) 0 else -1;
 }
 
 /// Copies our own snapshot of the original prologue back over the patch. This is the
@@ -429,9 +452,7 @@ export fn ExecHookUninstall() callconv(.c) i32 {
 /// 0 = the engine's bytes are intact at the target, -1 = fingerprint mismatch,
 /// -2 = non-Windows, -3 = the target was never resolved this session.
 export fn ExecHookVerify() callconv(.c) i32 {
-    if (!is_windows) return -2;
-    if (target_addr == 0) return -3;
-    return if (fingerprintMatches()) 0 else -1;
+    return verifyState();
 }
 
 /// Writes [Entry, HistEntry, Stats, ring_len, hist_len] so the Frida driver never sizes a

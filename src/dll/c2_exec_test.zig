@@ -2,8 +2,11 @@
 // Zig imports may not escape the module root.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const vtable = @import("c2/vtable.zig");
 const predicate_hook = @import("c2/predicate_hook.zig");
+const exec_hook = @import("scripted/exec_hook.zig");
+const live_probe = @import("c2/live_probe.zig");
 
 extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2ExecArmToken(token: u32, budget: u32) c_int;
@@ -137,4 +140,55 @@ test "predicate patchObject rewrites [obj+0] only for the armed token" {
 
     try std.testing.expectEqual(@as(u64, 1), predicate_hook.getStats().patched);
     predicate_hook.resetForTest();
+}
+
+/// Same exact-key rule as c2_diag_test.zig: `installed=` is a substring of
+/// `pred_installed=`, `calls=` of `pred_calls=`.
+fn countExactKey(text: []const u8, key: []const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.tokenizeAny(u8, text, " \n");
+    while (it.next()) |tok| {
+        const eq = std.mem.indexOfScalar(u8, tok, '=') orelse continue;
+        if (std.mem.eql(u8, tok[0..eq], key)) n += 1;
+    }
+    return n;
+}
+
+test "ctxUsable rejects only the lexer sentinel 0xb" {
+    try std.testing.expect(live_probe.ctxUsable(0));
+    try std.testing.expect(live_probe.ctxUsable(0xc));
+    try std.testing.expect(!live_probe.ctxUsable(0xb));
+}
+
+test "live probe setToken and non-Windows install" {
+    live_probe.resetForTest();
+    try std.testing.expectError(error.InvalidToken, live_probe.setToken(0));
+    try live_probe.setToken(4242);
+    try std.testing.expectEqual(@as(u32, 4242), live_probe.token());
+    if (builtin.os.tag != .windows) {
+        try std.testing.expectError(error.Unsupported, live_probe.install());
+        try std.testing.expectEqual(@as(i32, -2), live_probe.verify());
+    }
+    live_probe.resetForTest();
+}
+
+test "live probe stats render every driver key exactly once" {
+    live_probe.resetForTest();
+    var buf: [512]u8 = undefined;
+    const n = live_probe.statsInto(&buf);
+    const text = buf[0..n];
+    for ([_][]const u8{
+        "armed",         "token",      "calls",         "fired",    "ctx_skip",
+        "invalid",       "instantiate_rc", "patch_size", "installed", "verified",
+        "vtable",        "chain",      "pred_installed", "pred_calls", "pred_patched",
+    }) |key| {
+        try std.testing.expectEqual(@as(usize, 1), countExactKey(text, key));
+    }
+}
+
+test "exec_hook exposes a never-installed verify state on non-Windows" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try std.testing.expectEqual(@as(i32, -2), exec_hook.verifyState());
+    try std.testing.expectEqual(@as(?*anyopaque, null), exec_hook.original());
+    try std.testing.expectEqual(@as(u32, 0), exec_hook.patchSize());
 }

@@ -40,6 +40,7 @@ pub const keyword_registry = @import("scripted/keyword_registry.zig");
 pub const c2_handler = @import("c2/handler.zig");
 pub const c2_vtable = @import("c2/vtable.zig");
 pub const c2_predicate_hook = @import("c2/predicate_hook.zig");
+pub const c2_live_probe = @import("c2/live_probe.zig");
 
 comptime {
     _ = scripted;
@@ -48,6 +49,7 @@ comptime {
     _ = c2_handler;
     _ = c2_vtable;
     _ = c2_predicate_hook;
+    _ = c2_live_probe;
 }
 
 // ---------------------------------------------------------------------------
