@@ -2765,7 +2765,7 @@ is exactly the half §46's boundary kept.
 
 | frame | printed rva (`ip − 1`) | `.pdata` span | offset | records / source cited | name |
 |---:|---|---|---:|---|---|
-| 1 | `0xbd9b` | `0xbd70..0xbdf3` (131 B) | +`0x2b` (43) | 1 `TypeMismatchData` `0x5ab430` at `quickjs.c:1494:12`; plus the undecoded `PointerOverflowData` `0x5ab450`, same location | **`js_rc`** (`:1492`) |
+| 1 | `0xbd9b` | `0xbd70..0xbdf3` (131 B) | +`0x2b` (43) | 1 `TypeMismatchData` `0x5ab430` at `quickjs.c:1494:12`; plus the `PointerOverflowData` `0x5ab450`, same location, not decoded by the maintained tool (hand-decoded in §47.2) | **`js_rc`** (`:1492`) |
 | 2 | `0xeede3` | `0xeed10..0xeeff1` (737 B) | +`0xd3` (211) | 6, `:2361`–`:2366` | **`js_alloc_string_rt`** (`:2355`) |
 | 3 | `0x1ebde` | `0x1ebb0..0x1eda4` (500 B) | +`0x2e` (46) | 4, `:3433`/`:3434` | **`__JS_NewAtomInit`** (`:3426`) |
 | 4 | `0x55f5` | `0x5320..0x570b` (1003 B) | +`0x2d5` (725) | 5, `:3174`–`:3178` | **`JS_InitAtoms`** (`:3169`) |
@@ -2787,7 +2787,7 @@ Frame 2 is disassembled, not inferred: the call to `js_rc` is the 5-byte `call 0
 record at `0xeee07`. A read-only `E8` scan of `.text` finds **104** direct call sites to `0xbd70`;
 the one at `0xeeddf` is the first this execution reached.
 
-### 47.2 The 131 bytes contain three zero questions; only the first can answer
+### 47.2 Three judgment rows, none matching; the check that fired is a third check site
 
 Verbatim from the Task 2 listing (reproduced here with
 `python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 0xbdf3` — 40 insns,
@@ -2811,8 +2811,10 @@ Verbatim from the Task 2 listing (reproduced here with
     0000bde4  call    0x180499cc0            # pointer_overflow
 
 - **`0xbd86..0xbd97` — the check that aborted, on the compile-time constant 0.** `xor eax,eax` at
-  `0xbd86`; `test al,1` at `0xbd88`; `jne 0xbd9c` at `0xbd8a`. On the only entry (`0xbd70`) `al`
-  has just been zeroed and nothing writes it before the test, so the jump can never be taken.
+  `0xbd86`; `test al,1` at `0xbd88`; `jne 0xbd9c` at `0xbd8a`. On the entry the panic frame names
+  (`0xbd70`) `al` has just been zeroed and nothing writes it before the test, so the jump can never
+  be taken; whether a caller also branches into the function elsewhere was not scanned for, so the
+  claim is about this entry only.
   `lea rcx,[0x5ab430]`, then `xor eax,eax` / `mov edx,eax` put **0** in the handler's pointer
   slot and `call 0x498170` at `0xbd97`. The record decodes to `quickjs.c:1494:12`, kind
   `member_access`, type `JSMallocBlockHeader`, `log_align = 3` (8-byte alignment), `kind = 3`.
@@ -2832,12 +2834,14 @@ Verbatim from the Task 2 listing (reproduced here with
   16-byte `PointerOverflowData`: only a source location — filename pointer, line 1494, column 12
   (read directly; the maintained tool decodes only `TypeMismatchData`). The handler's entry tests
   both `rdx` and `r8` and takes three arguments, matching `__ubsan_handle_pointer_overflow`
-  (Task 2's attribution, re-checked at the entry). This is the only check in the function that
-  consumes `str` — and the failing run never reaches it, because `0xbd97` aborts.
+  (Task 2's attribution, re-checked at the entry). This is the only handler call that receives
+  `str` as an argument — and the failing run never reaches it, because `0xbd97` aborts. The
+  `test r8,r8` at `0xbda0` also reads `str`, but it feeds this call's guard, not the aborting
+  call's operand.
 
 So both a pre-subtraction zero test (on `str`) and a post-subtraction zero test (on `str − 8`)
 exist; the plan's single-check premise does not describe this code. The check that fired is a
-**third** one, on neither quantity.
+**third** check site — not either of the two sites the table contrasts — on neither quantity.
 
 ### 47.3 Judgment table: (i), (ii) and (iii) are inapplicable; the fourth row lands
 
@@ -2845,7 +2849,7 @@ exist; the plan's single-check premise does not describe this code. The check th
 |---|---|---|---|
 | **(i)** | zero test after `sub 8`, on the subtraction result ⇒ the header is checked ⇒ `str == 8` | the aborting report is `0xbd97`, **before** `add rcx,-8` at `0xbdab`; its operand is `edx = 0`, not `rcx` | **does not hold** |
 | **(ii)** | zero test before `sub 8`, on `str` ⇒ `str == NULL` at `:2361` ⇒ `:2359` contradicted ⇒ attribution unreliable, Task 1 redo | a pre-subtraction `test r8,r8` does exist at `0xbda0`, but it feeds the `0xbde4` pointer-overflow report, not the aborting call; the aborting operand is 0 whatever `str` is | **does not hold** |
-| **(iii)** | the test and the subtraction are in different blocks, or the trapping function is a thunk ⇒ handler hook | one straight-line block from `0xbd86` to `0xbde4`; the 131-byte function is `js_rc`'s own body (record at `:1494:12`), not a thunk | **does not hold** |
+| **(iii)** | the test and the subtraction are in different blocks, or the trapping function is a thunk ⇒ handler hook | the straight-line path actually taken runs from `0xbd86` through the aborting call at `0xbd97` (conditional branches exist at `0xbd8a` and `0xbdd3`, but neither is on that path); the 131-byte function is `js_rc`'s own body (record at `:1494:12`), not a thunk | **does not hold** |
 | **4** | none of the above | fallback `offsetof`'s compile-time null member access; constant-0 report; Zig abort; exit 3 | **lands** |
 
 Row (ii)'s consequence deserves its own sentence, because it is the one that would have thrown
@@ -2863,8 +2867,7 @@ evidence.
     cutils.h:43    #ifndef offsetof
     cutils.h:44    #define offsetof(type, field) ((size_t) &((type *)0)->field)
     cutils.h:49    #ifndef container_of
-    cutils.h:51    #define container_of(ptr, type, member) \
-                       ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
+    cutils.h:51    #define container_of(ptr, type, member) ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
     quickjs.c:1492 static inline JSMallocBlockHeader *js_rc(void *ptr)
     quickjs.c:1494     return container_of(ptr, JSMallocBlockHeader, user_data);
 
@@ -2882,12 +2885,12 @@ expands the body to
 
 The parenthesised expression is a member access through a null pointer written in the source. Its
 value is the compile-time constant 8 (`user_data` at offset 8; the layout probe in
-`c2_panicchain_4_4_4.log` (5) printed `JSMallocBlockHeader = 8, user_data@8`), but clang's
-`-fsanitize=null` instruments the **access**, not the folded value: the `TypeMismatchData`
-`0x5ab430` (file, line 1494, column 12, type descriptor `JSMallocBlockHeader`, `log_align = 3`,
-`kind = 3 = member_access`) gets the null constant as its pointer operand. There is no runtime
-branch that can suppress it: `xor eax,eax; test al,1; jne` on an `al` nothing writes is a
-constant-false guard, so `0xbd97` runs on every call.
+`c2_panicchain_4_4_4.log` (5) printed `sizeof(JSMallocBlockHeader)=8 u@0 block_size_idx@2 ref_count@4 user_data@8`), but clang's
+`-fsanitize=null` instruments the **access**, not the folded value: the handler call for the
+`TypeMismatchData` `0x5ab430` (file, line 1494, column 12, type descriptor `JSMallocBlockHeader`,
+`log_align = 3`, `kind = 3 = member_access`) receives the null constant as its pointer argument.
+There is no runtime branch that can suppress it: `xor eax,eax; test al,1; jne` on an `al` nothing
+writes is a constant-false guard, so `0xbd97` runs on every call.
 
 Zig's UBSan runtime takes that record and pointer: `kind = member_access` with pointer 0 prints
 `member access within null pointer of type 'JSMallocBlockHeader'`, then panics; Zig's panic
@@ -2981,8 +2984,10 @@ exits 2, with the correct vma echoed. Measured on this artifact:
     [ubsan_site] func takes a vma carrying the image base (0x180000000); 0xbd9b is below it,
       so it looks like a bare rva — pass 0x18000bd9b for rva 0xbd9b                      # rc=2
 
-That is the guard Task 1's log (8) installed and forward-referenced as "§47 加的口径护栏"; this
-paragraph is the §47 it pointed at.
+That is the guard the §47-preparation batch installed — `docs/offline-tooling.md` calls it
+"本批(§47 前置)加的口径护栏", i.e. the batch preceding §47, not §47 itself. Task 1's log (8)
+records the guard; the log's forward reference at `c2_panicchain_4_4_4.log:616` is not to it — it
+is the §45 `.pdata` accounting taken up in the next paragraph.
 
 Task 1's log also promised (`c2_panicchain_4_4_4.log:616`) that §47 would carry the accounting
 for §45's "the frame at `0xeede3` has no `.pdata` entry" sentence. It is false on §45's **own**

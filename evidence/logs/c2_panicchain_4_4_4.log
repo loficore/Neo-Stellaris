@@ -635,8 +635,9 @@ The three rows the plan expected, tested against the 131-byte `js_rc` body (rva 
   `0xbde4` pointer-overflow path (`0xbdd1`/`0xbdd3` branch); the aborting operand at `0xbd97` is 0
   whatever `str` is. The check at `0xbd97` is a third check, on neither quantity.
 - **(iii) does not hold.** (iii) needs the test and the subtraction in different basic blocks, or a
-  thunk. `0xbd86..0xbde4` is one straight-line block; the function's own record `0x5ab430` carries
-  `quickjs.c:1494:12`, so the 131 bytes are `js_rc`'s body, not a thunk.
+  thunk. The straight-line path actually taken runs from `0xbd86` through the aborting call at `0xbd97`
+  (conditional branches exist at `0xbd8a` and `0xbdd3`, but neither is on that path); the function's
+  own record `0x5ab430` carries `quickjs.c:1494:12`, so the 131 bytes are `js_rc`'s body, not a thunk.
 
 **Fourth row: lands — as a mechanism, not as "offline disassembly cannot judge".** Mechanism
 one-liner: `libs/quickjs/cutils.h:43-44`'s fallback `offsetof` (`&((type *)0)->field`) puts a
