@@ -2636,7 +2636,8 @@ it is not judgment-table row 4 either; it is the reader poll losing a race: the 
 2 ms, and between the last `heap_malloc` returning and `abort()` there is a window small enough that the
 0.2 ms witness thread always lands a sample in it while the 2 ms recorder thread almost never does. Forcing
 CPU oversubscription (16–24 concurrent children on 16 logical processors) gave the existing reader a
-timeslice and produced **5 data-bearing renders out of 71**, with no change to the instrument. This is a
+timeslice and produced **5 data-bearing renders out of the 70 oversubscribed child runs** (80 invocations,
+10 of which never started a child — see the log's run tally), with no change to the instrument. This is a
 **property of the channel**, recorded as a concern: with the defect present, the ring is readable only if
 the reader samples inside a sub-millisecond window, so the `post` rendering — the one Task 4's acceptance
 reads — is the reliable half of this design.
@@ -2699,8 +2700,11 @@ that class among all 31). In `JS_InitAtoms` order that is runtime → atom hash 
 **first** `__JS_NewAtomInit`'s name-string request (`js_alloc_string_rt(rt, len, 0)` at `:3430`). The ring
 therefore puts the trip **after that arena was handed over successfully and before any further `mf` call** —
 and the `atom_array` growth (which would have appeared as a `0x1640` large-block row, §43's other half) is
-absent from every render. That is §43's window confirmed from the allocator side, with the second of its two
-endpoints now excluded by observation rather than by reading.
+absent from every render. That is §43's window confirmed from the allocator side. The status of that second
+endpoint is **excluded by non-observation, not by a positive sighting**: no `0x1640` row landed in any of the
+four complete renders, and the witness's own `MmMmMm` (three mallocs, §42) corroborates the count
+independently of the ring — but under the sampling race of 46.1/46.5, absence from a raced reader is a weaker
+statement than observation, so 46.4 does not upgrade it to one.
 
 ### 46.5 The one render that must not be pooled
 

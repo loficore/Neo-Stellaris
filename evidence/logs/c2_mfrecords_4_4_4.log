@@ -156,8 +156,8 @@ allocator event, and a next poll (2 ms later) that never happened because the ch
     death therefore follows the last allocator event by roughly a fraction of a millisecond to ~2 ms.
   - Remedy that added no code and no capability: oversubscribe the CPU so the scheduler preempts the
     sequence thread inside that window. The 14 runs taken sequentially or at light concurrency produced
-    0 data-bearing renders; the oversubscribed batches (71 real child runs at 16–24-way concurrency)
-    produced 5. The instrument was never changed — only when the existing reader got a timeslice.
+    0 data-bearing renders; the oversubscribed batches (80 invocations at 16–24-way concurrency,
+    70 of them real child runs after the 10 connection resets above) produced 5. The instrument was never changed — only when the existing reader got a timeslice.
   - Every data-bearing run died with the identical 8-RVA frame set, the identical witness text, and
     returncode 3, so the concurrency that made the read possible did not change the behaviour being
     read (see also (10): the trap site re-pins to the same source line on these bytes).
