@@ -129,6 +129,16 @@ pub fn build(b: *std.Build) void {
     });
     linkQuickjs(b, c2_diag_tests.root_module);
 
+    // C4 execution-wrapper tests (native): donor vtable copy + slot[1] bridge.
+    const c2_exec_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dll/c2_exec_test.zig"),
+            .target = native,
+            .optimize = optimize,
+        }),
+    });
+    linkQuickjs(b, c2_exec_tests.root_module);
+
     // Offsets validation tests.
     const offsets_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -256,6 +266,9 @@ pub fn build(b: *std.Build) void {
     const run_c2_diag_tests = b.addRunArtifact(c2_diag_tests);
     run_c2_diag_tests.skip_foreign_checks = true;
 
+    const run_c2_exec_tests = b.addRunArtifact(c2_exec_tests);
+    run_c2_exec_tests.skip_foreign_checks = true;
+
     const run_offsets_tests = b.addRunArtifact(offsets_tests);
     run_offsets_tests.skip_foreign_checks = true;
 
@@ -283,10 +296,14 @@ pub fn build(b: *std.Build) void {
     const run_ui_button_tests = b.addRunArtifact(ui_button_tests);
     run_ui_button_tests.skip_foreign_checks = true;
 
+    const test_c2_exec_step = b.step("test-c2-exec", "Run C4 wrapper tests (native)");
+    test_c2_exec_step.dependOn(&run_c2_exec_tests.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_qjs_tests.step);
     test_step.dependOn(&run_c2_diag_tests.step);
+    test_step.dependOn(&run_c2_exec_tests.step);
     test_step.dependOn(&run_offsets_tests.step);
     test_step.dependOn(&run_detour_tests.step);
     test_step.dependOn(&run_api_gamestate_tests.step);
