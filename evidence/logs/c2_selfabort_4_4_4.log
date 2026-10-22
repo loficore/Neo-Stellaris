@@ -1,0 +1,180 @@
+# C2 self-terminating artifact (§45) — evidence
+
+# Purpose: §44 ended with a cheaper explanation than either branch of §36's fork — "the sequence
+# terminated its own host". Testing that needs NO shot and NO game: load the same DLL bytes in a
+# process this script owns and see whether it dies without being touched. If it does, every live
+# observation from §31 to §44 has been observing a self-kill, and the "environment vs engine"
+# question was framed on the wrong axis.
+# Second purpose, added when the first one came back positive: pin WHERE it dies using only the
+# file copy of the DLL (no symbols, no debug sections, no process).
+# exe identity: stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56 — NOT INVOLVED IN ANY OBSERVATION BELOW.
+# DLL under test: stellaris_quickjs.dll, sha256 863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617,
+#   deployed as C:\temp\sqjs_s43.dll (the same bytes as §42's and §44's). Verified this session:
+#   Get-FileHash C:\temp\sqjs_s43.dll → 863917F2579AE8C4472BE13BAECA4BED64DC2CCFFC7B620FDB2B016134A86617
+# Scripts: scripts/scratch/2026-10_abortexit/{dll_abort_repro.py,ubsan_site.py} (offline + child-proc
+#   probes), scripts/scratch/2026-10_threadhandle_matrix/threadhandle_matrix.py (Win32 rights matrix).
+
+## (1) exit status 3 is UCRT abort()'s signature, measured
+
+The harness reported `process exit code = 0x3` and the thread's exit code 3 in §38, §40, §42, §44.
+Before reading anything into it, measure what the C runtime does on the two ways a process can die:
+
+    ctypes.cdll.msvcrt.abort()   in a child python  → returncode 3
+    os.abort()                   in a child python  → returncode 3221226505 (0xC0000409, fastfail)
+
+So status 3 is not "some step of our sequence" and not a Windows OOM or access-violation code: it is
+the abort() exit status. `libs/quickjs/quickjs.c` calls plain `abort()` (30 sites), and build.zig:8-14
+compiles that file straight into the DLL.
+
+## (2) the standalone repro — no game, no injection, one child python
+
+    $ ssh Windows_Jiaolong "python C:\temp\dll_abort_repro.py"
+
+    [repro] dll=C:\temp\sqjs_s43.dll
+    [repro] child returncode = 3 (0x3)
+    [repro] child stdout = "BASE sqjs_s43.dll 0x7ffc138c0000\nLOGADDR 0x7ffc13f657f0\nWITNESS ''\nSANITY 42\nWITNESS 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'"
+    [repro] child stderr = "thread 7632 panic: member access within null pointer of type 'JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader')
+      ???:?:?: 0x7ffc138cbd9b in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc139aede3 in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc138debde in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc138c55f5 in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc138c43bc in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc13bdb9c8 in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc13bdcc05 in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc13d0d339 in ??? (sqjs_s43.dll)
+      … then libffi-8.dll, _ctypes.pyd, python313.dll, python.exe, KERNEL32.DLL, ntdll.dll frames"
+    (the child's stderr is one line per frame; the newlines above are formatting, and the non-DLL
+     frames are elided — all 8 in-DLL frames are listed in the RVA line below)
+    [repro] in-DLL RVAs from the panic stack: 0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44d339
+    [repro] VERDICT: the DLL terminated its own host with exit status 3 — the abort() signature, reproduced with no game involved
+
+Three things to notice:
+  - The witness text is the LIVE text, character for character: `enter heap_ok alloc_ok free_ok
+    new_rt MmMmMm`, then nothing. The child is a python interpreter with no Stellaris in it.
+  - `SANITY 42` printed first, so this is the same entry order the shot uses (gate, then sequence).
+  - The child never printed `SURVIVED rc=`. The process died inside the call, status 3.
+
+Run twice this session under different ASLR bases (0x7ffbeb710000 earlier, 0x7ffc138c0000 here); the
+in-DLL RVA set is identical both times. It is deterministic, not a race.
+
+## (3) the panic is in OUR build's QuickJS, and it is a safety trap, not a crash
+
+`member access within null pointer of type 'JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader')`
+is clang's UBSan wording. Zig links its own UBSan runtime (`lib/ubsan_rt.zig`), whose `typeMismatch`
+prints exactly `"{s} null pointer of type {s}"` for kind `member_access`, then panics; and Zig's panic
+handler aborts. `JSMallocBlockHeader` exists ONLY in `libs/quickjs/quickjs.c:270-280`, so the trip is
+inside the vendored QuickJS, in code that our build compiled with safety checks on.
+
+QuickJS 2025-09-13 (CONFIG_VERSION at quickjs.c) no longer uses the host allocator directly. It
+bundles an arena: `struct JSRuntime` begins with `JSMallocContext malloc_ctx` (quickjs.c:317-320),
+which holds its own `mf` + `malloc_state` and hands out blocks with an 8-byte header in front of every
+user pointer:
+
+    static inline JSMallocBlockHeader *js_rc(void *ptr) {          // quickjs.c:1492
+        return container_of(ptr, JSMallocBlockHeader, user_data);  // quickjs.c:1494  ⇒ ptr − 8
+    }
+
+So `JS_NewRuntime2` (quickjs.c:2067) allocates the JSRuntime through OUR `heap_malloc` once, then
+routes everything else through its own arena, calling us only for arenas and large blocks.
+
+## (4) pinning the site offline — no symbols, no debug info, no process
+
+The DLL has no symbol table and no `.debug_*` sections, so Zig's printer can only say `???`. Two
+things in the image still answer "where", and `ubsan_site.py` uses them:
+
+  * every UBSan check carries a `TypeMismatchData` record in `.rdata` holding the source file, line,
+    column and the type-descriptor name — the same strings the panic printed;
+  * `.pdata` is the x64 exception directory: `{BeginAddress, EndAddress}` per function, i.e. exact
+    function boundaries without symbols.
+
+Feeding the panic's innermost RVA (0xbd9b, absolute 0x18000bd9b at the usual image base) in:
+
+    $ python3 scripts/scratch/2026-10_abortexit/ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000bd9b
+    [ubsan_site] function holding 0x18000bd9b: rva 0xbd70..0xbdf3 (131 bytes)
+      /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:1494:12 member_access type='JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader') record_rva=0x5aa430 loaded_at=0x18000bd8c
+
+and objdump agrees at the byte level — the `lea rcx,[rip+0x59e69d]` at 0x18000bd8c computes 0x1805aa430,
+the record for **quickjs.c:1494:12, i.e. `js_rc`'s `container_of`**, and the panic address 0xbd9b is
+that call's return address minus one (Zig prints `ip−1` for a frame; the `call` occupies
+0x18000bd97..0x18000bd9c). `add rcx,0xfffffffffffffff8` a few bytes later is the `ptr − 8`.
+
+The third in-DLL frame (0x18001ebde → rva 0x1ebb0..0x1eda4) references records at
+**quickjs.c:3433:15 and 3434:8**, both on type `JSString` plus the unnamed union at quickjs.c:595.
+Reading those lines names the function without any symbol table:
+
+    static JSAtom __JS_NewAtomInit(JSRuntime *rt, const char *str, int len, int atom_type)  // 3427
+    { p = js_alloc_string_rt(rt, len, 0); if (!p) return JS_ATOM_NULL;
+      memcpy(p->u.str8, str, len); p->u.str8[len] = '\0'; ... }                             // 3433-3434
+
+`__JS_NewAtomInit` is exactly what `JS_InitAtoms` (quickjs.c:3169) runs ~504 times, and `JS_InitAtoms`
+is the first thing `JS_NewRuntime2` does after `js_malloc_init` — i.e. between allocation #3 and a
+hypothetical #4, which is where §42 parked the death.
+
+Mechanically, `js_rc` is reached with the header pointer equal to zero, which for `container_of(ptr,…)`
+means the user pointer it was handed was 8 — the value `__js_malloc` produces for `b->user_data` when
+its block header `b` is NULL (quickjs.c:1588, 1618). The `if (!p)` guard in `__JS_NewAtomInit` cannot
+catch that: 8 is not NULL. That is the shape of the defect; the reason `b` comes back NULL on Windows
+and not on Linux is not yet known.
+
+## (5) the same sequence natively, for contrast
+
+The Linux `c2_diag_tests` step (build.zig:123) runs the SAME `c2_diag_sequence` against the same
+vendored QuickJS and completes: `new_rt MmMmMmMmMmMmMmMmrt=0x2235f28`, rc=0, 8 matched allocation
+pairs and a runtime pointer. So this is not "QuickJS's arena is broken everywhere" — it is this build,
+on this platform. build.zig's own comment ("QuickJS's bundled allocator misbehaves under Zig's musl
+static libc") records that the allocator path is already target-sensitive; the tests link glibc
+dynamically for that reason.
+
+## (6) reading — what this retroactively changes
+
+  1. **§36's fork was the wrong question.** "Heap/environment side vs engine side" both assume the
+     host was alive and executing our sequence while it died. The artifact kills its own host in a
+     bare python child. Nothing about Stellaris is required to reproduce the death.
+  2. **§42's "6.9 s zero-allocation stretch inside QuickJS's own code" is void.** §44's memory series
+     releases monotonically from the first sample (8,179,876 K private → 2,156 K), which is teardown,
+     and §44's gle=5-at-80 ms says the thread was already unsuspendable. There was no long computation.
+  3. **The escalation §42 asked for is not needed.** "Seeing into that gap requires hooking QuickJS =
+     升级授权" was based on reading the gap as QuickJS-executes-without-allocating. The gap does not
+     exist, and the site is now pinned from the file copy with read-only tooling. No capability
+     escalation was performed or is required for the next step.
+  4. **`rc = 3` decoded as `bucket=intrinsic name=Date` is retracted again, now with a mechanism.**
+     §38.5 retracted it as unproven; here it is explained: 3 is abort()'s process exit status, and the
+     thread reported it because a terminated thread reports the process status.
+  5. **C2 is still blocked, but the blocker moved.** It is no longer "the host dies when our init
+     sequence runs" — it is "our build's QuickJS trips a null-header member access in its own atom-init
+     string allocation, aborts, and that abort is what the host's exit status 3 has been reporting
+     since §31". The target of the next step is our artifact, and the loop is
+     `edit → zig build → scp under a new name → python C:\temp\dll_abort_repro.py` with no game, no
+     dispatch and no shot authorization needed.
+  6. **A corollary worth naming:** the deployed DLL is a Debug build (build.zig's
+     `standardOptimizeOption(.{})` default), so Zig/clang safety checks are compiled into the code that
+     runs inside the game, and a safety trip is a host process kill. That is a property of every shot
+     so far, not of this defect alone.
+
+Honest boundaries:
+  - The repro involves NO game process, NO injection and NO dispatch; the child python is the only
+    process that died.
+  - "The user pointer was 8" is derived from what the emitted check tests (`ptr − 8 == 0`) plus the
+    source shape; the faulting value itself was never observed. The disassembled guard at 0x18000bd86
+    has an ambiguous shape (`xor eax,eax; test al,0x1; jne` ⇒ the handler call looks unconditional in
+    -O0 codegen), so I am NOT claiming clang proved nullness at compile time.
+  - Frame attribution uses `.pdata` ranges and UBSan record references, not symbol names; the
+    `__JS_NewAtomInit` identification rests on its two records being at lines 3433/3434, which is
+    strong but is a source-line match rather than a link-time name. The frame between the trap and
+    `__JS_NewAtomInit` (RVA 0xeede3 — where `js_alloc_string_rt`/`js_malloc_rt` would sit) has no
+    `.pdata` entry covering it, and that parse yields only 3,042 function entries for a 0x4c8b86-byte
+    `.text`, so absence of an entry says nothing about the code; the middle of the chain is inferred.
+  - WHY the arena's block header comes back NULL on Windows and not on Linux is open. Candidates the
+    next step should rank, none of them tested here: our `AllocHeader` vs the alignment QuickJS's arena
+    assumes; `heap_malloc`'s `size == 0` → NULL (glibc returns a unique pointer); `malloc_limit`/
+    `malloc_size` arithmetic across the `JSMallocState` we own vs the one `JS_NewRuntime2` seeds.
+  - One build, one artifact, two runs of the same child. The determinism claim covers those two runs.
+
+## (7) read-only self-attestation
+
+    - no hook/Interceptor/patchCode/writeByteArray/Memory.protect; no new capability; the DLL bytes are
+      byte-identical to §42's and were not modified.
+    - every observation here is either (a) a file copy of the DLL read offline, or (b) a child python
+      that this script spawned, loaded the DLL into itself, and died.
+    - no game process was involved; no init dispatch was made (the §44 单发射 stays spent); the Windows
+      host ran only `python` and `Get-FileHash`.

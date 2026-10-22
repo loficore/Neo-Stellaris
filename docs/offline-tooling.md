@@ -24,8 +24,10 @@ The `.i64` (705 MB) stays on Windows.
 unicorn 2.1.4). Only `emu_desc.py` needs unicorn, and its artifacts are checked in, so regenerating the oracle
 is the step that requires it — `zig build test` does not.
 
-**Host caveat**: 当前基线(2026-10-22 实测 `zig build test --summary all`)=
-`Build Summary: 22/25 steps succeeded (1 failed); 296/296 tests passed`,裁定 **P15 把这一步记为绿**。
+**Host caveat**: 当前基线(2026-10-22 复测 `zig build test --summary all`)=
+`Build Summary: 24/27 steps succeeded (1 failed); 307/307 tests passed`,裁定 **P15 把这一步记为绿**。
+更早的 `22/25 steps …; 296/296 tests passed` 是 scope 独立测试步启用**之前**的数,现在只剩历史价值
+(逐条计数与增量出处在 `docs/scope-read-points.md` 的「计数」一节)。
 那 1 个 failed 是 `exports.zig` 为 root 的 QuickJS 链接步,理由是 8 条 kernel32 undefined-symbol
 (`CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`)—— Windows API 在 Linux 上本来就没有,
 **不是代码故障**;其余 2 步是它的传递失败(没跑到)。
@@ -185,6 +187,27 @@ so it is safe against an unpaused game"。评审要复核这句话仍成立—�
 不是"capstone 错了"。第一次实机跑通记录见 `evidence/logs/fridadis_b3_4_4_4.log`,产物见
 `evidence/disasm/fridadis_live_0x1D08520.c`。同样的活从**文件**读(不需要进程/游戏)用 `scripts/cap.py`。
 
+## live 侧:§44 的只读线程状态通道
+
+`scripts/c2_init_threadstate.py` + `scripts/c2_harness.py:capture_thread_state` 是**一套**,
+两个零成本对照 `scripts/c2_control_cpuwatch.py` / `scripts/c2_control_suspendcap.py` 是它的
+判读前置。三个都不写内存、不 hook、不 `FreeLibrary`;`SuspendThread`→`GetThreadContext`→
+`ResumeThread` 的顺序由 `finally` 保证不悬空挂起。
+
+**用法**:三个都要在 Windows 侧跑,且都是 scp `c2_harness.py` + 该脚本到 `C:\temp\`(裸名 import,P5)后
+`python C:/temp/<name>.py`;`c2_init_threadstate.py` 额外要先有 §42 那份 DLL(它会核 sha256,不是那份字节就拒绝),
+两个对照不需要 DLL,只要一个正在跑的**未触碰**游戏(`c2_control_cpuwatch.py [watch_ms] [every_ms]`,默认 20 s)。
+
+**判读陷阱**:
+1. **`SuspendThread gle=5` 有两种意思,单看它无法区分**。句柄缺权限和「线程已经退出」报的是同一个
+   错误码 —— 把它们分开的是 `scripts/scratch/2026-10_threadhandle_matrix/`(4/4 格:活线程两种句柄都读得到,
+   退出线程两种句柄都 gle=5)。所以读到 gle=5 先怀疑后者,别去改 `OpenThread` 的权限位。
+2. **`pr_user_us` 一动不动,可能是仪器坏了**。用 `c2_control_cpuwatch.py` 打未触碰的游戏对照:它 20 s 前进
+   约 12.8 s user ⇒ 计数器是活的,那句「冻结」才是真的停。
+3. **线程状态通道给的是 teardown 的形状,不是执行的形状**。内存单调下降 + 80 ms 起就 suspend 不掉,
+   这个组合的意思是进程已经开始终止 —— §42 把同一种序列读成「6.9 s 零分配段在 QuickJS 代码内」,那条读法已撤回。
+4. 名字里的 `threadstate` 不是能力声明:它**只读 context 与 times**,拿不到栈,也设不了线程。
+
 ## IDA headless 现状(环境状态,非规则)
 
 **IDA MCP**: registered in `~/.qoder/settings.json` (`/home/lofibass/.local/bin/idalib-mcp --stdio --unsafe`).
@@ -198,14 +221,17 @@ The earlier `License not yet accepted, cannot run in batch mode` failure is **no
 
 ## 一次性探测脚本
 
-历次取证的一次性探针已经不在 `scripts/` 顶层,按取证批次归进三个目录,每个目录自带 README
-(逐行列出「这个文件当时在回答哪个问题」):
+历次取证的一次性探针已经不在 `scripts/` 顶层,按取证批次归进 `scripts/scratch/<年-月>_<主题>/`,
+每个目录自带 README(逐行列出「这个文件当时在回答哪个问题」):
 
 | 目录 | 内容 | 判据 |
 |---|---|---|
 | `scripts/scratch/2026-09_frida_hot_site_spies/` | `fs*.py`、`body*.py`/`body.js`、`spy*.{py,js}`、`strs*.py`、`kv*.py`、`vt.py`/`vtlive.{py,js}`、`walkdb.*`、`prologue.*`、`caller*.py`、`regfn.py`、`missstr.py`、`strdump.py` | 需要运行中的游戏 + Frida |
 | `scripts/scratch/2026-09_offline_hardcoded_oneshots/` | `callscan*.py`、`prol_exec*.py`、`rtti_check*.py`、`rtti_offline.py`、`refscan.py`、`sec.py`、`pedump.py`、`verify_base.py`、`dumpvt.py`、`vtcheck.py`、`kwmeta.py`、`cap2.py` | 只读 exe 拷贝,但**路径写死成 `D:\SteamLibrary\…`** |
 | `scripts/scratch/2026-09_frida_detour_era/` | `restoreexec.py`、`nsunload.py`、`peekexec.py`、`read_remote_mem.py` | detour 路线的善后 |
+| `scripts/scratch/2026-10_newrt_allocmap/` | `allocmap.c` | 同一份 vendored `quickjs.c` 在 Linux 上离线跑 `JS_NewRuntime2`,零游戏(§43) |
+| `scripts/scratch/2026-10_threadhandle_matrix/` | `threadhandle_matrix.py` | 需要进程,但目标是自己 spawn 的子 python —— 不碰游戏、不注入我们的 DLL(§44.3) |
+| `scripts/scratch/2026-10_abortexit/` | `dll_abort_repro.py`、`ubsan_site.py` | 前者把出货 DLL 装进自己的子进程看它会不会自杀(零游戏);后者只读 DLL 文件,用 `.pdata` + UBSan 记录做无符号符号化(§45) |
 
 它们**不作为接口维护**——可以失效,但不要在新结论上重犯它们已踩过的口径错误(见各节"陷阱"段)。
 结论已进 `evidence/` 与 `runtime_444_*.md` 三卷对应 §。

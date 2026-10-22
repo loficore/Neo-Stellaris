@@ -53,14 +53,17 @@
 
 | 文件 | 干什么 |
 |---|---|
-| `c2_harness.py` | 共享 harness：PID/base 解析、`list_exports` 重解析 RVA（P10）、`inject_dll`、`remote_alloc`、`call_remote*`、`dispatch_watching_buffer`（调用进行中同时轮询输出 buffer、`g_diag_log` 见证静态、psutil 内存采样；§38/§39） |
+| `c2_harness.py` | 共享 harness：PID/base 解析、`list_exports` 重解析 RVA（P10）、`pe_image_size` 读 SizeOfImage（§44 的模块地址区间上界）、`inject_dll`、`remote_alloc`、`call_remote*`、`dispatch_watching_buffer`（调用进行中同时轮询输出 buffer、`g_diag_log` 见证静态、psutil 内存采样，§38/§39；§44 加 `thread_probe` 通道 = 只交句柄、不碰内存、不加 dispatch）、`capture_thread_state`（§44 只读线程状态：`GetThreadTimes`/`GetProcessTimes` + `SuspendThread`→`GetThreadContext`→`ResumeThread`，`finally` 保证不悬空挂起） |
 | `c2_task2_load.py` | Task 2：证明 harness 在实机读到真正的 64-bit DLL base |
 | `c2_task3_diag.py` | Task 3：从实机抓 `JS_NewContext` 失败的**步骤编号**（只观测，修是 Task 4 的事） |
 | `c2_task5_init.py` | Task 5：证明实机 `C2Init` 返回 0 且 `g_test_rt`/`g_test_ctx` 真存在；四观测通道的接线处 |
 | `c2_task6_e2e.py` | Task 6（验收门）：`1+1` 走 DLL 自己的 `JS_Eval` 并读回结果 |
 | `c2_control_watch.py` | §39 对照：注入 + `C2Sanity` + 20 s 纯观测，**不做 init dispatch** |
 | `c2_control_sleep.py` | §39 判别器：只执行 `kernel32!Sleep(8000)` 的长远程线程，不碰我们一个字节（先 `Sleep(1000)` 校准） |
-| `test_c2_harness.py` | 上述全部的主机侧测试：Linux 上跑，无游戏、无 Windows API（86 passed） |
+| `c2_control_cpuwatch.py` | §44.3 对照：**零 DLL、零注入、零 dispatch、不开线程句柄**，只用 `psutil.Process.cpu_times()`（底下就是 `GetProcessTimes`）+ 线程数，对一个未触碰的游戏按 tick 采样（默认 20 s，可带 `[watch_ms] [every_ms]`）。判据是「被杀进程那 2.1 s 里 `pr_user_us` 一动都不动」到底是真停了、还是计数器死了（实测：未触碰游戏 20,119.7 ms 内 user 前进 12,828,125 µs，120 线程 ⇒ 那是真停） |
+| `c2_control_suspendcap.py` | §44.3 对照：把 `capture_thread_state` 这条只读路径用到**游戏自己的线程**上，量本机 session 到底能不能 suspend + 读 context（实测 12/12 读到 `Rip`、`suspend_denied_gle5=0/12` ⇒ 仪器没问题，§44 的 gle=5 不是权限缺失） |
+| `c2_init_threadstate.py` | §44 判别器：§42 那 6.9 s 冻结窗口里，我们自己的远程线程是在**跑**还是在**等**——`Rip` 落在 DLL 区间内 + 线程 CPU 时间推进 ⇒ 跑；`Rip` 在区间外 + CPU 平坦 ⇒ 等。先核 DLL sha256 等于 §42 那一枪的字节（不同产物就拒绝），门序照抄 `c2_task5_init.py` |
+| `test_c2_harness.py` | 上述全部的主机侧测试：Linux 上跑，无游戏、无 Windows API（131 passed —— §44 的 `CONTEXT` 偏移/尺寸与 `capture_thread_state` 调用次序假 kernel32 测试,加上 §44.3 两个对照工具的判读函数:`c2_control_cpuwatch` 的 CPU 前进量口径、`c2_control_suspendcap` 的 capable/incapable/partial 三分） |
 
 ## Frida 通道（保留在顶层，因为仍被引用）
 
@@ -81,6 +84,9 @@
 | `scratch/2026-09_frida_hot_site_spies/` | 44 个：热路径站点/Frida 采样与反汇编，结论在 §10–§19 |
 | `scratch/2026-09_offline_hardcoded_oneshots/` | 16 个：读 exe 但路径写死（`D:\SteamLibrary...`）的离线一次性扫描 |
 | `scratch/2026-09_frida_detour_era/` | 4 个：detour 路线的善后（还原 prologue / FreeLibrary / 读 live 字节） |
+| `scratch/2026-10_newrt_allocmap/` | 1 个：§43 的离线分配地图 —— 同一份 vendored `quickjs.c` 在 Linux 上跑完 `JS_NewRuntime2`，把每次分配的序 + size + 行号打出来 |
+| `scratch/2026-10_threadhandle_matrix/` | 1 个：§44.3 的 2×2 句柄矩阵（created/opened × alive/exited），把 `SuspendThread gle=5` 钉到「线程已退出」而不是「句柄没权限」 |
+| `scratch/2026-10_abortexit/` | 2 个：§45 的自杀判别器（子进程里 `ctypes.WinDLL` 装出货字节，无游戏复现 exit 3 + 逐字相同的 witness）与离线符号化器（`.pdata` 区间 + UBSan `TypeMismatchData` 记录 → 源文件行号） |
 
 basename **保留原样** —— `evidence/` 三卷与 `evidence/logs/` 按 basename 记录出处，改名等于让取证记录
 指向不存在的文件。

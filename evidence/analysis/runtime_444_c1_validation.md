@@ -2412,3 +2412,197 @@ basename kept, one-time probe), `JS_NewRuntime2` mallocs #0–#9 mapped to `quic
 sample — read-only but a new kind, needs 点名) that pre-empts the premature "hook QuickJS" escalation, 0 code
 change to the shipped DLL, 0 new Zig test, 0 new export.
 
+
+## 44. The authorized thread-state shot: no Rip was ever available because the process was already terminating (2026-10-22, live, 单发射)
+
+Transcript: `evidence/logs/c2_threadstate_4_4_4.log`. Authorization, in the human partner's words:
+"授权开线程状态观测这一枪(单发射,只读 GetThreadContext/GetProcessTimes,不 hook、不改内存)". §43 named
+this observation and said it needed 点名 before a live shot; the nod came, one dispatch was spent, and the
+单发射 is now consumed — any further killed init dispatch needs a fresh 点名.
+
+The DLL bytes did not change: sha256 `863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617`,
+§42's artifact, redeployed under a new name (`C:\temp\sqjs_s43.dll`, ruling P12) with local == remote
+verified. Everything new is in the driver (`scripts/c2_harness.py`: `dispatch_watching_buffer(...,
+thread_probe=)` and `capture_thread_state`), which per tick reads `GetThreadTimes` + `GetProcessTimes`,
+then `SuspendThread` → `GetThreadContext` → `ResumeThread` (resume only if suspend succeeded; nothing
+raises; no writes of any kind).
+
+### 44.1 The witness is §42's, character for character
+
+    witness g_diag_log: oks=133 fails=73 text='enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+    readable at 80.4 ms, unreadable at 2016.3 ms (gle=299), handle signalled at 2232.3 ms
+    rc = 3, process exit code = 0x3, thread_returned_while_alive=False, WARNING (rc not a step code)
+    buffer log = '' , on-disk log = ''
+
+Three allocations, each entered and each returned a block, no dangling `M`, no `rt=`. The allocation
+channel is saturated: it cannot say anything new, which is exactly why §43 asked for a different channel.
+
+### 44.2 What the thread channel returned
+
+22 captures, **0** with a readable `Rip`, every one carrying `err=SuspendThread gle=5` — including the
+first, at 80.3 ms, i.e. the same tick in which the witness static first became readable. The two
+counter columns behaved differently and are the actual result:
+
+  - `pr_user_us` = 42,218,750 in **all 22 samples**. The process accrued zero user CPU for 2.1 s.
+  - `th_user_us` = 0 in all 22, while `th_kernel_us` moved 0 → 15,625 → 125,000 → 218,750 µs. All the
+    CPU movement in the whole process belongs to our remote thread, and all of it is kernel time.
+
+Memory over the same window releases monotonically from the first sample: private 8,179,876 K → 2,156 K,
+rss 3,210,344 K → 18,812 K, with no upward excursion anywhere. §39's teardown shape, from t = 0.
+
+The driver's own verdict line was `VERDICT inconclusive: 0 of 22 captures yielded a readable Rip`, and
+that is correct as a statement about the *design question* ("running vs blocked"). The series still
+answers a question, just not that one.
+
+### 44.3 Two controls, both zero-cost, plus a rights matrix
+
+`SuspendThread gle=5` and "frozen user CPU" are each ambiguous: instrument failure or real stop. Both
+were separated with observations that involve **no DLL, no injection, no dispatch**, against a freshly
+launched untouched game (pid 3160):
+
+  - `scripts/c2_control_cpuwatch.py` — 80 samples over 20,119.7 ms: user advanced **12,828,125 µs**,
+    system 375,000 µs, 120 threads. VERDICT: an untouched game does accrue user CPU, so §44's frozen
+    `pr_user_us` is a real stop, not idleness and not a dead counter.
+  - `scripts/c2_control_suspendcap.py` — the same `OpenThread` + `capture_thread_state` path applied to
+    12 of the game's own threads: **readable_rip=12/12, suspend_denied_gle5=0/12, openthread_failed=0/12**,
+    host still running. The instrument works.
+  - `scripts/scratch/2026-10_threadhandle_matrix/threadhandle_matrix.py` — a 2×2 matrix (created handle
+    vs opened handle) × (thread alive vs exited) on a child running `kernel32!Sleep(8000)`: a live thread
+    suspends and reads fine either way; an **exited** thread fails `SuspendThread` with
+    `ERROR_ACCESS_DENIED (5)` whichever handle was used. gle=5 is therefore not a rights problem with
+    our handle — it is the signature of a thread that can no longer be suspended.
+
+### 44.4 Reading
+
+A thread that cannot be suspended at t = 80 ms, in a process whose user CPU does not move by one
+microsecond for 2.1 s and whose memory only ever decreases, is a thread in a process that **has already
+begun terminating**. The ~2.2 s we were watching was not QuickJS thinking; it was teardown, and the death
+had already happened by the first sample. §42's "~6.9 s zero-allocation stretch inside QuickJS's own
+code" reads the same kind of series as execution; it is not.
+
+That also collapses §36's fork. "Heap/environment side vs engine side" both presuppose a live host
+executing our sequence while it died. §43's third branch — "the thread is already terminated while the
+process lives → the stall is host-driven" — is the one the data picked, and even that was too generous:
+§45 shows the termination was ours, not the host's.
+
+Boundaries: rc=3 remains the process exit code, not a step code (§38.5 stands; `bucket=intrinsic
+name=Date` means nothing); "already terminating at 80 ms" is an inference from three separately
+controlled signals, not an observation of the termination moment; 22 samples of one thread in one shot;
+the 单发射 is spent.
+
+**Counts for §44**: 1 dispatch (the authorized 单发射, pid 13804 killed, now spent), 0 DLL change (§42's
+bytes, local == remote verified), 1 new driver-side observation kind (`GetThreadContext` +
+`GetThreadTimes`/`GetProcessTimes`, read-only, no new capability), 22 thread captures with 0 readable Rips
+and 22/22 `SuspendThread gle=5`, 1 process-wide user-CPU delta of exactly 0 µs across 2.1 s, 1 memory
+series monotonic from 8,179,876 K private → 2,156 K, 2 zero-cost controls (cpuwatch: untouched game
+advances 12,828,125 µs user over 20,119.7 ms; suspendcap: 12/12 readable Rips on the game's own threads),
+1 Win32 rights matrix pinning `SuspendThread gle=5` to "thread exited" (4/4 cells), 1 new public harness
+helper pair (`open_process_handle`/`open_thread_handle` + `close_handle`), 11 new
+`scripts/test_c2_harness.py` tests (131 passed), 0 code change to the shipped DLL, 0 new export.
+
+## 45. The artifact terminates its own host — exit 3 is `abort()`, and the trap pins offline to `js_rc` (quickjs.c:1494) inside `__JS_NewAtomInit` (2026-10-22, no dispatch, no game)
+
+Transcript: `evidence/logs/c2_selfabort_4_4_4.log`. §44 ended with a hypothesis that costs nothing to
+test and needs no authorization: **load the same DLL bytes in a process this script owns and see whether
+it dies without being touched.**
+
+### 45.1 Status 3 is the abort() signature
+
+Measured in child pythons on the Windows host: `ctypes.cdll.msvcrt.abort()` → returncode **3**, while
+`os.abort()` → 3221226505 (0xC0000409, fastfail). So the `0x3` that §38, §40, §42 and §44 all reported is
+the UCRT `abort()` exit status. `libs/quickjs/quickjs.c` calls plain `abort()` in 30 places and
+`build.zig:8-14` compiles that file into the DLL, where Zig's own UBSan/panic runtime converts a safety
+trip into exactly that.
+
+### 45.2 The repro
+
+    $ ssh Windows_Jiaolong "python C:\temp\dll_abort_repro.py"
+    [repro] child returncode = 3 (0x3)
+    [repro] child stdout = "BASE sqjs_s43.dll 0x7ffc138c0000 … SANITY 42 … WITNESS 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'"
+    [repro] child stderr = "thread 7632 panic: member access within null pointer of type 'JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader')" + 8 in-DLL frames
+    [repro] VERDICT: the DLL terminated its own host with exit status 3 — the abort() signature, reproduced with no game involved
+
+No Stellaris. No injection. No dispatch. The witness text is the live text verbatim, `SURVIVED rc=` never
+prints, and two runs under different ASLR bases (0x7ffbeb710000, 0x7ffc138c0000) produce an identical
+in-DLL RVA set: `0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44d339`. Deterministic.
+
+### 45.3 Pinning the site without symbols, without debug info, without a process
+
+The DLL has no symbol table and no `.debug_*` sections, so Zig's panic printer can only say `???`. Two
+artifacts inside the image still answer "where", and `scripts/scratch/2026-10_abortexit/ubsan_site.py`
+reads both: every UBSan check carries a `TypeMismatchData` record in `.rdata` with its **source file,
+line, column and type-descriptor name** (the same strings the panic printed), and `.pdata` is the x64
+exception directory — `{BeginAddress, EndAddress}` per function, i.e. exact boundaries without names.
+
+    $ python3 scripts/scratch/2026-10_abortexit/ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000bd9b
+    [ubsan_site] function holding 0x18000bd9b: rva 0xbd70..0xbdf3 (131 bytes)
+      libs/quickjs/quickjs.c:1494:12 member_access type='JSMallocBlockHeader' … record_rva=0x5aa430 loaded_at=0x18000bd8c
+
+objdump agrees byte-for-byte: the `lea rcx,[rip+0x59e69d]` at 0x18000bd8c computes that record, the
+following `call` ends at 0x18000bd9c (Zig prints `ip−1`, hence 0xbd9b), and `add rcx,0xfffffffffffffff8`
+is the `ptr − 8`. So the trip is **quickjs.c:1494**, `js_rc`'s `container_of`, in the 131-byte function
+holding it. The third frame resolves to a 500-byte function whose own records are at quickjs.c:3433/3434
+on type `JSString` — reading those lines names it: `__JS_NewAtomInit` (quickjs.c:3427), the atom-string
+allocator that `JS_InitAtoms` runs ~504 times, which is the *first* thing `JS_NewRuntime2` (quickjs.c:2067)
+does after `js_malloc_init`. **§43's offline narrowing — "first `__JS_NewAtomInit` iteration, `:3430`→`:3330`"
+— lands on the same function this symbolization resolves from the binary.** Two independent routes, one site.
+
+The mechanism: QuickJS 2025-09-13 no longer uses the host allocator directly. `struct JSRuntime` begins
+with `JSMallocContext malloc_ctx` (quickjs.c:317), its own arena holding its own `mf`/`malloc_state`, and
+every refcounted object carries an 8-byte header in front of the user pointer, recovered by
+`js_rc(ptr) = ptr − 8`. The check that fired tests the *header* pointer, so the user pointer handed to
+`js_rc` was **8** — the value `__js_malloc` returns for `b->user_data` when its block header `b` is NULL
+(quickjs.c:1588, 1618). `__JS_NewAtomInit`'s `if (!p)` guard cannot catch that: 8 is not NULL. This also
+explains the allocation witness: `JS_NewRuntime2` calls our `heap_malloc` once for the JSRuntime and then
+only for arenas and large blocks, so `MmMmMm` is three arena-phase allocations while the ~504 atom
+strings never reach us at all.
+
+### 45.4 What this retroactively changes
+
+  1. **§36's fork was the wrong axis.** Neither "our allocator/`HeapAlloc` failed to return" nor "QuickJS's
+     own code died in a live host" — the artifact aborts its own process. Nothing about `stellaris.exe` is
+     needed to reproduce the death.
+  2. **§42's 6.9 s engine-side stretch is void** (§44's memory series and gle=5-at-80 ms already said so):
+     that window was teardown, not computation.
+  3. **The 升级授权 §42 asked for is not needed.** "Seeing into that gap requires hooking QuickJS" was
+     premised on a gap that does not exist. The site came from a file copy with read-only tooling. No hook
+     was performed, and none is warranted by the next step.
+  4. **`rc=3 → bucket=intrinsic name=Date` is retracted with a mechanism**, not merely flagged unproven as
+     in §38.5.
+  5. **C2 stays blocked, but the blocker moved** from "the host dies when our init sequence runs" to "our
+     build's QuickJS trips a null-header member access in its own atom-init path and aborts". Everything
+     §31–§43 measured inside the game was observing that abort, which is why it looked host-shaped.
+  6. **The fix loop is now offline**: edit → `zig build` → scp under a new filename → `python
+     C:\temp\dll_abort_repro.py`, no game, no dispatch, no 点名. Corollary worth stating: the deployed DLL
+     is a **Debug** build (`build.zig`'s `standardOptimizeOption(.{})` default), so clang/Zig safety checks
+     are compiled into the code that runs inside the host and any trip is a host kill. That property holds
+     for every shot so far, independent of this defect.
+
+### 45.5 Ranked open question
+
+Why does the arena's block header come back NULL on Windows and not on Linux, where the same sequence
+completes with 8 matched `Mm` pairs and `rt=`? Untested candidates, in the order the next offline step
+should rank them: (a) our `AllocHeader` giving QuickJS an alignment the arena's `blocks[]` arithmetic
+assumes it need not re-derive; (b) `heap_malloc`'s `size == 0 → NULL` against glibc's unique non-NULL
+pointer (Linux never returns NULL there); (c) `malloc_limit`/`malloc_size` arithmetic split between the
+`JSMallocState` we own and the one `JS_NewRuntime2` seeds locally (quickjs.c:2070-2076). (b) is the
+cheapest to test and the only one where our own code deviates from C semantics.
+
+Boundaries: the faulting pointer value was never observed — "8" is derived from what the emitted check
+tests (`ptr − 8 == 0`) plus the source shape; the guard at 0x18000bd86 has an ambiguous `-O0` shape
+(`xor eax,eax; test al,0x1; jne`), so no claim is made that clang proved nullness at compile time; frame
+attribution is `.pdata` ranges plus record references, not link-time names, and the middle frame
+(RVA 0xeede3, where `js_alloc_string_rt`/`js_malloc_rt` would sit) resolves to no entry — that parse
+yields only 3,042 entries for a 0x4c8b86-byte `.text`, so absence proves nothing; the determinism claim
+covers two runs of one artifact.
+
+**Counts for §45**: 0 dispatch, 0 game process involved, 0 capability escalation (no hook, no patchCode,
+0 DLL bytes changed — §42's artifact reused), 1 abort-status measurement (msvcrt `abort()` → 3,
+`os.abort()` → 0xC0000409), 1 standalone child-process repro reproducing the live witness verbatim and
+dying with status 3, determinism checked across 2 ASLR bases with an identical 8-RVA frame set, 1 new
+offline probe (`ubsan_site.py`: `.pdata` ranges + UBSan `TypeMismatchData` records → 141 sites for
+`JSMallocBlockHeader`, trap resolved to quickjs.c:1494:12 in a 131-byte function, frame 3 resolved to
+`__JS_NewAtomInit` via quickjs.c:3433/3434), 1 §43→§45 independent-route agreement on the same function,
+4 §36–§44 conclusions voided or retracted (fork axis, 6.9 s stretch, hook-QuickJS escalation, rc=3 decode),
+1 roadmap consequence (C2 blocked on our artifact, offline-iterable), 3 named untested candidates for the
+why, 0 code change to the shipped DLL, 0 new Zig test, 0 new export.
