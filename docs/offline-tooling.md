@@ -24,10 +24,16 @@ The `.i64` (705 MB) stays on Windows.
 unicorn 2.1.4). Only `emu_desc.py` needs unicorn, and its artifacts are checked in, so regenerating the oracle
 is the step that requires it — `zig build test` does not.
 
-**Host caveat**: two `zig build test` steps that link QuickJS cannot start here
-(`/lib64/libm.so.6: version GLIBC_2.35 not found`). Pre-existing toolchain mismatch, not a code failure;
-every compiling test passes — 当前基线 `Build Summary: 22/25 steps succeeded (1 failed); 296/296 tests passed`
-(2026-10 实测)。历史计数:`293/293`,until `effects/id_mapper.zig` and its 21 tests were retired,
+**Host caveat**: 当前基线(2026-10-22 实测 `zig build test --summary all`)=
+`Build Summary: 22/25 steps succeeded (1 failed); 296/296 tests passed`,裁定 **P15 把这一步记为绿**。
+那 1 个 failed 是 `exports.zig` 为 root 的 QuickJS 链接步,理由是 8 条 kernel32 undefined-symbol
+(`CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`)—— Windows API 在 Linux 上本来就没有,
+**不是代码故障**;其余 2 步是它的传递失败(没跑到)。
+旧的 GLIBC 措辞已**被实测作废**,不要再当现时约束引用:那一版说「两个链接 QuickJS 的步在这里根本启动不了
+(`/lib64/libm.so.6: version GLIBC_2.35 not found`)」,而 2026-10-22 这次运行**没有** GLIBC 那条,QuickJS
+的 C 是能编的、失败发生在链接符号解析。别把两个理由混成一个;GLIBC 的旧叙述留在
+`evidence/analysis/build_pipeline_status.md` 与 `zig_test_coverage.md`(不可变,不改写)。
+历史计数:`293/293`,until `effects/id_mapper.zig` and its 21 tests were retired,
 then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不要拿这两个旧数当现在的门限。
 
 ## 基础:PE + capstone,不需要 IDA

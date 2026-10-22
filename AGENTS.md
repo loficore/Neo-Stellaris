@@ -87,7 +87,7 @@ All analysis artifacts go to `evidence/` at project root:
 也不能下沉一级目录。
 
 **这一节里可机械判定的部分现在是机器判据**,由 `python3 -m pytest scripts/test_scripts_layout.py -q` 执行;
-七条规则各是一个纯函数。`R-env` **`violates_env_var`** 只管**从磁盘读 `stellaris.exe`** 的脚本 —— 判据是行为
+八条规则各是一个纯函数。`R-env` **`violates_env_var`** 只管**从磁盘读 `stellaris.exe`** 的脚本 —— 判据是行为
 (带 `CreateRemoteThread` 的实机脚本被排除),不看族名;缺的是 `NS_STELLARIS_EXE` 候选而非绝对路径本身,
 候选链旁边的 `D:\SteamLibrary\…` fallback(现 5 个)**是合规的,不是缺陷**。
 `R-pair` **`violates_pairing`** 只扫顶层,`scratch/` 里 `body.js` 那种历史孤儿由它自己的 README 解释。
@@ -100,6 +100,9 @@ All analysis artifacts go to `evidence/` at project root:
 `R-roadmap` **`violates_roadmap_shape`** 管 `docs/roadmap.md` 这个尺寸与指针:≤140 行、不许写私有计划目录的路径、
 阶段状态表**按状态**必填出处(`blocked`/`in-progress` 要卷名 + §,`planned` 要计划文件名,`done` 两者之一)——
 这是「状态表不会再长回一份叙述性计划」的唯一机械防线。
+`R-header` **`violates_missing_roadmap_header`** 是 `R-roadmap` 的同伴:`R-roadmap` 靠那五个列名定位状态表,
+所以**改掉一个列名**会让它找不到表、静默解除所有按行检查而真树测试照样绿 —— 这条规则只钉「存在一行同时带齐
+五个列名」,让降级表头这件事必须响。
 **加豁免 = 把文件名写进那条规则函数的 docstring,不是 `xfail`** —— `xfail` 会藏掉这座围栏就是为了防的漂移,
 所以连 P10 都不给豁免。反过来,改名要写文档、每个维护中的工具在 `docs/offline-tooling.md` 有一节 —— 这两条
 **不在围栏里**(改名留下的死引用只被 `R-refs` 兜住一半:它只看 living docs,不看 `evidence/`),仍然只有人在读。

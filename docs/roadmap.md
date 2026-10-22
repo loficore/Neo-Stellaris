@@ -3,7 +3,8 @@
 本文件是那份 449 行叙述性计划的归位结果:**只放状态、门、指针**。论证一律在 `evidence/analysis/runtime_444_*.md`
 三卷里(§1–§15 `structures`、§16–§23 `pipeline`、§24–§37 `c1_validation`),这里一个都不重复。
 细计划不进 git,所以本表只写它们的**文件名**:要状态与前置看这里,要步骤得在私有 plans 目录里按名字找。
-防再膨胀的机械判据是 `scripts/test_scripts_layout.py` 的 `violates_roadmap_shape`(≤140 行、状态词表、按状态必填出处)。
+防再膨胀的机械判据是 `scripts/test_scripts_layout.py` 的 `violates_roadmap_shape`(≤140 行、状态词表、按状态必填出处)
+与它的同伴 `violates_missing_roadmap_header`(钉住那张状态表的表头确实带齐五个列名 —— 否则前者找不到表,按行检查会静默失效)。
 
 ## 1. 目标与判据
 
