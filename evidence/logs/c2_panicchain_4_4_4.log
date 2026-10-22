@@ -614,3 +614,44 @@ Nothing in `src/`, `build.zig`, or `libs/quickjs/` was touched, and the artifact
       existing `dll_ubsan_site.py` section). §45's text and §46's text are untouched; where this log
       corrects §45's prose claim that `0xeede3` had no `.pdata` entry, the correction is made in (4)/(4a)
       against §45's own artifact, and §47 will carry the accounting.
+
+## (10) judgment table: (i), (ii) and (iii) are inapplicable — the fourth row lands, with a mechanism
+
+Artifact read: `zig-out/bin/stellaris_quickjs.dll`, sha256
+`77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0`, file copy, image base
+`0x180000000`. Zero dispatch, zero game, zero Windows channel, zero build, zero byte changed.
+
+The three rows the plan expected, tested against the 131-byte `js_rc` body (rva `0xbd70..0xbdf3`,
+40 insns):
+
+- **(i) does not hold.** (i) needs the zero test to follow `sub 8` and to test its result. The
+  aborting report is `call 0x180498170` at `0xbd97`, which runs **before** `add rcx,-8` at `0xbdab`;
+  its pointer operand is `edx`, zeroed by `xor eax,eax` at `0xbd93` and `mov edx,eax` at `0xbd95`.
+  The operand is the literal 0, not a header. The post-subtraction test (`setne r9b` at `0xbdbb`,
+  `test al,1` at `0xbdd1`) feeds the second handler at `0xbde4` (`0x180499cc0`, record `0x5ab450`),
+  which this run never reaches.
+- **(ii) does not hold.** (ii) needs the zero test to precede `sub 8` and to test `str` in the
+  aborting path. A pre-subtraction `test r8,r8` does exist at `0xbda0`, but it belongs to the
+  `0xbde4` pointer-overflow path (`0xbdd1`/`0xbdd3` branch); the aborting operand at `0xbd97` is 0
+  whatever `str` is. The check at `0xbd97` is a third check, on neither quantity.
+- **(iii) does not hold.** (iii) needs the test and the subtraction in different basic blocks, or a
+  thunk. `0xbd86..0xbde4` is one straight-line block; the function's own record `0x5ab430` carries
+  `quickjs.c:1494:12`, so the 131 bytes are `js_rc`'s body, not a thunk.
+
+**Fourth row: lands — as a mechanism, not as "offline disassembly cannot judge".** Mechanism
+one-liner: `libs/quickjs/cutils.h:43-44`'s fallback `offsetof` (`&((type *)0)->field`) puts a
+compile-time null member access inside `container_of` (`quickjs.c:1494`); clang instruments the
+access, so the `0xbd97` call reports the constant 0 unconditionally (`xor eax,eax` at `0xbd86`,
+`test al,1` at `0xbd88`, `jne 0xbd9c` at `0xbd8a` is a constant-false guard), Zig prints `member
+access within null pointer of type 'JSMallocBlockHeader'` and aborts, exit status 3. The first
+`js_rc` call is `js_alloc_string_rt`'s at `0xeeddf` (returns to `0xeede4`, printed `0xeede3`;
+`quickjs.c:2361`), inside `JS_InitAtoms`' first `__JS_NewAtomInit`.
+
+Consequence: the trip is independent of runtime pointer values. §45's inference "the user pointer
+was 8" is **withdrawn**; `str`'s value and source remain unobserved, so §46's unobserved half
+stands. §46's 13 `Mx` rows remain valid callback observations but lose their discriminating power;
+an allocator fix would have been the wrong target. Task 4 is not qualified by this evidence. The
+choice among repair options — (a) make `offsetof` well-defined (`__builtin_offsetof` /
+`<stddef.h>`), (b) exclude `libs/quickjs` from UBSan null checks, (c) non-aborting Zig handler under
+separate authorization — belongs to the human. None was implemented. Full write-up:
+`evidence/analysis/runtime_444_c1_validation.md` §47.
