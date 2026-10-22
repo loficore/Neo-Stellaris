@@ -1,19 +1,24 @@
 """Contract tests for ``scripts/pe_disrva.py`` — the offline disassembler for
 **our own** PE artifact (not the game exe).
 
-The subject is the shipping ``zig-out/bin/stellaris_quickjs.dll``. §45 pinned the
-UBSan trap to ``quickjs.c:1494`` (``js_rc`` -> ``container_of``) inside the 131-byte
-function at ``rva 0xbd70..0xbdf3`` (end exclusive, per ``.pdata``); §47 needs a
-disassembly of those bytes to decide whether the null check tests the pointer
-before or after the ``-8``. These five tests pin the tool's surface — a range with
-a subtract-8 and a zero test, rip annotations, exit 2 for bad invocations, exit 1
-(not 0) for a range that is not code, and exit 2 for a truncated image whose
-section table claims bytes past EOF.
+The subject is the shipping ``zig-out/bin/stellaris_quickjs.dll``. §47 disassembled the
+UBSan trap at ``quickjs.c:1494`` (``js_rc`` -> ``container_of``), a 131-byte function at
+``rva 0xbd70..0xbdf3`` in the artifact of that section. §48 removed the
+``TypeMismatchData`` record that anchored that listing, so the old span is dead bytes
+now; what remains at the same source location is the ``PointerOverflowData`` record for
+the ``ptr - offsetof(...)`` arithmetic, and the function that loads it is still ``js_rc``.
+These tests derive the span from the artifact itself — record -> LEA site -> ``.pdata``
+range — so a rebuild moves the range instead of breaking the tests. They pin the tool's
+surface: a range with a subtract-8 and a zero test, rip annotations that resolve to real
+RVAs, exit 2 for bad invocations, exit 1 (not 0) for a range that is not code, and exit 2
+for a truncated image whose section table claims bytes past EOF.
 
-Everything runs as a subprocess against the built artifact: no game, no process
-to attach to, no Windows channel.
+Everything runs as a subprocess against the built artifact: no game, no process to
+attach to, no Windows channel.
 """
+import functools
 import re
+import struct
 import subprocess
 import sys
 import pathlib
@@ -22,16 +27,50 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 TOOL = REPO / "scripts" / "pe_disrva.py"
 DLL = REPO / "zig-out" / "bin" / "stellaris_quickjs.dll"
 
-# The annotation test cross-checks against the *other* offline reader of this same
-# artifact: record_rva values and .pdata function starts. Imported here, in the
+# The tests cross-check against the *other* offline reader of this same artifact:
+# record locations, LEA sites and .pdata function starts. Imported here, in the
 # test, so pe_disrva.py itself stays a single-file tool.
 sys.path.insert(0, str(REPO / "scripts"))
 import dll_ubsan_site  # noqa: E402
 
-# 131 bytes from .pdata (begin inclusive, end exclusive). The tool must print the
-# same byte count so "end exclusive" cannot silently become "end inclusive".
-TRAP_START, TRAP_END = "0xbd70", "0xbdf3"
-TRAP_BYTES = int(TRAP_END, 16) - int(TRAP_START, 16)
+
+@functools.lru_cache(maxsize=1)
+def trap_span():
+    """((begin, end), record_rva) — ``js_rc``'s .pdata span and the record it loads.
+
+    Anchored on the ``quickjs.c:1494:12`` SourceLocation rather than a fixed RVA. The
+    old anchor (a ``TypeMismatchData`` record at that location) was removed by §48;
+    the pointer-overflow record for the same expression remains and is still loaded by
+    the first ``lea rcx,[rip+…]`` in ``js_rc``. Finding the loading function goes
+    through .pdata, so the span is whatever this build emitted.
+    """
+    data = DLL.read_bytes()
+    image_base, secs = dll_ubsan_site.parse(data)
+    off_of, _ = dll_ubsan_site.make_maps(secs)
+    records = set()
+    for name, s_rva, _vsize, raw_size, raw_off in secs:
+        if name == ".text" or not raw_size:
+            continue
+        blob = data[raw_off:raw_off + raw_size]
+        for off in range(0, len(blob) - 16, 8):
+            ptr, line, col = struct.unpack_from("<QII", blob, off)
+            if line != 1494 or col != 12:
+                continue
+            where = dll_ubsan_site.cstring(data, off_of(ptr - image_base))
+            if where.endswith("quickjs.c"):
+                records.add(s_rva + off)
+    assert len(records) == 1, sorted(records)
+    record = records.pop()
+    name, text_rva, text_vsize, _raw_size, _raw_off = next(
+        s for s in secs if s[0] == ".text")
+    hits = dll_ubsan_site.lea_record_targets(
+        data, secs, text_rva, text_rva + text_vsize, {record})
+    assert record in hits, f"no code loads the {record:#x} record"
+    code_rva = min(hits[record])
+    span = next(((b, e) for b, e in dll_ubsan_site.runtime_functions(data, secs)
+                 if b <= code_rva < e), None)
+    assert span, f"rva {code_rva:#x} is not inside any .pdata function entry"
+    return span, record
 
 
 def _run(argv):
@@ -76,31 +115,32 @@ def _has_zero_test(out):
 
 
 def test_disasm_finds_the_sub_and_the_null_check_in_the_trap_function():
-    # 0xbd70..0xbdf3 里必须能数出:至少一条把某寄存器减 8 的指令,
-    # 以及一条 test/cmp 对 0 的判零;两者都反汇编自同一段字节。
-    out = _disasm(TRAP_START, TRAP_END)
+    # The derived js_rc body must still show: at least one instruction subtracting 8
+    # from some register, and a test/cmp against zero — both from the same bytes.
+    (start, end), _record = trap_span()
+    out = _disasm(hex(start), hex(end))
     assert _has_sub8(out) and _has_zero_test(out)
     # The ruler's byte accounting: printed count == end - start (exclusive end).
-    assert f"{TRAP_BYTES} bytes" in out
+    assert f"{end - start} bytes" in out
 
 
 def test_rip_relative_operands_are_annotated_with_resolved_rvas():
     # Two independent witnesses from the artifact on disk, both derived (never
     # pinned), so this survives a re-link:
-    #   (a) at least one `#0x…` equals a UBSan record_rva that dll_ubsan_site's
-    #       own scan yields for these bytes;
+    #   (a) at least one `#0x…` equals the quickjs.c:1494:12 record that the
+    #       function's `lea` loads — §48 made it a PointerOverflowData, which the
+    #       maintained reader does not decode, so the test finds it directly;
     #   (b) at least one `#0x…` equals a .pdata function start (the handler call
-    #       targets in this function).
+    #       target in this function).
+    (start, end), record = trap_span()
     data = DLL.read_bytes()
-    image_base, secs = dll_ubsan_site.parse(data)
-    record_rvas = {rva for rva, *_rest in
-                   dll_ubsan_site.iter_records(data, image_base, secs)}
+    _image_base, secs = dll_ubsan_site.parse(data)
     function_starts = {begin for begin, _end in
                        dll_ubsan_site.runtime_functions(data, secs)}
-    out = _disasm(TRAP_START, TRAP_END)
+    out = _disasm(hex(start), hex(end))
     annotated = {int(m, 16) for m in re.findall(r"#0x([0-9a-f]+)", out)}
     assert annotated, out
-    assert annotated & record_rvas, sorted(annotated)
+    assert record in annotated, sorted(annotated)
     assert annotated & function_starts, sorted(annotated)
 
 
@@ -125,12 +165,13 @@ def test_zero_instruction_range_exits_1_not_0():
 def test_truncated_image_exits_2_instead_of_clipping_to_the_surviving_prefix(tmp_path):
     # A file cut at 0xb180 — inside .text by RVA, but 4.9 MB short of the raw
     # bytes the section table claims. Before the section-range check the tool
-    # decoded the surviving 14 bytes of the trap range and exited 0: a truncated
+    # decoded the surviving prefix of the trap range and exited 0: a truncated
     # input read as "the listing is the artifact". Truncation is an invocation
     # error (2), the same class as a non-PE file, not a finding.
+    (start, end), _record = trap_span()
     trunc = tmp_path / "trunc.dll"
     trunc.write_bytes(DLL.read_bytes()[:0xb180])
-    r = _run([str(trunc), TRAP_START, TRAP_END])
+    r = _run([str(trunc), hex(start), hex(end)])
     assert r.returncode == 2, (r.returncode, r.stderr)
     assert "Traceback" not in r.stderr, r.stderr
     assert r.stderr.startswith("[pe_disrva] "), r.stderr

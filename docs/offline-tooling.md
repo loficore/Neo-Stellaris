@@ -256,6 +256,13 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
 同一函数还 `call 0x499cc0`(`__ubsan_handle_pointer_overflow`),带的是 `0x5ab450` 处的 16 字节
 `PointerOverflowData`(同为 `:1494:12`);它**不在**上面这条记录的输出里 —— 见判读陷阱 7。
 
+**§48 修复后的当前产物**:`cutils.h` 引入 `<stddef.h>` 让 `offsetof` 用 builtin,`:1494:12` 的
+`TypeMismatchData` 记录消失(`site JSMallocBlockHeader` 141→133、该行 0 条),因此
+`func 0x18000bd9b` 在新产物上不再有记录可打;`js_rc` 本体仍在,只剩 `:1494:12` 的
+`PointerOverflowData`(工具不解码),区间也随重链移动到 `rva 0xbba0..0xbc01`(97 字节)。
+`scripts/test_pe_disrva.py` 的 `trap_span()` 就是从这条 SourceLocation 反查当前区间,不钉常量。
+上面 141/131 字节那组数字属于 §47 产物 `77c0c35e…`,要复现请读基线字节(缓存副本)。
+
 **判读陷阱**:
 1. **`func` 打印的是 `.pdata` 区间和该区间加载了哪些记录,不是链接期函数名。** 帧归属靠的是
    区间 + 记录引用;要说"这是 `__JS_NewAtomInit`",得去读那几行 C 本身(§45.3 就是这么做的)。
@@ -311,6 +318,11 @@ scp scripts/c2_selfabort_repro.py Windows_Jiaolong:C:/temp/     # 单文件,无�
 python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码 0=复现到 abort 签名,1=没有,2=路径没给/不存在
 ```
 
+**重建陷阱(§48 实测)**:只改头文件(`libs/quickjs/*.h`)时,已有 Zig 缓存的 `zig build` 可能把 C
+编译报成 `cached` 并留下旧字节 —— 此时 scp 出去的是**旧 DLL**,复现器仍显示 abort,会被误读成
+「修复无效」。改完头文件先核 `zig build --summary all` 里 `compile lib stellaris_quickjs` 的状态
+行与 `sha256sum zig-out/bin/stellaris_quickjs.dll` 是否真的变了;没变就换一个 `--cache-dir` 重建。
+
 关键行(子进程的逐字 echo,父进程的带 `[repro] ` 前缀,`VERDICT` 永远是最后一行):
 `BASE`、`LOGADDR`、`RECORDER ok|absent`、`SANITY`、`WITNESS '<g_diag_log>'`、
 `MFREC <seq> <watch|post> '<渲染>'`、`SURVIVED rc=<n>`、`LOG '<调用方 buffer>'`、`[repro] VERDICT: …`。
@@ -357,9 +369,14 @@ python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码
 
 ```
 python3 scripts/pe_disrva.py <pe_path> <rva_start_hex> [<rva_end_hex>|<count>]
-python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 0xbdf3   # end 不含
-python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 40       # 40 条(默认 64,上限 4096)
+python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbba0 0xbc01   # end 不含(§48 产物的 js_rc)
+python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbba0 40       # 40 条(默认 64,上限 4096)
 ```
+
+**RVA 每次重链都会变**:上面的 `0xbba0..0xbc01` 是 §48 产物(`79c8dc24…`)的 `js_rc`;
+`scripts/test_pe_disrva.py` 的 `trap_span()` 从 `quickjs.c:1494:12` 的 SourceLocation 反查
+`record → LEA → .pdata` 得到当前区间,所以测试不会因重链失效。§47 的 `0xbd70..0xbdf3` 属于基线
+产物 `77c0c35e…`。
 
 - 第三个参数:`0x` 开头 = **结束 RVA,不含**;纯十进制数字 = **指令条数**。所以小的十六进制结束 RVA
   必须带 `0x`(裸 `100` 是 100 条,不是 rva 0x100)。
@@ -376,12 +393,12 @@ python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 40       #
   确定不是代码」的结论;2 只留给**读不了 / 非 PE / 截断的输入**和写错的调用参数。
 - 上限 4096 条,超出打 `; truncated at 4096 insns`;头行给 `N insns, M bytes`。**未截断时** end 模式下
   `M` 等于 `end - start`;可一旦超过 4096 条(或 end 越过段尾被裁剪),头行的 end 是**有效(裁剪后)
-  的 end**,`M` 小于请求的 `end - start`,同时带上截断提示(实测 `0xbd70 0x800000` 头行打
-  `0x4cac00` 并附 `; truncated at 4096 insns`;未截断的 `0xbd70..0xbdf3` = 131 字节 = 40 条)。
+  的 end**,`M` 小于请求的 `end - start`,同时带上截断提示(实测 `0xbba0 0x800000` 头行裁到
+  段尾并附 `; truncated at 4096 insns`;未截断的 `0xbba0..0xbc01` = §48 产物的 `js_rc` = 97 字节 = 29 条)。
 
 **判读陷阱:**
-1. **反汇编证明的是「被检查的是哪个表达式」,永远不是运行时值。** 它读得出 `0xbd70` 的 `test r8,r8`
-   在 `add rcx,-8` 之前、测的是原始指针;它证明不了那一枪里 `r8` 是不是 NULL。
+1. **反汇编证明的是「被检查的是哪个表达式」,永远不是运行时值。** 它读得出 `js_rc` 的
+   `test rdx,rdx` 在 `add rcx,-8` 之前、测的是原始指针;它证明不了那一枪里 `rdx` 是不是 NULL。
 2. **`#0x...` 是 image-base-relative 的 RVA,不是 VA**;rip 目标按 `address + size + disp` 算,不是从
    指令起点算。
 3. **clang 的「减 8」可能是 `add reg,-8`**:本产物里 `container_of` 的 header 偏移是 `48 83 c1 f8`

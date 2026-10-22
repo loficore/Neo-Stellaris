@@ -3010,3 +3010,116 @@ arguments), 1 `E8` scan (104 direct calls to `0xbd70`), 2 preprocessor runs (win
 vs native builtin), 3 judgment rows rejected, 1 row landed (the fourth, with a named mechanism),
 1 inference withdrawn (§45's `str == 8`), 1 candidate table retired (§46 row 4's "incomplete"
 reading), 0 repair implemented.
+
+## 48. Repair option (a) implemented: `offsetof` is the builtin now, and the artifact completes `C2DiagQJSInto` (2026-10-22, authorized, no game, no injection, no dispatch)
+
+Transcript: `evidence/logs/c2_offsetof_fix_4_4_4.log`. Artifact of record:
+`zig-out/bin/stellaris_quickjs.dll`, sha256
+`79c8dc240ef87d3bc979efb78e3549b937b909d57939eb552832be0d1c5c230c`, deployed as
+`C:\temp\sqjs_s48b.dll` and hash-checked on the host. Baseline control:
+`77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0`, read as a file copy.
+The Windows host ran scp, `Get-FileHash` and `python` only — zero game, zero injection, zero
+dispatch, zero `CreateRemoteThread`.
+
+§47 left three repair options unimplemented and the choice to the human. The human chose **(a)**:
+make the vendored fallback `offsetof` well-defined. This section records the one-line change, the
+rebuilt bytes, and the zero-game verification that the abort is gone.
+
+### 48.1 The change
+
+    libs/quickjs/cutils.h:31
+    +#include <stddef.h> /* MinGW defines no offsetof; the fallback below is a null member access */
+
+The `#ifndef offsetof` fallback itself is untouched. Preprocessing the same file with the same flags
+as §47.4 now expands `js_rc` to
+
+    return ((JSMallocBlockHeader *)((uint8_t *)(ptr) - __builtin_offsetof(JSMallocBlockHeader, user_data)));
+
+instead of the `((size_t) &((JSMallocBlockHeader *)0)->user_data)` form §47 measured. The value is
+still 8; the syntactic null member access that `-fsanitize=null` instruments is gone. The change is
+in vendored source, so it is one line plus a comment marking why it must survive a vendored update.
+
+### 48.2 The build-cache trap (an operational finding)
+
+A header-only edit did **not** invalidate the C compile in the existing Zig cache:
+`zig build --summary all` reported `compile lib stellaris_quickjs Debug x86_64-windows cached` and
+the DLL stayed at the baseline sha. A fresh `--cache-dir` forced the recompile. Consequence for the
+offline fix loop: after a header-only edit, verify the compile step actually ran and the sha changed
+before scp'ing; otherwise the host would receive the old bytes and the repro would show the old
+abort, which reads as a failed fix. Recorded in `docs/offline-tooling.md`.
+
+**A second consequence, in the tests.** `scripts/test_pe_disrva.py` had pinned the §47 trap's
+`.pdata` span (`rva 0xbd70..0xbdf3`). After the rebuild that range is no longer code, and more than a
+moved RVA: the `TypeMismatchData` record the listing was *about* is gone by construction, so an
+updated constant would only re-arm the same trap for the next rebuild. The tests now derive the span
+from the artifact — the `quickjs.c:1494:12` `SourceLocation` (now a `PointerOverflowData` record,
+which `dll_ubsan_site` does not decode and the test scans directly) → the `lea` that loads it → the
+enclosing `.pdata` range (`trap_span()`). The annotation witness checks that same record instead of
+intersecting with the `TypeMismatchData` set. 5/5 pass on the new artifact; the §47-era numbers
+(141 sites, 131 bytes) remain reproducible only against the baseline bytes.
+
+### 48.3 Offline confirmation on the new bytes
+
+`dll_ubsan_site.py site JSMallocBlockHeader`: **141 → 133** check sites; the `quickjs.c:1494:12`
+record is **present once in the baseline, absent in the fixed artifact**. The 8 removed records are
+exactly the 8 `container_of` expressions built from the fallback:
+
+| line | function | expression |
+|---:|---|---|
+| 1494 | `js_rc` | `container_of(ptr, JSMallocBlockHeader, user_data)` |
+| 1601 | `__js_free` | same, block header |
+| 1607 | `__js_free` | `JSMallocLargeBlockHeader` (`header.user_data`) |
+| 1645 | `__js_realloc` | block header |
+| 1651 | `__js_realloc` | large-block variant |
+| 1684 | `__js_realloc` | `container_of(new_ptr, …)` |
+| 1704 | `__js_malloc_usable_size` | block header |
+| 1711 | `__js_malloc_usable_size` | large-block variant |
+
+Only `js_rc` was on the exercised path; the other seven were latent copies of the same
+unconditional abort on the first free/realloc/usable-size call. This is why the include is the
+right granularity: special-casing `js_rc` would have moved the abort, not removed it.
+
+### 48.4 The zero-game run
+
+`python C:\temp\c2_selfabort_repro.py C:\temp\sqjs_s48b.dll` (run 1; run 2 repeats it):
+
+    RECORDER ok
+    SANITY 42
+    WITNESS 'enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000000017B18D8 opaque_ok limits_ok ne'
+    SURVIVED rc=0
+    LOG 'enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000000017B18D8 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRFdiag_rc=0 ctx=00000000018BD5F8'
+    child returncode = 0 (0x0)
+    VERDICT: the child did not die with status 3; this artifact does not self-terminate on this path
+
+Run 2 differs only in the ASLR-dependent numbers (`rt=0000000001833A88`, different `ctx`) and
+reproduces `SURVIVED rc=0` and the same verdict. The tool's own exit status is 1 in both runs —
+exit 0 means "abort signature reproduced", so 1 is the success side of this verification.
+
+What the run shows: the same entry order as the live shot (`SANITY 42`, then the sequence), the
+artifact loads, `JS_NewRuntime2` completes (`rt=` non-null), the stage markers past the old death
+point run (`opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRF`), and `C2DiagQJSInto` returns
+`rc=0`. The §42 witness's stop at `new_rt MmMmMm` is after three mallocs; the new witness has eight
+`M`s before `rt=`, i.e. the allocation events after the old abort site now complete. §47.5's
+"whether a second defect hides behind this one is unobserved" is now observed **on this path**: it
+does not.
+
+### 48.5 Boundaries
+
+- This is a child-process result. In-game behavior — the host's loader, injection, `C2Init` in the
+  engine, dispatch — is **not** tested here and needs a live shot under its own authorization.
+- One artifact, two runs; the run is deterministic in its outcome across the two ASLR bases.
+- The fix is a vendored-source edit; a future vendored update can drop the include (the comment marks
+  it). No other vendored file was audited for the same fallback.
+- The seven non-`js_rc` sites are inferred to be latent aborts from the record identity (same
+  expression, same instrumentation) and the source shape; none of them was exercised in this run.
+- The native test binary's sanitizer configuration remains unmeasured (§47.4); the native
+  `zig build test` result is unchanged at `24/27 steps succeeded (1 failed); 314/314 tests passed`,
+  the failure being the known `exports.zig` kernel32-undefined-symbol environment fact.
+
+### 48.6 Counts for §48
+
+1 authorized repair implemented (one include + one comment in `libs/quickjs/cutils.h`), 0 edits to
+`src/` or `build.zig`; 1 artifact rebuilt in a fresh cache, sha checked locally and remotely;
+1 UBSan site diff (141→133, 8 `container_of` expressions removed, `:1494:12` 1→0); 2 zero-game runs;
+1 test file re-anchored to the artifact (`trap_span()`; the pinned §47 span no longer exists);
+0 game processes, 0 injections, 0 dispatch, 0 hooks; 1 new evidence log.
