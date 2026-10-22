@@ -204,8 +204,13 @@ static int g_diag_pos = 0;
  * the 1st; the recorder is deliberately NOT reset by c2_diag_sequence — the
  * window means "the last 8 allocator events of this process", which on a
  * first-JS_NewRuntime2 death is exactly the events bracketing the death point.
- * Single-threaded by construction (the callbacks run only on the sequence's
- * own thread); no locking, the same treatment as the mf_tag counters above.
+ * Single-threaded by construction on the WRITE side (the callbacks run only on
+ * the sequence's own thread); no locking, the same treatment as the mf_tag
+ * counters above. The READ side is NOT: the next task reads the ring from a
+ * SECOND thread of the child process while the first thread is still inside
+ * JS_NewRuntime2 (the process aborts inside that call, so a post-call read-back
+ * would never run), so C2DiagMfRecords below is written to degrade honestly
+ * under a concurrent writer instead of emitting a mixture.
  * ------------------------------------------------------------------------- */
 #define MF_REC_CAP 8
 typedef struct {
@@ -600,12 +605,14 @@ int C2CopyDiagLog(unsigned char *out) {
 
 /* Task 1 renderer: dump the heap_mf ring as TEXT into a caller buffer, one
  * fixed-shape row per slot, ordered oldest -> newest (the ring is walked from
- * g_mf_rec_pos, the slot the NEXT event will overwrite). Row shape:
+ * the cursor g_mf_rec_pos, the slot the NEXT event will overwrite). Row shape:
  *     "<kind><filled> size=<hex> ptr=<hex> st=<low 12 hex digits>\n"
  * size/ptr are hexadecimal WITHOUT zero padding — the plan's own literal
  * assertions (" size=0 " for a captured zero-size request, and the ptr=0 vs
  * unfilled distinction) only read under this spelling; "fixed width" holds in
- * the row template and in the worst-case bound below.
+ * the row template, in the st= column (exactly 12 hex digits, zero padded —
+ * pinned by a native test so a regression to an unpadded or full-pointer-width
+ * state column cannot pass), and in the worst-case bound below.
  * filled column: 'x' = the callback reached its exit, '_' = it did not (never
  * written: kind column '_' too). An unfilled row draws its pointer column as
  * a fixed 16-dash placeholder and never emits the stored value: the 0x1
@@ -618,25 +625,72 @@ int C2CopyDiagLog(unsigned char *out) {
  * can never exceed 495, whatever the caller asks; the caller's out_size is
  * still respected as a hard limit (the loop stops before writing past it,
  * leaving room for the NUL), and a buffer at the 4096-byte contract holds the
- * full ring without ever coming near that limit. */
+ * full ring without ever coming near that limit.
+ *
+ * CONCURRENT READER (the shape Task 2 actually schedules): a second thread of
+ * the child process calls this while the first thread is still inside
+ * JS_NewRuntime2, i.e. while mf_rec_enter/mf_rec_leave are actively rewriting
+ * slots. Two torn reads were structurally possible in the obvious loop and are
+ * what the three rules below close, lock-free (no mutex: taking one inside a
+ * dying process is not an option, and the writer must not be able to block):
+ *   1. the cursor is read ONCE before the loop, so the walk visits each slot
+ *      exactly once; re-reading it per row let an advancing cursor make one
+ *      slot appear twice and another disappear, producing an ordering/content
+ *      that was never a ring state;
+ *   2. every field is SNAPSHOT into locals first, so a row's size/ptr/state can
+ *      never be a mixture of values that did not coexist in one event;
+ *   3. `filled` is re-read AFTER the copy; if it no longer holds the captured
+ *      value, the slot was written during the snapshot and the row is rendered
+ *      in the UNFILLED form ('_' + the dash placeholder). That is deliberate:
+ *      an unstable row is a RACE ARTIFACT, not allocator behaviour — it must
+ *      never be printed as a completed event, because the value a mid-flight
+ *      writer leaves in ptr is the 0x1 sentinel, and a sentinel escaping into
+ *      the text as a CLAIMED RETURNED POINTER is exactly the false fact the
+ *      sentinel clause exists to prevent (NULL and 0x1 each mean something
+ *      specific to this investigation).
+ * The reads go through a volatile-qualified view on purpose: without it the
+ * compiler may fold the second `filled` read into the first (nothing in this
+ * function writes g_mf_rec, so as far as the abstract machine goes the value
+ * cannot change), which would silently un-implement rule 3.
+ * Residual limit, stated rather than hidden: a writer that ENTERS and LEAVES
+ * the same slot entirely between the two `filled` reads leaves both reads
+ * agreeing ('x'/'x') and the row is a genuine ABA mixture. With MF_REC_CAP
+ * slots and a reader that touches each slot ~8 times, that window is a handful
+ * of nanoseconds against a writer whose interesting events are separated by
+ * whole allocations; and Task 2 reads a *dying* process, where the writer is
+ * not looping. If a row's numbers ever have to be proof, the pointer VALUE is
+ * what to re-check, not the text layout. */
 #define MF_REC_ROW_MAX 62
 int C2DiagMfRecords(char *out, int out_size) {
     if (out == NULL || out_size <= 0) return 0;
+    /* Rule 1: one cursor read, before the loop. */
+    const int start = *(volatile const int *)&g_mf_rec_pos;
     int written = 0;
     for (int k = 0; k < MF_REC_CAP; k++) {
-        const MfRecord *r = &g_mf_rec[(g_mf_rec_pos + k) % MF_REC_CAP]; /* oldest first */
-        int kind_c = r->kind ? (int)r->kind : (int)'_';
+        volatile const MfRecord *slot =
+            (volatile const MfRecord *)&g_mf_rec[(start + k) % MF_REC_CAP]; /* oldest first */
+        /* Rule 2: snapshot the whole tuple, one read per field. */
+        const char kind = slot->kind;
+        const char filled = slot->filled;
+        const size_t sz = slot->size;
+        const void *ptr = slot->ptr;
+        const JSMallocState *st = slot->state;
+        /* Rule 3: re-read the marker AFTER the copy. A different value means the
+           slot moved under us, so nothing in this row is a claim. */
+        const int settled = (slot->filled == filled);
+        const int kind_c = kind ? (int)kind : (int)'_';
         unsigned long long st_low48 =
-            (unsigned long long)((uintptr_t)r->state & 0xFFFFFFFFFFFFULL);
+            (unsigned long long)((uintptr_t)st & 0xFFFFFFFFFFFFULL);
         char row[MF_REC_ROW_MAX + 1];
         int n;
-        if (r->filled == '\0') {
+        if (filled == '\0' || !settled) {
+            /* Unfilled, and unstable: the unfilled form is the only honest one. */
             n = snprintf(row, sizeof(row), "%c_ size=%llx ptr=---------------- st=%012llx\n",
-                         kind_c, (unsigned long long)r->size, st_low48);
+                         kind_c, (unsigned long long)sz, st_low48);
         } else {
             n = snprintf(row, sizeof(row), "%cx size=%llx ptr=%llx st=%012llx\n",
-                         kind_c, (unsigned long long)r->size,
-                         (unsigned long long)(uintptr_t)r->ptr, st_low48);
+                         kind_c, (unsigned long long)sz,
+                         (unsigned long long)(uintptr_t)ptr, st_low48);
         }
         if (n < 0) continue; /* snprintf failure: skip the slot, still bound the loop by MF_REC_CAP */
         if (n >= (int)sizeof(row)) n = (int)sizeof(row) - 1; /* defensive; 62 < 63 cannot truncate */
@@ -646,6 +700,48 @@ int C2DiagMfRecords(char *out, int out_size) {
     }
     out[written] = '\0';
     return written;
+}
+
+/* Test-only, NOT a PE export and NOT reachable from the injection channel
+ * (exports.zig declares nothing for it — the C2ProbeMallocZero shape the plan
+ * blesses for Task 4: 「exports.zig 里给测试用的一行包装,它不暴露给注入通道」,
+ * here even lighter: no Zig-side declaration at all, the native test binds this
+ * symbol with `extern fn` the way it binds every other quickjs_wrapper.c symbol).
+ *
+ * Why it exists: Task 1's Step 4 wanted the recorder to be able to SEE the two
+ * zero-size deviations the plan names — `malloc(state, 0)` and `realloc(state,
+ * ptr, 0)` — but on this vendored build no such request can ever reach the
+ * callbacks (quickjs.c serves size==0 itself; the reading is recorded on the Zig
+ * test that used to assert it). Visibility of a path QuickJS never takes is
+ * still what Task 3/4's discrimination needs, so it is pinned directly: this
+ * function only CALLS the existing static callbacks with a caller-owned
+ * JSMallocState. It changes no allocator semantics, touches no runtime, and its
+ * state never escapes the frame.
+ *
+ * Returns the residual malloc_count after the sequence: 0 means the probe
+ * released everything it allocated, which is the accounting-honesty requirement
+ * (heap_malloc(s,0) allocates nothing; heap_realloc(s,p,0) frees p through
+ * heap_free itself). The Zig test asserts that 0, so a future change that made
+ * the probe leak cannot pass quietly. */
+int C2DiagMfProbeZeroSize(void) {
+    JSMallocState s;
+    void *p;
+
+    memset(&s, 0, sizeof(s));
+    s.malloc_limit = 64 * 1024; /* big enough that the probe exercises the zero-size
+                                   branches, not the malloc_limit rejection branch */
+
+    /* Deviation 1: malloc asked for zero. Its own size==0 branch answers NULL. */
+    heap_malloc(&s, 0);
+
+    /* Deviation 2: realloc asked for zero WITH a live block, so the path taken is
+       the size==0 branch (free the block, return NULL) and not the !ptr
+       delegation to heap_malloc. The block handed in must be a real one, because
+       that branch reads its header via heap_free. */
+    p = heap_malloc(&s, 16);
+    if (p) heap_realloc(&s, p, 0);
+
+    return (int)s.malloc_count;
 }
 
 /* Test-only: force an intrinsic failure by starving the runtime of memory, so
