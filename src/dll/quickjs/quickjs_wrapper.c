@@ -168,6 +168,100 @@ typedef struct {
    while the host is dying). */
 static char g_diag_log[512];
 static int g_diag_pos = 0;
+
+/* ---------------------------------------------------------------------------
+ * Task 1 (C2 allocator-record discrimination plan) — bounded ring recorder
+ * inside the three heap_mf callbacks. PURE OBSERVATION: the callbacks gain
+ * entry/exit bookkeeping only; no control flow, accounting, size==0 handling,
+ * alignment, or return value changes, and the 'M'/'m'/'!' marking plus
+ * MF_TAG_CAP below are byte-for-byte untouched (every §41–§44 live reading is
+ * compared against that text).
+ *
+ * Why: §45 pinned the crash to quickjs.c:1494 js_rc's `container_of` reading
+ * `ptr - 8`, reproduced in a child process we own — but the VALUE of the
+ * faulting pointer was never observed, only inferred. The ring turns that
+ * inference into data: the last MF_REC_CAP allocator events, each a
+ * (kind, size, ptr, malloc_state) tuple, rendered to text by C2DiagMfRecords
+ * (below) and read back through exports.zig's C2DiagMfRecordsInto.
+ *
+ * Slot lifecycle (the plan's contract, verbatim):
+ *   entry — kind/size/state written, filled = '\0', ptr = (void *)0x1 sentinel;
+ *   exit  — filled = '\0' flipped to 'x', ptr = what the callback returned
+ *           (heap_free records the pointer it released).
+ *   A slot whose callback entered but never reached its exit keeps
+ *   filled == '\0' with the 0x1 sentinel stored in ptr. The sentinel must NOT
+ *   be NULL: NULL is one of the facts this plan discriminates between ("the
+ *   callback returned NULL") and cannot double as the not-reached marker.
+ *   Never-written slots keep the same sentinel state through the static
+ *   initializer below, so "ptr == 0x1 until an exit overwrites it" holds for
+ *   EVERY slot at every moment, as the interface promises.
+ *   The renderer never emits the stored value for an unfilled slot: it draws
+ *   '_' in the filled column and a fixed 16-dash placeholder in the ptr
+ *   column, so neither the sentinel nor a fake ptr=0 crosses the text
+ *   boundary — see Review Focus 2 pinned by the native tests.
+ *
+ * Ring: one shared cursor across the three callbacks, the 9th event overwrites
+ * the 1st; the recorder is deliberately NOT reset by c2_diag_sequence — the
+ * window means "the last 8 allocator events of this process", which on a
+ * first-JS_NewRuntime2 death is exactly the events bracketing the death point.
+ * Single-threaded by construction (the callbacks run only on the sequence's
+ * own thread); no locking, the same treatment as the mf_tag counters above.
+ * ------------------------------------------------------------------------- */
+#define MF_REC_CAP 8
+typedef struct {
+    char kind;                  /* 'M', 'F', 'R'; '\0' = never written */
+    char filled;                /* '\0' until the callback's exit writes 'x' */
+    short _pad;                 /* explicit pad so the fields below keep natural alignment */
+    size_t size;                /* Requested size; heap_free records the released block's own size (see mf_rec_free_size) */
+    void *ptr;                  /* (void *)0x1 sentinel until exit, then the returned value */
+    const JSMallocState *state; /* which malloc_state drove the call — candidate (c)'s discriminator */
+} MfRecord;
+/* The plan's prose says "每条记录 24 字节" while the field list above is what
+ * governs (Task 1 ruling 3): on x86-64 natural alignment makes sizeof(MfRecord)
+ * 32, and that is the real size. Nothing consumes this struct as raw bytes —
+ * only the rendered text crosses the boundary — so the discrepancy is cosmetic
+ * and recorded here rather than shaved by packing. */
+#define MF_REC_EMPTY_SLOT { 0, 0, 0, 0, (void *)(uintptr_t)0x1, NULL }
+static MfRecord g_mf_rec[MF_REC_CAP] = {
+    MF_REC_EMPTY_SLOT, MF_REC_EMPTY_SLOT, MF_REC_EMPTY_SLOT, MF_REC_EMPTY_SLOT,
+    MF_REC_EMPTY_SLOT, MF_REC_EMPTY_SLOT, MF_REC_EMPTY_SLOT, MF_REC_EMPTY_SLOT,
+};
+static int g_mf_rec_pos = 0;
+
+/* Entry half: claim the next slot, record what is knowable before the call
+ * returns, hand the slot index back for the exit half to close. */
+static int mf_rec_enter(char kind, size_t size, const JSMallocState *s) {
+    int i = g_mf_rec_pos;
+    g_mf_rec_pos = (i + 1) % MF_REC_CAP;
+    g_mf_rec[i].kind = kind;
+    g_mf_rec[i].filled = '\0';
+    g_mf_rec[i].size = size;
+    g_mf_rec[i].ptr = (void *)(uintptr_t)0x1;
+    g_mf_rec[i].state = s;
+    return i;
+}
+
+/* heap_free's requested size: the recorded size of the block being released,
+ * read at ENTRY (the block is still ours here — it is only reads AFTER
+ * HeapFree that are the §33 use-after-free). A free has no size argument, so
+ * copying the block's own size is the only value that keeps the rendered
+ * `size=` column honest for what it means elsewhere: a request for zero
+ * bytes. The constant-0 alternative made every `Fx` row read as a captured
+ * zero-size request and let the plan's Step 4 discriminator pass without any
+ * such event ever having happened (observed natively 2026-10: `Fx size=0
+ * ptr=2dc4e28`), so the distinction is load-bearing, not cosmetic. A free of
+ * NULL records size 0 — no block was released and the pointer column says so. */
+static size_t mf_rec_free_size(void *ptr) {
+    if (!ptr) return 0;
+    return (((const AllocHeader *)ptr) - 1)->size;
+}
+
+/* Exit half: publish how the call actually ended. */
+static void mf_rec_leave(int slot, void *ptr) {
+    g_mf_rec[slot].ptr = ptr;
+    g_mf_rec[slot].filled = 'x';
+}
+
 /* Rate limit: a live JS_NewRuntime2 does dozens of mallocs; unbounded tagging
    would overflow the 512 buffer and push the `enter…new_rt` prefix off the end,
    so the LAST tag read would be the buffer tail, not the death point. Cap each
@@ -203,25 +297,28 @@ static void mf_tag(char c) {
    g_mf_malloc_tagged increments once per CALL, so MF_TAG_CAP bounds the number
    of allocation LIFECYCLES shown (up to 2 chars each), not raw chars. */
 static void *heap_malloc(JSMallocState *s, size_t size) {
+    int rec_slot = mf_rec_enter('M', size, s);
     int tag_this_call = (g_mf_malloc_tagged < MF_TAG_CAP);
     if (tag_this_call) { mf_tag('M'); g_mf_malloc_tagged++; }
-    if (size == 0) { if (tag_this_call) mf_tag('!'); return NULL; }
-    if (s->malloc_size + size > s->malloc_limit) { if (tag_this_call) mf_tag('!'); return NULL; }
+    if (size == 0) { if (tag_this_call) mf_tag('!'); mf_rec_leave(rec_slot, NULL); return NULL; }
+    if (s->malloc_size + size > s->malloc_limit) { if (tag_this_call) mf_tag('!'); mf_rec_leave(rec_slot, NULL); return NULL; }
 
     HANDLE heap = GetProcessHeap();
     AllocHeader *h = (AllocHeader *)HeapAlloc(heap, 0, sizeof(AllocHeader) + size);
-    if (!h) { if (tag_this_call) mf_tag('!'); return NULL; }
+    if (!h) { if (tag_this_call) mf_tag('!'); mf_rec_leave(rec_slot, NULL); return NULL; }
     if (tag_this_call) mf_tag('m');
 
     h->size = size;
     s->malloc_count++;
     s->malloc_size += size;
+    mf_rec_leave(rec_slot, (void *)(h + 1));
     return (void *)(h + 1);
 }
 
 static void heap_free(JSMallocState *s, void *ptr) {
+    int rec_slot = mf_rec_enter('F', mf_rec_free_size(ptr), s);
     if (g_mf_free_tagged < MF_TAG_CAP) { mf_tag('F'); g_mf_free_tagged++; }
-    if (!ptr) return;
+    if (!ptr) { mf_rec_leave(rec_slot, ptr); return; }
     
     AllocHeader *h = ((AllocHeader *)ptr) - 1;
     /* Read the recorded size BEFORE releasing the block. After HeapFree the
@@ -237,27 +334,41 @@ static void heap_free(JSMallocState *s, void *ptr) {
     
     s->malloc_count--;
     s->malloc_size -= freed;
+    /* The recorder's ptr column keeps the pointer this call released; `freed`
+       above was its size, read before the block went back to the heap manager
+       (the UAF the §33 comment documents must not be reintroduced here). */
+    mf_rec_leave(rec_slot, ptr);
 }
 
 static void *heap_realloc(JSMallocState *s, void *ptr, size_t size) {
+    int rec_slot = mf_rec_enter('R', size, s);
     if (g_mf_realloc_tagged < MF_TAG_CAP) { mf_tag('R'); g_mf_realloc_tagged++; }
-    if (!ptr) return heap_malloc(s, size);
+    if (!ptr) {
+        /* Delegation is unchanged (heap_malloc records its own slot too); the
+           capture exists only so THIS slot closes with the value actually
+           returned instead of dangling at the 0x1 sentinel. */
+        void *delegated = heap_malloc(s, size);
+        mf_rec_leave(rec_slot, delegated);
+        return delegated;
+    }
     if (size == 0) {
         heap_free(s, ptr);
+        mf_rec_leave(rec_slot, NULL);
         return NULL;
     }
     
     AllocHeader *h = ((AllocHeader *)ptr) - 1;
     size_t old_size = h->size;
     
-    if (s->malloc_size - old_size + size > s->malloc_limit) return NULL;
+    if (s->malloc_size - old_size + size > s->malloc_limit) { mf_rec_leave(rec_slot, NULL); return NULL; }
     
     HANDLE heap = GetProcessHeap();
     AllocHeader *new_h = (AllocHeader *)HeapReAlloc(heap, 0, h, sizeof(AllocHeader) + size);
-    if (!new_h) return NULL;
+    if (!new_h) { mf_rec_leave(rec_slot, NULL); return NULL; }
     
     new_h->size = size;
     s->malloc_size = s->malloc_size - old_size + size;
+    mf_rec_leave(rec_slot, (void *)(new_h + 1));
     return (void *)(new_h + 1);
 }
 
@@ -485,6 +596,56 @@ int C2CopyDiagLog(unsigned char *out) {
     memcpy(out, g_diag_log, n);
     out[n] = '\0';
     return (int)n;
+}
+
+/* Task 1 renderer: dump the heap_mf ring as TEXT into a caller buffer, one
+ * fixed-shape row per slot, ordered oldest -> newest (the ring is walked from
+ * g_mf_rec_pos, the slot the NEXT event will overwrite). Row shape:
+ *     "<kind><filled> size=<hex> ptr=<hex> st=<low 12 hex digits>\n"
+ * size/ptr are hexadecimal WITHOUT zero padding — the plan's own literal
+ * assertions (" size=0 " for a captured zero-size request, and the ptr=0 vs
+ * unfilled distinction) only read under this spelling; "fixed width" holds in
+ * the row template and in the worst-case bound below.
+ * filled column: 'x' = the callback reached its exit, '_' = it did not (never
+ * written: kind column '_' too). An unfilled row draws its pointer column as
+ * a fixed 16-dash placeholder and never emits the stored value: the 0x1
+ * sentinel must not leak as a fake pointer, and must not be drawn as ptr=0
+ * either — a real all-zero ptr on a COMPLETED row means "returned NULL", one
+ * of the facts this recorder exists to observe (Review Focus 2).
+ * Review Focus 3 bound: a row is at most MF_REC_ROW_MAX = 62 bytes (hex of a
+ * 64-bit value is <= 16 digits), so the renderer's OWN bound is MF_REC_CAP
+ * rows x 62 = 496 bytes — every slot is always rendered and the return value
+ * can never exceed 495, whatever the caller asks; the caller's out_size is
+ * still respected as a hard limit (the loop stops before writing past it,
+ * leaving room for the NUL), and a buffer at the 4096-byte contract holds the
+ * full ring without ever coming near that limit. */
+#define MF_REC_ROW_MAX 62
+int C2DiagMfRecords(char *out, int out_size) {
+    if (out == NULL || out_size <= 0) return 0;
+    int written = 0;
+    for (int k = 0; k < MF_REC_CAP; k++) {
+        const MfRecord *r = &g_mf_rec[(g_mf_rec_pos + k) % MF_REC_CAP]; /* oldest first */
+        int kind_c = r->kind ? (int)r->kind : (int)'_';
+        unsigned long long st_low48 =
+            (unsigned long long)((uintptr_t)r->state & 0xFFFFFFFFFFFFULL);
+        char row[MF_REC_ROW_MAX + 1];
+        int n;
+        if (r->filled == '\0') {
+            n = snprintf(row, sizeof(row), "%c_ size=%llx ptr=---------------- st=%012llx\n",
+                         kind_c, (unsigned long long)r->size, st_low48);
+        } else {
+            n = snprintf(row, sizeof(row), "%cx size=%llx ptr=%llx st=%012llx\n",
+                         kind_c, (unsigned long long)r->size,
+                         (unsigned long long)(uintptr_t)r->ptr, st_low48);
+        }
+        if (n < 0) continue; /* snprintf failure: skip the slot, still bound the loop by MF_REC_CAP */
+        if (n >= (int)sizeof(row)) n = (int)sizeof(row) - 1; /* defensive; 62 < 63 cannot truncate */
+        if (written + n > out_size - 1) break; /* keep the NUL slot; never write past out_size */
+        memcpy(out + written, row, (size_t)n);
+        written += n;
+    }
+    out[written] = '\0';
+    return written;
 }
 
 /* Test-only: force an intrinsic failure by starving the runtime of memory, so

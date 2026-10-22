@@ -109,6 +109,7 @@ extern fn C2CopyDiagLog(out: [*]u8) c_int;
 extern fn C2GetQuickJSPointers(out_rt: *?*anyopaque, out_ctx: *?*anyopaque) void;
 extern fn C2WriteQuickJSPointersInto(out16: [*]u8) void;
 extern fn C2EvalProbe(src: [*:0]const u8) c_int;
+extern fn C2DiagMfRecords(out: [*]u8, out_size: c_int) c_int;
 
 /// C2 diagnostic: test QuickJS init from C side. Returns 0=OK, 1=malloc fail, 2=runtime fail, 3=context fail.
 export fn C2TestQJS() callconv(.c) i32 {
@@ -239,6 +240,29 @@ export fn C2DiagGetLogAddr() callconv(.c) usize {
 export fn C2DiagQJSInto(out_diag: [*]u8) callconv(.c) i32 {
     const r = C2DiagQuickJS(out_diag, 512);
     return @intCast(r);
+}
+
+/// C2 allocator-record read-back: render the last MF_REC_CAP heap_mf events
+/// (kind, size, ptr, malloc_state) into a CALLER-SUPPLIED buffer as text and
+/// return the byte length written (excluding the NUL terminator).
+///
+/// Why this exists: §45 pinned the crash to quickjs.c:1494's `container_of`
+/// reading `ptr - 8`, but the VALUE of that pointer was only ever inferred. The
+/// ring recorder in quickjs_wrapper.c turns that inference into data; this
+/// export is its read channel. It formats on the C side through
+/// `C2DiagMfRecords` — the same C-formats/Zig-forwards split as the existing
+/// C2DiagQuickJS + C2CopyDiagLog pair — so no per-record marshalling crosses
+/// into Zig and no QuickJS C symbol is bound here (global constraint).
+///
+/// Buffer contract: `out_diag` must be a caller-owned buffer of at least 4096
+/// bytes, passed as CreateRemoteThread lpParameter — exactly one argument, the
+/// size baked into the contract (4096) and never passed by the caller, the same
+/// shape as C2DiagQJSInto above (ruling P4: nothing 64-bit crosses the exit
+/// code; the returned length is a 32-bit count of how much of the buffer is
+/// text). The C renderer bounds itself by MF_REC_CAP rows x a fixed row width
+/// and never writes past the length it is handed.
+export fn C2DiagMfRecordsInto(out_diag: [*]u8) callconv(.c) i32 {
+    return @intCast(C2DiagMfRecords(out_diag, 4096));
 }
 
 /// §36 live read-back path: copy `g_diag_log` into a CALLER-SUPPLIED 512-byte
