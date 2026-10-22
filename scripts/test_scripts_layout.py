@@ -120,7 +120,7 @@ _SCRIPT_REF_RE = re.compile(r"(?:^|[\s`(])scripts/([A-Za-z0-9_./-]+\.(?:py|js|sh
 # test_named_living_docs_exist read this, so when a later task retires PLAN.md it
 # is removed *here* once and the existence assertion follows — a test that pinned
 # ``REPO / "PLAN.md"`` in its body would block that deletion.
-LIVING_DOCS_NAMED = [REPO / "AGENTS.md", REPO / "PLAN.md"]
+LIVING_DOCS_NAMED = [REPO / "AGENTS.md"]
 
 def dangling_script_refs(doc_paths):
     """R-refs: every ``scripts/<path>`` token written in a living doc must
@@ -387,3 +387,6 @@ def test_roadmap_rule_flags_a_private_plan_path_and_unknown_status(tmp_path):
     hits = violates_roadmap_shape(p)
     assert any("private plan path" in h for h in hits)
     assert any("Q" in h and "status" in h for h in hits)
+
+def test_real_roadmap_matches_shape():
+    assert violates_roadmap_shape(REPO / "docs" / "roadmap.md") == []

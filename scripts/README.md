@@ -68,7 +68,7 @@
 |---|---|
 | `execspy.py` + `execspy.js` | 只记录版 base-Execute detour 的驱动与注入脚本；`src/dll/scripted/exec_hook.zig:167` 把它当**记录格式的契约方**引用 |
 | `frida-test.py` + `start-frida-server.bat` | `docs/frida-setup.md` 的安装与连通自检路径 |
-| `fridadis.py` + `dis.js` | 从 live 进程线性反汇编；`PLAN.md` 的 **B3** 待办还指着它（`dis.js` 尚未上传） |
+| `fridadis.py` + `dis.js` | 从 live 进程线性反汇编；`docs/roadmap.md` 段3 的 **B3** 行还指着它（细计划 `2026-10-22-b3-fridadis-bringup.md`；文件本地已在 `scripts/dis.js`,缺的只是上传到 `C:\ns\dis.js`） |
 | `scan444.py` + `anchor444.js` | `evidence/xrefs/anchors_4_4_4.md` 的 "Reproduction scripts" —— 换游戏版本要重跑的重锚定 |
 
 `scripts/windows/` —— 独立的 SSH launcher 子包（自带 `requirements.txt` 与 `tests/`），用法见
