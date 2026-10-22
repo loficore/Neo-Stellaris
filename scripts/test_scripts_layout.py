@@ -213,6 +213,24 @@ def violates_roadmap_shape(roadmap_path):
                        "or a plan filename")
     return out
 
+def violates_missing_roadmap_header(roadmap_path):
+    """R-header: the companion of R-roadmap that closes its defeat vector.
+    ``violates_roadmap_shape`` locates the 阶段状态表 by the five column names;
+    renaming or dropping one header word makes it find no table, silently
+    un-policing every per-row evidence/plan check while the real-tree test
+    stays green.  This fence pins that a header line carrying all five names
+    exists at all, so degrading the header fails loudly.  Violation strings
+    match the rule shape ``"<basename>: <reason>"``.
+    """
+    name = roadmap_path.name
+    for line in _read(roadmap_path).splitlines():
+        if line.strip().startswith("|") and \
+                all(c in _roadmap_cells(line) for c in _ROADMAP_COLUMNS):
+            return []
+    return [f"{name}: no table header carries all five column names "
+            f"{'|'.join(_ROADMAP_COLUMNS)} — the per-row checks of "
+            "violates_roadmap_shape would silently not run"]
+
 def violates_hardcoded_rvas(files):
     """R-rva: no hard-coded module-level ``RVAS`` dict literal in a maintained
     script — every RVA must be re-parsed from the injected copy via
@@ -390,3 +408,18 @@ def test_roadmap_rule_flags_a_private_plan_path_and_unknown_status(tmp_path):
 
 def test_real_roadmap_matches_shape():
     assert violates_roadmap_shape(REPO / "docs" / "roadmap.md") == []
+
+def test_roadmap_header_fence_bites_and_the_real_header_is_policied(tmp_path):
+    p = tmp_path / "roadmap.md"
+    p.write_text("| 阶段 | status | 证据 | 计划 | 第一前置 |\n|---|---|---|---|---|\n"
+                 "| C2 | blocked | 无 | x.md | 重开游戏 |\n")
+    # Renaming one header word silences the per-row checks of the main rule —
+    # exactly the defeat vector the companion fence exists to close — so this
+    # test pins both halves: the fixture blinds violates_roadmap_shape and the
+    # header rule bites it; the real roadmap carries the five-name header.
+    assert violates_roadmap_shape(p) == []
+    assert violates_missing_roadmap_header(p) == [
+        "roadmap.md: no table header carries all five column names "
+        "阶段|状态|证据|计划|第一前置 — the per-row checks of "
+        "violates_roadmap_shape would silently not run"]
+    assert violates_missing_roadmap_header(REPO / "docs" / "roadmap.md") == []
