@@ -430,6 +430,33 @@ python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码
    `VERDICT: inconclusive`,它对"这份产物会不会自杀"**什么都没证明**,不要当成阴性结果读
    (判据是纯函数 `child_loaded_the_dll`,120 s 超时也走同一条 `inconclusive` 形状)。
 
+### `scripts/c2_exec_probe.py [dll]` — C4 执行路径实机一枪
+
+把 C1 注册的 effect token 走完 C4 执行链:谓词 detour 把实例的 `[obj+0]` 换成 DLL vtable,
+base-Execute 探针合成**一次** instantiate,slot[1] 经 `C2ExecCall` 进固定 JS 脚本,脚本返回哨兵
+`1504`。读的是两组统计:`C2ExecStatsInto`(C 桥:`armed/token/js_calls/js_ok/js_err/mismatch/
+last_rc/last_value`)与 `C2ExecProbeStatsInto`(探针与谓词:`calls/fired/ctx_skip/invalid/
+pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔、120 s 上限),判读只看
+清理后的最终快照,不看轮询中间值。
+
+**一枪一进程**:`C1Run`/`C2Init`/`C2ExecInstall`/`C2ExecProbeInstall` 每个都只派发一次,重跑必须
+重开游戏。清理段(`finally`)顺序固定:先 `C2ExecProbeUninstall` 让探针 inert,再
+`C2ExecProbeVerify`(0 = base-Execute 字节已还原),`SETTLE_S` 之后 `C2ExecDisarm`(`-1` = C 桥锁忙,
+最多重试 5 次)。任何一步报 `-6`/非 0 都**绝不 `FreeLibrary`**。
+
+**verdict 判读表**(`classify`,缺失键按 0):
+
+| verdict | 条件 | 意思 |
+|---|---|---|
+| `no_fire` | `fired == 0` | 120 s 内没抓到可用调用 —— **环境结论,不是代码结论**:加载一个跑着的战役并取消暂停,重开进程再跑 |
+| `ctx_skip_only` | `fired >= 1`、`js_calls == 0`、`ctx_skip > 0`、`invalid == 0` | 每次调用都带 lexer 哨兵 `[ctx+0x38]==0xb`,instantiate 被拒 |
+| `fired_no_js` | `fired >= 1`、`js_calls == 0`、其余 | instantiate 发了但没走到 JS:实例没经过 patch 后的谓词/vtable 链,或 C 桥已 disarm |
+| `ok` | `fired >= 1`、`js_ok >= 1`、`pred_patched >= 1`、无 `js_err`/`mismatch` | 链路成立;还会断言 `token == C1EffectId()`、`last_value == 1504`、`chain == 0` |
+| `error` | 其余 | 链跑了但 JS 没给哨兵:看 `js_err`(脚本/异常)与 `mismatch`(到达 JS 的 token 不对) |
+
+`no_fire` 报出来时先查环境(战役是否在跑、是否暂停),不要去改探针。**宿主死了先跑 §45 的两个
+离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)排除我们自己的产物再谈别的。
+
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 
 `scripts/disrva.py` 与 `scripts/cap.py` 反汇编的是**游戏**:它们只收 RVA,自己去找 `stellaris.exe`
