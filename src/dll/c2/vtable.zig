@@ -97,22 +97,6 @@ pub fn resetForTest() void {
 }
 
 // ---------------------------------------------------------------------------
-// Compatibility adapters (ledger P3) — removed when exports.zig is rewritten
-// in Task 6. They keep the tree compiling and behaving the same in between;
-// they add no second vtable.
-// ---------------------------------------------------------------------------
-
-pub fn buildVtables(game_base: usize) void {
-    buildFromGame(game_base) catch |err| {
-        std.log.err("c2.vtable: cannot build from donor at base 0x{x}: {s}", .{ game_base, @errorName(err) });
-    };
-}
-
-pub fn isInitialized() bool {
-    return built;
-}
-
-// ---------------------------------------------------------------------------
 // Safe memory reads
 // ---------------------------------------------------------------------------
 

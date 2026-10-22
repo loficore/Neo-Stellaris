@@ -33,6 +33,7 @@ var base_address: usize = 0;
 /// token_id = 0 means not yet run or failed; check c1_error for the reason.
 var c1_result: ?keyword_registry.Registration = null;
 var c1_error: ?keyword_registry.RegisterError = null;
+var c1_effect_id: u32 = 0;
 
 /// Retrieve the stored engine pointer. Returns null if not yet set.
 pub fn getEnginePtr() ?*anyopaque {
@@ -168,7 +169,13 @@ export fn C1Run() callconv(.c) u32 {
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "C1 OK: trigger_id={d} effect_id={d}\n", .{ trigger_result.token_id, effect_result.token_id }) catch "C1 OK\n";
     writeLogStatic("C:\\temp\\c1_result.log", msg);
+    c1_effect_id = effect_result.token_id;
     return trigger_result.token_id;
+}
+
+/// The effect-side token from the last successful C1Run. 0 = never run/failed.
+export fn C1EffectId() callconv(.c) u32 {
+    return c1_effect_id;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,8 +185,14 @@ export fn C1Run() callconv(.c) u32 {
 const c2_handler = main.c2_handler;
 const c2_vtable = main.c2_vtable;
 const c2_predicate_hook = main.c2_predicate_hook;
+const c2_live_probe = main.c2_live_probe;
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
+
+extern fn C2ExecArmToken(token: u32, budget: u32) c_int;
+extern fn C2ExecStats(out: [*]u8, out_size: c_int) c_int;
+extern fn C2ExecDisarmState() c_int;
+const C2EXEC_BUDGET: u32 = 64;
 
 /// Sanity check: returns 42 if the new DLL code is loaded.
 /// Pure Zig, no C wrapper — proves the DLL binary is correct.
@@ -361,14 +374,72 @@ export fn C2TestVtable() callconv(.c) i32 {
     const hdr = std.fmt.bufPrint(&buf, "C2Test: game_base=0x{x}\n", .{game_base}) catch "C2Test: game_base ok\n";
     writeLogStatic("C:\\temp\\c2_test.log", hdr);
 
-    c2_vtable.buildVtables(game_base);
-    if (!c2_vtable.isInitialized()) {
+    c2_vtable.buildFromGame(game_base) catch {
+        writeLogStatic("C:\\temp\\c2_test.log", "C2Test FAIL: vtable build failed\n");
+        return -2;
+    };
+    if (!c2_vtable.isBuilt()) {
         writeLogStatic("C:\\temp\\c2_test.log", "C2Test FAIL: vtable build failed\n");
         return -2;
     }
 
     writeLogStatic("C:\\temp\\c2_test.log", "C2Test OK: vtables built\n");
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// C4 execution path (Task 6)
+// ---------------------------------------------------------------------------
+
+/// One-shot arming of the whole chain, in dependency order:
+/// vtable → predicate token → predicate install → probe token → C bridge arm.
+export fn C2ExecInstall(token: u32) callconv(.c) i32 {
+    const exe_name: [*:0]const u8 = "stellaris.exe";
+    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    if (token == 0 or game_base == 0) return -1;
+    c2_vtable.buildFromGame(game_base) catch return -2;
+    c2_predicate_hook.setToken(token) catch return -3;
+    c2_predicate_hook.install() catch return -4;
+    c2_live_probe.setToken(token) catch return -5;
+    return switch (C2ExecArmToken(token, C2EXEC_BUDGET)) {
+        0 => 0,
+        1 => -6,
+        2 => -7,
+        3 => -8,
+        5 => -9,
+        6 => -10,
+        else => -1,
+    };
+}
+
+export fn C2ExecProbeInstall() callconv(.c) i32 {
+    if (!c2_vtable.isBuilt() or !c2_predicate_hook.isInstalled()) return -1;
+    c2_live_probe.install() catch return -2;
+    return 0;
+}
+
+export fn C2ExecProbeUninstall() callconv(.c) i32 {
+    c2_live_probe.uninstall() catch return -6;
+    return 0;
+}
+
+export fn C2ExecProbeVerify() callconv(.c) i32 {
+    return c2_live_probe.verify();
+}
+
+export fn C2ExecDisarm() callconv(.c) i32 {
+    if (C2ExecDisarmState() < 0) return -1;
+    c2_predicate_hook.clearToken();
+    c2_predicate_hook.uninstall() catch return -6;
+    return 0;
+}
+
+export fn C2ExecStatsInto(out: [*]u8) callconv(.c) i32 {
+    return C2ExecStats(out, 1024);
+}
+
+export fn C2ExecProbeStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_live_probe.statsInto(out[0..512]));
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.
