@@ -227,10 +227,22 @@ log 还逐字引了它们的输出),提升是**复制**不是移动。两处都�
 `zig-out/bin/stellaris_quickjs.dll`,按**本文件位置**解析,不是按 cwd);`image_base` 从镜像自己的
 optional header 读,没有任何地址是写死的 —— 换一份产物就把 RVA 重算一遍。
 
-**退出码有三种意思,调用方必须能分开**:0 = 读到了且有匹配;1 = 读到了但**没有**匹配(该类型名
-零个检查点、或 `func` 没命中任何引用记录的函数)—— 这是一个结论,不是故障;**2 = 工具没能读到
-产物**(路径不存在、不可读、截断、非 PE32+;打一行 stderr,不给 traceback)。修复循环会拿
-`c2_selfabort_repro.py` 送来的任意文件名调它,把 2 误读成 1 就是「这份产物没有检查点」的假结论。
+**退出码有三种意思,调用方必须能分开**:0 = 读到了且有匹配;1 = 读到了但**没有**匹配 —— 这是
+一个结论,不是故障。**1 有两种不同的意思,别把它们并成一句话**:「该类型名零个检查点 / `func`
+的地址不在任何 `.pdata` 函数区间里」和「命中了函数、但**该函数代码不引用任何 `TypeMismatchData` 记录**」
+是两件事(工具分别打 `rva 0x… is not inside any .pdata function entry` 和
+`this function's code references no TypeMismatchData record (other UBSan record
+kinds are not decoded)`),后者的含义是"这一帧没有
+可归因的捕获",不是"这里没有 UBSan";**2 = 调用本身是错的,所以对产物什么都没下结论** ——
+工具没能读到产物(路径不存在、不可读、截断、非 PE32+),**或 `func` 拿到的数低于镜像基址**
+(那是 panic 栈打的裸 RVA,不是 vma;本批(§47 前置)加的口径护栏,打一行 stderr 并把该传的
+`image_base + rva` 原样回显)。修复循环会拿 `c2_selfabort_repro.py` 送来的任意文件名调它,
+把 2 误读成 1 就是「这份产物没有检查点」的假结论 —— 两条 exit-1 消息与 2 的措辞故意不同形,
+护栏就是为了不让"调用写错了"长得像"结论"。**本批围栏实测**:`scripts/test_c2_harness.py`
+**134 passed**(133 + 新增 1 条),`scripts/test_scripts_layout.py` **23 passed**。
+**§47 终评修复轮**(2026-10-22)`parse` 补上 section 越界检查后,截断输入真的走 2 了(此前
+`func` 会拿空 `.pdata` 答 1);新增 1 条截断测试,`test_c2_harness.py` 变为 **135 passed**,
+`test_pe_disrva.py` 变为 **5 passed**。
 
 ```
 python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll site JSMallocBlockHeader
@@ -241,14 +253,17 @@ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000
 **141** 个检查点,其中 `quickjs.c:1494:12` 恰好 1 条;`func 0x18000bd9b` = 持有该地址的函数
 `rva 0xbd70..0xbdf3`(**131 bytes**),引用记录 `quickjs.c:1494:12 member_access
 type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— 与 §45.3 记的同一条。
+同一函数还 `call 0x499cc0`(`__ubsan_handle_pointer_overflow`),带的是 `0x5ab450` 处的 16 字节
+`PointerOverflowData`(同为 `:1494:12`);它**不在**上面这条记录的输出里 —— 见判读陷阱 7。
 
 **判读陷阱**:
 1. **`func` 打印的是 `.pdata` 区间和该区间加载了哪些记录,不是链接期函数名。** 帧归属靠的是
    区间 + 记录引用;要说"这是 `__JS_NewAtomInit`",得去读那几行 C 本身(§45.3 就是这么做的)。
-2. **"地址不在任何区间内"证明不了任何事 —— 这份解析是不完整的。** §45.4 的边界声明量到的是
-   §42 产物(`.text` 0x4c8b86)只出 **3,042** 条区间;同一份代码跑当前产物(`.text` 0x4c9be6)出
-   **4,824** 条(`runtime_functions` 现场可复测)。两个数都覆盖不了镜像里的函数,所以"没命中"
-   既可能是地址在数据/填充里,也可能只是 `.pdata` 这条解析没读全 —— 分不清。
+2. **"地址不在任何区间内"证明不了任何事 —— 这份解析是不完整的。** §45.4 记的 **3,042** 条区间是
+   **当时那版解析器**在同一份字节(`.text` 0x4c8b86,§42/§45 产物)上的输出,不是那份产物的属性;
+   现在的 `runtime_functions` 在同一份字节上出 **4,818** 条,同一份工具跑当前产物(`.text` 0x4c9be6)
+   出 **4,824** 条(现场可复测)—— 差 6 条的是字节,差 1,776 条的是解析器版本。两个数都覆盖不了
+   镜像里的函数,所以"没命中"既可能是地址在数据/填充里,也可能只是 `.pdata` 这条解析没读全 —— 分不清。
 3. **panic 栈每帧打印的是 `ip − 1`**,即调用指令**前一字节**,所以那个数值本身既不是出错指令也不是
    调用点。直接把它传给 `func` 没问题(`.pdata` 查找是闭区间 `begin <= rva < end`),但别把打印值
    当成指令地址来解读。
@@ -262,6 +277,27 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
    32 字节里那条完全可读的记录。提升版改成 `end - 26 + 1`。当前产物上两个界给出**逐条相同的
    13,693 条记录**(`site JSMallocBlockHeader` 仍是 141,`quickjs.c:1494:12` 仍恰好 1 条),所以这条
    不改变任何已记录的计数 —— 它是给下一次链接准备的,届时布局器未必不把记录放进那段尾部。
+6. **记录行不带 `[ubsan_site]` 前缀,所以按前缀过滤会把证据丢掉。** `site`(`:261`)与 `func`
+   (`:290`)的 header 行带前缀,而每条记录行是**两个空格**开头(分别在 `:264`/`:304` 打印)—— `grep -F '[ubsan_site]'`
+   (或转义 `\[ubsan_site\]`)只留下 header。本批(§47 前置)对一次真实输出(`func 0x1800055f5`)实测 = 7 行
+   (2 行 header + 5 行记录),过滤后**只剩 2 行**,5 条记录全丢。更糟的是另一种写法:
+   不加转义的 `grep '[ubsan_site]'` 是**字符类**(任一字符 u/b/s/a/n/_/i/t/e),同一份
+   7 行输出**一行都不会被滤掉** —— 看起来"过滤生效了、什么都没丢",其实过滤根本没起作用。
+   两种写法都别拿来取证据:要记录行就 `grep '^  '` 或 `grep 'quickjs\.c:'`(同一份输出各实测
+   5 行)。
+7. **`#0x…` 标注只能和 `TypeMismatchData` 记录的 `record_rva=` 比。** `func`/`site` 只解码
+   `TypeMismatchData` 的 kind 3–11(`scripts/dll_ubsan_site.py:93`,`:201` 还要求 `log_align <= 7`),
+   其它 UBSan 记录种类**不解码** —— 例如 `PointerOverflowData` 是 16 字节、只有 `SourceLocation`,
+   没有类型描述器与 kind 字节,所以它没有 `record_rva=` 行,"no record" ≠ "no handler"。实例:
+   `js_rc` 的 131 字节函数有两次 handler 调用(`0x498170`/`0x5ab430` 的
+   `member_access type='JSMallocBlockHeader'` 与 `0x499cc0`/`0x5ab450` 的
+   `PointerOverflowData`),`func` 只打出前一条;`evidence/disasm/js_rc_trap_77c0c35e.md` 两次都列。
+   所以一个函数"恰好一条记录"只意味着**恰好一条可解码的 `TypeMismatchData`**,不是只有一次
+   UBSan handler 调用。
+8. **报告里的 `pointer == 0` 可能是编译期常量,不是被检查的那个运行时指针。** §47 的实例:fallback
+   `offsetof`(`cutils.h:43-45` 的 `&((type *)0)->field`)把一次**空成员访问**编译进 `container_of`
+   (`quickjs.c:1494`),于是 `type_mismatch` 的指针操作数是字面 0;handler 文本里的 "null pointer"
+   因此**不是**「运行时指针为 0」的观测,allocator 形状或记录器数据都不能拿来判它。
 
 ### `scripts/c2_selfabort_repro.py <dll_path>`(Windows 侧;§45 的自检器)
 
@@ -311,6 +347,49 @@ python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码
    压根没把 DLL 装进来(平台不对 / 路径不对 / 装载失败 —— 于是没有 `BASE` 行)。后者打的是
    `VERDICT: inconclusive`,它对"这份产物会不会自杀"**什么都没证明**,不要当成阴性结果读
    (判据是纯函数 `child_loaded_the_dll`,120 s 超时也走同一条 `inconclusive` 形状)。
+
+## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
+
+`scripts/disrva.py` 与 `scripts/cap.py` 反汇编的是**游戏**:它们只收 RVA,自己去找 `stellaris.exe`
+(`NS_STELLARIS_EXE` / 固定候选)。`scripts/pe_disrva.py` 反汇编的是**你给的那份 PE**,路径是必填的
+第一个位置参数 —— 本仓库用它读自己构建的 `zig-out/bin/stellaris_quickjs.dll`(§45/§47 的 `js_rc` trap),
+不读游戏,所以没有默认路径、也不受 `NS_STELLARIS_EXE` 影响。
+
+```
+python3 scripts/pe_disrva.py <pe_path> <rva_start_hex> [<rva_end_hex>|<count>]
+python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 0xbdf3   # end 不含
+python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 40       # 40 条(默认 64,上限 4096)
+```
+
+- 第三个参数:`0x` 开头 = **结束 RVA,不含**;纯十进制数字 = **指令条数**。所以小的十六进制结束 RVA
+  必须带 `0x`(裸 `100` 是 100 条,不是 rva 0x100)。
+- 每条绝对 `call`/`jmp` 目标与每个 `rip+disp` 操作数标 `  #0x<rva>`;`#0x` 后是**相对 image base**
+  的 RVA(image base 从该 PE 的 optional header 读),所以能和 `dll_ubsan_site.py` 的
+  `record_rva=` 比 —— 但那条只对**它解码的 `TypeMismatchData` 记录**成立(见上一节判读陷阱 7)。
+- **只解码带 `IMAGE_SCN_MEM_EXECUTE`(`0x20000000`)的段**。RVA 0 落在 PE 头里,capstone 会把 `MZ...`
+  当指令解出来,所以工具在喂给它之前按 section 位拒绝。可执行段外的起点、文件映射之外的起点、或解出
+  **0 条指令**,一律退出 1 —— 那是「这段不是代码」的结论。
+- 退出码三义与 `dll_ubsan_site.py` 一致:**0** = 至少解出 1 条;**1** = 不是可执行代码 / 0 条;
+  **2** = 调用错了(缺参、非 hex、文件读不到、非 PE32+、**截断的镜像**(section 表声明的 raw 字节
+  越过 EOF)、end < start、count <= 0),一行 stderr、无 traceback。
+- **起点不落在任何段里、或落在非可执行段里,是 1 而不是 2**(控制器的裁定):那是「这个文件里这段
+  确定不是代码」的结论;2 只留给**读不了 / 非 PE / 截断的输入**和写错的调用参数。
+- 上限 4096 条,超出打 `; truncated at 4096 insns`;头行给 `N insns, M bytes`。**未截断时** end 模式下
+  `M` 等于 `end - start`;可一旦超过 4096 条(或 end 越过段尾被裁剪),头行的 end 是**有效(裁剪后)
+  的 end**,`M` 小于请求的 `end - start`,同时带上截断提示(实测 `0xbd70 0x800000` 头行打
+  `0x4cac00` 并附 `; truncated at 4096 insns`;未截断的 `0xbd70..0xbdf3` = 131 字节 = 40 条)。
+
+**判读陷阱:**
+1. **反汇编证明的是「被检查的是哪个表达式」,永远不是运行时值。** 它读得出 `0xbd70` 的 `test r8,r8`
+   在 `add rcx,-8` 之前、测的是原始指针;它证明不了那一枪里 `r8` 是不是 NULL。
+2. **`#0x...` 是 image-base-relative 的 RVA,不是 VA**;rip 目标按 `address + size + disp` 算,不是从
+   指令起点算。
+3. **clang 的「减 8」可能是 `add reg,-8`**:本产物里 `container_of` 的 header 偏移是 `48 83 c1 f8`
+   (`add rcx,-8`)。按 mnemonic 找 `sub` 会漏 —— 读语义,不读拼写。
+4. **0 条的退出 1 是结论不是失败**,但别把它读成「这里没有 sub」:先看 stderr 是「不在可执行段」还是
+   「段内 0 条」,两者都与「成功但没有该指令」分开。
+5. 想验证「0 条 → 1」可以拿 RVA 0,但它走的是 section 门,不是 capstone 解失败;两条路都退出 1,
+   理由不同,不要混成一条判据。
 
 ## IDA headless 现状(环境状态,非规则)
 

@@ -2745,3 +2745,268 @@ explicitly *not* credited to this run because it was excluded offline, 4 indepen
 sites, same function range), 1 window bound inferred from two reader cadences (≳0.2 ms, < 2 ms), 1 plan
 outcome: **candidate table incomplete — the three §45.5 candidates are not the mechanism**, C2 stays
 blocked, and the next move belongs to the human rather than to Task 4.
+
+## 47. The trap's null report is a compile-time constant from the fallback offsetof — §45's "pointer was 8" is withdrawn (2026-10-22, no dispatch, no game)
+
+Transcripts: `evidence/logs/c2_panicchain_4_4_4.log` (Task 1's eight-frame chain) and
+`evidence/disasm/js_rc_trap_77c0c35e.md` (Task 2's 40-instruction listing of the 131 bytes).
+Artifact: `zig-out/bin/stellaris_quickjs.dll`, sha256
+`77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0`, read as a file copy. Zero
+dispatch, zero game, zero Windows channel, zero bytes changed.
+
+The finding is narrow and it moves the question: the UBSan report that aborts is **not** about the
+pointer `js_rc` was handed. It is the instrumentation of the **fallback `offsetof`** inside
+`container_of` — a member access through a null pointer that exists only at compile time. Its
+pointer operand is the literal **0**, so the report fires on every call to `js_rc`, whatever `str`
+is. §45's "the user pointer was 8" is withdrawn; `str`'s value and source remain unobserved, which
+is exactly the half §46's boundary kept.
+
+### 47.1 The chain, frame by frame
+
+| frame | printed rva (`ip − 1`) | `.pdata` span | offset | records / source cited | name |
+|---:|---|---|---:|---|---|
+| 1 | `0xbd9b` | `0xbd70..0xbdf3` (131 B) | +`0x2b` (43) | 1 `TypeMismatchData` `0x5ab430` at `quickjs.c:1494:12`; plus the `PointerOverflowData` `0x5ab450`, same location, not decoded by the maintained tool (hand-decoded in §47.2) | **`js_rc`** (`:1492`) |
+| 2 | `0xeede3` | `0xeed10..0xeeff1` (737 B) | +`0xd3` (211) | 6, `:2361`–`:2366` | **`js_alloc_string_rt`** (`:2355`) |
+| 3 | `0x1ebde` | `0x1ebb0..0x1eda4` (500 B) | +`0x2e` (46) | 4, `:3433`/`:3434` | **`__JS_NewAtomInit`** (`:3426`) |
+| 4 | `0x55f5` | `0x5320..0x570b` (1003 B) | +`0x2d5` (725) | 5, `:3174`–`:3178` | **`JS_InitAtoms`** (`:3169`) |
+| 5 | `0x43bc` | `0x3e40..0x4f6b` (4395 B) | +`0x57c` (1404) | 31, `:2076` … `:2118` | **`JS_NewRuntime2`** (`:2067`) |
+| 6 | `0x31b9c8` | `0x31ad90..0x31cbeb` (7771 B) | +`0xc38` (3128) | 0 | **`c2_diag_sequence`** (`quickjs_wrapper.c:497`) |
+| 7 | `0x31cc05` | `0x31cbf0..0x31cd30` (320 B) | +`0x15` (21) | 0 | **`C2DiagQuickJS`** (`quickjs_wrapper.c:580`) |
+| 8 | `0x44e399` | `0x44e350..0x44e3cc` (124 B) | +`0x49` (73) | 0 | **`C2DiagQJSInto`** (`src/dll/exports.zig:240`) |
+
+The four edges that make it a chain are in the source at the cited lines:
+
+    quickjs.c:2096   if (JS_InitAtoms(rt))                      JS_NewRuntime2  → JS_InitAtoms
+    quickjs.c:3191   if (__JS_NewAtomInit(rt, p, len, atom_type) == JS_ATOM_NULL)
+                                                                JS_InitAtoms    → __JS_NewAtomInit
+    quickjs.c:3430   p = js_alloc_string_rt(rt, len, 0);        __JS_NewAtomInit → js_alloc_string_rt
+    quickjs.c:2361   js_rc(str)->ref_count = 1;                 js_alloc_string_rt → js_rc
+
+Frame 2 is disassembled, not inferred: the call to `js_rc` is the 5-byte `call 0x18000bd70` at
+`0xeeddf`, returning to `0xeede4` (printed `0xeede3`), and the next check site is the `:2361`
+record at `0xeee07`. A read-only `E8` scan of `.text` finds **104** direct call sites to `0xbd70`;
+the one at `0xeeddf` is the first this execution reached.
+
+### 47.2 Three judgment rows, none matching; the check that fired is a third check site
+
+Verbatim from the Task 2 listing (reproduced here with
+`python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 0xbdf3` — 40 insns,
+131 bytes, byte-identical):
+
+    0000bd86  xor     eax, eax
+    0000bd88  test    al, 1
+    0000bd8a  jne     0x18000bd9c
+    0000bd8c  lea     rcx, [rip + 0x59f69d]  #0x5ab430
+    0000bd93  xor     eax, eax
+    0000bd95  mov     edx, eax
+    0000bd97  call    0x180498170            # type_mismatch_v1
+    0000bd9c  mov     r8, qword ptr [rbp - 0x10]
+    0000bda0  test    r8, r8
+    0000bda3  setne   al
+    0000bda8  mov     rcx, r8
+    0000bdab  add     rcx, -8
+    0000bdbb  setne   r9b
+    ...
+    0000bddd  lea     rcx, [rip + 0x59f66c]  #0x5ab450
+    0000bde4  call    0x180499cc0            # pointer_overflow
+
+- **`0xbd86..0xbd97` — the check that aborted, on the compile-time constant 0.** `xor eax,eax` at
+  `0xbd86`; `test al,1` at `0xbd88`; `jne 0xbd9c` at `0xbd8a`. The panic frame names `0xbd9b`, which
+  resolves to the function entry `0xbd70`; at that entry `al` has just been zeroed and nothing writes
+  it before the test, so the jump can never be taken; whether a caller also branches into the function
+  elsewhere was not scanned for, so the claim is about this entry only.
+  `lea rcx,[0x5ab430]`, then `xor eax,eax` / `mov edx,eax` put **0** in the handler's pointer
+  slot and `call 0x498170` at `0xbd97`. The record decodes to `quickjs.c:1494:12`, kind
+  `member_access`, type `JSMallocBlockHeader`, `log_align = 3` (8-byte alignment), `kind = 3`.
+  The handler's entry reads `log_align` at `[rcx+0x18]`, `kind` at `[rcx+0x19]` and the type
+  descriptor at `[rcx+0x10]`, and branches on `test rdx,rdx; jne …`: with `rdx = 0` it takes the
+  null branch and formats `member access within null pointer of type 'JSMallocBlockHeader'` — the
+  panic text at `c2_selfabort_4_4_4.log:36` and the return code 3 at `:34` are the two
+  observations. The panic frame `0xbd9b` is `ip − 1` of the **return from `0xbd97`** (`0xbd9c`),
+  not of the second call (`0xbde4` returns to `0xbde9`, printed `0xbde8`), so the text belongs to
+  this call.
+- **`0xbda0..0xbdd3` — the runtime pointer's zero test, and the subtraction.**
+  `test r8,r8` at `0xbda0` reads the original `str`; `0xbdab` is `add rcx,-8` (the "sub 8",
+  encoded `48 83 c1 f8`); `setne r9b` at `0xbdbb` tests the subtraction result's nullness;
+  `0xbdd1 test al,1` / `0xbdd3 jne 0xbde9` either skips the second handler or falls into it.
+- **`0xbde4` — the pointer-overflow report on `str − 8`.** `lea rcx,[0x5ab450]` at `0xbddd`,
+  `call 0x499cc0` at `0xbde4`, with `rdx = str` and `r8 = str − 8`. The record at `0x5ab450` is a
+  16-byte `PointerOverflowData`: only a source location — filename pointer, line 1494, column 12
+  (read directly; the maintained tool decodes only `TypeMismatchData`). The handler's entry tests
+  both `rdx` and `r8` and takes three arguments, matching `__ubsan_handle_pointer_overflow`
+  (Task 2's attribution, re-checked at the entry). This is the only handler call that receives
+  `str` as an argument — and the failing run never reaches it, because `0xbd97` aborts. The
+  `test r8,r8` at `0xbda0` also reads `str`, but it feeds this call's guard, not the aborting
+  call's operand.
+
+So both a pre-subtraction zero test (on `str`) and a post-subtraction zero test (on `str − 8`)
+exist; the plan's single-check premise does not describe this code. The check that fired is a
+**third** check site — not either of the two sites the table contrasts — on neither quantity.
+
+### 47.3 Judgment table: (i), (ii) and (iii) are inapplicable; the fourth row lands
+
+| row | premise | what the 131 bytes show | verdict |
+|---|---|---|---|
+| **(i)** | zero test after `sub 8`, on the subtraction result ⇒ the header is checked ⇒ `str == 8` | the aborting report is `0xbd97`, **before** `add rcx,-8` at `0xbdab`; its operand is `edx = 0`, not `rcx` | **does not hold** |
+| **(ii)** | zero test before `sub 8`, on `str` ⇒ `str == NULL` at `:2361` ⇒ `:2359` contradicted ⇒ attribution unreliable, Task 1 redo | a pre-subtraction `test r8,r8` does exist at `0xbda0`, but it feeds the `0xbde4` pointer-overflow report, not the aborting call; the aborting operand is 0 whatever `str` is | **does not hold** |
+| **(iii)** | the test and the subtraction are in different blocks, or the trapping function is a thunk ⇒ handler hook | the straight-line path actually taken runs from `0xbd86` through the aborting call at `0xbd97` (conditional branches exist at `0xbd8a` and `0xbdd3`, but neither is taken on that path), and the zero test at `0xbda0` with the `add rcx,-8` at `0xbdab` are in the same basic block; the 131-byte function is `js_rc`'s own body (record at `:1494:12`), not a thunk | **does not hold** |
+| **4** | none of the above | fallback `offsetof`'s compile-time null member access; constant-0 report; Zig abort; exit 3 | **lands** |
+
+Row (ii)'s consequence deserves its own sentence, because it is the one that would have thrown
+away Task 1: the attribution is **not** ambiguous here. The 131-byte function references exactly
+two UBSan records and both carry the same `:1494:12` location — one `TypeMismatchData`
+(`0x5ab430`) and one `PointerOverflowData` (`0x5ab450`). There is no competing line, so `js_rc` is
+the function and `:1494` is the expression.
+
+**Landing row: the plan's fourth row — with a mechanism, not with "offline disassembly cannot
+judge".** This is the termination row: Task 4's allocator repair is not qualified by this
+evidence.
+
+### 47.4 The mechanism: the fallback `offsetof` is a syntactic null member access
+
+    cutils.h:43    #ifndef offsetof
+    cutils.h:44    #define offsetof(type, field) ((size_t) &((type *)0)->field)
+    cutils.h:49    #ifndef container_of
+    cutils.h:51    #define container_of(ptr, type, member) ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
+    quickjs.c:1492 static inline JSMallocBlockHeader *js_rc(void *ptr)
+    quickjs.c:1494     return container_of(ptr, JSMallocBlockHeader, user_data);
+
+The fallback is the definition that actually takes effect in this translation unit — measured,
+not assumed. Preprocessing the same file with the build's default target (windows x86_64, Zig's
+default ABI `.gnu`) and C flags
+
+    $ zig cc -target x86_64-windows-gnu -DCONFIG_VERSION='"2025-09-13"' \
+        -Wno-gnu-zero-variadic-macro-arguments -E libs/quickjs/quickjs.c > /tmp/qjs_s47.i   # rc=0
+
+expands the body to
+
+    return ((JSMallocBlockHeader *)((uint8_t *)(ptr)
+            - ((size_t) &((JSMallocBlockHeader *)0)->user_data)));
+
+The parenthesised expression is a member access through a null pointer written in the source. Its
+value is the compile-time constant 8 (`user_data` at offset 8; the layout probe in
+`c2_panicchain_4_4_4.log` (5) printed `sizeof(JSMallocBlockHeader)=8 u@0 block_size_idx@2 ref_count@4 user_data@8`), but clang's
+`-fsanitize=null` instruments the **access**, not the folded value: the handler call for the
+`TypeMismatchData` `0x5ab430` (file, line 1494, column 12, type descriptor `JSMallocBlockHeader`,
+`log_align = 3`, `kind = 3 = member_access`) receives the null constant as its pointer argument.
+There is no runtime branch that can suppress it: `xor eax,eax; test al,1; jne` on an `al` nothing
+writes is a constant-false guard, so `0xbd97` runs on every call.
+
+Zig's UBSan runtime takes that record and pointer: `kind = member_access` with pointer 0 prints
+`member access within null pointer of type 'JSMallocBlockHeader'`, then panics; Zig's panic
+handler aborts, and §45.1 measured the abort status as **3**. That is the whole chain: fallback
+`offsetof` → statically-null member access → unconditional UBSan report with constant 0 → Zig
+abort → exit 3.
+
+**Why this is Windows-only, at the source level.** The same `zig cc -E` on the native target
+expands the body to `__builtin_offsetof(JSMallocBlockHeader, user_data)`:
+
+    $ zig cc -DCONFIG_VERSION='"2025-09-13"' -Wno-gnu-zero-variadic-macro-arguments \
+        -E libs/quickjs/quickjs.c > /tmp/qjs_native.i                                     # rc=0
+    static inline JSMallocBlockHeader *js_rc(void *ptr)
+    { return ((JSMallocBlockHeader *)((uint8_t *)(ptr) - __builtin_offsetof(JSMallocBlockHeader, user_data))); }
+
+The preprocessor trace explains it: on the native target `__linux__` selects the `<malloc.h>` branch
+at `quickjs.c:38`, and that header includes `<stddef.h>` **fully** (no `__need_*`), so `offsetof` is
+already the builtin when the `#ifndef` is reached. `<stdlib.h>` (`quickjs.c:25`) is not the source
+of the pull: glibc's copy asks `<stddef.h>` for `size_t`/`wchar_t`/`NULL` only (`__need_size_t`,
+`__need_wchar_t`, `__need_NULL`) and defines no `offsetof` — measured, the stdin probe
+`zig cc -E -dM -x c -include stdlib.h - </dev/null` prints no `offsetof`, while the same command
+with `-include malloc.h` prints `#define offsetof(t,d) __builtin_offsetof(t, d)` (verbatim output
+in `c2_panicchain_4_4_4.log` (12)). On the MinGW headers this build uses, the `__linux__`/`__GLIBC__`
+branch is not taken, `<stdlib.h>` defines no `offsetof`, and `<inttypes.h>` (`quickjs.c:28`)
+reaches `<stddef.h>` only with `__need_wchar_t` — so `offsetof` is still undefined at `cutils.h:43`,
+the fallback is defined, and the later full `<stddef.h>` inclusion (via `libregexp.h:27`) cannot
+override it because `__stddef_offsetof.h` guards its definition with `#if !defined(offsetof)`. That
+is a preprocessor-level difference sufficient to explain why the native control completes; whether
+the native test binary also carries `-fsanitize=null` was not measured, so this is the source-level
+reason the check exists on one target and not the other, not a claim about that binary's flags.
+
+**What this does to the death window.** `js_rc` cannot return in this build, so the first call to
+it is the death. The chain says that call is at `0xeeddf` — `js_alloc_string_rt`'s `:2361`, inside
+the first `__JS_NewAtomInit` of `JS_InitAtoms`, after the 40-byte arena (`0xff0`) was handed over
+and before any further `mf` call. §43/§45/§46 spent three sections narrowing to that window; §47
+says the window is where the first `js_rc` happens, not where an arena computation goes wrong. No
+allocator event needs to explain the stop.
+
+### 47.5 What the report does **not** say
+
+- **`str`'s runtime value and source are unobserved.** The report carries a type and the literal
+  0; the only instruction in the function that **tests** `str` for null is `0xbda0`, and the check
+  it feeds never runs. §46's boundary — "nothing in this section observes the value that `js_rc` was
+  handed" — stands unchanged. §45's inference `str == 8` is **withdrawn**: it was derived from
+  treating the `ptr − 8 == 0` check as the one that fired, and the check that fired does not test
+  `ptr − 8`.
+- **The pointer-overflow check's outcome for the real pointer is unobserved.** It would fire if
+  `str == 8` (result null) or `str == 0` (base null, result non-null); neither value was seen. The
+  old "8" story is exactly that check's condition, moved one call too late.
+- **Whether a second defect hides behind this one is unobserved.** With the first check aborting,
+  the rest of `js_rc` and the arena path are never executed in this build. A repair will reveal
+  whatever is next; this section does not predict it.
+- **The native test binary's sanitizer configuration was not measured** (47.4). The header
+  difference is verified; its role as the sole difference between the two builds is not.
+
+### 47.6 What this does to §46's 13 `Mx` rows
+
+The rows remain valid observations of **our callbacks**: the sizes (`0x5a0`, `0x808`, `0xff0`), the
+pointers, the 8-alignment and `≡8 mod 16` shape, the per-render `st` counts and the
+`+0x408 = offsetof(JSMallocContext, malloc_state)` identity are all untouched. What changes is
+their **discriminating power**: they were read as evidence about the header that `js_rc`
+supposedly received null, and there is no null header in the report. The trip is independent of
+runtime pointer values, so no allocator property — alignment, zero-size behaviour, state
+arithmetic — can be selected or excluded by it. §46's row 4 ("candidate table incomplete") is
+superseded: the table was not missing a fourth allocator candidate; the candidates were answers to
+a question the binary never asked. **An allocator fix would have been the wrong target.**
+
+### 47.7 Repair options, not implemented
+
+Handed to the human; this plan implements none of them and changes no byte.
+
+1. **Make `offsetof` well-defined for the vendored QuickJS.** In `cutils.h`, define it as
+   `__builtin_offsetof(type, field)` (or include `<stddef.h>` before the `#ifndef`; on this
+   MinGW target that header defines the builtin — verified in Zig's bundled
+   `__stddef_offsetof.h`). The value stays 8 and the instrumented null member access disappears.
+   Narrowest fix; vendored source only.
+2. **Exclude `libs/quickjs` from null checks in the build** (e.g. `-fno-sanitize=null` on the
+   QuickJS C files). Removes this trip and also every genuine null check in the vendored engine;
+   treats the symptom.
+3. **Make the Zig type-mismatch handler non-aborting for this record kind.** This is the plan's
+   row-(iii) read point and needs the link-order/handler experiment (`ubsan_rt.zig` already
+   exports the symbol; whether a C-side definition collides is untested) that the plan reserved
+   as a **separate authorization**. It would still emit a report per `js_rc` call unless
+   filtered, so it is not a first choice.
+
+### 47.8 The Task 1 tool contract, and the §45 accounting Task 1 handed here
+
+`dll_ubsan_site.py func` takes a **vma carrying the image base**; a bare RVA is a caller error and
+exits 2, with the correct vma echoed. Measured on this artifact:
+
+    $ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000bd9b
+    [ubsan_site] function holding 0x18000bd9b: rva 0xbd70..0xbdf3 (131 bytes)
+      .../libs/quickjs/quickjs.c:1494:12 member_access type='JSMallocBlockHeader' ...   # rc=0
+
+    $ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0xbd9b
+    [ubsan_site] func takes a vma carrying the image base (0x180000000); 0xbd9b is below it,
+      so it looks like a bare rva — pass 0x18000bd9b for rva 0xbd9b                      # rc=2
+
+That is the guard the §47-preparation batch installed — `docs/offline-tooling.md` calls it
+"本批(§47 前置)加的口径护栏", i.e. the batch preceding §47, not §47 itself. Task 1's log (8)
+records the guard; the log's forward reference at `c2_panicchain_4_4_4.log:616` is not to it — it
+is the §45 `.pdata` accounting taken up in the next paragraph.
+
+Task 1's log also promised (`c2_panicchain_4_4_4.log:616`) that §47 would carry the accounting
+for §45's "the frame at `0xeede3` has no `.pdata` entry" sentence. It is false on §45's **own**
+artifact: the same `func` there prints `rva 0xeed10..0xeeff1` (737 B) with the same six records
+(chain log (4a)). §45's text is untouched; the correction is booked here.
+
+### 47.9 Counts for §47
+
+0 dispatch, 0 game process, 0 injection, 0 `CreateRemoteThread`, 0 new capability, 0 edit to
+`src/`, `build.zig` or `libs/`, 0 DLL bytes changed (digest re-checked); 2 prior evidence files
+read, 1 40-instruction listing reproduced (`pe_disrva`, 131 bytes), 2 UBSan records decoded
+(`TypeMismatchData 0x5ab430`, `PointerOverflowData 0x5ab450`), 1 handler entry read (`0x498170`:
+log_align/kind/type-descriptor offsets), 1 second handler entry read (`0x499cc0`: Base/Result
+arguments), 1 `E8` scan (104 direct calls to `0xbd70`), 2 preprocessor runs (windows-gnu fallback
+vs native builtin), 3 judgment rows rejected, 1 row landed (the fourth, with a named mechanism),
+1 inference withdrawn (§45's `str == 8`), 1 candidate table retired (§46 row 4's "incomplete"
+reading), 0 repair implemented.

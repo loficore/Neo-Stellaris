@@ -1,0 +1,791 @@
+# C2 panic-stack call chain, symbolized from disk (4.4.4) — evidence
+
+# Purpose: §45 pinned the trap (quickjs.c:1494, `js_rc`'s `container_of`) and §46 pinned the last
+# allocator event before it (`Mx size=ff0`), but the eight in-DLL frames both logs recorded were never
+# turned into a named chain: §45's own boundary says "the middle of the chain is inferred". This log does
+# that one thing — it symbolizes the eight RVAs that are ALREADY ON DISK in `c2_selfabort_4_4_4.log` and
+# `c2_mfrecords_4_4_4.log` with the maintained offline tool, and writes the chain down with the source
+# lines that name each frame. Nothing is measured on a running process.
+# Second purpose: install the misreading guard that this job exposed. `func` was fed a bare RVA and
+# answered "not inside any .pdata function entry" + exit 1 — the same sentence and the same code as the
+# real finding. That is now exit 2, see (8).
+# exe identity: stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56 —
+#   NOT INVOLVED IN ANY OBSERVATION BELOW. It was not started, not contacted, and **not even opened from
+#   disk** by any command in this log. §44's single-shot dispatch authorization stays spent and was not
+#   used or rehearsed: zero shots, zero game, zero dispatch, zero Windows channel (no CreateRemoteThread,
+#   no frida, no ssh, no remote host touched).
+# DLL under test: stellaris_quickjs.dll, sha256 77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
+#   — the artifact already on disk, i.e. §46's `sqjs_s46.dll` bytes. Read as a file copy only.
+#   The §45 artifact (`863917f2…86617`) is also read, for comparison only; its path and sha are in (1).
+# Work at the time of reading: `git rev-parse HEAD` = 6f12d6558e08b4fb9ddf21ef262d07117ba941ff, branch
+#   c2-panic-chain. The bytes were NOT rebuilt and NOT modified (no `src/`, no `build.zig`, no `libs/quickjs/`
+#   edit); the digest is re-verified at the end of this file and is unchanged.
+# Scripts: scripts/dll_ubsan_site.py (maintained; the only things this task changed about it are the exit
+#   contract in (8) and the docstring/comment wording of that guard). Batch notes:
+#   scripts/scratch/2026-10_panicchain/README.md.
+
+## (1) which bytes, and why that is the first question
+
+Frame RVAs and artifact bytes are one pair: resolving §45's frames against §46's bytes (or the reverse)
+returns a different function. §46 recorded the pair explicitly — `evidence/logs/c2_mfrecords_4_4_4.log:12`
+names `77c0c35e…c11ad0`, and `:172`-`:174` records that §45's set (`…86617` bytes) differs from §46's in
+exactly one frame, the outermost:
+
+    §45 in-DLL RVAs: 0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44d339
+    §46 in-DLL RVAs: 0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44e399
+                                                                last frame moved 0x44d339 → 0x44e399
+
+This log reads **§46's set against §46's bytes**, because `zig-out/bin/stellaris_quickjs.dll` is those
+bytes right now:
+
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0  zig-out/bin/stellaris_quickjs.dll
+
+which is the §46 artifact, not a rebuild of it.
+
+**Correction (fix round 1).** An earlier version of this section said §45's `0x44d339` was "not
+resolvable" because "no local copy of `863917f2…86617` exists on this host". That was false: the §45
+digest is in the build cache, not in `/tmp` (this task's first pass searched `/tmp` only). The exact
+bytes are still on disk and the maintained tool reads them:
+
+    $ sha256sum .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll
+    863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617  .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll
+
+The path is `.gitignore`d, but it is a local readable file, and the §45 named Windows copy
+(`C:\temp\sqjs_s43.dll`) was neither needed nor touched. So both eight-frame sets are resolved in this
+log: §46's in (3)/(4), §45's in (4a). The `/tmp` copies this task did hash are `29086eae…` (§38),
+`35b0fb10…` (§39) and `77c0c35e…` (§46, the copy of the artifact in `zig-out/`); none of them is §45's.
+
+The two sets, side by side (`func` on each artifact with `vma = image_base + rva`; image base
+`0x180000000` on both; offset = rva − span start; record counts are the number of `quickjs.c` lines the
+range loads):
+
+| frame | §45 rva | §45 span | §45 offset | §46 rva | §46 span | §46 offset | records (§45 / §46) |
+|---|---|---|---|---|---|---|---|
+| 1 | `0xbd9b` | `0xbd70..0xbdf3` (131 B) | +`0x2b` | `0xbd9b` | `0xbd70..0xbdf3` (131 B) | +`0x2b` | 1 / 1 |
+| 2 | `0xeede3` | `0xeed10..0xeeff1` (737 B) | +`0xd3` | `0xeede3` | `0xeed10..0xeeff1` (737 B) | +`0xd3` | 6 / 6 |
+| 3 | `0x1ebde` | `0x1ebb0..0x1eda4` (500 B) | +`0x2e` | `0x1ebde` | `0x1ebb0..0x1eda4` (500 B) | +`0x2e` | 4 / 4 |
+| 4 | `0x55f5` | `0x5320..0x570b` (1003 B) | +`0x2d5` | `0x55f5` | `0x5320..0x570b` (1003 B) | +`0x2d5` | 5 / 5 |
+| 5 | `0x43bc` | `0x3e40..0x4f6b` (4395 B) | +`0x57c` | `0x43bc` | `0x3e40..0x4f6b` (4395 B) | +`0x57c` | 31 / 31 |
+| 6 | `0x31b9c8` | `0x31ad90..0x31cbeb` (7771 B) | +`0xc38` | `0x31b9c8` | `0x31ad90..0x31cbeb` (7771 B) | +`0xc38` | 0 / 0 |
+| 7 | `0x31cc05` | `0x31cbf0..0x31cd30` (320 B) | +`0x15` | `0x31cc05` | `0x31cbf0..0x31cd30` (320 B) | +`0x15` | 0 / 0 |
+| 8 | `0x44d339` | `0x44d2f0..0x44d36c` (124 B) | +`0x49` | `0x44e399` | `0x44e350..0x44e3cc` (124 B) | +`0x49` | 0 / 0 |
+
+Frames 1–7 are identical in span, size, offset and record count; only the `record_rva` values differ
+(§45's data section sits `0x1000` lower: frame 1's record is `0x5aa430` there, `0x5ab430` here), which is
+section layout, not code. Frame 8 is the one that moved: `+0x60`, same 124-byte size, same +`0x49` offset.
+`list_exports` names `rva 0x44d2f0` `C2DiagQJSInto` on the §45 artifact and `rva 0x44e350`
+`C2DiagQJSInto` on the §46 one, so the moving function is the same function.
+
+## (2) frame ORDER comes from the stderr dump, not from the sorted RVA line
+
+The order is the child's panic print, verbatim at `evidence/logs/c2_selfabort_4_4_4.log:36-45` (frame 1 is
+innermost, i.e. the trap itself):
+
+    [repro] child stderr = "thread 7632 panic: member access within null pointer of type 'JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader')
+      ???:?:?: 0x7ffc138cbd9b in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc139aede3 in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc138debde in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc138c55f5 in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc138c43bc in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc13bdb9c8 in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc13bdcc05 in ??? (sqjs_s43.dll)
+      ???:?:?: 0x7ffc13d0d339 in ??? (sqjs_s43.dll)
+      … then libffi-8.dll, _ctypes.pyd, python313.dll, python.exe, KERNEL32.DLL, ntdll.dll frames"
+
+Subtracting that run's own `BASE sqjs_s43.dll 0x7ffc138c0000` (`:35`) turns each line into an RVA:
+`0xbd9b, 0xeede3, 0x1ebde, 0x55f5, 0x43bc, 0x31b9c8, 0x31cc05, 0x44d339`. **The sorted line `:48` —
+`0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44d339` — is a set, not an order**, and so
+are §46's sorted dumps — `c2_mfrecords_4_4_4.log:107` and `:127` (this artifact's set) plus the comparison
+pair `:172`/`:173` (which prints §45's set alongside).
+Reading the sorted line as a stack would put `JS_NewRuntime2` innermost of everything, i.e. upside down.
+
+For the §46 bytes only the innermost frame is printed as a stack line (`c2_mfrecords_4_4_4.log:103`:
+`???:?:?: 0x7ffc125bbd9b in ??? (sqjs_s46.dll)`, then `:104` "… 7 further in-DLL frames"). The order is
+carried across by identity: 7 of the 8 RVAs are literally the same numbers in §45 and §46, and §46 says so
+at `:176` ("Five of eight frames are the same RVA; only the outermost moved" — five *resolved* the same,
+eight *numbers* are shared except one). So position 1..7 is taken from §45's stderr and position 8 is
+§46's moved `0x44e399`. This is recorded as an inference from a stated identity, not as a fresh ordering
+observation.
+
+## (3) the eight frames, verbatim tool output
+
+Command shape (once per frame, `vma = 0x180000000 + rva`, the image base this artifact carries):
+
+    python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func <vma>
+
+`###` markers below are this log's separators, not tool output; everything after them is byte-for-byte
+what the tool printed, including the `rc=` lines this log added.
+
+```
+### vma 0x18000bd9b     (frame 1, innermost — §46's trap)
+[ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x18000bd9b: rva 0xbd70..0xbdf3 (131 bytes)
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:1494:12 member_access type='JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader') record_rva=0x5ab430 loaded_at=0x18000bd8c
+rc=0
+```
+
+```
+### vma 0x1800eede3     (frame 2)
+[ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x1800eede3: rva 0xeed10..0xeeff1 (737 bytes)
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2361:17 member_access type='JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader') record_rva=0x5adbb0 loaded_at=0x1800eee07
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2362:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5adbf0 loaded_at=0x1800eee7b
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2363:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5adc10 loaded_at=0x1800eeec6
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2364:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5adc30 loaded_at=0x1800eef0f
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2365:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5adc50 loaded_at=0x1800eef4f
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2366:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5adc70 loaded_at=0x1800eef92
+rc=0
+```
+
+```
+### vma 0x18001ebde     (frame 3)
+[ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x18001ebde: rva 0x1ebb0..0x1eda4 (500 bytes)
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3433:15 member_access type='JSString' (aka 'struct JSString') record_rva=0x5adac0 loaded_at=0x18001ec1a
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3433:15 member_access type='union (unnamed union at /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:595:5)' record_rva=0x5adae0 loaded_at=0x18001ec4e
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3434:8 member_access type='JSString' (aka 'struct JSString') record_rva=0x5adb20 loaded_at=0x18001ecbd
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3434:8 member_access type='union (unnamed union at /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:595:5)' record_rva=0x5adb40 loaded_at=0x18001ecf1
+rc=0
+```
+
+```
+### vma 0x1800055f5     (frame 4)
+[ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x1800055f5: rva 0x5320..0x570b (1003 bytes)
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3174:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5abb60 loaded_at=0x180005358
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3175:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5abba0 loaded_at=0x1800053c9
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3176:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5abbe0 loaded_at=0x18000543b
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3177:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5abc20 loaded_at=0x1800054ac
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:3178:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5abc60 loaded_at=0x18000551d
+rc=0
+```
+
+```
+### vma 0x1800043bc     (frame 5)
+[ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x1800043bc: rva 0x3e40..0x4f6b (4395 bytes)
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2076:14 member_access type='const JSMallocFunctions' (aka 'const struct JSMallocFunctions') record_rva=0x5922d0 loaded_at=0x180003f3e
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2080:25 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592310 loaded_at=0x180003ff3
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2081:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592330 loaded_at=0x180004038
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2081:9 member_access type='JSMallocContext' record_rva=0x592350 loaded_at=0x18000406a
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2082:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592370 loaded_at=0x1800040dc
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2082:9 member_access type='JSMallocContext' record_rva=0x592390 loaded_at=0x18000410e
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2083:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5923b0 loaded_at=0x180004186
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2085:25 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5923f0 loaded_at=0x18000420d
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2086:25 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592410 loaded_at=0x180004259
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2087:25 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592430 loaded_at=0x1800042a5
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2088:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592450 loaded_at=0x1800042f1
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2089:25 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592470 loaded_at=0x180004346
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2094:25 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592490 loaded_at=0x180004392
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2103:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5924b0 loaded_at=0x18000441d
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2103:5 member_access type='JSClass' (aka 'struct JSClass') record_rva=0x592500 loaded_at=0x1800044f3
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2104:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592540 loaded_at=0x18000457a
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2104:5 member_access type='JSClass' (aka 'struct JSClass') record_rva=0x592590 loaded_at=0x180004650
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2105:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5925d0 loaded_at=0x1800046d7
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2105:5 member_access type='JSClass' (aka 'struct JSClass') record_rva=0x592620 loaded_at=0x1800047ad
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2106:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592660 loaded_at=0x180004834
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2106:5 member_access type='JSClass' (aka 'struct JSClass') record_rva=0x5926b0 loaded_at=0x18000490a
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2108:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5926f0 loaded_at=0x18000498b
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2108:5 member_access type='JSClass' (aka 'struct JSClass') record_rva=0x592740 loaded_at=0x180004a40
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2109:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592780 loaded_at=0x180004ab5
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2109:5 member_access type='JSClass' (aka 'struct JSClass') record_rva=0x5927d0 loaded_at=0x180004b6a
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2110:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592810 loaded_at=0x180004bdf
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2110:5 member_access type='JSClass' (aka 'struct JSClass') record_rva=0x592860 loaded_at=0x180004c94
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2111:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x5928a0 loaded_at=0x180004d09
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2111:5 member_access type='JSClass' (aka 'struct JSClass') record_rva=0x5928f0 loaded_at=0x180004dbe
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2115:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592930 loaded_at=0x180004e49
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2118:9 member_access type='JSRuntime' (aka 'struct JSRuntime') record_rva=0x592970 loaded_at=0x180004eca
+rc=0
+```
+
+```
+### vma 0x18031b9c8     (frame 6)
+[ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x18031b9c8: rva 0x31ad90..0x31cbeb (7771 bytes)
+[ubsan_site] this function's code references no UBSan record
+rc=1
+```
+
+```
+### vma 0x18031cc05     (frame 7)
+[ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x18031cc05: rva 0x31cbf0..0x31cd30 (320 bytes)
+[ubsan_site] this function's code references no UBSan record
+rc=1
+```
+
+```
+### vma 0x18044e399     (frame 8, outermost in-DLL)
+[ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x18044e399: rva 0x44e350..0x44e3cc (124 bytes)
+[ubsan_site] this function's code references no UBSan record
+rc=1
+```
+
+Five of eight frames resolve to `quickjs.c` lines; three resolve to a `.pdata` range and nothing else
+(exit 1 = "references no UBSan record" [fix-round 2026-10-22: the tool's wording now names the record
+kind — "no TypeMismatchData record (other UBSan record kinds are not decoded)"], see (7) trap 5 for why that is a finding and not a failure). The
+innermost one was **already** symbolized on disk before this task: `c2_mfrecords_4_4_4.log:179-181` prints
+the same command, the same `rva 0xbd70..0xbdf3 (131 bytes)` and the same `quickjs.c:1494:12` record, with
+`record_rva` moved only because the section layout moved (§45's copy at
+`c2_selfabort_4_4_4.log:92-94` reads `0x5aa430`). That frame is prior work; frames 2-5 are this log's
+addition.
+
+## (4) the chain, and the source lines that name each frame
+
+The tool gives frame *attribution* (a `.pdata` range plus the records that range loads), never a
+link-time name — the artifact has no symbol table. So the name comes from reading the C at the referenced
+lines and taking the **enclosing definition**, which is what §45 did prose-wise for two frames and what is
+done here mechanically for all five. `grep`/`Read` on `libs/quickjs/quickjs.c`, the definition line for
+each frame's cited source line:
+
+| frame rva (as printed) | `.pdata` span | offset in function | records | enclosing definition found in `libs/quickjs/quickjs.c` | name |
+|---|---|---|---|---|---|
+| 1 `0xbd9b` | `0xbd70..0xbdf3` (131 B) | start +`0x2b` (43) | 1 | `:1492 static inline JSMallocBlockHeader *js_rc(void *ptr)`; body `:1494 return container_of(ptr, JSMallocBlockHeader, user_data);` | **`js_rc`** |
+| 2 `0xeede3` | `0xeed10..0xeeff1` (737 B) | start +`0xd3` (211) | 6 | `:2355 static JSString *js_alloc_string_rt(JSRuntime *rt, int max_len, int is_wide_char)`; records at `:2361-:2366` | **`js_alloc_string_rt`** |
+| 3 `0x1ebde` | `0x1ebb0..0x1eda4` (500 B) | start +`0x2e` (46) | 4 | `:3426 static JSAtom __JS_NewAtomInit(JSRuntime *rt, const char *str, int len,` (+ `:3427 int atom_type)`); records at `:3433`/`:3434` | **`__JS_NewAtomInit`** |
+| 4 `0x55f5` | `0x5320..0x570b` (1003 B) | start +`0x2d5` (725) | 5 | `:3169 static int JS_InitAtoms(JSRuntime *rt)`; records at `:3174-:3178` | **`JS_InitAtoms`** |
+| 5 `0x43bc` | `0x3e40..0x4f6b` (4395 B) | start +`0x57c` (1404) | 31 | `:2067 JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)`; records at `:2076 … :2118` | **`JS_NewRuntime2`** |
+| 6 `0x31b9c8` | `0x31ad90..0x31cbeb` (7771 B) | start +`0xc38` (3128) | 0 | no record ⇒ no source line here; `quickjs_wrapper.c:497 static int c2_diag_sequence(void)`; this range loads the DLOG literal `"new_rt "` (`lea` at `0x31b926`) and calls `JS_NewRuntime2`'s range start `0x3e40` at `0x31b9c4` | **`c2_diag_sequence`** (C) |
+| 7 `0x31cc05` | `0x31cbf0..0x31cd30` (320 B) | start +`0x15` (21) | 0 | no record; `quickjs_wrapper.c:580 int C2DiagQuickJS(char *out_diag, int diag_size)`, whose `:581` calls `c2_diag_sequence`; this range calls `0x31ad90` at `0x31cc01` | **`C2DiagQuickJS`** (C) |
+| 8 `0x44e399` | `0x44e350..0x44e3cc` (124 B) | start +`0x49` (73) | 0 | no record; export table names rva `0x44e350` `C2DiagQJSInto`, `src/dll/exports.zig:240-241` calls `C2DiagQuickJS`; this range calls `0x31cbf0` at `0x44e395` | **`C2DiagQJSInto`** (Zig export) |
+
+Frames 6–8 have no UBSan record, so they cannot be named the way frames 1–5 are. Their names come from
+three checkable sources instead, and the `ip − 1` arithmetic in each is a byte-scan fact, not a guess:
+the call at `0x31b9c4` is 5 bytes, so its return is `0x31b9c9` and the printed frame is `0x31b9c8`; the
+call at `0x31cc01` returns `0x31cc06`, printed `0x31cc05`; the call at `0x44e395` returns `0x44e39a`,
+printed `0x44e399`. Sources: (a) `list_exports` on this artifact gives `C2DiagQJSInto` = `rva 0x44e350`
+(the only one of the three that is an export); (b) `quickjs_wrapper.c:497`/`:580-581` and
+`exports.zig:240-241` read from disk; (c) a read-only `E8 rel32` scan of each range, which finds exactly
+one call from frame 6's range to the `JS_NewRuntime2` span start (`0x3e40`), exactly one from frame 7's
+range to frame 6's start (`0x31ad90`), and one from frame 8's range to frame 7's start (`0x31cbf0`).
+Frame 6's range also loads the literals `"enter "`, `"heap_ok "`, `"new_rt "`, `"runtime2_null"` and
+`"rt=%p "` at `0x31af50`, `0x31b291`, `0x31b926`, `0x31badd` and `0x31bc85` — the DLOG sequence that
+only `c2_diag_sequence` emits in that source file. These are attributions of the *range to a source
+definition*, not link-time symbol names; the artifact still has no symbol table.
+
+The offsets are what a *return address* must look like, so they are recorded per frame rather than folded
+into the span. All eight are inside their own span, as they must be.
+
+So the in-DLL chain, innermost first, is:
+
+    js_rc  (quickjs.c:1494, the UBSan trap)
+      ^ called from js_alloc_string_rt  (:2355; frame 2 sits +211 into its 737-byte body)
+      ^ called from __JS_NewAtomInit    (:3426; frame 3 sits +46 into its 500-byte body)
+      ^ called from JS_InitAtoms        (:3169; frame 4 sits +725 into its 1003-byte body)
+      ^ called from JS_NewRuntime2      (:2067; frame 5 sits +1404 into its 4395-byte body)
+      ^ called from c2_diag_sequence    (quickjs_wrapper.c:497; frame 6 sits +3128 into its 7771-byte body)
+      ^ called from C2DiagQuickJS       (quickjs_wrapper.c:580; frame 7 sits +21 into its 320-byte body)
+      ^ called from C2DiagQJSInto       (src/dll/exports.zig:240; frame 8 sits +73 into its 124-byte body)
+
+**Every edge of that chain is independently present in the source**, which is what makes it a call chain
+and not eight coincident ranges:
+
+    quickjs.c:2096   if (JS_InitAtoms(rt))                          — inside JS_NewRuntime2   (5 → 4)
+    quickjs.c:3191   if (__JS_NewAtomInit(rt, p, len, atom_type) …  — inside JS_InitAtoms      (4 → 3)
+    quickjs.c:3430   p = js_alloc_string_rt(rt, len, 0);            — inside __JS_NewAtomInit  (3 → 2)
+    quickjs.c:2361   js_rc(str)->ref_count = 1;                     — inside js_alloc_string_rt(2 → 1)
+
+and frame 2's record list contains `:2361:17` on type `JSMallocBlockHeader` — the same header type as the
+trap — so the caller of the trapping frame is carrying a check on that very call.
+
+Three things this pins that §45 could only infer (`c2_selfabort_4_4_4.log:163-166`: "The frame between the
+trap and `__JS_NewAtomInit` (RVA 0xeede3 …) has no `.pdata` entry covering it … the middle of the chain is
+inferred"):
+
+  1. **0xeede3 has a `.pdata` entry, and §45's own bytes say so too.** On the cached §45 artifact the
+     same `func` gives `rva 0xeed10..0xeeff1` (737 B) with the same six records (`:2361`-`:2366`);
+     verbatim output in (4a). So §45's sentence "has no `.pdata` entry covering it"
+     (`c2_selfabort_4_4_4.log:163-166`) is not a property of those bytes and not a difference between
+     the two builds — it is contradicted by its own artifact. This is also **not** explained by a tool
+     version: the frozen original and the maintained tool share the same `.pdata` walk
+     (`scripts/scratch/2026-10_abortexit/ubsan_site.py:119-131` and `scripts/dll_ubsan_site.py:219-231`
+     are the same `size // 12` loop with the same `0 < begin < end` filter), and running the frozen
+     original on the §45 bytes reproduces the span and the six records. No `func 0xeede3` invocation is
+     recorded in §45 — the claim appears only as prose — so there is no old bound computation to blame.
+     The only parsing bound that changed after §45 is `iter_records`' scan end (`end - 32` →
+     `end - RECORD_READ_SIZE + 1`, `scripts/dll_ubsan_site.py:198`, commit 26589ac), which governs
+     which *records* a `site` scan can see, not which function spans exist. On the bytes read here —
+     and on §45's — the middle of the chain is attributed, not inferred.
+  2. `__JS_NewAtomInit`'s span on §46 bytes is `0x1ebb0..0x1eda4` — numerically identical to §45's
+     (`c2_selfabort_4_4_4.log:101`), so the recorder that moved the outer frame did not move this one.
+  3. The 131-byte trapping function carries **exactly one** UBSan **TypeMismatchData** record
+     (`0x5ab430`, `:1494:12`). No second site in that range competes for the attribution, so the
+     "which line of this function" question has one answer in these bytes. (Later tasks that change
+     the build should re-measure this, not assume it.)
+     *Fix-round note (2026-10-22):* this sentence first said "exactly one UBSan record"; the
+     machine code has **two** handler calls and two records. The second is `0x5ab450`, a 16-byte
+     `PointerOverflowData` at the same source location `:1494:12`, passed to
+     `__ubsan_handle_pointer_overflow` (`0x499cc0`). `func` prints one because it decodes only
+     `TypeMismatchData` kinds 3–11; the `:1494:12` attribution is unaffected because both records
+     share that location.
+
+## (4a) the §45 set, resolved on its own bytes
+
+The artifact is `.zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll`, sha256
+`863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617` (verified before the commands below),
+image base `0x180000000`, `.text` vsize `0x4c8b86`. All eight frames were resolved with the maintained
+tool; the spans/offsets are the §45 column of the table in (1). Verbatim for the two frames that carry
+the correction — frame 2 (the one §45 said had no entry) and frame 8 (the one that moved):
+
+```
+$ python3 scripts/dll_ubsan_site.py .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll func 0x1800eede3
+[ubsan_site] .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x1800eede3: rva 0xeed10..0xeeff1 (737 bytes)
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2361:17 member_access type='JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader') record_rva=0x5acbb0 loaded_at=0x1800eee07
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2362:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acbf0 loaded_at=0x1800eee7b
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2363:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acc10 loaded_at=0x1800eeec6
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2364:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acc30 loaded_at=0x1800eef0f
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2365:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acc50 loaded_at=0x1800eef4f
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2366:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acc70 loaded_at=0x1800eef92
+rc=0
+
+$ python3 scripts/dll_ubsan_site.py .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll func 0x18044d339
+[ubsan_site] .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x18044d339: rva 0x44d2f0..0x44d36c (124 bytes)
+[ubsan_site] this function's code references no UBSan record
+rc=1
+```
+
+The other six were run the same way; their header/range lines are the §45 column in (1), and their record
+lines are the same lines/columns/kinds/types as the §46 output in (3), with `record_rva` shifted by
+`0x1000` (data-section layout). `list_exports` on these bytes names `rva 0x44d2f0` `C2DiagQJSInto`, the
+same name the §46 artifact gives `rva 0x44e350`.
+
+Two more measurements on the same bytes, for the trap-4 numbers: `runtime_functions` yields **4,818**
+entries here (`.text` `0x4c8b86`) and **4,824** on the §46 artifact (`.text` `0x4c9be6`). The **3,042**
+figure repeated in §45.4/`docs/offline-tooling.md` is that section's historical count, not what the
+current tool measures on the cached §45 bytes; both current numbers are still far below the image's real
+function count, so the incompleteness conclusion stands.
+
+## (5) interlock with §46's last record — the arena size arithmetic
+
+§46's ring, read back from four complete renders, ends with the same event before the death
+(`c2_mfrecords_4_4_4.log:274-276`, and row 3 of the table at
+`evidence/analysis/runtime_444_c1_validation.md:2649-2652`):
+
+    Mx size=ff0 ptr=1884f28 st=00000154be70
+
+The chain above says the death sits inside the first `__JS_NewAtomInit` iteration, in `js_alloc_string_rt`
+→ `js_rc`. Those are two different instruments; they agree on one number, which is the interlock. The
+allocation path, read off the same source the frame names came from:
+
+    quickjs.c:3430       p = js_alloc_string_rt(rt, len, 0);        (first iteration: len = 4, "null")
+    quickjs.c:2358       js_malloc_rt(rt, sizeof(JSString) + (max_len << is_wide_char) + 1 - is_wide_char)
+    quickjs.c:1800-1803  js_malloc_rt -> __js_malloc(&rt->malloc_ctx, size)
+    quickjs.c:1556-1557  total_size = ((size + 7) & ~7) + sizeof(JSMallocBlockHeader)   (JS_MALLOC_ALIGN = 8, :243)
+    quickjs.c:1566       block_size_idx = get_block_size_index(total_size)              (:1453-1466)
+    quickjs.c:1503-1505  block_size = js_malloc_block_sizes[block_size_idx];
+                         n_blocks = (JS_MALLOC_ARENA_SIZE - sizeof(JSMallocArena)) / block_size;
+                         js_malloc(&s->malloc_state, sizeof(JSMallocArena) + n_blocks * block_size)
+
+The first `JS_InitAtoms` iteration (`:3182-3193`: `p = js_atom_init`, `len = strlen(p)` at `:3190`, the
+`__JS_NewAtomInit` call at `:3191`) takes the blob's first entry, `DEF(null, "null") /* must be first */`
+(`libs/quickjs/quickjs-atom.h:29`), so `len = 4` and `is_wide_char = 0` — the request is
+`sizeof(JSString) + 4 + 1`.
+
+The sizes were **measured, not transcribed**. §46 got them from a throwaway probe
+(`c2_mfrecords_4_4_4.log:304`); they were re-measured here the same way: a /tmp-only replica of
+`struct list_head`, `JSString`, `JSMallocArena`, `JSMallocBlockHeader` typed out of `quickjs.c:583-599`,
+`:289-302`, `:270-280`. The replica has no `link` field because `DUMP_LEAKS` is not defined (`:99` is commented
+out and `build.zig:16-19` is the whole flag list): that `#ifdef` adds `struct list_head link` to
+`JSString` (`quickjs.c:595-597`) and changes `sizeof(JSString)`, not the arena. The arena has no `bitmap`
+because `JS_MALLOC_USE_ITER` is likewise commented out (`:257`): that one adds `uint32_t bitmap[…]` to
+`JSMallocArena` (`quickjs.c:296-301`) and is the only one of the two that moves `blocks[]` and changes
+`sizeof(JSMallocArena)`. So the replica is only valid for this configuration, which is the one that
+shipped. No repository file, no
+artifact, no game involved; the probe is deliberately not in git.
+
+    $ zig cc /tmp/layout_probe.c -o /tmp/lp && /tmp/lp          # host = x86_64-linux
+    sizeof(list_head)=16
+    sizeof(JSString)=12 align=4 offsetof(u)=12
+    sizeof(JSMallocArena)=40 free_link@0 link@16 block_size_idx@32 n_used@34 n_blocks@36 first_free@38 blocks@40
+    sizeof(JSMallocBlockHeader)=8 u@0 block_size_idx@2 ref_count@4 user_data@8
+    rc=0
+
+`blocks[]` at 40 is the `__attribute__((aligned(JS_MALLOC_ALIGN)))` of `:301` doing its job, so
+`sizeof(JSMallocArena)` = 40 and the flexible array starts exactly there. The shipping DLL is
+`windows`/`x86_64` (`build.zig:39-43`), and MS x86_64 gives each differently-typed bitfield its own
+allocation unit, so `sizeof(JSString)` there is **20**, not 12. That is not taken on faith either — the
+same numbers were asserted at the shipping target, and asserted *wrong* on each side so the check cannot
+pass vacuously:
+
+    $ zig cc -target x86_64-windows-gnu -c /tmp/layout_assert.c -o /tmp/la_win.o   # rc=0
+    12 _Static_asserts pass, incl. sizeof(struct JSString) == 20 and offsetof(hash_next) == 16
+
+    $ zig cc -c /tmp/layout_assert.c -o /tmp/la_nat.o                              # rc=1, host
+    /tmp/layout_assert.c:39:16: error: static assertion failed due to requirement 'sizeof(struct JSString) == 20': jsstring_size
+    /tmp/layout_assert.c:39:40: note: expression evaluates to '12 == 20'
+
+    $ zig cc -target x86_64-windows-gnu -c /tmp/layout_assert_win12.c -o /tmp/la_win12.o   # rc=1
+    /tmp/layout_assert_win12.c:12:16: error: static assertion failed due to requirement 'sizeof(struct JSString) == 12': jsstring_size_eq_12_on_windows_target
+    /tmp/layout_assert_win12.c:12:40: note: expression evaluates to '20 == 12'
+
+`JSMallocArena` = 40 and `JSMallocBlockHeader` = 8 (`user_data` @8) on **both** targets, so `JSString` is
+the only layout difference in this path. Substituting per target (`JS_MALLOC_ARENA_SIZE = 4096`, `:244`):
+
+    Windows: 20 + 4 + 1 = 25  ->  align8 32  ->  +8 header = 40  ->  idx 3, block 40
+    host   : 12 + 4 + 1 = 17  ->  align8 24  ->  +8 header = 32  ->  idx 2, block 32
+
+    $ python3 -c "print(hex(40 + ((4096-40)//40)*40), hex(40 + ((4096-40)//32)*32))"
+    0xff0 0xfe8
+
+40 + 101*40 = 4080 = `0xff0`, character-for-character the recorded size. So the arena that was handed over
+successfully **immediately before the trap** is the **40-byte block class**, and the size identifies that
+class uniquely among the 31 — recomputed here over `js_malloc_block_sizes` (`:1419-1451`, block_size_idx 3
+= 40):
+
+    0xff0 4080 ← only (idx 3, bs 40, n 101)
+    0xfe8 4072 ← idx 2,4,5,6,7,10,12,15,18,20,23,28   (twelve classes collide here)
+    0xff8 4088 ← idx 0,9,17
+    0x1000 4096 ← idx 1,11
+
+so `0xff0` is not a size two classes could produce. The block header that `js_rc` then walks backwards
+from is 8 bytes (`:270-280`, `user_data` at +8, which is the `add rcx,0xfffffffffffffff8` §45 disassembled)
+— the same 8 whose nullness is the trip.
+
+The host branch is worth stating rather than skipping, because it is the arithmetic's own control group:
+on the SysV layout the same string request lands in class idx 2, whose arena is **0xfe8** — and 0xfe8 is a
+size §46 actually rendered, in the native positive control (`c2_mfrecords_4_4_4.log:196`,
+`Mx size=fe8 ptr=2dc2e18`). The two recorded rows differ by exactly the MS-bitfield padding of `JSString`
+and by nothing else in the allocator. **That is a consistency check of the layout claim, not an
+identification of the native row**: the native ring is a *completed* sequence whose tail is
+`Mx fe8`, `Rx 378`, `Fx 268` — not the same three allocations as the Windows renders — so reading the
+native row as "the atom-name arena" would be exactly the overreach §46 warned about for its own rows 2 and
+3 ("arithmetic plus call order, not an observed label", `c2_mfrecords_4_4_4.log:289-290`). Held to that
+standard: the Windows `0xff0` is the interlock, the host `0xfe8` is the control.
+
+If that arithmetic had not landed on `0xff0` the reading would have stopped there, per the brief's stop
+clause. It landed.
+
+## (6) what the chain says, and what it still does not say
+
+The shape is now: `JS_NewRuntime2` → `JS_InitAtoms` → first `__JS_NewAtomInit` → `js_alloc_string_rt` →
+`js_rc`, dying on a null `JSMallocBlockHeader` derived from a user pointer that is not NULL (§45's
+"the user pointer was 8" reading, `c2_selfabort_4_4_4.log:113-116`, which this log neither re-derives nor
+retracts). (superseded by (10)/§47: the report's pointer is the constant 0; the runtime str
+value/source is unobserved) §43's "flat, trivial code between `:3430` and `:3330`" window and §46's
+"after the 40-byte arena was delivered, before any next `mf` call" are the same place:
+`js_alloc_string_rt`'s body from
+`:2358` (the `js_malloc_rt` that consumed the arena) to `:2361` (the first `js_rc`), with **no `mf` call in
+between** — a block from the just-created arena, no callback to the host. So no additional allocator event
+was expected between the `Mx size=ff0` row and the panic, and none was observed. Consistent, and worth
+saying because §42 read that exact gap as 6.9 seconds of computation.
+
+What this log does **not** establish:
+
+  * **No function names are link-time names.** Attribution is `.pdata` range + UBSan record + the C read
+    at that line, i.e. the §45 method. Nothing resolves a symbol.
+  * **The three outer frames are attributed by other means, not by UBSan records.** Frames 6-8 carry no
+    record, so no source line names them. Frame 6 is the range that loads `c2_diag_sequence`'s DLOG
+    literals and calls `JS_NewRuntime2`; frame 7 is the range the exported `C2DiagQJSInto` calls and that
+    calls frame 6; frame 8 is the range the export table itself names `C2DiagQJSInto`. The evidence is the
+    export directory, the C/Zig source at `quickjs_wrapper.c:497`/`:580`/`exports.zig:240`, and an `E8`
+    call-site scan of each range (details under the table in (4)). None of that is a link-time symbol.
+  * **The offsets inside each function were not decoded.** "Frame 2 = `js_alloc_string_rt` start +211" is
+    arithmetic on `.pdata` bounds and the printed `ip − 1`; which instruction is at +211 and which call it
+    returns from is a disassembly question, and no disassembler was run here. It belongs to the planned
+    `pe_disrva` tool, not to this log.
+  * **Nothing here observed why the header is null.** The mechanism is §45's open question and §46 left
+    the candidate table incomplete; this log adds a location, not a cause.
+  * Two artifacts, each with one digest, one host. The determinism behind them (§45's two runs, §46's 84
+    children with `distinct in-DLL RVA sets = 1`) is that of those logs, not re-measured here.
+
+## (7) judging traps for anyone re-running this
+
+1. **`func` wants a vma carrying the image base.** `0x18000bd9b`, not `0xbd9b`. Before the guard added in
+   (8), a bare RVA fell straight through to the exit-1 branch. Reproduced here against the pre-change code
+   (`git show HEAD:scripts/dll_ubsan_site.py`, run on these bytes):
+
+       [ubsan_site] rva -0x17fffbc44 is not inside any .pdata function entry      # rc=1
+
+   — i.e. the tool subtracted the base from a number that had none, echoed a **negative** rva, and exited 1
+   with the same sentence as the genuine finding "this `.text` address is not covered by the incomplete
+   `.pdata` parse" (trap 4). A negative rva in that line is already a tell, but a tell that costs nothing
+   to the tool is not a fence: this is now exit 2 before anything is concluded.
+   The second, nastier spelling of the same bug: bash's `$(( ))` prints **DECIMAL**, and `main` re-reads
+   the argument as hex, so a base-carrying address built in bash arrives as a different number entirely.
+   It is not limited to bash either — string-concatenating the base onto the rva works only when the rva is
+   exactly four hex digits, and this session hit it: `0x18000` + `1ebde` = `0x180001ebde`, which is not
+   `0x180000000 + 0x1ebde`, and the tool echoed `rva 0x168001ebde` for a `.text` of 0x4c9be6 bytes. The
+   guard cannot catch that form (the number is above the base, so it *looks* like a vma), but the echoed rva
+   is wider than the whole image, and **that is the tell**: an rva outside the image means the input number
+   was wrong, not that the frame is. Build the number as `image_base + rva` in python
+   (`python3 -c "print(hex(0x180000000+0x1ebde))"`) — every frame in (3) was read that way.
+2. **`func`'s record lines do NOT start with the `[ubsan_site]` prefix** — they start with two spaces
+   (they are `print(f"  {f}:{l}:{c} …")`). So filtering with a **literal** prefix match silently throws
+   away every record line and leaves only the header and the function-range line. Measured on this
+   artifact, `func 0x1800055f5` (7 output lines: 2 prefixed + 5 records):
+
+       $ … func 0x1800055f5 | grep -F '[ubsan_site]'   → 2 lines   (the 5 records are gone)
+       $ … func 0x1800055f5 | grep '\[ubsan_site\]'    → 2 lines   (same)
+       $ … func 0x1800055f5 | grep '[ubsan_site]'      → 7 lines   ← note
+
+   That third form is the trap **pointing the other way**: unescaped, `[ubsan_site]` is a grep BRE
+   *character class* (any one of `u,b,s,_,a,n,i,t,e`), so it matches almost every line and filters
+   nothing — a pipeline that "worked" in a previous session and dropped the record lines was using the
+   escaped or `-F` form; a pipeline using the bare form looks like a filter but is a pass-through.
+   Either way, do not pipe `func` through a prefix grep: pipe to `less`, or grep `quickjs\.c:`.
+3. **The frame value is `ip − 1`.** Zig prints each return address one byte before the call instruction,
+   so `0xbd9b` is not the faulting or calling instruction; §45 established the call as
+   `0x18000bd97..0x18000bd9c` and the record load as `0x18000bd8c` (`loaded_at` above agrees). Pass the
+   printed value to `func` as-is (the `.pdata` test is `begin <= rva < end`), but never read it as an
+   instruction address.
+4. **"Not inside any range" proves nothing.** Re-measured here on these bytes: `runtime_functions` yields
+   **4,824** entries against a `.text` of vsize 0x4c9be6 — a fraction of the functions the image actually
+   has; the current tool measures **4,818** on the cached §45 bytes (0x4c8b86), while the **3,042** figure
+   in §45.4/`docs/offline-tooling.md` is that section's historical count, not a current measurement. Frames
+   6-8 were NOT flagged by that trap — they hit ranges — but the inverse reading ("this frame is data or
+   padding") is what §45 had to disclaim, and (4a) above shows §45's own claim of *no* `.pdata` entry for
+   0xeede3 is contradicted by its own bytes (a 737-byte entry, not a build difference).
+5. **`this function's code references no UBSan record` is a finding, not an error.** [Fix-round
+   2026-10-22: the tool's wording now names the record kind — "no TypeMismatchData record (other UBSan
+   record kinds are not decoded)"; the sentence below still describes the same exit-1 branch.] It exits 1 and it
+   means: this function's bytes contain no `lea` of any record the scanner knows — a fact about
+   instrumentation, not about the language of the frame. A C function with no check site produces the same
+   answer; frames 6-7 are exactly that, and frame 8 is Zig. It does NOT mean the function is unreachable
+   or misattributed.
+6. **`rc=3` is still not a step code.** Nothing in this log re-endorses reading the process exit status as
+   a position in the init sequence (§38.5, §45.4).
+
+## (8) the guard this job installed, and the exit-code contract
+
+Two mis-calibered numbers were fed to `func` in the session that produced this log. One was the
+concatenation slip of trap 1 (`0x18000` + `1ebde` = `0x180001ebde`, **above** the image base), answered by
+the exit-1 "not inside any `.pdata` function entry" sentence; the guard does **not** catch that form — its
+tell was the echoed `rva 0x168001ebde`, wider than the image. The other was a bare RVA (below the base),
+fed on purpose against `git show HEAD:scripts/dll_ubsan_site.py` to record what the tool did **before**
+the change; that is the form the guard now turns into exit 2. A wrong number in the caller's own hand must
+not come out looking like a conclusion about the image, so `cmd_func` now checks the caliber before
+subtracting the base (`scripts/dll_ubsan_site.py`), and prints one line on **stderr**, the stream the
+tool's other caller-side errors already use:
+
+    $ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x43bc
+    [ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func      # stdout
+    [ubsan_site] func takes a vma carrying the image base (0x180000000); 0x43bc is below it, so it looks like a bare rva — pass 0x1800043bc for rva 0x43bc   # stderr
+    rc=2
+
+The contract: the two exit-1 messages keep **distinct meanings** — a
+later reader must not collapse them:
+
+| code | meaning | where it is printed |
+|---|---|---|
+| 0 | the artifact was read and something matched | `site` with rows; `func` with a covering range **and** ≥1 referenced record |
+| 1 | the artifact was read and **nothing** matched — a finding | `site`: no check site for that type name. `func`: **either** "rva `X` is not inside any `.pdata` function entry" (no covering range — uninformative, trap 4) **or** "this function's code references no UBSan record" (a range was found, no record inside it — a normal answer for code with no check site, trap 5) [fix-round 2026-10-22: the second message now reads "no TypeMismatchData record (other UBSan record kinds are not decoded)"] |
+| 2 | the invocation was wrong, so nothing was concluded about the artifact | cannot read the path / truncated / not PE32+; **or** `func` was handed a number below the image base |
+
+Code 2's name in the module changed from `EXIT_READ_ERROR` to `EXIT_CALLER_ERROR` (the constant's old name
+covered only the I/O half; no evidence log cites the constant, and the frozen `scratch/2026-10_abortexit/`
+original keeps its own copy untouched). The guard is pinned by one new test function in
+`scripts/test_c2_harness.py::test_ubsan_site_func_rejects_a_bare_rva_instead_of_guessing`, which asserts
+both sides (bare rva → 2 + "image base" on stderr and no `.pdata` sentence anywhere in the output;
+`image_base + rva` → 0) against an address **derived from the image**, not hard-coded, for the reason the
+sibling `func` test states. Fence counts as actually printed after the change:
+
+    $ python3 -m pytest scripts/test_scripts_layout.py -q
+    23 passed in 0.12s
+    $ python3 -m pytest scripts/test_c2_harness.py -q
+    134 passed in 1.09s                    (was 133 before this job's one added test)
+    $ PYTHONPATH=scripts/windows python3 -m pytest scripts/windows/tests -q
+    169 passed in 4.62s
+
+Nothing in `src/`, `build.zig`, or `libs/quickjs/` was touched, and the artifact re-checked at commit time:
+
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0  zig-out/bin/stellaris_quickjs.dll
+
+## (9) read-only self-attestation
+
+    - Zero shots, zero game, zero dispatch, zero Windows channel. No CreateRemoteThread, no frida, no ssh,
+      no remote host contacted; §44's single-shot dispatch authorization stays spent and was neither used
+      nor rehearsed.
+    - stellaris.exe was not started, not contacted, not opened from disk. The file inputs were
+      `zig-out/bin/stellaris_quickjs.dll` (a file copy), the cached §45 artifact
+      `.zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll` (sha256 `863917f2…86617`,
+      verified first; a file copy, added in fix round 1), `libs/quickjs/quickjs.c`,
+      `src/dll/quickjs/quickjs_wrapper.c`, `src/dll/exports.zig` (sources), and two EXISTING evidence
+      logs, read-only. `scripts/c2_harness.py`'s `list_exports` was imported read-only to read the
+      export directory of both artifacts.
+    - No existing file under `evidence/` was edited. This log is the only artifact created there;
+      `scripts/scratch/2026-10_panicchain/README.md` is the only one created under `scripts/`.
+    - The DLL bytes were not modified and not rebuilt: no `src/` edit, no `build.zig` edit, no
+      `libs/quickjs/` edit. The digest at the top and in (8) is the same value, taken before and after.
+    - The only code changed is `scripts/dll_ubsan_site.py` (a guard on its own input caliber plus the
+      exit-code paragraph), `scripts/test_c2_harness.py` (one test), and `docs/offline-tooling.md` (the
+      existing `dll_ubsan_site.py` section). §45's text and §46's text are untouched; where this log
+      corrects §45's prose claim that `0xeede3` had no `.pdata` entry, the correction is made in (4)/(4a)
+      against §45's own artifact, and §47 will carry the accounting.
+
+## (10) judgment table: (i), (ii) and (iii) are inapplicable — the fourth row lands, with a mechanism
+
+Artifact read: `zig-out/bin/stellaris_quickjs.dll`, sha256
+`77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0`, file copy, image base
+`0x180000000`. Zero dispatch, zero game, zero Windows channel, zero build, zero byte changed.
+
+The three rows the plan expected, tested against the 131-byte `js_rc` body (rva `0xbd70..0xbdf3`,
+40 insns):
+
+- **(i) does not hold.** (i) needs the zero test to follow `sub 8` and to test its result. The
+  aborting report is `call 0x180498170` at `0xbd97`, which runs **before** `add rcx,-8` at `0xbdab`;
+  its pointer operand is `edx`, zeroed by `xor eax,eax` at `0xbd93` and `mov edx,eax` at `0xbd95`.
+  The operand is the literal 0, not a header. The post-subtraction test (`setne r9b` at `0xbdbb`,
+  `test al,1` at `0xbdd1`) feeds the second handler at `0xbde4` (`0x180499cc0`, record `0x5ab450`),
+  which this run never reaches.
+- **(ii) does not hold.** (ii) needs the zero test to precede `sub 8` and to test `str` in the
+  aborting path. A pre-subtraction `test r8,r8` does exist at `0xbda0`, but it belongs to the
+  `0xbde4` pointer-overflow path (`0xbdd1`/`0xbdd3` branch); the aborting operand at `0xbd97` is 0
+  whatever `str` is. The check at `0xbd97` is a third check, on neither quantity.
+- **(iii) does not hold.** (iii) needs the test and the subtraction in different basic blocks, or a
+  thunk. The straight-line path actually taken runs from `0xbd86` through the aborting call at `0xbd97`
+  (conditional branches exist at `0xbd8a` and `0xbdd3`, but neither is taken on that path), and the
+  zero test at `0xbda0` with the `add rcx,-8` at `0xbdab` are in the same basic block; the function's
+  own record `0x5ab430` carries `quickjs.c:1494:12`, so the 131 bytes are `js_rc`'s body, not a thunk.
+
+**Fourth row: lands — as a mechanism, not as "offline disassembly cannot judge".** Mechanism
+one-liner: `libs/quickjs/cutils.h:43-44`'s fallback `offsetof` (`&((type *)0)->field`) puts a
+compile-time null member access inside `container_of` (`quickjs.c:1494`); clang instruments the
+access, so the `0xbd97` call reports the constant 0 unconditionally (`xor eax,eax` at `0xbd86`,
+`test al,1` at `0xbd88`, `jne 0xbd9c` at `0xbd8a` is a constant-false guard), Zig prints `member
+access within null pointer of type 'JSMallocBlockHeader'` and aborts, exit status 3. The first
+`js_rc` call is `js_alloc_string_rt`'s at `0xeeddf` (returns to `0xeede4`, printed `0xeede3`;
+`quickjs.c:2361`), inside `JS_InitAtoms`' first `__JS_NewAtomInit`.
+
+Consequence: the trip is independent of runtime pointer values. §45's inference "the user pointer
+was 8" is **withdrawn**; `str`'s value and source remain unobserved, so §46's unobserved half
+stands. §46's 13 `Mx` rows remain valid callback observations but lose their discriminating power;
+an allocator fix would have been the wrong target. Task 4 is not qualified by this evidence. The
+choice among repair options — (a) make `offsetof` well-defined (`__builtin_offsetof` /
+`<stddef.h>`), (b) exclude `libs/quickjs` from UBSan null checks, (c) non-aborting Zig handler under
+separate authorization — belongs to the human. None was implemented. Full write-up:
+`evidence/analysis/runtime_444_c1_validation.md` §47.
+
+## (11) closing ledger for this plan (2026-10-22)
+
+Commits in branch order. The plan is stacked on `c2-mf-records` @ `6f12d65` (PR #7, still unmerged),
+so the branch's earlier history is not this plan's:
+
+    5405c73  Task 1: the eight-frame chain off the disk dump; dll_ubsan_site `func` caliber guard exits 2
+    bfd4e65  Task 1 fix: §45's bytes live in .zig-cache; frames 6-8 attributed by checkable sources
+    9d88ac6  Task 1 fix: line refs corrected; 3,042/4,824 restated as a tool-vs-tool difference
+    e371c30  Task 2: scripts/pe_disrva.py + its tests + the offline-tooling.md section
+             (+ evidence/disasm/js_rc_trap_77c0c35e.md, the 40-insn listing, and scripts/README.md)
+    1a7e720  Task 2 fix: the second record is PointerOverflowData; `func` wording names the record kind
+    270a59e  Task 3: §47 appended — rows (i)/(ii)/(iii) fail, the fourth lands with a mechanism
+    db87170  Task 3 fix: nine wording/reference corrections inside §47
+    (<this commit>)  Task 5: bookkeeping only — AGENTS.md index `§31–§47` + constraint 8, tool-doc
+             line refs, the three §47/(10) wording nits, this ledger; no src/, build.zig or libs/ byte
+    Task 4: no dispatch (ruling); no `src/` change, no 314 -> 315
+
+Fence counts, measured on this commit's tree (not quoted from earlier sections):
+
+    $ python3 -m pytest scripts/test_scripts_layout.py -q
+    23 passed in 0.12s
+    $ python3 -m pytest scripts/test_c2_harness.py -q
+    134 passed in 1.11s
+    $ python3 -m pytest scripts/test_pe_disrva.py -q
+    4 passed in 0.94s
+    $ PYTHONPATH=scripts/windows python3 -m pytest scripts/windows/tests -q
+    169 passed in 4.73s
+    $ timeout 900 zig build test --summary all
+    Build Summary: 24/27 steps succeeded (1 failed); 314/314 tests passed
+    (the 1 failed is exports.zig's kernel32 link step — the known Linux environment fact, not code)
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
+
+No game, no shot, no dispatch was used for §47 — zero of each.
+
+## (12) §47 final-review fix round (2026-10-22) — native header attribution; truncation exits 2
+
+Two Important findings and four minor ones from the whole-branch review at `bb5c2b4`. No shot, game,
+dispatch, build or DLL byte: the subjects are the vendored preprocessor, the two offline PE readers,
+this log and §47. The DLL digest below is unchanged.
+
+### (12.1) The native full `<stddef.h>` pull is `<malloc.h>` at `quickjs.c:38`, not `<stdlib.h>` at `:25`
+
+Review item 1 measured §47.4's old sentence false. Reproduced with the same preprocessor family the
+§47 build uses (Zig 0.16.0's clang). `-x c` is explicit because this Zig falls back to `/usr/include`
+for a bare `-` and then cannot find `stddef.h`; it is required for the stdin form in this environment.
+
+    $ zig cc -E -dM -x c -include stdlib.h - </dev/null | grep -w offsetof
+    $ echo rc=$?
+    rc=1
+    $ zig cc -E -dM -x c -include malloc.h - </dev/null | grep -w offsetof
+    #define offsetof(t,d) __builtin_offsetof(t, d)
+    $ echo rc=$?
+    rc=0
+
+and the whole translation unit's final definition, on each target:
+
+    $ zig cc -DCONFIG_VERSION='"2025-09-13"' -Wno-gnu-zero-variadic-macro-arguments \
+        -E -dM libs/quickjs/quickjs.c 2>/dev/null | grep -w offsetof
+    #define container_of(ptr,type,member) ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
+    #define offsetof(t,d) __builtin_offsetof(t, d)
+
+    $ zig cc -target x86_64-windows-gnu -DCONFIG_VERSION='"2025-09-13"' \
+        -Wno-gnu-zero-variadic-macro-arguments -E -dM libs/quickjs/quickjs.c 2>/dev/null | grep -w offsetof
+    #define container_of(ptr,type,member) ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
+    #define offsetof(type,field) ((size_t) &((type *)0)->field)
+
+Why: glibc's `<stdlib.h>` asks `<stddef.h>` for `size_t`/`wchar_t`/`NULL` only
+(`__need_size_t`/`__need_wchar_t`/`__need_NULL`, `/usr/include/stdlib.h:27-31`), so
+`__stddef_offsetof.h` is not reached and no `offsetof` is defined. `<malloc.h>` — selected by
+`#elif defined(__linux__) || defined(__GLIBC__)` at `quickjs.c:37`, included at `:38` — includes
+`<stddef.h>` with no `__need_*` (line 23), and Zig's clang resource `__stddef_offsetof.h` defines
+`offsetof` as the builtin when it is not already defined. MinGW does not take that branch: its
+`<stdlib.h>` also defines no `offsetof` (same `-dM` command, no output), and `<inttypes.h>` reaches
+`<stddef.h>` only with `__need_wchar_t` (`any-windows-any/inttypes.h:13-14`, `quickjs.c:28`). So at
+`cutils.h:43` the fallback is the active definition on MinGW and the builtin on native. §47.4 was
+rewritten to this attribution; the constant-0 mechanism, the landing row and §45's withdrawal are
+unchanged.
+
+### (12.2) Truncated PE exits 2 instead of clipping to the surviving prefix
+
+Review item 2's repro, before the fix:
+
+    $ cp zig-out/bin/stellaris_quickjs.dll /tmp/trunc.dll && truncate -s $((0xb180)) /tmp/trunc.dll
+    $ python3 scripts/pe_disrva.py /tmp/trunc.dll 0xbd70 0xbdf3
+    ; trunc.dll .text rva 0xbd70..0xbd80 (end exclusive) image_base=0x180000000: 4 insns, 14 bytes
+      ...
+    rc=0
+
+after:
+
+    $ python3 scripts/pe_disrva.py /tmp/trunc.dll 0xbd70 0xbdf3
+    [pe_disrva] /tmp/trunc.dll is not a readable PE32+ image: section .text claims 0x4c9c00 raw bytes at file offset 0x400, past the end of the file (0xb180 bytes): truncated image
+    rc=2
+
+`parse` now rejects any section whose declared raw range runs past EOF (`raw_size == 0` skipped);
+`disassemble` already mapped `ValueError` to its one-line exit-2 message. The same guard went into
+`dll_ubsan_site.py`'s `parse`, whose docs already promised truncated input → 2 while `func` on a
+truncated copy answered 1 from the surviving empty `.pdata`; `main` maps the `ValueError` to
+`EXIT_CALLER_ERROR`. New tests:
+`test_pe_disrva.py::test_truncated_image_exits_2_instead_of_clipping_to_the_surviving_prefix`
+and `test_c2_harness.py::test_ubsan_site_truncated_input_exits_2_not_a_no_pdata_finding`.
+
+Out-of-section case (controller's ruling): an RVA that lands in no section, or in a non-executable
+section, still exits **1** by design — a definite "this range is not code in this file"; 2 is only
+for unreadable / non-PE / truncated input and bad invocations. `docs/offline-tooling.md` now says
+both. The real artifact's output is byte-identical before/after on `0xbd70..0xbdf3`, `0xbd70 40`,
+`0xbd70 0x800000`, `0x0 4`, `site JSMallocBlockHeader` and `func 0x18000bd9b` (six diffs, empty).
+
+### (12.3) The remaining minors
+
+Item 3: review said the two `dll_ubsan_site.py` refs were one line low at `bb5c2b4` (`:214-226`,
+`:193`). The five-line section-range guard above sits in `parse`, so in this commit's tree the same
+`.pdata` loop is `:219-231` and the `RECORD_READ_SIZE + 1` bound is `:198`; (4) cites those.
+Item 4: the forward pointer is in (6), and (8) now says the two exit-1 messages "keep distinct
+meanings" instead of "stay exactly as they were". Item 5: §47.5 says "**tests** `str` for null".
+Item 6: the `e371c30` ledger line names `evidence/disasm/js_rc_trap_77c0c35e.md` and
+`scripts/README.md`.
+
+Fence counts on the fix-round tree:
+
+    $ python3 -m pytest scripts/test_pe_disrva.py scripts/test_c2_harness.py scripts/test_scripts_layout.py -q
+    163 passed in 2.48s                    (5 + 135 + 23; pe_disrva was 4, harness 134)
+    $ PYTHONPATH=scripts/windows python3 -m pytest scripts/windows/tests -q
+    169 passed in 4.75s
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
+
+The Zig suite was not re-run (no Zig/C source changed).
