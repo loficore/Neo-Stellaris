@@ -25,9 +25,9 @@ unicorn 2.1.4). Only `emu_desc.py` needs unicorn, and its artifacts are checked 
 is the step that requires it — `zig build test` does not.
 
 **Host caveat**: 当前基线(2026-10-22 复测 `zig build test --summary all`)=
-`Build Summary: 24/27 steps succeeded (1 failed); 307/307 tests passed`,裁定 **P15 把这一步记为绿**。
-更早的 `22/25 steps …; 296/296 tests passed` 是 scope 独立测试步启用**之前**的数,现在只剩历史价值
-(逐条计数与增量出处在 `docs/scope-read-points.md` 的「计数」一节)。
+`Build Summary: 24/27 steps succeeded (1 failed); 314/314 tests passed`,裁定 **P15 把这一步记为绿**。
+更早的 `24/27 …; 307/307` 与 `22/25 steps …; 296/296 tests passed` 都是历史数(逐条计数与增量出处在
+`docs/scope-read-points.md` 的「计数」一节)。
 那 1 个 failed 是 `exports.zig` 为 root 的 QuickJS 链接步,理由是 8 条 kernel32 undefined-symbol
 (`CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`)—— Windows API 在 Linux 上本来就没有,
 **不是代码故障**;其余 2 步是它的传递失败(没跑到)。
