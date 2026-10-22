@@ -30,6 +30,16 @@ C2QuickJSPointersInto buffer decoder), pinned by host tests below, and
 ``c2_task6_e2e`` contributes ``decode_probe_rc`` (the C2EvalProbe exit-code
 decoder: sentinel names vs the ``n*4+3`` encoding), pinned below as well.
 
+The two §45 tools promoted out of ``scripts/scratch/2026-10_abortexit/`` contribute
+host-pure logic too: ``c2_selfabort_repro`` owns the tool's key-line set (now
+including the ``MFREC`` ring-recorder channel) and the abort-signature verdict
+predicate, and ``dll_ubsan_site`` reads a file copy of our DLL, so its ``func``
+mode is exercised against the built artifact. Both are imported through
+``importlib`` inside their test rather than at the top of this file: ``c2_selfabort_repro``
+drives a child process on Windows and must stay import-safe here, and a missing or broken
+one of the two must read as two failing tests, not as a collection error that hides every
+other test in the file.
+
 **One deliberate exception to "remote control flow is not mocked":** §36's
 log read-back (``fetch_diag_log`` / ``report_init_failure``) is the mechanism
 that decides whether an expensive live shot is readable at all, and it is pure
@@ -44,7 +54,9 @@ bug like that is invisible to any test that only runs against a real process.
 
 import ctypes
 import hashlib
+import importlib
 import os
+import re
 import struct
 
 import pytest
@@ -1889,3 +1901,84 @@ def test_cap_lines_renders_an_unopened_thread_without_inventing_a_state():
     assert lines[0] == "tid=1 open_err=OpenThread(1) failed: gle=87"
     assert "rip=" + hex(base + 0x1230) in lines[1]
     assert "where=inside_dll" in lines[1]
+
+
+# --- §45's two promoted tools (Task 2): the self-checker's recorder channel and
+# --- the offline symbolizer's func mode. Both pure; no Windows API is touched.
+
+def test_selfabort_repro_reads_the_recorder_channel():
+    """The promoted §45 self-checker must carry the ring-recorder as a key line, and
+    its verdict must stay exactly the abort signature §45 measured: the child's exit
+    status is 3 AND it never printed SURVIVED.
+
+    Nothing about the recorder may hinge on the post-call dump: §45's child aborts
+    *inside* C2DiagQJSInto, so the only channel that can see the dying process is the
+    concurrent reader thread — which is why MFREC is in the key-line set at all.
+    """
+    repro = importlib.import_module("c2_selfabort_repro")
+    assert "MFREC" in repro.KEY_LINES, "the recorder channel must be a key line of this tool"
+
+    stdout = "\n".join([
+        "BASE stellaris_quickjs.dll 0x7ffc138c0000",
+        "LOGADDR 0x7ffc13f657f0",
+        "RECORDER ok",
+        "SANITY 42",
+        "WITNESS ''",
+        "WITNESS 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'",
+        "MFREC 0 watch 'M_ size=0 ptr=---------------- st=000000000000\\n'",
+        "MFREC 1 watch 'Mx size=20 ptr=198c3e40 st=00007ff644d3\\n'",
+        "[repro] child returncode = 3 (0x3)",
+        "[repro] VERDICT: the DLL terminated its own host with exit status 3",
+    ])
+    assert repro.key_lines_in(stdout) == [
+        "BASE", "LOGADDR", "RECORDER", "SANITY", "WITNESS", "WITNESS", "MFREC",
+        "MFREC", "VERDICT"]
+    counts = repro.key_line_counts(stdout)
+    assert counts["MFREC"] == 2 and counts["WITNESS"] == 2
+    assert "SURVIVED" not in counts
+
+    # The verdict predicate, in both directions, on the shapes §45 and §40 produced.
+    assert repro.verdict(3, stdout) is True
+    assert repro.verdict(3, stdout + "\nSURVIVED rc=0") is False
+    assert repro.verdict(0, stdout) is False
+    assert repro.verdict(-1073740791, stdout) is False  # 0xC0000409 fastfail != abort()
+
+    # A child that never loaded the DLL also ends with status != 3, and that is NOT a
+    # negative result about the artifact — the tool must be able to tell the two apart.
+    assert repro.child_loaded_the_dll(stdout) is True
+    assert repro.child_loaded_the_dll(
+        "[repro] child returncode = 1 (0x1)\nTraceback: no WinDLL here") is False
+
+
+def test_ubsan_site_func_mode_reports_function_range_and_records(capsys):
+    """``func`` must name the function holding the address (its ``.pdata`` range, with
+    length) and the UBSan records its code references, with the record address and the
+    instruction that loaded it. The address is derived from the image, not hard-coded:
+    pinning §45's concrete 0x18000bd9b would break on the next link.
+    """
+    site = importlib.import_module("dll_ubsan_site")
+    with open(DLL_PATH, "rb") as f:
+        data = f.read()
+    image_base, secs = site.parse(data)
+
+    records = [r for r in site.iter_records(data, image_base, secs)
+               if "JSMallocBlockHeader" in r[5]]
+    assert records, "the shipped artifact must still carry the §45 type-mismatch records"
+    want = {r[0] for r in records if r[0] is not None}
+    span = None
+    for begin, end in site.runtime_functions(data, secs):
+        if site.lea_record_targets(data, secs, begin, end, want):
+            span = (begin, end)
+            break
+    assert span is not None, "no .pdata function referenced a JSMallocBlockHeader record"
+
+    rc = site.cmd_func(data, image_base, secs, image_base + span[0])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert f"rva {span[0]:#x}..{span[1]:#x} ({span[1] - span[0]} bytes)" in out, \
+        "the report must carry the function range .pdata gives for that address"
+    assert "JSMallocBlockHeader" in out
+    assert re.search(r"quickjs\.c:\d+:\d+ member_access type=", out), \
+        "the report must carry each referenced record's source location and kind"
+    assert re.search(r"record_rva=0x[0-9a-f]+ loaded_at=0x[0-9a-f]+", out), \
+        "the report must say which record and where the function loaded it"
