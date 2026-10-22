@@ -396,6 +396,63 @@ static const JSMallocFunctions heap_mf = {
 static JSRuntime *g_test_rt = NULL;
 static JSContext *g_test_ctx = NULL;
 
+/* ---------------------------------------------------------------------------
+ * §52 — the execution bridge.
+ *
+ * The vtable wrapper (src/dll/c2/vtable.zig) forwards every effect whose
+ * [obj+0x20] equals the armed token here. This routine evaluates ONE fixed
+ * script — baked in at arm time — with two numeric arguments (token, ctx
+ * pointer word) and reports whether it returned the sentinel 1504.
+ *
+ * Why the script is a fixed function and not caller JS: C3's general evaluation
+ * API is still deferred (ruling P21); the only thing this bridge must prove is
+ * that a real effect-object token reaches QuickJS through the engine's own
+ * Execute slot. `typeof p === 'number'` keeps the pointer-width bridge explicit
+ * without depending on numeric precision (Windows x64 user addresses < 2^47 are
+ * exactly representable in a double).
+ *
+ * Locking: a single try-lock, never a blocking wait — the game thread must not
+ * stall because a diagnostic is in flight. A held lock is reported as busy and
+ * the call returns 0 (the caller treats it as "no evidence", never as failure).
+ * ------------------------------------------------------------------------- */
+#define JS_TAG_UNDEFINED 3
+#define JS_TAG_FLOAT64   8
+#define C2_EXEC_SENTINEL 1504
+
+static long g_exec_lock = 0;
+static int g_exec_armed = 0;
+static uint32_t g_exec_token = 0;
+static uint32_t g_exec_budget_left = 0;
+static JSValue g_exec_fn;
+static int g_exec_fn_valid = 0;
+static uint64_t g_exec_calls, g_exec_skip, g_exec_busy;
+static uint64_t g_exec_js_calls, g_exec_js_ok, g_exec_js_err, g_exec_mismatch;
+static int32_t g_exec_last_rc = 0;
+static uint32_t g_exec_last_token = 0;
+static int32_t g_exec_last_value = 0;
+
+static int c2_exec_try_lock(void) {
+    return __sync_lock_test_and_set(&g_exec_lock, 1) == 0;
+}
+static void c2_exec_unlock(void) { __sync_lock_release(&g_exec_lock); }
+
+static JSValue c2_exec_num(double d) {
+    JSValue v;
+    memset(&v, 0, sizeof(v));
+    /* quickjs.h names this member `float64`; THIS translation unit hand-forwards
+       the JSValue layout without including the header (lines 45-55), so the
+       member here is `f64`. The layout is identical (8-byte union). */
+    v.u.f64 = d;
+    v.tag = JS_TAG_FLOAT64;
+    return v;
+}
+static JSValue c2_exec_undefined(void) {
+    JSValue v;
+    memset(&v, 0, sizeof(v));
+    v.tag = JS_TAG_UNDEFINED;
+    return v;
+}
+
 // ---------------------------------------------------------------------------
 // Exported functions
 // ---------------------------------------------------------------------------
@@ -423,10 +480,15 @@ int C2SanityCheck(void) {
  *   100..104   THIS file's outer gates: 100 no process heap, 101 test HeapAlloc
  *              failed, 102 JS_NewRuntime2 NULL, 103 runtime opaque mismatch,
  *              104 raw context NULL
+ *   105        exec bridge busy — teardown refused without touching g_test_ctx
  * The two ranges no longer intersect, so an rc is decodable on its own; the log
  * is still written because the inner codes carry the exception text.
  * ------------------------------------------------------------------------- */
 #define C2_DIAG_ERR_SIZE 192
+
+/* Defined with the exec bridge at the bottom of this file. */
+int C2ExecDisarmState(void);
+int C2ExecArmSrcForTest(const char *src, uint32_t token, uint32_t budget);
 
 /* ---------------------------------------------------------------------------
  * The on-disk diagnostic channel.
@@ -495,6 +557,10 @@ static void c2_diag_write_file(int rc, int log_len) {
 }
 
 static int c2_diag_sequence(void) {
+    /* The exec bridge may hold a JSValue and a lock; free it while g_test_ctx is
+       still valid. A busy bridge means a JS call is in flight — refuse to pull
+       the ctx out from under it (105 is never expected on the live one-shot). */
+    if (C2ExecDisarmState() < 0) return 105;
     g_test_rt = NULL;
     g_test_ctx = NULL;
     g_diag_log[0] = '\0';
@@ -820,6 +886,10 @@ extern JSValue JS_Eval(JSContext *ctx, const char *input, size_t input_len,
                        const char *filename, int eval_flags);
 extern int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
 extern JSValue JS_GetException(JSContext *ctx);
+/* Real linker symbols (not static inline): needed by the §52 exec bridge. */
+extern int JS_IsFunction(JSContext *ctx, JSValueConst val);
+extern JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,
+                       int argc, JSValueConst *argv);
 
 /* Move a pending exception out of rt->current_exception and release it, so the
    moved-out exception value does not leak (quickjs.c:7406-7413; the slot would
@@ -940,4 +1010,164 @@ static const char c2_stress_script[] =
 
 int C2EvalStress(void) {
     return C2EvalProbe(c2_stress_script);
+}
+
+/* ---------------------------------------------------------------------------
+ * §52 execution bridge — arm / call / stats / disarm.
+ *
+ * Return codes (pinned by c2_diag_test.zig):
+ *   arm:  0 ok, 1 no ctx, 2 arm-script threw, 3 eval result not a function,
+ *         4 bad token/budget, 5 already armed, 6 lock busy
+ *   call: 0 skip (unarmed / token mismatch / budget spent / lock busy),
+ *         1 fixed script returned the sentinel 1504, 2 returned something else,
+ *         3 JS threw
+ *   disarm: 1 was armed, 0 was not, -1 lock busy (nothing changed)
+ * The counters are process-lifetime diagnostics, not reset on disarm, so the
+ * one live shot can read a cumulative picture after the fact.
+ * ------------------------------------------------------------------------- */
+int C2ExecArmToken(uint32_t token, uint32_t budget) {
+    char src[160];
+    /* No `typeof p === 'number'` here. QuickJS's OPTIMIZE typeof path
+       (quickjs.c:35523) evaluates `M4(OP_strict_eq, OP_strict_neq, OP_eq,
+       OP_neq)`, whose `OP_strict_eq << 24` overflows a signed int; this Debug
+       build instruments C with UBSan, so the arm eval ABORTS the process
+       (observed: 6/9 native tests aborted inside JS_Eval). The argument type is
+       not in question anyway — C2ExecCall is the only producer of `p` and always
+       passes a double. The token check below is the real gate. */
+    if (snprintf(src, sizeof(src),
+                 "(function(v,p){return (v===%u)?1504:-1;})",
+                 (unsigned)token) >= (int)sizeof(src)) {
+        return 4;
+    }
+    return C2ExecArmSrcForTest(src, token, budget);
+}
+
+int C2ExecArmSrcForTest(const char *src, uint32_t token, uint32_t budget) {
+    JSValue fn;
+    if (!g_test_ctx) return 1;
+    if (!src || token == 0 || budget == 0) return 4;
+    if (!c2_exec_try_lock()) return 6;
+    if (g_exec_armed) { c2_exec_unlock(); return 5; }
+
+    if (g_exec_fn_valid) {
+        JS_FreeValue(g_test_ctx, g_exec_fn);
+        g_exec_fn_valid = 0;
+    }
+    g_exec_calls = g_exec_skip = g_exec_busy = 0;
+    g_exec_js_calls = g_exec_js_ok = g_exec_js_err = g_exec_mismatch = 0;
+    g_exec_last_rc = 0;
+    g_exec_last_token = 0;
+    g_exec_last_value = 0;
+
+    JS_UpdateStackTop(g_test_rt);
+    fn = JS_Eval(g_test_ctx, src, strlen(src), "<c2exec>", 0);
+    if (JS_VALUE_GET_TAG(fn) == JS_TAG_EXCEPTION) {
+        JS_FreeValue(g_test_ctx, fn);
+        c2_clear_pending_exception(g_test_ctx);
+        c2_exec_unlock();
+        return 2;
+    }
+    if (!JS_IsFunction(g_test_ctx, fn)) {
+        JS_FreeValue(g_test_ctx, fn);
+        c2_exec_unlock();
+        return 3;
+    }
+    g_exec_fn = fn;
+    g_exec_fn_valid = 1;
+    g_exec_token = token;
+    g_exec_budget_left = budget;
+    g_exec_armed = 1;
+    c2_exec_unlock();
+    return 0;
+}
+
+int C2ExecCall(uint32_t token, uint64_t ctx_word) {
+    JSValue argv[2];
+    JSValue r;
+    int32_t n = 0;
+    int conv;
+
+    __sync_fetch_and_add(&g_exec_calls, 1);
+    if (!c2_exec_try_lock()) {
+        __sync_fetch_and_add(&g_exec_busy, 1);
+        __sync_fetch_and_add(&g_exec_skip, 1);
+        return 0;
+    }
+    if (!g_exec_armed || token != g_exec_token || g_exec_budget_left == 0) {
+        g_exec_last_token = token;
+        __sync_fetch_and_add(&g_exec_skip, 1);
+        c2_exec_unlock();
+        return 0;
+    }
+    g_exec_budget_left--;
+    g_exec_last_token = token;
+
+    JS_UpdateStackTop(g_test_rt);
+    argv[0] = c2_exec_num((double)token);
+    argv[1] = c2_exec_num((double)ctx_word);
+    r = JS_Call(g_test_ctx, g_exec_fn, c2_exec_undefined(), 2, argv);
+    if (JS_VALUE_GET_TAG(r) == JS_TAG_EXCEPTION) {
+        JS_FreeValue(g_test_ctx, r);
+        c2_clear_pending_exception(g_test_ctx);
+        __sync_fetch_and_add(&g_exec_js_calls, 1);
+        __sync_fetch_and_add(&g_exec_js_err, 1);
+        g_exec_last_rc = 3;
+        g_exec_last_value = 0;
+        c2_exec_unlock();
+        return 3;
+    }
+    conv = JS_ToInt32(g_test_ctx, &n, r);
+    JS_FreeValue(g_test_ctx, r);
+    __sync_fetch_and_add(&g_exec_js_calls, 1);
+    g_exec_last_value = n;
+    if (conv != 0 || n != C2_EXEC_SENTINEL) {
+        __sync_fetch_and_add(&g_exec_mismatch, 1);
+        g_exec_last_rc = 2;
+        c2_exec_unlock();
+        return 2;
+    }
+    __sync_fetch_and_add(&g_exec_js_ok, 1);
+    g_exec_last_rc = 1;
+    c2_exec_unlock();
+    return 1;
+}
+
+int C2ExecStats(char *out, int out_size) {
+    int n;
+    if (!out || out_size <= 0) return 0;
+    n = snprintf(out, (size_t)out_size,
+        "armed=%d token=%u budget_left=%u calls=%llu skip=%llu busy=%llu "
+        "js_calls=%llu js_ok=%llu js_err=%llu mismatch=%llu "
+        "last_rc=%d last_token=%u last_value=%d\n",
+        g_exec_armed, (unsigned)g_exec_token, (unsigned)g_exec_budget_left,
+        (unsigned long long)g_exec_calls, (unsigned long long)g_exec_skip,
+        (unsigned long long)g_exec_busy, (unsigned long long)g_exec_js_calls,
+        (unsigned long long)g_exec_js_ok, (unsigned long long)g_exec_js_err,
+        (unsigned long long)g_exec_mismatch,
+        g_exec_last_rc, (unsigned)g_exec_last_token, g_exec_last_value);
+    if (n < 0) { out[0] = '\0'; return 0; }
+    return n < out_size ? n : out_size - 1;
+}
+
+int C2ExecDisarmState(void) {
+    int was;
+    if (!c2_exec_try_lock()) return -1;
+    was = g_exec_armed;
+    g_exec_armed = 0;
+    g_exec_token = 0;
+    g_exec_budget_left = 0;
+    if (g_exec_fn_valid && g_test_ctx) {
+        JS_FreeValue(g_test_ctx, g_exec_fn);
+        g_exec_fn_valid = 0;
+    }
+    c2_exec_unlock();
+    return was;
+}
+
+/* Test-only: hold (1) or release (0) the bridge lock so the busy path can be
+   observed without racing a real JS call. Not a PE export. */
+int C2ExecTestLock(uint32_t hold) {
+    if (hold) return c2_exec_try_lock() ? 0 : 1;
+    c2_exec_unlock();
+    return 0;
 }

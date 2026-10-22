@@ -53,6 +53,16 @@ extern fn C2DiagMfRecords(out: [*]u8, out_size: c_int) c_int;
 // allocator semantics — it only calls the existing static callbacks.
 extern fn C2DiagMfProbeZeroSize() c_int;
 
+// §52 — the execution bridge (quickjs_wrapper.c), again OUR own C symbols, not
+// PE exports and not QuickJS symbols. The live channel reaches the bridge
+// through vtable.zig; these tests drive it directly at the value level.
+extern fn C2ExecArmToken(token: u32, budget: u32) c_int;
+extern fn C2ExecArmSrcForTest(src: [*:0]const u8, token: u32, budget: u32) c_int;
+extern fn C2ExecCall(token: u32, ctx_word: u64) c_int;
+extern fn C2ExecStats(out: [*]u8, out_size: c_int) c_int;
+extern fn C2ExecDisarmState() c_int;
+extern fn C2ExecTestLock(hold: u32) c_int;
+
 /// Same-shape mirror of the PE export `C2DiagMfRecordsInto` (src/dll/exports.zig):
 /// one pointer argument, the 4096-byte size baked into the contract and never
 /// passed. The export itself cannot be what these tests call — exports.zig-rooted
@@ -83,6 +93,26 @@ fn liveContext() !*qjs.JSContext {
     try std.testing.expect(rt != null);
     const c = ctx orelse return error.NoContext;
     return @ptrCast(c);
+}
+
+/// `calls=` must not be satisfied by `js_calls=`; match the key, not a substring.
+fn countExactKey(text: []const u8, key: []const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.tokenizeAny(u8, text, " \n");
+    while (it.next()) |tok| {
+        const eq = std.mem.indexOfScalar(u8, tok, '=') orelse continue;
+        if (std.mem.eql(u8, tok[0..eq], key)) n += 1;
+    }
+    return n;
+}
+
+fn keyValue(text: []const u8, key: []const u8) ?[]const u8 {
+    var it = std.mem.tokenizeAny(u8, text, " \n");
+    while (it.next()) |tok| {
+        const eq = std.mem.indexOfScalar(u8, tok, '=') orelse continue;
+        if (std.mem.eql(u8, tok[0..eq], key)) return tok[eq + 1 ..];
+    }
+    return null;
 }
 
 /// Prove the runtime/context survived the call under test: re-run the bootstrap
@@ -120,6 +150,28 @@ test "C2EvalProbe returns 0 while g_test_ctx is NULL (no init has run yet)" {
     }
 
     try std.testing.expectEqual(@as(c_int, 0), C2EvalProbe("1+1"));
+}
+
+test "C2ExecCall before any init returns 0 and counts a skip" {
+    var rt: ?*anyopaque = null;
+    var ctx: ?*anyopaque = null;
+    C2GetQuickJSPointers(&rt, &ctx);
+    if (rt != null or ctx != null) return error.InitRanBeforeThisTest;
+
+    var buf: [512]u8 = undefined;
+    const n0 = C2ExecStats(&buf, @intCast(buf.len));
+    try std.testing.expect(n0 > 0);
+    const t0 = buf[0..@intCast(n0)];
+    try std.testing.expectEqualStrings("0", keyValue(t0, "armed").?);
+    try std.testing.expectEqualStrings("0", keyValue(t0, "calls").?);
+
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecCall(123, 0));
+
+    const n = C2ExecStats(&buf, @intCast(buf.len));
+    try std.testing.expect(n > 0);
+    const t1 = buf[0..@intCast(n)];
+    try std.testing.expectEqualStrings("1", keyValue(t1, "calls").?);
+    try std.testing.expectEqualStrings("1", keyValue(t1, "skip").?);
 }
 
 test "C2SanityCheck returns 42" {
@@ -490,6 +542,113 @@ test "C2EvalProbe on a lower-stack thread (runtime built on main) returns 11, no
 
     // The same context still serves afterwards (refresh left it usable):
     try std.testing.expectEqual(@as(c_int, 11), C2EvalProbe("1+1"));
+}
+
+test "C2ExecArmToken rejects zero token and zero budget" {
+    _ = liveContext() catch return error.NoContext;
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmToken(0, 4));
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmToken(4242, 0));
+    _ = C2ExecDisarmState();
+}
+
+test "C2ExecCall fires only for the armed token and leaves budget alone on skip" {
+    _ = liveContext() catch return error.NoContext;
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmToken(4242, 4));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecCall(999, 0x1234));
+    try std.testing.expectEqual(@as(c_int, 1), C2ExecCall(4242, 0x1234));
+
+    var buf: [512]u8 = undefined;
+    const n = C2ExecStats(&buf, @intCast(buf.len));
+    const text = buf[0..@intCast(n)];
+    try std.testing.expect(std.mem.indexOf(u8, text, "js_ok=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "budget_left=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "last_value=1504") != null);
+    _ = C2ExecDisarmState();
+}
+
+test "C2ExecCall stops at the budget" {
+    _ = liveContext() catch return error.NoContext;
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmToken(4242, 1));
+    try std.testing.expectEqual(@as(c_int, 1), C2ExecCall(4242, 0));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecCall(4242, 0));
+    var buf: [512]u8 = undefined;
+    const n = C2ExecStats(&buf, @intCast(buf.len));
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "budget_left=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "js_calls=1") != null);
+    _ = C2ExecDisarmState();
+}
+
+test "C2ExecCall reports a non-sentinel as mismatch" {
+    _ = liveContext() catch return error.NoContext;
+    const src: [*:0]const u8 = "(function(v,p){return 7;})";
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmSrcForTest(src, 4242, 4));
+    try std.testing.expectEqual(@as(c_int, 2), C2ExecCall(4242, 0));
+    var buf: [512]u8 = undefined;
+    const n = C2ExecStats(&buf, @intCast(buf.len));
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "mismatch=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "last_value=7") != null);
+    _ = C2ExecDisarmState();
+}
+
+test "C2ExecCall survives a throwing script and the next arm still works" {
+    _ = liveContext() catch return error.NoContext;
+    const boom: [*:0]const u8 = "(function(){throw new Error('boom')})";
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmSrcForTest(boom, 4242, 4));
+    try std.testing.expectEqual(@as(c_int, 3), C2ExecCall(4242, 0));
+    _ = C2ExecDisarmState();
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmToken(4242, 4));
+    try std.testing.expectEqual(@as(c_int, 1), C2ExecCall(4242, 0));
+    _ = C2ExecDisarmState();
+}
+
+test "C2ExecCall reports busy instead of blocking on a held bridge lock" {
+    _ = liveContext() catch return error.NoContext;
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmToken(4242, 4));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecTestLock(1));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecCall(4242, 0));
+    try std.testing.expectEqual(@as(c_int, -1), C2ExecDisarmState());
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecTestLock(0));
+    var buf: [512]u8 = undefined;
+    const n = C2ExecStats(&buf, @intCast(buf.len));
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "busy=1") != null);
+    _ = C2ExecDisarmState();
+}
+
+test "C2ExecCall on a lower-stack thread returns the sentinel" {
+    var main_local: u8 = 0;
+    const main_addr = @intFromPtr(&main_local);
+    _ = liveContext() catch return error.NoContext;
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmToken(4242, 4));
+
+    var layout_delta: i64 = undefined;
+    var rc: c_int = undefined;
+    const t = try std.Thread.spawn(.{}, struct {
+        fn threadFn(out_rc: *c_int, out_delta: *i64, anchor: usize) void {
+            var b_local: u8 = 0;
+            out_delta.* = @as(i64, @bitCast(anchor)) -% @as(i64, @bitCast(@intFromPtr(&b_local)));
+            out_rc.* = C2ExecCall(4242, 0);
+        }
+    }.threadFn, .{ &rc, &layout_delta, main_addr });
+    t.join();
+    try std.testing.expect(layout_delta > 1024 * 1024);
+    try std.testing.expectEqual(@as(c_int, 1), rc);
+    _ = C2ExecDisarmState();
+}
+
+test "C2ExecStats renders every key exactly once" {
+    _ = liveContext() catch return error.NoContext;
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmToken(4242, 4));
+    var buf: [512]u8 = undefined;
+    const n = C2ExecStats(&buf, @intCast(buf.len));
+    const text = buf[0..@intCast(n)];
+    for ([_][]const u8{
+        "armed",       "token",    "budget_left", "calls",     "skip",      "busy",
+        "js_calls",    "js_ok",    "js_err",      "mismatch",  "last_rc",   "last_token",
+        "last_value",
+    }) |key| {
+        try std.testing.expectEqual(@as(usize, 1), countExactKey(text, key));
+    }
+    _ = C2ExecDisarmState();
 }
 
 // ---------------------------------------------------------------------------
