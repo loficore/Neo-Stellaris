@@ -183,6 +183,8 @@ def _kernel32():
         k32.GetThreadTimes.argtypes = [ctypes.c_void_p] + [_FILETIME_OUT] * 4
         k32.GetProcessTimes.restype = ctypes.c_int
         k32.GetProcessTimes.argtypes = [ctypes.c_void_p] + [_FILETIME_OUT] * 4
+        k32.OpenThread.restype = ctypes.c_void_p
+        k32.OpenThread.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_uint]
         _KERNEL32_CONFIGURED = True
 
     return _KERNEL32
@@ -190,6 +192,10 @@ def _kernel32():
 
 # process_all_access = 0x1F0FFF
 _PROCESS_ALL_ACCESS = 0x1F0FFF
+# thread_all_access = STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x1FF. The suspend
+# right (0x20) is inside that mask, and §44's failure was on SuspendThread, not on
+# the open — so the open must ask for everything or the error is not attributable.
+_THREAD_ALL_ACCESS = 0x1FFFFF
 # VirtualAllocEx flProtect PAGE_READWRITE, allocation MEM_COMMIT|MEM_RESERVE
 _PAGE_READWRITE = 0x04
 _MEM_COMMIT_RESERVE = 0x3000
@@ -460,6 +466,36 @@ def _open_process(pid: int):
     if not handle:
         raise RuntimeError(f"OpenProcess({pid}) failed: gle={_gle()}")
     return handle
+
+
+def open_process_handle(pid: int):
+    """A process handle for the read-only thread-state channel.
+
+    Public because ``capture_thread_state`` takes the two handles the poll loop
+    normally supplies, and a control script that holds no dispatched thread still
+    has to answer the process half of the question.
+    """
+    return _open_process(pid)
+
+
+def open_thread_handle(tid: int):
+    """``OpenThread`` with ``thread_all_access``, so ``SuspendThread`` has the right.
+
+    Raises with the gle: the §44 shot lost its whole ``Rip`` axis to
+    ``SuspendThread gle=5`` and the only way to tell "this token cannot suspend
+    this process" from "that thread had already left the running state" is to ask
+    the open call for its actual error.
+    """
+    k32 = _kernel32()
+    handle = k32.OpenThread(_THREAD_ALL_ACCESS, False, tid)
+    if not handle:
+        raise RuntimeError(f"OpenThread({tid}) failed: gle={_gle()}")
+    return handle
+
+
+def close_handle(handle) -> None:
+    """``CloseHandle`` for handles the callers opened (thread and process)."""
+    _kernel32().CloseHandle(handle)
 
 
 def kernel32_call_address(symbol: bytes) -> int:

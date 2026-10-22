@@ -55,7 +55,7 @@ import c2_task5_init
 from c2_harness import (
     list_exports, parse_module_base_from_ps, resolve_pid, dispatch_watching_buffer,
     pe_image_size, classify_rip, filetime_us, format_thread_state, CONTEXT,
-    CONTEXT_READ_MASK, capture_thread_state,
+    CONTEXT_READ_MASK, capture_thread_state, open_thread_handle,
 )
 from c2_task3_diag import parse_ctx
 from c2_task5_init import (
@@ -67,6 +67,11 @@ from c2_task5_init import (
     sample_window,
 )
 from c2_control_sleep import plausible_sleep_ms
+from c2_control_cpuwatch import format_cpu_sample, cpu_advance_us
+from c2_control_suspendcap import (
+    CAPABLE, INCAPABLE, PARTIAL, NO_SAMPLES,
+    thread_ids, suspend_cap_verdict, cap_lines,
+)
 from c2_task6_e2e import decode_probe_rc
 from c2_init_threadstate import (
     EXECUTING_IN_DLL, EXECUTING_ELSEWHERE, BLOCKED, INCONCLUSIVE,
@@ -1756,3 +1761,131 @@ def test_watched_dispatch_drops_a_raising_thread_probe_after_recording_it(monkey
     assert len(calls) == 2
     assert "thread_probe raised" in report["thread_samples"][1][1]
     assert "pid 8288 no longer exists" in report["thread_samples"][1][1]
+
+
+def test_cpuwatch_formats_process_cpu_counters_in_shot_units():
+    # The §44 baseline control prints the same units the shot's §44 line printed, so
+    # the two series can be compared by eye without a conversion step.
+    assert (format_cpu_sample(42.21875, 4.46875, 32)
+            == "user_us=42218750 system_us=4468750 threads=32")
+
+
+def test_cpuwatch_advance_is_first_to_last_only():
+    samples = [(0.0, 1.5, 0.25), (250.0, 2.0, 0.5), (500.0, 3.25, 0.75)]
+    assert cpu_advance_us(samples) == (1_750_000, 500_000)
+
+
+def test_cpuwatch_advance_of_a_short_run_is_zero():
+    # One sample cannot show an advance; reporting the value itself as the advance
+    # would let a control that died after its first read look like an answer.
+    assert cpu_advance_us([(0.0, 42.21875, 4.46875)]) == (0, 0)
+    assert cpu_advance_us([]) == (0, 0)
+
+
+def test_open_thread_handle_asks_for_every_thread_right(monkeypatch):
+    # §44's failure was on SuspendThread, not on the open. If the open quietly
+    # asked for less than the suspend right, gle=5 would be our bug and the
+    # session's health unknown — so the mask is part of the claim.
+    seen = {}
+
+    class FakeK32:
+        def OpenThread(self, access, inherit, tid):
+            seen["access"] = access
+            seen["tid"] = tid
+            return 0xBEEF
+
+    monkeypatch.setattr(c2_harness, "_kernel32", lambda: FakeK32())
+
+    assert open_thread_handle(4242) == 0xBEEF
+    assert seen == {"access": 0x1FFFFF, "tid": 4242}
+
+
+def test_open_thread_handle_raises_with_the_gle_when_the_open_fails(monkeypatch):
+    class FakeK32:
+        def OpenThread(self, access, inherit, tid):
+            return None
+
+    monkeypatch.setattr(c2_harness, "_kernel32", lambda: FakeK32())
+    monkeypatch.setattr(c2_harness, "_gle", lambda: 5)
+
+    with pytest.raises(RuntimeError, match=r"OpenThread\(4242\) failed: gle=5"):
+        open_thread_handle(4242)
+
+
+class _FakeThread:
+    def __init__(self, tid):
+        self.id = tid
+
+
+class _FakeProc:
+    def __init__(self, tids):
+        self._tids = tids
+
+    def threads(self):
+        return [_FakeThread(t) for t in self._tids]
+
+
+def test_thread_ids_are_sorted_and_capped():
+    # Sorted so two runs of the control describe the same threads; capped because
+    # each attempt suspends a real game thread for as long as the context read.
+    assert thread_ids(_FakeProc([9, 3, 7, 1]), 4) == [1, 3, 7, 9]
+    assert thread_ids(_FakeProc([9, 3, 7, 1]), 2) == [1, 3]
+
+
+def _cap_entry(tid, rip=None, context_err=None, open_err=None):
+    state = None if open_err else {
+        "rip": rip, "rsp": rip, "thread_kernel_us": 0, "thread_user_us": 0,
+        "process_kernel_us": 0, "process_user_us": 0,
+        "context_err": context_err, "times_err": None,
+    }
+    return {"tid": tid, "open_err": open_err, "state": state}
+
+
+def test_suspend_cap_verdict_is_capable_when_every_thread_reads():
+    results = [_cap_entry(1, rip=0x7ff600001230), _cap_entry(2, rip=0x7ff600004560)]
+    label, reason = suspend_cap_verdict(results)
+    assert label == CAPABLE
+    assert "readable_rip=2/2" in reason and "suspend_denied_gle5=0/2" in reason
+
+
+def test_suspend_cap_verdict_is_incapable_when_every_thread_refuses_gle5():
+    # Exactly the §44 shape, reproduced on the game's own threads: that is the
+    # signature of a session that cannot suspend this process.
+    results = [_cap_entry(t, context_err="SuspendThread gle=5") for t in (1, 2, 3)]
+    label, reason = suspend_cap_verdict(results)
+    assert label == INCAPABLE
+    assert "suspend_denied_gle5=3/3" in reason
+    assert "every thread refused identically" in reason
+
+
+def test_suspend_cap_verdict_is_partial_when_only_some_threads_read():
+    results = [_cap_entry(1, rip=0x7ff600001230),
+               _cap_entry(2, context_err="SuspendThread gle=5")]
+    label, reason = suspend_cap_verdict(results)
+    assert label == PARTIAL
+    assert "readable_rip=1/2" in reason and "suspend_denied_gle5=1/2" in reason
+
+
+def test_suspend_cap_verdict_counts_a_failed_open_separately():
+    # OpenThread failing is a different wall from SuspendThread failing: the first
+    # says the thread is not even addressable from this token.
+    results = [_cap_entry(1, open_err="OpenThread(1) failed: gle=87"),
+               _cap_entry(2, context_err="SuspendThread gle=5")]
+    label, reason = suspend_cap_verdict(results)
+    assert label == INCAPABLE
+    assert "openthread_failed=1/2" in reason
+
+
+def test_suspend_cap_verdict_of_nothing_attempted_says_nothing():
+    label, reason = suspend_cap_verdict([])
+    assert label == NO_SAMPLES
+    assert reason == "no thread was attempted"
+
+
+def test_cap_lines_renders_an_unopened_thread_without_inventing_a_state():
+    base, image = 0x7ff600000000, 0x200000
+    lines = cap_lines([_cap_entry(1, open_err="OpenThread(1) failed: gle=87"),
+                       _cap_entry(2, rip=base + 0x1230)], base, image)
+    assert lines[0] == "tid=1 open_err=OpenThread(1) failed: gle=87"
+    assert "rip=" + hex(base + 0x1230) in lines[1]
+    assert "where=inside_dll" in lines[1]
