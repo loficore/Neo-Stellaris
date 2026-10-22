@@ -141,6 +141,50 @@ checks §20's leading-char rule, warns on mixed case, and prints the predicted f
 (`max static 18817 + 1 = 18818`) with its reading rule — larger is normal (§19 lazy accessors keep minting
 during start-up), smaller means the collision this check exists for. Exit code 0 = clear.
 
+## live 侧:需要运行中的进程
+
+以下工具**不满足离线前提**——它们 attach 到正在运行的 `stellaris.exe`,读的是活内存。按
+`scripts/README.md` 的两条判据(只读 exe 拷贝 = 工具,需要进程 = 探针)它们是**探针**;
+但因为它们是维护中的接口,仍留在 `scripts/` 顶层。
+
+### `scripts/fridadis.py` + `scripts/dis.js` — 线性反汇编 live 镜像
+
+对**正在运行的**游戏做一次只读线性反汇编,让 live 列表与离线取证在同一条指令上相遇。
+
+**用法**(两个分支,同一个 attach):
+```
+python C:/ns/fridadis.py <rva> <instructions>        # 线性:从 rva 反 N 条
+python C:/ns/fridadis.py --chain <rva> off,off,…     # 指针链:沿偏移读活指针再反汇编
+```
+在 Windows 本机跑(`frida.get_local_device()`),两个文件必须先成对上传到 `C:\ns\`。
+
+**它是探针,不是离线工具**:需要运行中的 `stellaris.exe`;缺进程时 `fridadis.py` 在
+`next(...)` 那行抛 `StopIteration`——那是"游戏没在跑"的签名,不是工具坏了,回去补环境前置,
+不要去改那一行。名字必须全等 `stellaris.exe`(靠 `.lower()` 忽略大小写,别的 launcher 名不算)。
+
+**read-only 自证**:两个文件的头注各自写着"Read-only (no Interceptor, no Memory.patchCode),
+so it is safe against an unpaused game"。评审要复核这句话仍成立——`Interceptor`/`patchCode`/
+`writeByteArray`/`writePointer`/`Memory.protect` 这些符号只应出现在注释行,一条代码行都不能有。
+`dis.js` 渲染 hex 列用的是 `readByteArray`(**读**解码后的字节 span,不是写),没有新增能力。
+
+**硬编码路径 = 上传契约**:`fridadis.py` 里 `JS = r'C:\ns\dis.js'` 钉死,所以上传目标目录**只能**
+是 `C:\ns\`;传到别处会得到 `FileNotFoundError`,那不是工具的错。`fridadis.py` 与 `dis.js` 刻意
+异名(见本节末尾的配对说明),`.py`↔`.js` 必须同目录成对上传、成对核 sha。
+
+**判读陷阱**:
+1. **渲染差异 + 条数口径都不是分歧**。`fridadis.py` 把第二个参数按 **10 进制**读(`40` = 40 条),
+   而 `scripts/disrva.py` 按 **16 进制**读(`40` 会被读成 0x40=64 条)。要和 live 那 40 条比,离线必须写
+   `0x28`。两侧行形也不同:live 第一列是**距起始 rva 的字节偏移**(`+0x00XX`,不是 RVA),mnemonic 不补宽;
+   离线第一列是**绝对 RVA**,mnemonic 补宽到 7。所以判据是空白宽容的 `grep -E`,**不是**逐字 diff。
+2. **`--chain` 读的是活指针,不是镜像字节**——那是运行期状态,会随存档变。别把 `--chain` 的输出混进
+   线性 disasm 产物,会污染判读。
+3. `StopIteration` 见上,是缺进程不是缺功能。
+
+**交叉验证的正确姿势**:与 `scripts/disrva.py` **同 RVA** 比,用 `grep -E` 数命中,**不比 diff**;
+"先核版本再核指令"——live 与离线对不上时第一假设是"跑的不是这一份 build"(exe 身份见本文件"前置条件"),
+不是"capstone 错了"。第一次实机跑通记录见 `evidence/logs/fridadis_b3_4_4_4.log`,产物见
+`evidence/disasm/fridadis_live_0x1D08520.c`。同样的活从**文件**读(不需要进程/游戏)用 `scripts/cap.py`。
+
 ## IDA headless 现状(环境状态,非规则)
 
 **IDA MCP**: registered in `~/.qoder/settings.json` (`/home/lofibass/.local/bin/idalib-mcp --stdio --unsafe`).

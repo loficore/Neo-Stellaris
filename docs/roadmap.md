@@ -43,7 +43,7 @@
 | 阶段 | 状态 | 证据 | 计划 | 第一前置 |
 |---|---|---|---|---|
 | A | done | pipeline §17/§18/§19,c1_validation §25 | — | — |
-| B3 | planned | — | `2026-10-22-b3-fridadis-bringup.md` | 把 `scripts/dis.js` 送到 `C:\ns\dis.js` |
+| B3 | done | c1_validation §26 + `evidence/disasm/fridadis_live_0x1D08520.c` | `2026-10-22-b3-fridadis-bringup.md` | — |
 | api/scope 假偏移 | done | c1_validation §26/§26.3 | `2026-10-22-scope-false-offset-consolidation.md` | 无(§26.2 的真实布局仍未定 → 段4 那条线) |
 | C0 | done | pipeline §20/§21 | — | — |
 | C1 | done | c1_validation §24/§24.6 | — | — |
