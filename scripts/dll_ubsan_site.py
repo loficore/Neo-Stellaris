@@ -41,11 +41,15 @@ Read-only: opens a file copy, no process, no game, no dispatch.
 
 **Exit codes — 0/1/2 mean three different things, and a caller must be able to tell
 them apart.** 0 = the artifact was read and something matched. 1 = the artifact was read
-and *nothing* matched (no check site for that type name; no ``.pdata`` entry referencing
-a record) — that is a finding, not a failure. 2 = **the tool could not read the
-artifact** (missing path, unreadable file, truncated or non-PE32+ input), printed as one
-line on stderr instead of a traceback. A "no sites" 1 on a file that never opened would
-otherwise look exactly like an artifact with no matching checks.
+and *nothing* matched (no check site for that type name; no ``.pdata`` entry for that
+address; a function whose code references no record) — that is a finding, not a failure.
+2 = **the invocation is wrong, so nothing was concluded about the artifact** (missing
+path, unreadable file, truncated or non-PE32+ input, or `func` handed a number below
+the image base — see the caliber guard in `cmd_func`), printed as one line on stderr
+instead of a traceback. A "no sites" 1 on a file that never opened would otherwise look
+exactly like an artifact with no matching checks, and — the reason `func` gained its own
+2 — a bare RVA fed to `func` used to land in the exit-1 "not inside any .pdata function
+entry" branch, i.e. a caller-side caliber slip printed as a conclusion about the image.
 
 **Judgement traps (full write-up in ``docs/offline-tooling.md``):** `func` prints the
 `.pdata` range plus the records that range loads — that is frame *attribution*, not a
@@ -55,7 +59,15 @@ build's 0x4c9be6 one — measured with `runtime_functions` on each), so "the add
 inside any range" proves nothing; and a panic stack prints each return address as
 ``ip − 1``, so a frame's printed value is one byte *before* the call instruction — pass it
 to `func` as-is (the `.pdata` lookup is the inclusive ``begin <= rva < end``), but never
-read the printed address itself as the faulting or calling instruction.
+read the printed address itself as the faulting or calling instruction. Two more that bite
+a caller: `func` takes a vma carrying the image base, so a bare rva (or bash's
+decimal `$(( ))` re-read as hex) is a caller-side error (exit 2) and not a fact about the
+image; and the record lines start with two spaces, **not** with the ``[ubsan_site]``
+prefix, so a *literal* prefix filter (``grep -F '[ubsan_site]'``, or the escaped
+``grep '\\[ubsan_site\\]'``) silently drops every record line and leaves only the banner and
+the function-range line — while the unescaped ``grep '[ubsan_site]'`` is a BRE *character
+class* that matches almost any line and therefore filters nothing at all. Both readings of
+that pipeline are wrong; take the records with ``grep '^  '``.
 """
 from __future__ import annotations
 
@@ -88,11 +100,15 @@ MODES = ("site", "func")
 RECORD_FMT = "<QIIQBB"
 RECORD_READ_SIZE = struct.calcsize(RECORD_FMT)
 
-# Exit code for "this input is not an artifact we could read". Deliberately distinct
-# from 1, which means "the artifact has no matching check sites" — see the docstring.
-# The number itself matches `c2_selfabort_repro.py`, which also uses 2 for "the path
-# you gave me is not an artifact", so the fix loop's two tools report alike.
-EXIT_READ_ERROR = 2
+# Exit code for "the *invocation* is wrong, so nothing was concluded about the
+# artifact": the path could not be read (missing, unreadable, truncated, non-PE32+),
+# or `func` was handed a number that is not a vma (see cmd_func's caliber guard).
+# Deliberately distinct from 1, which means "this artifact has no matching check
+# sites" — see the docstring. The number matches `c2_selfabort_repro.py`, which also
+# uses 2 for "the path you gave me is not an artifact". Named EXIT_CALLER_ERROR
+# rather than the original EXIT_READ_ERROR because the caliber guard widened it past
+# I/O: both are the caller's fault, and neither is a finding about the image.
+EXIT_CALLER_ERROR = 2
 
 
 def parse(data: bytes):
@@ -242,6 +258,18 @@ def cmd_site(data, image_base, secs, want):
 
 
 def cmd_func(data, image_base, secs, va):
+    if va < image_base:
+        # A number below the image base cannot be a vma in this image: it is the
+        # bare RVA the panic stack prints (or a decimal re-read as hex), not the
+        # absolute address `func` asks for. Without this guard it fell through to
+        # "not inside any .pdata function entry" with exit 1 — the same sentence
+        # shape and code as the real finding, so a caliber bug in the caller read
+        # as a conclusion about the artifact. Exit 2 = the invocation was wrong;
+        # nothing here concluded anything about the image.
+        print(f"[ubsan_site] func takes a vma carrying the image base "
+              f"({image_base:#x}); {va:#x} is below it, so it looks like a bare "
+              f"rva — pass {image_base + va:#x} for rva {va:#x}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     rva = va - image_base
     span = next((f for f in runtime_functions(data, secs) if f[0] <= rva < f[1]), None)
     if span is None:
@@ -281,7 +309,7 @@ def main(argv=None) -> int:
         image_base, secs = parse(data)
     except OSError as e:
         print(f"[ubsan_site] cannot read {path}: {e}", file=sys.stderr)
-        return EXIT_READ_ERROR
+        return EXIT_CALLER_ERROR
     except (ValueError, struct.error) as e:
         # `parse` raises ValueError for "not a PE image", for a PE32 (not PE32+) magic,
         # and for header fields it cannot trust; `struct.error` is what a file too
@@ -290,7 +318,7 @@ def main(argv=None) -> int:
         # artifact", none of them is "this artifact has no sites".
         print(f"[ubsan_site] {path} is not a readable PE32+ image: {e}",
               file=sys.stderr)
-        return EXIT_READ_ERROR
+        return EXIT_CALLER_ERROR
     mode = argv[0] if argv else "site"
     arg = argv[1] if len(argv) > 1 else "JSMallocBlockHeader"
     print(f"[ubsan_site] {path} image_base={image_base:#x} mode={mode}")
