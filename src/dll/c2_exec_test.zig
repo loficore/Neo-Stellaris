@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const vtable = @import("c2/vtable.zig");
+const predicate_hook = @import("c2/predicate_hook.zig");
 
 extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2ExecArmToken(token: u32, budget: u32) c_int;
@@ -103,4 +104,37 @@ test "resetForTest clears build state, donor and chain" {
     try std.testing.expect(!vtable.chainEnabled());
     try std.testing.expectEqual(@as(u64, 0), vtable.donorExecute());
     try std.testing.expectEqual(@as(?*const [vtable.SlotCount]u64, null), vtable.getVtable());
+}
+
+test "predicate setToken rejects zero and duplicate installs" {
+    predicate_hook.resetForTest();
+    try std.testing.expectError(error.InvalidToken, predicate_hook.setToken(0));
+    try predicate_hook.setToken(4242);
+    try std.testing.expectEqual(@as(u32, 4242), predicate_hook.token());
+    predicate_hook.clearToken();
+    try std.testing.expectEqual(@as(u32, 0), predicate_hook.token());
+}
+
+test "predicate patchObject rewrites [obj+0] only for the armed token" {
+    predicate_hook.resetForTest();
+    try predicate_hook.setToken(4242);
+
+    var obj: [64]u8 align(8) = [_]u8{0} ** 64;
+    const obj_addr = @intFromPtr(&obj);
+    std.mem.writeInt(u64, obj[0..8], 0xAAAA, .little);
+    std.mem.writeInt(u32, obj[0x20..0x24], 4242, .little);
+
+    try std.testing.expect(predicate_hook.shouldPatch(4242));
+    try std.testing.expect(!predicate_hook.shouldPatch(999));
+    try std.testing.expect(!predicate_hook.shouldPatch(0));
+
+    try std.testing.expect(predicate_hook.patchObject(obj_addr, 4242, 0xBEEF));
+    try std.testing.expectEqual(@as(u64, 0xBEEF), std.mem.readInt(u64, obj[0..8], .little));
+
+    std.mem.writeInt(u32, obj[0x20..0x24], 999, .little);
+    try std.testing.expect(!predicate_hook.patchObject(obj_addr, 999, 0xCAFE));
+    try std.testing.expectEqual(@as(u64, 0xBEEF), std.mem.readInt(u64, obj[0..8], .little));
+
+    try std.testing.expectEqual(@as(u64, 1), predicate_hook.getStats().patched);
+    predicate_hook.resetForTest();
 }

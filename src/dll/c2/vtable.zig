@@ -97,10 +97,9 @@ pub fn resetForTest() void {
 }
 
 // ---------------------------------------------------------------------------
-// Compatibility adapters (ledger P3) — removed when the last consumer is
-// rewritten: predicate_hook.zig in Task 4 (getEffect*Ptr) and exports.zig in
-// Task 6 (buildVtables/isInitialized). They keep the tree compiling and
-// behaving the same in between; they add no second vtable.
+// Compatibility adapters (ledger P3) — removed when exports.zig is rewritten
+// in Task 6. They keep the tree compiling and behaving the same in between;
+// they add no second vtable.
 // ---------------------------------------------------------------------------
 
 pub fn buildVtables(game_base: usize) void {
@@ -111,16 +110,6 @@ pub fn buildVtables(game_base: usize) void {
 
 pub fn isInitialized() bool {
     return built;
-}
-
-pub fn getEffectVtablePtr() ?*const [SlotCount]u64 {
-    return getVtable();
-}
-
-/// The trigger table is no longer built (the C4 path does not touch triggers);
-/// the old predicate hook is rewritten in Task 4 and never installs it.
-pub fn getTriggerVtablePtr() ?*const [17]u64 {
-    return null;
 }
 
 // ---------------------------------------------------------------------------
