@@ -1,0 +1,259 @@
+2026-10_mfrecords — §46 判别说明(一次性笔记,跑完即冻结)
+========================================================================================
+
+本文件放的是一批**已经冻结**的过程笔记:取样诊断、逐 render 的判别算术、陈旧读的排除理由、
+以及重跑命令的逐字转录。逐字机器输出在 `evidence/logs/c2_mfrecords_4_4_4.log`(以下引用它做
+交叉核对,编号 (2)…(10) 沿用该 log 的小节号)。判定表的三行来自
+`docs/superpowers/plans/2026-10-22-c2-allocator-record-discrimination.md` 的 Task 3 brief。
+
+产物身份(全部见 log (2)(3)):
+  DLL   sha256 77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0  7,171,072 B
+        HEAD 26589ac018e1c5410b6a8bf8be3c723ad5344091,c2-mf-records 分支;远端 C:\temp\sqjs_s46.dll
+        (这不是 §42/§44 的 863917f2… —— Task 1 改了 quickjs_wrapper.c,字节必然移动。
+         C:\temp\sqjs_s43.dll 未被覆盖、未被复用。)
+  脚本  sha256 947cb0055cd2038278de0146469da05ed8dcc4260310574cfabdf58ae53eea37  14,567 B
+        scripts/c2_selfabort_repro.py → C:\temp\c2_selfabort_repro.py(远端 Get-FileHash 同值)
+
+
+----------------------------------------------------------------------------------------
+1. 空环不是坏通道:取样节奏诊断(log (7))
+----------------------------------------------------------------------------------------
+
+前 14 次(8 次顺序 + 6 次轻并发)全部回同一种形状:
+
+    RECORDER ok … MFREC=1 行,且这一行里 8 个槽全是 `__ size=0 ptr=---------------- st=000000000000`
+    WITNESS 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+    child returncode = 3 / VERDICT = abort() 签名 / SURVIVED 从不出现
+
+按 brief 的裁定 5,"一条 MFREC 都没有"不落在判定表任何一行;这里连"没有"都不是 —— 通道是好的,
+`RECORDER ok` 证明导出在这份字节里存在,渲染器吐出的是 8 条语法完整的行,远端摘要与本地一致,
+缓冲是契约里的 4096。缺的是**时间**:`MFREC` 读线程 2 ms 轮一次(`MFREC_POLL_S = 0.002`),
+而最后一条分配事件到 `abort()` 之间只剩不到一个轮询周期。同一个子进程里 0.2 ms 的 `WITNESS`
+线程每次都拿到了 `new_rt MmMmMm` —— 两条节奏正好把死亡窗口夹在中间,这就是"窗口比 2 ms 窄"的证据。
+
+补救不新增任何能力,只改变"现有读线程什么时候拿到时间片":把主机 CPU 超订(16–24 个子进程并发,
+主机 16 逻辑处理器),让调度器在死亡窗口内 preempt 掉序列线程,读线程因此有机会落一次采样。
+结果:84 次真实子进程跑里 5 次带数据(log (6) 末尾的总账)。所有带数据的跑都以**同一组 8 个 RVA**、
+同一句 witness、returncode 3 死掉 —— 造成可读性的并发没有改变被读的行为。
+
+零枪核对:整个过程只有 `ssh … python C:\temp\c2_selfabort_repro.py …`。没有 CreateRemoteThread、
+没有注入、没有 hook/patch、没有碰 `stellaris.exe`(它甚至没被这些命令从磁盘打开)。
+
+----------------------------------------------------------------------------------------
+2. 逐 render 的判别算术(表行 1/2/3 各自怎么读)
+----------------------------------------------------------------------------------------
+
+解析只用字面 token(`" size="` / `" ptr="` / `" st="`)与正则
+`([MR_F][x_]) size=([0-9a-f]+) ptr=([0-9a-f\-]+) st=([0-9a-f]{12})` —— 十六进制列不补零,
+所以**不能按列偏移取值**。第一版写成 `([MR_F_]{2})`,它把 `Mx` 行整个漏掉(报 rows=5 event=0),
+已改为 `[MR_F][x_]`。`ptr=----------------` 不匹配 `st` 之外的指针模式是刻意的:那是"进了没出"
+或不稳定行,不参与对齐判断。
+
+分析脚本(本机跑的纯文本后处理,不落仓库):
+
+    import re
+    files = ["/tmp/s46_ov3.txt","/tmp/s46_C3.txt","/tmp/s46_C15.txt","/tmp/s46_C22.txt","/tmp/s46_C5.txt"]
+    for f in files:
+        txt = open(f, encoding="utf-8", errors="replace").read()
+        for tag, body in re.findall(r"^(MFREC \d+ \w+ ')(.*)'$", txt, re.M):
+            rows = re.findall(r"([MR_F][x_]) size=([0-9a-f]+) ptr=([0-9a-f\-]+) st=([0-9a-f]{12})", body)
+            ev = [(k,int(s,16),int(p,16),int(t,16)) for k,s,p,t in rows if k[1]=='x']
+            p1 = ev[0][2] if ev else None
+            for k,z,p,t in ev:
+                print("%s size=0x%03x ptr=%x ptr%%8=%d ptr%%16=%x st=%x st-ptr1=%+#x"
+                      % (k,z,p,p%8,p%16,t,t-p1))
+
+它的输出(逐字):
+
+    === s46_ov3.txt  BASE=7ffc11e30000  rc=3
+      MFREC 0 watch ' -> 8 rows, 0 event rows
+      MFREC 1 watch ' -> 8 rows, 3 event rows
+        Mx size=0x5a0 (1440) ptr=0x154ba68 ptr%8=0 ptr%16=0x8 st=0x6dec18 st-ptr1=-0xe6ce50
+        Mx size=0x808 (2056) ptr=0x1884708 ptr%8=0 ptr%16=0x8 st=0x154be70 st-ptr1=+0x408
+        Mx size=0xff0 (4080) ptr=0x1884f28 ptr%8=0 ptr%16=0x8 st=0x154be70 st-ptr1=+0x408
+    === s46_C3.txt  BASE=7ffbeff30000  rc=3
+      MFREC 0 watch ' -> 8 rows, 3 event rows
+        Mx size=0x5a0 (1440) ptr=0x181f388 ptr%8=0 ptr%16=0x8 st=0x6dec18 st-ptr1=-0x1140770
+        Mx size=0x808 (2056) ptr=0x8ad018 ptr%8=0 ptr%16=0x8 st=0x181f790 st-ptr1=+0x408
+        Mx size=0xff0 (4080) ptr=0x8ad838 ptr%8=0 ptr%16=0x8 st=0x181f790 st-ptr1=+0x408
+    === s46_C15.txt  BASE=7ffbeff30000  rc=3
+      MFREC 0 watch ' -> 8 rows, 0 event rows
+      MFREC 1 watch ' -> 8 rows, 3 event rows
+        Mx size=0x5a0 (1440) ptr=0x17e7128 ptr%8=0 ptr%16=0x8 st=0x6dec18 st-ptr1=-0x1108510
+        Mx size=0x808 (2056) ptr=0x1587df8 ptr%8=0 ptr%16=0x8 st=0x17e7530 st-ptr1=+0x408
+        Mx size=0xff0 (4080) ptr=0x183b378 ptr%8=0 ptr%16=0x8 st=0x17e7530 st-ptr1=+0x408
+    === s46_C22.txt  BASE=7ffbeff30000  rc=3
+      MFREC 0 watch ' -> 8 rows, 0 event rows
+      MFREC 1 watch ' -> 8 rows, 3 event rows
+        Mx size=0x5a0 (1440) ptr=0x17c67b8 ptr%8=0 ptr%16=0x8 st=0x6dec18 st-ptr1=-0x10e7ba0
+        Mx size=0x808 (2056) ptr=0x84bf98 ptr%8=0 ptr%16=0x8 st=0x17c6bc0 st-ptr1=+0x408
+        Mx size=0xff0 (4080) ptr=0x84c7b8 ptr%8=0 ptr%16=0x8 st=0x17c6bc0 st-ptr1=+0x408
+    === s46_C5.txt  BASE=7ffbeff30000  rc=3
+      MFREC 0 watch ' -> 8 rows, 1 event rows
+        Mx size=0xff0 (4080) ptr=0x188c118 ptr%8=0 ptr%16=0x8 st=0x18451c0 st-ptr1=-0x46f58
+    === 汇总 ===
+    event rows = 13 ; ptr%8!=0 = 0 ; size==0 的 M/R 行 = 0 ; ptr%16 集合 = ['0x8']
+      s46_ov3.txt: 事件行=3 distinct st=2
+      s46_C3.txt: 事件行=3 distinct st=2
+      s46_C15.txt: 事件行=3 distinct st=2
+      s46_C22.txt: 事件行=3 distinct st=2
+      s46_C5.txt: 事件行=1 distinct st=1
+      汇池后的 distinct st = 6  <- 行 3 的口径陷阱
+
+表行 1(`M`/`R` 行上有 `size == 0` → 候选 (b)):观测到的尺寸是 `0x5a0 / 0x808 / 0xff0`,
+四个完整 render 逐字同意这个三元组,**没有零尺寸的 `M`/`R` 行**。按裁定 2,这不记作"本次跑排除了
+(b)":`__js_malloc(s,0)` 由内嵌 `zero_size_block` 服务(`quickjs.c:1549-1556`)、
+`js_new_string8_len` 在 `len <= 0` 短路(`:4018`),零尺寸请求在这份 vendored 修订上根本到不了
+`mf.js_malloc` —— 这是离线已定的事实,本次跑只是与它一致。每 render 那 5 条
+`__ size=0 ptr=----------------` 是**从未写过的槽**,不是零尺寸请求,进不了这个判据。
+
+表行 2(对齐 → 候选 (a)):按 `ptr % 8 != 0` 读,因为 `JS_MALLOC_ALIGN = 8`(`:243`)且
+`offsetof(JSMallocBlockHeader, user_data) == 8`(`:270-280`),UBSan 对 `JSMallocBlockHeader`
+的 misalignment 检查只在指针非 8 对齐时触发。13 个指针 `ptr % 8` 全为 0 → 不选 (a)。
+同时把另一个读法写清楚,免得后人误用:**`ptr & 0xf != 0` 单独不构成 (a) 的证据**。观测集合
+`ptr % 16` 恰好 `{0x8}` —— 我们 return 的指针结构上恒为 `≡ 8 (mod 16)`(`AllocHeader` 一个 `size_t`,
+`heap_malloc` 返回 `h + 1`,底层 `HeapAlloc` 块 16 对齐:`quickjs_wrapper.c:161-163, :312`),
+而 Linux 阳性对照的无故障序列也是 `≡ 8 (mod 16)`(log (8):原生 render
+`Mx size=fe8 ptr=2dc2e18`)。所以 brief 第二句"原生同一序列全是 16 对齐"在数据上是 **false**。
+数据支持的结论更窄:我们交回的指针全部满足 QuickJS 自己那套 header 算术要求的 8 对齐;
+而我们要追的 panic 是 `member access within NULL POINTER`(空值),不是错位。
+
+表行 3(`st` → 候选 (c)):必须按**模式**读,distinct 数按裁定 4 打印出来 —— 每 render 2 个。
+"任何两条 `st` 不同"在健康运行时同样成立:`quickjs.c:2070` 的 `JSMallocState ms` 是**栈局部**,
+`:2076 rt = mf->js_malloc(&ms, sizeof(JSRuntime))` 带的是栈地址,`:2082 rt->malloc_ctx.malloc_state = ms`
+之后才有堆副本;一次 `JS_NewRuntime2` 里两个值是结构上必需的。观测到的正是健康模式:
+
+    render  row1 st(栈)   row2/row3 st(堆)   row1 ptr        st(row2) − ptr(row1)
+    ov3     0x6dec18      0x154be70          0x154ba68       +0x408
+    C3      0x6dec18      0x181f790          0x181f388       +0x408
+    C15     0x6dec18      0x17e7530          0x17e7128       +0x408
+    C22     0x6dec18      0x17c6bc0          0x17c67b8       +0x408
+
+  - 栈值在四个不同子进程里是同一个数(`0x6dec18`)—— 一个与进程无关的地址该待的地方;
+  - 堆副本 = 运行时块指针 + 0x408(1032),而 1032 是算出来的
+    `offsetof(JSMallocContext, malloc_state)`(`arena_list[31]+free_arena_list[31]`=992,
+    `zero_size_block`=1000,`mf` 4 个指针=1032),且 `offsetof(JSRuntime, malloc_ctx)` = 0;
+  - 栈值在运行时行之后从未复现;`sizeof(JSRuntime)` 那一行(`0x5a0`)在每个完整 render 里都在。
+三个"选 (c)"的触发条件一个都没出现(≥3 distinct / 栈值复现 / 缺失 1440 行)→ 不选 (c),
+而且是**正向观测**到健康模式四次,不是靠缺失推断。
+
+尺寸换算用 vendored 源在 Linux 侧算(不碰 Windows):
+
+    zig cc -DCONFIG_VERSION='"2025-09-13"' -Wno-gnu-zero-variadic-macro-arguments -I libs/quickjs \
+        -o /tmp/szprobe /tmp/szprobe.c libs/quickjs/{libregexp,libunicode,cutils,dtoa}.c
+    → sizeof(JSRuntime)=1440(=0x5a0)  offsetof(JSRuntime,malloc_ctx)=0
+      offsetof(JSMallocContext,malloc_state)=1032(=0x408)  sizeof(JSMallocBlockHeader)=8
+      sizeof(JSMallocArena)=40  offsetof(JSMallocArena,blocks)=40
+      sizeof(JSMallocLargeBlockHeader)=8  JS_MALLOC_ARENA_SIZE=4096
+
+`-target x86_64-windows-gnu` 的 `_Static_assert` 版本在语法检查阶段就 `FileNotFound`(这个宿主机
+没有 Windows CRT 头),所以 LLP64 目标的布局是靠"`JSRuntime` 里没有 `long`/`time_t`/`wchar_t`,
+只有指针与固定宽类型"论证 + 观测值 +0x408/0x5a0 与计算值一致来支撑的;这条限制写在 §46.5 的
+Boundaries 里,不当作已证事实。
+
+----------------------------------------------------------------------------------------
+3. 第 5 条 render 是陈旧读:为什么它必须被排除,以及汇池会造出什么
+----------------------------------------------------------------------------------------
+
+`C5` 的 `MFREC 0 watch` 把唯一一行 `Mx size=ff0 ptr=188c118` 放在**第 3 个槽**,而槽 0、1 渲染为
+未写过。任何顺序的环历史都产生不了这个形状:三条事件时游标是 3,走位应是 5 条 pristine + 3 条事件
+(其余四个 render 正是如此)。它是"渲染器只在走位之前读一次游标"这一设计后果
+(`quickjs_wrapper.c:666-671`):游标被读成 0,走位走到槽 2 时第三条事件才落下,而槽 0、1 已经按
+pristine 读过了。也就是说这条 render 显示的顺序**从来不是某个环状态**。
+
+为什么值得单独记一笔:如果把这条 render 的 `st` 与完整 render 汇池,distinct 数从 2 变成 6,
+判定表行 3 会仅仅因为一个读者侧的假象而"选出"候选 (c)。**分类必须逐 render 做**。这条陈旧读
+贡献的只有旁证:它那一条行仍是 `≡ 8 (mod 16)`、`size > 0`。
+
+----------------------------------------------------------------------------------------
+4. 这三行是什么(事后从源读的算术,不是观测到的标签)
+----------------------------------------------------------------------------------------
+
+按 `JS_InitAtoms` 的调用顺序对号:`0x5a0` = `sizeof(JSRuntime)` = `:2076`;
+`0x808` = `sizeof(JSMallocLargeBlockHeader)(8) + 2048` = `JS_ResizeAtomHash(rt, 512)` 里的
+`js_mallocz_rt(sizeof(uint32_t) * 512)`(`:3180`,即 `JS_InitAtoms` 做的第一件事);
+`0xff0` = 4080 = `sizeof(JSMallocArena)(40) + 101 * 40` = **40 字节块级**的新 arena
+(`js_malloc_block_sizes` 里 31 个级中唯一给出 4080 的那一级),由第一条
+`__JS_NewAtomInit` 的名字串请求 `js_alloc_string_rt(rt, len, 0)`(`:3430`)触发。
+§43 把死亡夹在":3430 名字串"与":3330 atom_array 增长"之间,§45 把陷阱钉在 `__JS_NewAtomInit` 内;
+环现在显示死亡坐在**40 字节 arena 已被成功交回之后**、下一次 `mf` 调用之前 ——
+`atom_array` 增长那一行(会是 `0x1640` 的 large-block 行)在每个 render 里都缺席。
+死前最后一条记录,四个完整 render 同一种:
+
+    Mx size=ff0 ptr=1884f28 st=00000154be70        (ov3;+0x408 恒等式在每个 render 都成立)
+
+行 2、行 3 的"名字"是算术 + 调用顺序推得,不是读到的标签;§46 的 Boundaries 里也是这么说。
+
+----------------------------------------------------------------------------------------
+5. 判定表落到哪一行,以及其他行为什么不能算
+----------------------------------------------------------------------------------------
+
+行 1 不选:没有零尺寸 `M`/`R` 行(且这一事实先于本次跑就已离线确定,不能记作本次跑的排除)。
+行 2 不选:13/13 指针 8 对齐;`ptr & 0xf` 的读法按裁定 3 不构成 (a) 的证据,且原生序列同形。
+行 3 不选:每 render distinct `st` = 2,健康两值模式 + `+0x408` 恒等式在四个独立地址空间被正向
+观测到;三个 (c) 触发条件皆未出现。第 5 条 render 是读者侧陈旧读,不参与计数。
+→ **落在第四行:候选表不完整。** 按 plan 自己的指令,把 `MFREC` 原文(log (6))与死前最后一条记录
+交回给人,本计划到此停,不自造第四个候选。C2 阻塞,下一步归人,不归 Task 4。
+
+----------------------------------------------------------------------------------------
+6. 重跑命令逐字转录
+----------------------------------------------------------------------------------------
+
+本机(构建 + 摘要 + 离线符号化 + 尺寸算术):
+
+    cd /var/lofibass_ssd/code/zig/Neo-Stellaris
+    timeout 600 zig build && sha256sum zig-out/bin/stellaris_quickjs.dll
+    # 可复现性:把树上产物挪走再从空位构建,两次摘要一致(log (2))
+    mv zig-out/bin/stellaris_quickjs.dll /tmp/s46_prev.dll && timeout 900 zig build
+    sha256sum zig-out/bin/stellaris_quickjs.dll /tmp/s46_prev.dll
+    timeout 900 zig build test        # 24/27 steps succeeded (1 failed); 314/314 tests passed
+    python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000bd9b
+    python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll site JSMallocBlockHeader
+    timeout 300 zig cc -DCONFIG_VERSION='"2025-09-13"' -Wno-gnu-zero-variadic-macro-arguments \
+        -I libs/quickjs -o /tmp/szprobe /tmp/szprobe.c \
+        libs/quickjs/{libregexp,libunicode,cutils,dtoa}.c && /tmp/szprobe
+
+部署(脚本也要 scp;`sqjs_s43.dll` 绝不覆盖):
+
+    timeout 180 scp zig-out/bin/stellaris_quickjs.dll Windows_Jiaolong:C:/temp/sqjs_s46.dll
+    timeout 120 scp scripts/c2_selfabort_repro.py     Windows_Jiaolong:C:/temp/c2_selfabort_repro.py
+    sha256sum scripts/c2_selfabort_repro.py zig-out/bin/stellaris_quickjs.dll
+    timeout 120 ssh Windows_Jiaolong "certutil -hashfile C:\temp\sqjs_s46.dll SHA256; \
+        Get-ChildItem C:\temp\sqjs_s46.dll,C:\temp\c2_selfabort_repro.py | \
+        Select-Object Name,Length | Format-Table -AutoSize; \
+        (Get-FileHash C:\temp\c2_selfabort_repro.py -Algorithm SHA256).Hash"
+
+单次跑(读回大概率是空环,见第 1 节):
+
+    timeout 300 ssh Windows_Jiaolong "python C:\temp\c2_selfabort_repro.py C:\temp\sqjs_s46.dll" \
+        > /tmp/s46_run1.txt 2>&1
+
+带数据的取样要 CPU 超订(16 与 24 两档都用过;输出落 /tmp,不落仓库):
+
+    for i in $(seq 1 24); do \
+      (timeout 200 ssh Windows_Jiaolong \
+        "python C:\temp\c2_selfabort_repro.py C:\temp\sqjs_s46.dll" > /tmp/s46_ov$i.txt 2>&1) & \
+    done; wait
+    for b in A B; do for i in $(seq 1 16); do \
+      (timeout 200 ssh Windows_Jiaolong \
+        "python C:\temp\c2_selfabort_repro.py C:\temp\sqjs_s46.dll" > /tmp/s46_${b}$i.txt 2>&1) & \
+    done; wait; done
+    for i in $(seq 1 24); do \
+      (timeout 200 ssh Windows_Jiaolong \
+        "python C:\temp\c2_selfabort_repro.py C:\temp\sqjs_s46.dll" > /tmp/s46_C$i.txt 2>&1) & \
+    done; wait
+
+总账脚本(区分"调用"与"真实子进程跑",24 路 ssh 并发下 10 次死在
+`kex_exchange_identification: read: Connection reset by peer`,那些没有起过子进程):
+
+    tot=0; real=0; data=0
+    for f in /tmp/s46_run*.txt /tmp/s46_par*.txt /tmp/s46_ov*.txt /tmp/s46_A*.txt /tmp/s46_B*.txt /tmp/s46_C*.txt; do
+      tot=$((tot+1))
+      if grep -aq "child returncode" $f; then
+        real=$((real+1)); grep -aq "Mx \|Rx \|Fx " $f && data=$((data+1))
+      fi
+    done
+    echo "invocations=$tot real_child_runs=$real data_bearing=$data"
+    → invocations=94 real_child_runs=84 data_bearing=5
+
+需要重跑时注意:远程 shell 是 PowerShell,链式命令用 `;`,不要用 `&&`;`&&` 在那里不是分隔符。

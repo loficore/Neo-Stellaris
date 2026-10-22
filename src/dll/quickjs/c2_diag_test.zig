@@ -37,6 +37,36 @@ extern fn JS_NewString(ctx: ?*qjs.JSContext, str: [*:0]const u8) qjs.JSValue;
 // Task 6: our own wrapper symbol (quickjs_wrapper.c), never a QuickJS C symbol.
 extern fn C2EvalProbe(src: [*:0]const u8) c_int;
 
+// Task 1 (allocator-record discrimination): the C ring recorder's renderer
+// symbol (quickjs_wrapper.c), again OUR own symbol, never a QuickJS C symbol.
+extern fn C2DiagMfRecords(out: [*]u8, out_size: c_int) c_int;
+
+// Task 1 fix round: the test-only zero-size probe (quickjs_wrapper.c). Same
+// precedent as the three wrappers above — it is this file's own C symbol, not a
+// QuickJS C symbol, so binding it here does not violate the "bind QuickJS in C
+// only" constraint. It is deliberately NOT a PE export and NOT declared in
+// exports.zig: the injection channel cannot reach it (the plan's own
+// C2ProbeMallocZero shape for Task 4, 「它不暴露给注入通道」), and it changes no
+// allocator semantics — it only calls the existing static callbacks.
+extern fn C2DiagMfProbeZeroSize() c_int;
+
+/// Same-shape mirror of the PE export `C2DiagMfRecordsInto` (src/dll/exports.zig):
+/// one pointer argument, the 4096-byte size baked into the contract and never
+/// passed. The export itself cannot be what these tests call — exports.zig-rooted
+/// tests do not link on the Linux host (ledgered as P15), so its symbol is not
+/// present in this test binary — and the C file must not define a second
+/// `C2DiagMfRecordsInto` either (duplicate link symbol with the Zig export, the
+/// verified C2WriteQuickJSPointersInto precedent). This forwarder is the plan's
+/// contract line for line, through the same C symbol the export delegates to.
+fn C2DiagMfRecordsInto(out_diag: *[4096]u8) i32 {
+    return C2DiagMfRecords(out_diag, 4096);
+}
+
+/// Ring capacity mirrored for the assertions below. The authority is the
+/// `#define MF_REC_CAP 8` in quickjs_wrapper.c; it is deliberately NOT promised
+/// as a Zig-visible symbol (Task 1 ruling 2), so this test declares it locally.
+const MF_REC_CAP = 8;
+
 /// Drive the full bootstrap sequence and hand back the LIVE context, so a
 /// value-level test below has a real ctx (passing NULL would make the pre-fix
 /// `__JS_FreeValue(ctx, v)` die on `ctx->rt` instead of on QuickJS's
@@ -752,4 +782,219 @@ test "the diag file accumulates one line per sequence run, and pure reads add no
 
     try std.testing.expectEqual(before, after_read);
     try std.testing.expectEqual(before + 1, after_seq);
+}
+
+// ---------------------------------------------------------------------------
+// C2 allocator-record discrimination plan, Task 1 — the bounded ring recorder
+// inside heap_malloc/heap_free/heap_realloc (quickjs_wrapper.c), rendered to
+// text by the C symbol `C2DiagMfRecords` and read back through the
+// `C2DiagMfRecordsInto` buffer contract. Observation only: the three callbacks
+// gain entry/exit bookkeeping and nothing else; the 'M'/'m'/'!' marking and
+// MF_TAG_CAP are byte-for-byte untouched, so every live reading recorded in
+// §41–§44 still compares against the same text.
+// ---------------------------------------------------------------------------
+
+test "mf recorder renders kind size ptr state in fixed width" {
+    // 裁定 1(brief Step 1 的省略处):环里要有记录必须先有回调跑过 —— 用既有的
+    // liveContext()(c2_diag_test.zig:44)先驱动 bootstrap 序列(它自己断言 rc=0),
+    // 序列的分配即落入环形记录器。
+    _ = try liveContext();
+    var rec: [4096]u8 = undefined;
+    const n = C2DiagMfRecordsInto(&rec);
+    try std.testing.expect(n > 0);
+    // 至少一条 malloc 记录,且 size 与 ptr 都是定宽十六进制
+    try std.testing.expect(std.mem.indexOf(u8, rec[0..@intCast(n)], "Mx size=") != null);
+    // state 字段必须出现:候选 (c) 的判别依赖它
+    try std.testing.expect(std.mem.indexOf(u8, rec[0..@intCast(n)], " st=") != null);
+}
+
+/// Parses the `size=` column of one rendered recorder row into its numeric value.
+/// Pure, allocates nothing, used by the size assertions below; returns null when
+/// the row is not the shape the C renderer promises (that is an error for the
+/// caller, never a silent 0).
+fn mfRowSize(row: []const u8) ?u64 {
+    const at = std.mem.indexOf(u8, row, " size=") orelse return null;
+    const digits = row[at + " size=".len ..];
+    const end = std.mem.indexOfScalar(u8, digits, ' ') orelse return null;
+    if (end == 0) return null;
+    return std.fmt.parseInt(u64, digits[0..end], 16) catch return null;
+}
+
+/// Asserts the invariant Task 1 Step 4 turned into: every `M`/`R` row the ring
+/// renders carries `size > 0`, i.e. a zero-size request *would* be visible. Also
+/// requires at least one `M` row, so the claim is never vacuous.
+fn assertNoZeroSizeMallocOrRealloc(text: []const u8) !void {
+    var malloc_rows: usize = 0;
+    var row_it = std.mem.splitScalar(u8, text, '\n');
+    while (row_it.next()) |row| {
+        if (row.len == 0) continue; // 末行 \n 之后的空段
+        if (row[0] != 'M' and row[0] != 'R') continue;
+        const sz = mfRowSize(row) orelse return error.MissingSizeColumn;
+        if (row[0] == 'M') malloc_rows += 1;
+        try std.testing.expect(sz > 0);
+    }
+    try std.testing.expect(malloc_rows > 0);
+}
+
+test "no zero-size request reaches mf on this vendored build, and the recorder would see one" {
+    // 裁定 1(brief Step 4 的省略处):先经既有 helper 拿到活 ctx,再走下面的触发序列。
+    const ctx = try liveContext();
+    var rec: [4096]u8 = undefined;
+    // 直接经导出序列走到 QuickJS 的零尺寸路径:JS_NewString(ctx, "") 在 vendored
+    // 2025-09-13 上经 js_alloc_string_rt(rt, 0) → __js_malloc(&rt->malloc_ctx, 0)
+    // ↑ 这条路径主张在 2026-10 离线读源中被逐层证伪。三层证据(行号是本仓库
+    // libs/quickjs/quickjs.c,CONFIG_VERSION 2025-09-13):
+    //   1. `js_new_string8_len`(:4014)对 `len <= 0` 短路
+    //      `return JS_AtomToString(ctx, JS_ATOM_empty_string);`(:4018-4020)
+    //      —— 零分配,brief 的路径主张在第一层就不成立;
+    //   2. 即便走到 `js_alloc_string_rt(rt, max_len, is_wide)`(:2355),它请求的是
+    //      `sizeof(JSString) + (max_len << is_wide) + 1 - is_wide`(:2358),
+    //      max_len=0 时也是 sizeof(JSString)+1 ≠ 0;
+    //   3. `__js_malloc(s, 0)`(:1549)在 `size == 0` 时直接返回内置
+    //      `zero_size_block` 的 user_data(:1552-1554,取法 :1468-1470),
+    //      **从不**把它转发给 `mf.js_malloc`;`__js_realloc`(:1636)同理对
+    //      `size == 0` 走 `__js_free(s, ptr); return NULL;`(:1641-1643),也不转发。
+    //      而 mf 的三个调用点都自带头部:arena `sizeof(JSMallocArena)+n_blocks*block_size`
+    //      (:1505)、大块 `sizeof(JSMallocLargeBlockHeader)+size`(:1538)、
+    //      realloc `sizeof(JSMallocLargeBlockHeader)+size`(:1655)⇒ 结构上恒 > 0。
+    // 因此这条测试原样写下时永远不可能通过(每个后续任务都会继承一个红的
+    // `zig build test`)。这里断言的是它**发现的那个不变式**:记录器看得见
+    // size=0(见下面那条 probe 测试),而本机 vendored build 从不产生它。
+    const v = JS_NewString(ctx, "");
+    _ = v;
+    const n = C2DiagMfRecordsInto(&rec);
+    try std.testing.expect(n > 0);
+    try assertNoZeroSizeMallocOrRealloc(rec[0..@intCast(n)]);
+
+    // 触发器本身也要钉一次:JS_NewString(ctx, "") 之后再渲染,仍然没有任何 M/R 行
+    // 是零尺寸 —— 上面第 1 层证据(零分配)在这台机器上是可观察的,而不只是读源结论。
+    const n2 = C2DiagMfRecordsInto(&rec);
+    try std.testing.expect(n2 > 0);
+    try assertNoZeroSizeMallocOrRealloc(rec[0..@intCast(n2)]);
+}
+
+test "an unwritten recorder slot is empty, not a fake NULL return" {
+    var rec: [4096]u8 = undefined;
+    const n = C2DiagMfRecordsInto(&rec);
+    // 渲染层必须把 filled=='\0' 的槽位画成 "M_ ...",而不是画一个 ptr=0
+    try std.testing.expectEqual(@as(usize, MF_REC_CAP), std.mem.count(u8, rec[0..@intCast(n)], "\n"));
+    const undrawn = std.mem.indexOf(u8, rec[0..@intCast(n)], " ptr=0") != null;
+    try std.testing.expect(!undrawn or std.mem.indexOf(u8, rec[0..@intCast(n)], "x size=") != null);
+
+    // Step 6 散文要求的实质断言(计划原片段末尾那个 or 只在有 filled 记录时成立,
+    // 钉不住「未写槽位画成 unfilled 标记、既不泄露 0x1 哨兵也不画成假 ptr=0」这条)。
+    // 逐行扫描渲染文本:filled 列只允许 'x'(走到出口)或 '_'(没走到出口,含
+    // 从未写入);'_' 行的 ptr 列必须是 16 个 '-' 的占位 —— 存进去的 0x1 哨兵
+    // 永远不许作为数字出现在 ptr 列,NULL(全零)更不许出现在未走到出口的行里,
+    // 因为「返回了 NULL」正是本记录器要判别的事实,不能和「还没返回」混写。
+    const text = rec[0..@intCast(n)];
+    var row_it = std.mem.splitScalar(u8, text, '\n');
+    var rows: usize = 0;
+    while (row_it.next()) |row| {
+        if (row.len == 0) continue; // 末行 \n 之后的空段
+        rows += 1;
+        // kind 列:'M'/'F'/'R'(已入口)或 '_'(从未写入)。
+        try std.testing.expect(row[0] == 'M' or row[0] == 'F' or row[0] == 'R' or row[0] == '_');
+        // filled 列:'x' = 走到出口;'_' = 没走到。
+        try std.testing.expect(row[1] == 'x' or row[1] == '_');
+        const ptr_at = std.mem.indexOf(u8, row, " ptr=") orelse return error.MissingPtrColumn;
+        if (row[1] == '_') {
+            // 未走到出口的槽位:ptr 列只许是 dash 占位,既不是哨兵也不是假 NULL。
+            try std.testing.expectEqual(@as(u8, '-'), row[ptr_at + 5]);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, MF_REC_CAP), rows);
+    // 哨兵若在 ptr 列漏出,渲染只会是 "ptr=1 st="(无补零);它必须不存在。
+    try std.testing.expect(std.mem.indexOf(u8, text, "ptr=1 st=") == null);
+}
+
+test "mf recorder renderer stays inside the 4096-byte contract and never writes past" {
+    // Step 7 / Review Focus 3:渲染层按 MF_REC_CAP × 定宽行自算上界(8 行恒画,
+    // 含从未写入的槽位),返回字节数必须 <= 4095,且绝不越出调用方 buffer。
+    _ = try liveContext(); // 完整记录 ⇒ 各列都是真实宽度,buffer 上界断言才有牙
+    var rec: [4096]u8 = undefined;
+    for (&rec) |*b| b.* = 0xAA;
+    const n = C2DiagMfRecordsInto(&rec);
+    try std.testing.expect(n > 0);
+    const written: usize = @intCast(n);
+    try std.testing.expect(written <= 4095);
+    // 渲染以 rec[n] 处的 NUL 收尾;n+1 之后一个字节都不许被碰 —— 哨兵 0xAA 必须原样。
+    try std.testing.expectEqual(@as(u8, 0), rec[written]);
+    for (rec[written + 1 ..]) |b| try std.testing.expectEqual(@as(u8, 0xAA), b);
+    // 8 行恒定齐备(上界自算,不看调用方长度)。
+    try std.testing.expectEqual(@as(usize, MF_REC_CAP), std.mem.count(u8, rec[0..@intCast(n)], "\n"));
+}
+
+test "mf recorder renders a zero-size malloc and a zero-size realloc driven straight into the callbacks" {
+    // Fix round 1 / Review Focus 1 的实质:该钉的是**记录器看得见**零尺寸请求,不是
+    // QuickJS 会不会发出一个(后者已由上面那条测试的三层读源证据钉成「从不」)。
+    // 手法 = 本计划给 Task 4 的 C2ProbeMallocZero 批的那类:一个只在测试期可达的
+    // C 符号,拿调用方自有的 JSMallocState 去调用既有的 static 回调 —— 不 export、
+    // exports.zig 里没有它的声明、注入通道碰不到,分配器语义一字不改(它只是**调用**)。
+    // 两条偏离分别钉,不用 `or`:brief 说的是 malloc 与 realloc **两条**不同偏离。
+    try std.testing.expectEqual(@as(c_int, 0), C2DiagMfProbeZeroSize()); // 残留记账为 0
+    var rec: [4096]u8 = undefined;
+    const n = C2DiagMfRecordsInto(&rec);
+    try std.testing.expect(n > 0);
+    const text = rec[0..@intCast(n)];
+    // 偏离 1:heap_malloc(state, 0) —— 入口 size=0,出口 ptr=0(它的 size==0 分支返回 NULL)。
+    try std.testing.expect(std.mem.indexOf(u8, text, "Mx size=0 ptr=0 st=") != null);
+    // 偏离 2:heap_realloc(state, live block, 0) —— 走的是「释放并返回 NULL」那条分支,
+    // 与 !ptr 委托给 malloc 的那条不是同一条;同样入口 size=0、出口 ptr=0。
+    try std.testing.expect(std.mem.indexOf(u8, text, "Rx size=0 ptr=0 st=") != null);
+    // 上面那条测试(不变式)说本机 build 从不产生这类行;这条说**若有**,环里就一定看得见。
+    // 两条合起来才是 Review Focus 1 要的判据,任何一条单独存在都是空话。
+}
+
+test "mf recorder renderer stops cleanly in a caller buffer shorter than its own bound" {
+    // Fix round 1 / Review Focus 3 的另一半:既有的 4096 那条离渲染器自算的 496 字节
+    // 上界太远,`written + n > out_size - 1` 那条 break 路径从来没有被测过。这里给一个
+    // 明确小于满环渲染的小 out_size(64 字节),走的就是那条 break。
+    _ = try liveContext(); // 环里要有真实行,截断才有东西可截
+    var full: [4096]u8 = undefined;
+    const full_n = C2DiagMfRecordsInto(&full);
+    try std.testing.expect(full_n > 0);
+
+    const out_size: c_int = 64;
+    var buf: [192]u8 = undefined;
+    for (&buf) |*b| b.* = 0xAA;
+    const n = C2DiagMfRecords(&buf, out_size);
+    try std.testing.expect(n > 0);
+    const written: usize = @intCast(n);
+    // 返回的字节数严格小于调用方给的长度(NUL 槽留给 out[written] 自己)。
+    try std.testing.expect(written < @as(usize, @intCast(out_size)));
+    // 终结符必须是 NUL …
+    try std.testing.expectEqual(@as(u8, 0), buf[written]);
+    // … 且 written+1 起、一路到哨兵区末尾(含 out_size 内外)一个字节都不许被碰。
+    for (buf[written + 1 ..]) |b| try std.testing.expectEqual(@as(u8, 0xAA), b);
+    // break 真的走过了:只画得出完整行,行数 >= 1 且 < 满环的 MF_REC_CAP。
+    const rows = std.mem.count(u8, buf[0..written], "\n");
+    try std.testing.expect(rows >= 1);
+    try std.testing.expect(rows < MF_REC_CAP);
+    // 截断不改写内容:前 written 字节与满环渲染逐字相同(单线程进程,环在两次阅读之间不动)。
+    try std.testing.expectEqualSlices(u8, full[0..written], buf[0..written]);
+}
+
+test "mf recorder renders the st column as exactly 12 hex digits" {
+    // Fix round 1 / Review Focus:既有的断言只查 `" st="` 存在,宽度没有任何钉。brief 的
+    // `st=<低 12 位十六进制>` 实现取的是 **12 个十六进制位**(state 指针的低 48 位,
+    // `st=%012llx`),不是 12 **个位**(那只有 3 个十六进制位);改渲染字节被本任务的
+    // 硬约束禁止(单线程输出必须逐字不变),所以这里钉的是实现的那个宽度 —— 防的正是
+    // 「回退成不补零的可变长度」与「把整个指针画出来」两种退化。
+    _ = try liveContext(); // 真实事件 ⇒ 每行的 st= 都是真实宽度
+    var rec: [4096]u8 = undefined;
+    const n = C2DiagMfRecordsInto(&rec);
+    try std.testing.expect(n > 0);
+    var row_it = std.mem.splitScalar(u8, rec[0..@intCast(n)], '\n');
+    var rows: usize = 0;
+    while (row_it.next()) |row| {
+        if (row.len == 0) continue; // 末行 \n 之后的空段
+        rows += 1;
+        const st_at = std.mem.indexOf(u8, row, " st=") orelse return error.MissingStateColumn;
+        const col = row[st_at + " st=".len ..];
+        // st= 是最后一列,列尾就是行尾:宽度必须正好 12,多一字少一字都算退化。
+        try std.testing.expectEqual(@as(usize, 12), col.len);
+        for (col) |c| try std.testing.expect(std.ascii.isHex(c));
+    }
+    try std.testing.expectEqual(@as(usize, MF_REC_CAP), rows);
 }

@@ -25,9 +25,9 @@ unicorn 2.1.4). Only `emu_desc.py` needs unicorn, and its artifacts are checked 
 is the step that requires it — `zig build test` does not.
 
 **Host caveat**: 当前基线(2026-10-22 复测 `zig build test --summary all`)=
-`Build Summary: 24/27 steps succeeded (1 failed); 307/307 tests passed`,裁定 **P15 把这一步记为绿**。
-更早的 `22/25 steps …; 296/296 tests passed` 是 scope 独立测试步启用**之前**的数,现在只剩历史价值
-(逐条计数与增量出处在 `docs/scope-read-points.md` 的「计数」一节)。
+`Build Summary: 24/27 steps succeeded (1 failed); 314/314 tests passed`,裁定 **P15 把这一步记为绿**。
+更早的 `24/27 …; 307/307` 与 `22/25 steps …; 296/296 tests passed` 都是历史数(逐条计数与增量出处在
+`docs/scope-read-points.md` 的「计数」一节)。
 那 1 个 failed 是 `exports.zig` 为 root 的 QuickJS 链接步,理由是 8 条 kernel32 undefined-symbol
 (`CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`)—— Windows API 在 Linux 上本来就没有,
 **不是代码故障**;其余 2 步是它的传递失败(没跑到)。
@@ -208,6 +208,110 @@ so it is safe against an unpaused game"。评审要复核这句话仍成立—�
    这个组合的意思是进程已经开始终止 —— §42 把同一种序列读成「6.9 s 零分配段在 QuickJS 代码内」,那条读法已撤回。
 4. 名字里的 `threadstate` 不是能力声明:它**只读 context 与 times**,拿不到栈,也设不了线程。
 
+## §45 修复循环的两个维护工具(从 `scratch/2026-10_abortexit/` 提升)
+
+**新旧名映射(本仓库的改名约定,同上面 `PLAN.md` 那条)**:
+`scripts/scratch/2026-10_abortexit/dll_abort_repro.py` → **`scripts/c2_selfabort_repro.py`**;
+`scripts/scratch/2026-10_abortexit/ubsan_site.py` → **`scripts/dll_ubsan_site.py`**。
+两个 scratch 原件**字节不动**(`evidence/logs/c2_selfabort_4_4_4.log` 按 basename 记了出处,§45 的
+log 还逐字引了它们的输出),提升是**复制**不是移动。两处都留了旧名一句。
+
+### `scripts/dll_ubsan_site.py [dll] (site <类型名子串> | func <vma>)`
+
+无符号、无 debug 段的产物里,把 UBSan panic 钉到源文件行号:只读 DLL 文件,用 `.rdata`/`.data`
+里的 `TypeMismatchData` 记录(文件名、行、列、类型描述器名字)+ `.pdata`(x64 异常目录)的
+`{begin, end}` 函数区间。第一个参数**不是 `site`/`func` 就是 DLL 路径**(按小写比较模式名;
+所以 `C:\temp\S43_new.DLL` 这种大写扩展名、以及没有扩展名的 scp 文件名都是路径 —— 旧规则
+「以 `.dll` 结尾才算路径」会把它们当成模式,于是**分析仓库默认的产物却打印出你给的那个参数**,
+一个没有报错的错答案)。没有路径参数时才落到仓库自己构建的
+`zig-out/bin/stellaris_quickjs.dll`,按**本文件位置**解析,不是按 cwd);`image_base` 从镜像自己的
+optional header 读,没有任何地址是写死的 —— 换一份产物就把 RVA 重算一遍。
+
+**退出码有三种意思,调用方必须能分开**:0 = 读到了且有匹配;1 = 读到了但**没有**匹配(该类型名
+零个检查点、或 `func` 没命中任何引用记录的函数)—— 这是一个结论,不是故障;**2 = 工具没能读到
+产物**(路径不存在、不可读、截断、非 PE32+;打一行 stderr,不给 traceback)。修复循环会拿
+`c2_selfabort_repro.py` 送来的任意文件名调它,把 2 误读成 1 就是「这份产物没有检查点」的假结论。
+
+```
+python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll site JSMallocBlockHeader
+python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000bd9b
+```
+
+`site JSMallocBlockHeader`(2026-10-22 实测于当前产物 `77c0c35e…c11ad0`)=
+**141** 个检查点,其中 `quickjs.c:1494:12` 恰好 1 条;`func 0x18000bd9b` = 持有该地址的函数
+`rva 0xbd70..0xbdf3`(**131 bytes**),引用记录 `quickjs.c:1494:12 member_access
+type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— 与 §45.3 记的同一条。
+
+**判读陷阱**:
+1. **`func` 打印的是 `.pdata` 区间和该区间加载了哪些记录,不是链接期函数名。** 帧归属靠的是
+   区间 + 记录引用;要说"这是 `__JS_NewAtomInit`",得去读那几行 C 本身(§45.3 就是这么做的)。
+2. **"地址不在任何区间内"证明不了任何事 —— 这份解析是不完整的。** §45.4 的边界声明量到的是
+   §42 产物(`.text` 0x4c8b86)只出 **3,042** 条区间;同一份代码跑当前产物(`.text` 0x4c9be6)出
+   **4,824** 条(`runtime_functions` 现场可复测)。两个数都覆盖不了镜像里的函数,所以"没命中"
+   既可能是地址在数据/填充里,也可能只是 `.pdata` 这条解析没读全 —— 分不清。
+3. **panic 栈每帧打印的是 `ip − 1`**,即调用指令**前一字节**,所以那个数值本身既不是出错指令也不是
+   调用点。直接把它传给 `func` 没问题(`.pdata` 查找是闭区间 `begin <= rva < end`),但别把打印值
+   当成指令地址来解读。
+4. **和冻结原件比计数要先去重。** 原件的 `.rdata`/`.data` 扫描没有按段定界(从段起始一路扫到 EOF),
+   而这份产物的记录**全部**落在 `.data` 里,于是每个记录被 `.rdata` 那趟再过一遍:原件
+   `site JSMallocBlockHeader` 打 **282** 行,其实是 **141** 个不同记录(成对共享同一个
+   `record_rva`)。提升版把每趟扫描定到该段自己的 raw 字节 ⇒ 141 行,与 §45.3 记的数一致。
+   **记录的集合本身没变**,只变了重复。
+5. **同一段扫描的上界要按「读多少」算,不是按「步长」算。** 记录之间隔 32 字节,但被读的字段
+   只有 26 字节(`struct.calcsize("<QIIQBB")`),原件的上界 `end - 32` 因此**够不着**落在某段最后
+   32 字节里那条完全可读的记录。提升版改成 `end - 26 + 1`。当前产物上两个界给出**逐条相同的
+   13,693 条记录**(`site JSMallocBlockHeader` 仍是 141,`quickjs.c:1494:12` 仍恰好 1 条),所以这条
+   不改变任何已记录的计数 —— 它是给下一次链接准备的,届时布局器未必不把记录放进那段尾部。
+
+### `scripts/c2_selfabort_repro.py <dll_path>`(Windows 侧;§45 的自检器)
+
+把出货字节装进**本脚本自己拥有的**子 python,按实机那枪的门序跑 `C2Sanity` → `C2DiagQJSInto`,
+零游戏、零注入、零 dispatch:子进程若在没人碰它的情况下以退出码 3 死掉、且 witness 文本与实机逐字
+相同,"host 死了"这件事就与 `stellaris.exe` 无关。修复循环的形状(§45.4):**每改一次 QuickJS/
+allocator 就重跑这一条命令**,不需要第二支枪。
+
+```
+scp scripts/c2_selfabort_repro.py Windows_Jiaolong:C:/temp/     # 单文件,无裸名 import 依赖
+python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码 0=复现到 abort 签名,1=没有,2=路径没给/不存在
+```
+
+关键行(子进程的逐字 echo,父进程的带 `[repro] ` 前缀,`VERDICT` 永远是最后一行):
+`BASE`、`LOGADDR`、`RECORDER ok|absent`、`SANITY`、`WITNESS '<g_diag_log>'`、
+`MFREC <seq> <watch|post> '<渲染>'`、`SURVIVED rc=<n>`、`LOG '<调用方 buffer>'`、`[repro] VERDICT: …`。
+
+**为什么 `MFREC` 是一条读取线程,而不是 `C2DiagQJSInto` 之后的一次 dump**(这条设计**不要**被
+"简化"掉,§45 就是理由):子进程的主线程是在 `C2DiagQJSInto` **内部**abort 的 —— witness 停在
+`new_rt MmMmMm`,`SURVIVED rc=` 从来不打印。所以调用之后再读永远轮不到,Task 3 将没有记录器数据可判。
+读取线程每 ~2 ms 调一次 `C2DiagMfRecordsInto`,只在渲染**变了**时才发一行,自己封顶 400 次,并且
+在门序跑起来**之前**启动。调用后那一次**保留**(`post` 标签、无条件打印):Task 4 修好之后调用会返回,
+那一行是 Task 4 验收要读的。代价写明:在一个正死的进程里多一个线程是扰动 —— 于是"子进程活了"
+在缺陷仍在时是 Task 3 的**停下来报告**条件,不是通过。
+
+**判读陷阱**:
+1. **`VERDICT` 的两半都吃重**:`returncode == 3` **且** stdout 里没有 `SURVIVED`。只有 3 不算 ——
+   harness 早就警告过被进程终止杀掉的线程会把进程状态当自己的退出码报回来(§44);`0xC0000409`
+   (`os.abort()` 的 fastfail)也不是 `abort()` 的 3(§45.1 量的就是这一对)。
+2. **`MFREC` 行里 `filled` 是 `_` 的那一行是竞态伪影或"没走到出口",不是分配器行为。** 渲染层对
+   「槽在快照中途被重写」的行就是画成未填充形(`<kind>_`,kind 保持 `M`/`F`/`R`/`_`),并把指针换成
+   16 个短横(`ptr=----------------`),所以**哨兵 `0x1` 与假零永远不会以指针的形式出现在文本里**;
+   看到 `_` 不要读成"分配返回了 NULL"——真的返回 NULL 是 `filled=x` 且 `ptr=0`,那是另一种形状。
+3. **`Fx size=` 是被释放那块内存**自己记下的 size(在 entry 时从块头读的),不是请求大小。**只有
+   `M`/`R`(malloc/realloc 两个请求)的 `size` 才是请求**;Task 3 的判定表读 `size == 0` 时**只看
+   `M`/`R`**。把 `F` 混进去的错法很具体:`free(NULL)` 合法地记 `size=0 ptr=0`(没有任何块被释放),
+   它会被读成"发生过一次零大小的分配请求"——那是另一个事实,而计划的判据要的正是后者。
+   (`quickjs_wrapper.c` 的 `mf_rec_free_size` 就是为这条区分写的。)
+4. **渲染按字面 token 解析,不要按列。** 每行是
+   `"<kind><filled> size=<十六进制,不补零> ptr=<十六进制,不补零> st=<正好 12 位十六进制>\n"`,
+   8 行、oldest→newest;两个十六进制列**不定宽**,所以只能用 `" size="`/`" ptr="`/`" st="` 切。
+5. **`RECORDER absent`**:被测产物里没有 `C2DiagMfRecordsInto` 这个导出(比 §45 更早的字节)。
+   这**不是**工具坏了 —— 那条通道确实不存在,`MFREC` 一行也不会有,`WITNESS`/`VERDICT` 照常可用。
+   导出地址按名字从注入那份的导出表解析(P10),所以工具不需要任何 RVA。
+6. `SANITY` 必须是 42;不是 42 时后面看到的一切都不属于那条门序(和实机同样的一句话)。
+7. **退出码 1 有两种意思,工具自己会说是哪一种**:真的没自杀(有 `BASE`、没死在 3),**或**子进程
+   压根没把 DLL 装进来(平台不对 / 路径不对 / 装载失败 —— 于是没有 `BASE` 行)。后者打的是
+   `VERDICT: inconclusive`,它对"这份产物会不会自杀"**什么都没证明**,不要当成阴性结果读
+   (判据是纯函数 `child_loaded_the_dll`,120 s 超时也走同一条 `inconclusive` 形状)。
+
 ## IDA headless 现状(环境状态,非规则)
 
 **IDA MCP**: registered in `~/.qoder/settings.json` (`/home/lofibass/.local/bin/idalib-mcp --stdio --unsafe`).
@@ -231,7 +335,7 @@ The earlier `License not yet accepted, cannot run in batch mode` failure is **no
 | `scripts/scratch/2026-09_frida_detour_era/` | `restoreexec.py`、`nsunload.py`、`peekexec.py`、`read_remote_mem.py` | detour 路线的善后 |
 | `scripts/scratch/2026-10_newrt_allocmap/` | `allocmap.c` | 同一份 vendored `quickjs.c` 在 Linux 上离线跑 `JS_NewRuntime2`,零游戏(§43) |
 | `scripts/scratch/2026-10_threadhandle_matrix/` | `threadhandle_matrix.py` | 需要进程,但目标是自己 spawn 的子 python —— 不碰游戏、不注入我们的 DLL(§44.3) |
-| `scripts/scratch/2026-10_abortexit/` | `dll_abort_repro.py`、`ubsan_site.py` | 前者把出货 DLL 装进自己的子进程看它会不会自杀(零游戏);后者只读 DLL 文件,用 `.pdata` + UBSan 记录做无符号符号化(§45) |
+| `scripts/scratch/2026-10_abortexit/` | `dll_abort_repro.py`、`ubsan_site.py` | 前者把出货 DLL 装进自己的子进程看它会不会自杀(零游戏);后者只读 DLL 文件,用 `.pdata` + UBSan 记录做无符号符号化(§45)。**两个脚本已提升为维护工具(`scripts/c2_selfabort_repro.py`、`scripts/dll_ubsan_site.py`,见上一节),原批次冻结留档、字节不动** |
 
 它们**不作为接口维护**——可以失效,但不要在新结论上重犯它们已踩过的口径错误(见各节"陷阱"段)。
 结论已进 `evidence/` 与 `runtime_444_*.md` 三卷对应 §。

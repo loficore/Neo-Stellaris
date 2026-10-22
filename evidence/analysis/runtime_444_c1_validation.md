@@ -2606,3 +2606,142 @@ offline probe (`ubsan_site.py`: `.pdata` ranges + UBSan `TypeMismatchData` recor
 4 §36–§44 conclusions voided or retracted (fork axis, 6.9 s stretch, hook-QuickJS escalation, rc=3 decode),
 1 roadmap consequence (C2 blocked on our artifact, offline-iterable), 3 named untested candidates for the
 why, 0 code change to the shipped DLL, 0 new Zig test, 0 new export.
+
+## 46. The ring hands back real sizes, pointers and `JSMallocState` addresses — and all three §45.5 candidates fail on them (2026-10-22, no dispatch, no game)
+
+Transcript: `evidence/logs/c2_mfrecords_4_4_4.log`. §45.5 ranked three explanations of the Windows-only
+null header, and its own boundary admitted the whole ranking rested on a value nobody had seen ("the
+faulting pointer value was never observed"). Task 1's ring recorder exists to turn that value into text,
+so this section is the first discrimination made **from data rather than from plausibility**.
+
+### 46.1 What was run, and the sampling problem that nearly hid the data
+
+`python C:\temp\c2_selfabort_repro.py C:\temp\sqjs_s46.dll` — the maintained §45 self-checker (promoted in
+Task 2) against bytes rebuilt at `26589ac`: **77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0**,
+deliberately *not* §42/§44's `863917f2…86617`, because the recorder lives in `quickjs_wrapper.c`. The
+rebuild is byte-reproducible (artifact moved aside, rebuilt, same digest), remote `certutil` agrees, and
+the script itself had to be scp'd too (`C:\temp` did not contain it — plan Step 2 gap, closed by the
+controller's ruling).
+
+94 invocations, 84 real child runs: **84/84 died with returncode 3, 0 printed `SURVIVED`, one single
+distinct in-DLL RVA set** (`0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44e399`),
+witness text `enter heap_ok alloc_ok free_ok new_rt MmMmMm` — §45's text, verbatim, in bytes that
+differ from §45's by the recorder. Five of the eight frames are the same RVA as §45's; only the outermost
+moved, and `dll_ubsan_site.py` still resolves `0xbd9b` to `quickjs.c:1494:12` in the same 131-byte
+function range with the same 141 sites. A read point moved no code.
+
+The first 14 renders came back **empty** — eight rows of `__ size=0 ptr=---------------- st=000000000000`.
+That is not "no data because the recorder is broken" (`RECORDER ok`, well-formed rows, digest matched) and
+it is not judgment-table row 4 either; it is the reader poll losing a race: the recorder thread polls every
+2 ms, and between the last `heap_malloc` returning and `abort()` there is a window small enough that the
+0.2 ms witness thread always lands a sample in it while the 2 ms recorder thread almost never does. Forcing
+CPU oversubscription (16–24 concurrent children on 16 logical processors) gave the existing reader a
+timeslice and produced **5 data-bearing renders out of the 70 oversubscribed child runs** (80 invocations,
+10 of which never started a child — see the log's run tally), with no change to the instrument. This is a
+**property of the channel**, recorded as a concern: with the defect present, the ring is readable only if
+the reader samples inside a sub-millisecond window, so the `post` rendering — the one Task 4's acceptance
+reads — is the reliable half of this design.
+
+### 46.2 The rows
+
+Four of the five renders are complete ring states (3 events, 5 never-written slots), and they agree:
+
+    row  kind  size    ptr            st             ptr%8  ptr%16   st − ptr(row1)
+    1    Mx    0x5a0   0x154ba68 …    0x0000006dec18   0      0x8      —        (the runtime block)
+    2    Mx    0x808   0x1884708 …    0x00000154be70   0      0x8      +0x408
+    3    Mx    0xff0   0x1884f28 …    0x00000154be70   0      0x8      +0x408
+
+13 event rows in total, every one of them `Mx` — a completed `heap_malloc`. No `Fx`, no `Rx`, and no
+`<kind>_` row, i.e. **no allocator callback was in flight when the process died**. Sizes are the same
+triple in the same order in all four complete renders; the pointers move with the heap (ASLR), the first
+`st` does not.
+
+### 46.3 Judgment table: the fourth row fires
+
+  - **`size == 0` on an `M`/`R` row → (b): does not fire, and this run must not be credited for it.**
+    `__js_malloc(s, 0)` is served by the embedded `zero_size_block` (`quickjs.c:1549-1556`) and
+    `js_new_string8_len` short-circuits `len <= 0` (`:4018`), so a zero-size request never reaches
+    `mf.js_malloc` on this revision — established offline before this read-back. Observing no zero-size row is
+    **agreement with a known fact, not an exclusion produced by this run.** Candidate (b) stays excluded
+    offline and is not booked here. (The pristine slots' `size=0` is a never-written marker; the table
+    reads `M`/`R` rows only.)
+  - **Alignment → (a): does not fire.** Evaluated as `ptr % 8 != 0` — the reading forced by
+    `JS_MALLOC_ALIGN = 8` (`:243`) and `offsetof(JSMallocBlockHeader, user_data) == 8` (`:270-280`). All 13
+    pointers are 8-aligned. They are all `≡ 8 (mod 16)`, which is what our one-`size_t` `AllocHeader` plus
+    `return h + 1` over a 16-aligned `HeapAlloc` structurally produces, and it is also what the native
+    (unbroken) sequence renders (`ptr=2dc2e18`, `ptr=2dc50a8`) — so **that shape cannot be the
+    Windows/Linux differentiator**, and the plan clause "原生同一序列全是 16 对齐" is measured false ahead of
+    this run. The trip we are chasing is *null pointer*, not misaligned, and nothing we handed QuickJS
+    violates the alignment its own arithmetic needs.
+  - **`st` → (c): does not fire, on a positively-matched healthy pattern.** Distinct `st` **per complete
+    render = 2**, in 4/4 renders: one constant `0x6dec18` on the runtime row, one per-process value on the
+    other two rows. `quickjs.c:2070-2082` requires exactly that: `JSMallocState ms` is a **stack local**, the
+    first `js_malloc` carries `&ms`, and only `rt->malloc_ctx.malloc_state = ms` creates the heap copy every
+    later call carries — so "any two rows differ in `st`" (the plan's literal row-3 wording) would fire on a
+    *healthy* runtime and is not usable as written. Two independent confirmations that the second value is
+    `&rt->malloc_ctx.malloc_state` and not a stray state: it equals the runtime block pointer **+ 0x408 in
+    all four renders**, and 0x408 = 1032 = the computed `offsetof(JSMallocContext, malloc_state)`
+    (`arena_list[31]`+`free_arena_list[31]`=992, `zero_size_block`=8 → 1000, `mf`=4 pointers → 1032) with
+    `offsetof(JSRuntime, malloc_ctx) = 0`; and the stack value never reappears after the runtime row. No
+    third `st`, no abandoned copy, and the `sizeof(JSRuntime)` row is present ⇒ no "first malloc never
+    completed" case either.
+  - **⇒ Row 4: all three candidates fail on the data.** Per the plan's own instruction the candidate table is
+    declared **incomplete**, the raw `MFREC` text and the last record before the death go back to the
+    human, and **this plan stops here — no fourth candidate is invented in this section.**
+
+### 46.4 What the three rows are, and where the death sits relative to them
+
+Read off the vendored source after the fact (arithmetic plus call order, not an observed label):
+`0x5a0` = 1440 = `sizeof(JSRuntime)` — the `mf->js_malloc(&ms, sizeof(JSRuntime))` at `:2076`; `0x808` =
+2056 = `sizeof(JSMallocLargeBlockHeader)(8) + 2048` = `js_mallocz_rt(sizeof(uint32_t) × 512)` inside
+`JS_ResizeAtomHash(rt, 512)`, the first thing `JS_InitAtoms` does (`:3180`); `0xff0` = 4080 =
+`sizeof(JSMallocArena)(40) + 101 × 40`, the new-arena request of the **40-byte block class** (unique to
+that class among all 31). In `JS_InitAtoms` order that is runtime → atom hash → the arena created by the
+**first** `__JS_NewAtomInit`'s name-string request (`js_alloc_string_rt(rt, len, 0)` at `:3430`). The ring
+therefore puts the trip **after that arena was handed over successfully and before any further `mf` call** —
+and the `atom_array` growth (which would have appeared as a `0x1640` large-block row, §43's other half) is
+absent from every render. That is §43's window confirmed from the allocator side. The status of that second
+endpoint is **excluded by non-observation, not by a positive sighting**: no `0x1640` row landed in any of the
+four complete renders, and the witness's own `MmMmMm` (three mallocs, §42) corroborates the count
+independently of the ring — but under the sampling race of 46.1/46.5, absence from a raced reader is a weaker
+statement than observation, so 46.4 does not upgrade it to one.
+
+### 46.5 The one render that must not be pooled
+
+The fifth render prints a single `Mx size=ff0` row in its third slot with slots 0 and 1 pristine. No
+sequential ring history can produce that ordering: it is the documented consequence of reading the cursor
+once before the walk (`quickjs_wrapper.c:666-671`) while the writer advances — the cursor was read at 0, and
+by the time the walk reached slot 2 the third event had landed, while slots 0 and 1 had already been read as
+empty. The render shows an ordering that **was never a ring state**. Had its `st` been pooled with the
+complete renders, the distinct-`st` count would have gone 2 → 6 and row 3 would have "selected" candidate
+(c) from a reader artifact. Rule applied: **classify per render; a render whose row order is impossible for
+the cursor value it must have read is excluded from counting** (its individual filled rows stay internally
+consistent, so they still corroborate size and alignment).
+
+Boundaries: the rows report the pointers and sizes **our callbacks returned**, at the moments the reader
+sampled them — they are not the faulting value inside the arena, and §45's "`ptr − 8 == 0`" mechanism lives
+on QuickJS's own derived pointers that the ring cannot see; nothing in this section observes the value that
+`js_rc` was handed. The three-row identification in 46.4 is arithmetic plus source order, not a label
+carried by the data; row 2's and row 3's *names* (atom hash, 40-byte arena) could be wrong even though their
+sizes are unique. `sizeof(JSRuntime)`/offsets were computed by compiling this `quickjs.c` natively
+(LP64); the Windows target (LLP64) was not asserted directly because `zig cc -target
+x86_64-windows-gnu` has no CRT headers here — the carry-over rests on `JSRuntime` containing no
+`long`/`time_t`/`wchar_t`, plus the observed 0x408 agreement. Whether a fourth `heap_malloc` entered after
+the last sampled row and before `abort()` cannot be excluded from the ring alone; the witness (cap 8, and
+it reads `MmMmMm`) and the identical 8-frame panic set make it unlikely, not impossible. The 5 data-bearing
+renders come from the same artifact and the same host in one session, under deliberately heavy scheduling
+load — determinism of the *death* is established (84/84, one RVA set), determinism of *which render lands*
+is not: it is a race we leaned on, not a property we control.
+
+**Counts for §46**: 0 dispatch, 0 game process, 0 injection, 0 `CreateRemoteThread`, 0 new capability, 0
+edit to `src/` or to any top-level tool; 1 rebuild (byte-reproducible, `77c0c35e…c11ad0`, ≠ §42's
+`863917f2…86617` as the plan predicted), 2 remote artifacts verified by digest (DLL by `certutil`, script by
+`Get-FileHash`), 94 tool invocations / 84 real child runs / 84 status-3 deaths / 0 `SURVIVED` / 1 distinct
+RVA set, 5 data-bearing renders (13 event rows: 13 `Mx`, 0 `Fx`, 0 `Rx`, 0 in-flight), 1 stale render
+identified and excluded from counting, 3 judgment-table candidates evaluated (0 selected), 1 of them
+explicitly *not* credited to this run because it was excluded offline, 4 independent confirmations of the
++0x408 `malloc_state` identity, 1 offline struct computation (`sizeof(JSRuntime)=1440`,
+`offsetof(JSMallocContext, malloc_state)=1032`), 1 site re-pin on the new bytes (quickjs.c:1494:12, 141
+sites, same function range), 1 window bound inferred from two reader cadences (≳0.2 ms, < 2 ms), 1 plan
+outcome: **candidate table incomplete — the three §45.5 candidates are not the mechanism**, C2 stays
+blocked, and the next move belongs to the human rather than to Task 4.
