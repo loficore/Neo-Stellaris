@@ -2101,6 +2101,34 @@ number and end near zero.
   `scripts/c2_control_sleep.py` — written, tested offline, not yet fired. See §40 for its verdict, which
   does not exist yet at the time of writing.
 
+### 39.5 The pre-context tags are the first live result that reads as a location, not an integer
+
+The two §39 shots each caught the static witness holding exactly
+
+```
+text='enter heap_ok alloc_ok free_ok new_rt '
+```
+
+(`oks=1663 fails=129` / `oks=3011 fails=81`; both shots then report `witness … unreadable` and
+`process exit code = 0x3`). The tag before `JS_NewRuntime2` — `new_rt ` — is the **last one present in
+both**. That is the whole finding: every step up to and including the `HeapFree` is proven to have run,
+the runtime-creation call is the first whose completion is never marked, and the sequence is bounded at
+a named operation rather than a bare `rc`.
+
+Before this, the only live signal the C2Init path ever produced was the integer `rc = 3` (or `0x3`), which
+§38.5 retracts as uninterpretable — the outer gates and the intrinsic steps shared the numbers, and
+`C2TestQuickJS` originally wrote no log at all. These tags are the **first** live result that did not
+depend on decoding a number: `native` order is now pinned by
+`src/dll/quickjs/c2_diag_test.zig`'s `the shared sequence tags every step before the runtime exists`, which
+walks the 12 markers (`enter `, `heap_ok `, `alloc_ok `, `free_ok `, `new_rt `, `rt=`, `opaque_ok `,
+`limits_ok `, `new_raw `, `raw_ok `, `new_diag `, `diag_rc=0`) and rejects any offset `<=` its predecessor
+with `error.StepMarkersOutOfOrder`. Dropping a tag from `c2_diag_sequence` turns that test red, so the live
+disambiguator cannot silently rot.
+
+What it does **not** buy: the tags bound the failure to "`JS_NewRuntime2` was entered and never returned",
+not to "`JS_NewRuntime2` itself crashed" — that distinction is exactly the `Sleep(8000)` control in §40,
+still pending.
+
 **Counts for §39**: 2 dispatch shots with full series (7820, 7812; 33 samples each), 1 no-dispatch control
 (59 samples), 0 new code paths measured, 1 hypothesis retired (allocation storm), 1 hypothesis left open
 (teardown vs crash) and 1 discriminator pending (§40).

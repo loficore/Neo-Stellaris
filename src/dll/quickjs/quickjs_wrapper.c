@@ -20,6 +20,8 @@
  * part of `zig build test`. The Windows build path is byte-identical: all of
  * this is inside #ifdef _WIN32 guards. */
 #include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
 typedef void *HANDLE;
 #define GetProcessHeap() ((HANDLE)1)
 static void *HeapAlloc(HANDLE heap, unsigned flags, size_t size) {
@@ -266,6 +268,72 @@ int C2SanityCheck(void) {
  * ------------------------------------------------------------------------- */
 #define C2_DIAG_ERR_SIZE 192
 
+/* ---------------------------------------------------------------------------
+ * The on-disk diagnostic channel.
+ *
+ * Why the in-process buffer is not enough: every live dispatch that has reached
+ * this sequence lost the host right after the remote thread returned its exit
+ * code (§32 C2DiagQJSInto, §36.3 C2Init, and the 2026-10-21 22:41 and 22:47
+ * shots). The 22:47 shot is the decisive one — it used the one-shot shape, so
+ * the log was already copied into the caller's remote buffer inside the same
+ * thread call, and the very next ReadProcessMemory of that buffer returned
+ * ERROR_PARTIAL_COPY (gle 299). The text was written; it just lived in an
+ * address space that was going away. Anything that must survive has to leave
+ * the process before this function returns.
+ *
+ * Plain kernel32 file handles (CreateFileA/WriteFile), not stdio FILE: this DLL
+ * is injected, and pulling CRT stdio state into the sequence would add a new
+ * variable to the very crash being measured. A failed write is silently ignored
+ * — the file is a bonus channel and must never be able to change the rc.
+ * ------------------------------------------------------------------------- */
+#ifdef _WIN32
+#define C2_DIAG_FILE_DIR "C:/temp"
+#else
+/* The native `zig build test` path writes here; the Windows path above is what
+   the live probe deletes and reads. */
+#define C2_DIAG_FILE_DIR "/tmp"
+#endif
+
+static void c2_diag_write_file(int rc, int log_len) {
+    char path[64];
+    char line[640];
+    unsigned long pid;
+#ifdef _WIN32
+    pid = (unsigned long)GetCurrentProcessId();
+#else
+    pid = (unsigned long)getpid();
+#endif
+    snprintf(path, sizeof(path), C2_DIAG_FILE_DIR "/c2_diag_%lu.log", pid);
+
+    int n = snprintf(line, sizeof(line), "rc=%d %.*s\n", rc, log_len, g_diag_log);
+    if (n < 0) {
+        return;
+    }
+    if ((size_t)n >= sizeof(line)) {
+        n = (int)sizeof(line) - 1; /* truncated line is still evidence */
+    }
+
+#ifdef _WIN32
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    SetFilePointer(f, 0, NULL, FILE_END);
+    DWORD written = 0;
+    WriteFile(f, line, (DWORD)n, &written, NULL);
+    CloseHandle(f);
+#else
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) {
+        return;
+    }
+    ssize_t w = write(fd, line, (size_t)n);
+    (void)w;
+    close(fd);
+#endif
+}
+
 static int c2_diag_sequence(void) {
     g_test_rt = NULL;
     g_test_ctx = NULL;
@@ -287,11 +355,21 @@ static int c2_diag_sequence(void) {
     } while(0)
 
     HANDLE heap = GetProcessHeap();
+    /* Each tag lands BEFORE the operation it precedes, so the LAST tag present in
+       the static is the boundary of what actually ran. The live probe reads this
+       static directly while the sequence is still running (§38: the 23:55 shot
+       polled g_diag_log for 6.9 s and found it EMPTY, which a log beginning at
+       `rt=` cannot distinguish from "the thread never started"). */
+    DLOG("enter ");
     if (!heap) { DLOG("no_process_heap"); result = 100; goto finish; }
+    DLOG("heap_ok ");
     void *test_p = HeapAlloc(heap, 0, 256);
     if (!test_p) { DLOG("heap_alloc_failed"); result = 101; goto finish; }
+    DLOG("alloc_ok ");
     HeapFree(heap, 0, test_p);
+    DLOG("free_ok ");
 
+    DLOG("new_rt ");
     g_test_rt = JS_NewRuntime2(&heap_mf, NULL);
     if (!g_test_rt) { DLOG("runtime2_null"); result = 102; goto finish; }
     DLOG("rt=%p ", g_test_rt);
@@ -302,10 +380,13 @@ static int c2_diag_sequence(void) {
         DLOG("opaque_mismatch got=%p", opaque);
         result = 103; goto finish;
     }
+    DLOG("opaque_ok ");
 
     JS_SetMaxStackSize(g_test_rt, 1024 * 1024);
     JS_SetMemoryLimit(g_test_rt, 256 * 1024 * 1024);
+    DLOG("limits_ok ");
 
+    DLOG("new_raw ");
     JSContext *raw_ctx = JS_NewContextRaw(g_test_rt);
     if (!raw_ctx) { DLOG("raw_ctx_null"); result = 104; goto finish; }
     JS_FreeContext(raw_ctx);
@@ -313,6 +394,7 @@ static int c2_diag_sequence(void) {
 
     {
         err[0] = '\0';
+        DLOG("new_diag ");
         int diag_rc = JS_NewContextDiag(g_test_rt, &g_test_ctx, err, C2_DIAG_ERR_SIZE);
         DLOG("diag_rc=%d ctx=%p", diag_rc, g_test_ctx);
         if (diag_rc != 0 && err[0] != '\0') DLOG(" err=[%s]", err);
@@ -321,6 +403,7 @@ static int c2_diag_sequence(void) {
 
 finish:
     #undef DLOG
+    c2_diag_write_file(result, pos);
     return result;
 }
 
