@@ -2132,3 +2132,70 @@ still pending.
 **Counts for §39**: 2 dispatch shots with full series (7820, 7812; 33 samples each), 1 no-dispatch control
 (59 samples), 0 new code paths measured, 1 hypothesis retired (allocation storm), 1 hypothesis left open
 (teardown vs crash) and 1 discriminator pending (§40).
+
+## 40. A kernel32-only long remote thread leaves the host alive — the death is specific to our sequence (2026-10-22, live)
+
+This is the last discriminator between "the C2 init sequence crashes the game" and "any long remote thread
+crashes the game." `scripts/c2_control_sleep.py` dispatches `kernel32!Sleep` — no QuickJS symbol, no engine
+symbol — into pid 13076 (`sqjs_c39.dll` base `0x7ffbed580000`, `C2Sanity == 42` already answered), twice:
+a 1 s calibration to prove the resolved address is a timer, then the measured 8 s dispatch.
+`kernel32!Sleep` resolved `@ 0x7ffcb3798670`; witness `g_diag_log @ 0x7ffbedc256f0`.
+
+### 40.1 The calibration gate cleared — the address really is a timer
+
+```
+[sleep] calib poll: exit code = 0 (thread had returned); process exit code = 0x103, thread returned while process alive = True
+[sleep] calibration    = Sleep(1000) took 1002.8ms, rc=0
+[sleep] calibration plausible, game alive — the address is a timer
+```
+
+The `plausible_sleep_ms` ±50 % band accepted 1002.8 ms, so the 8 s result below is about `Sleep`, not about
+a misresolved symbol. This is the branch that, had it fired, would have stopped the shot (`AssertionError:
+the resolved address did not behave like Sleep(1000)`) — it did not fire.
+
+### 40.2 The 8 s dispatch, verbatim
+
+```
+[sleep] poll: primed 512 bytes @0xb00000: read back 512 bytes, all zero
+[sleep] poll: witness g_diag_log: readable at 66.4ms, text ''
+[sleep] poll: stop: thread finished, 0 bytes in view at 8002.5ms
+[sleep] poll: exit code = 0 (thread had returned); process exit code = 0x103, thread returned while process alive = True
+[sleep] Sleep(8000) rc=0 buffer='' wall=8002.7ms
+[sleep] poll report      = primed=512 reads=2369 failures=0 first_read_ms=66.36100000105216 first_failure_ms=None
+[sleep] poll report      = thread exit code=0 process exit code=0x103 thread_returned_while_alive=True
+[sleep] poll report      = witness g_diag_log: oks=2369 fails=0 text=''
+[sleep] mem growth       = private KiB: first=8146544 last=8146628 delta=+84 samples=32 window=7790.2ms
+[sleep] mem growth       = rss KiB: first=3207060 last=3207188 delta=+128 samples=32 window=7790.2ms
+[sleep] mem growth       = vms KiB: first=8146544 last=8146628 delta=+84 samples=32 window=7790.2ms
+[sleep] VERDICT: a remote thread that executes only kernel32!Sleep for 8000ms left the host alive=True, thread_returned_while_alive=True
+```
+
+`process exit code = 0x103` is `STILL_ACTIVE`: the process was alive at the instant the thread handle
+signalled. `reads=2369 failures=0` — the buffer and the static stayed readable for the full 8 s, the direct
+contrast with §38, where the dying host's reads failed at ~7 s. The witness `text=''` is the control's own
+design confirmed: the `Sleep` path never enters `c2_diag_sequence`, so no tags were written.
+
+### 40.3 What this settles
+
+- **A long remote thread is NOT sufficient to kill the game.** The reading that would have made every
+  §36-style conclusion about the *thread* rather than QuickJS is dead: this thread ran 8 s of nothing and
+  the host is still here — re-checked after the shot, pid 13076 alive, `StartTime` unchanged `11:21:44`.
+- **The death is specific to our init sequence.** Combined with §39.5 (both §39 shots stop at the `new_rt `
+  tag, the one immediately before `JS_NewRuntime2`), the next plan's target is `JS_NewRuntime2` itself, not
+  "a remote thread exists."
+- **First shot where an `rc` is the callee's own return value.** `thread exit code=0` here is `Sleep`
+  finishing normally with the host demonstrably up, not a code read off a process already going away (the
+  §36/§39 `0x3` case). The exit code is meaningful for the first time precisely because the process is
+  still alive to produce it.
+
+### 40.4 The engine did not notice us
+
+Checked for this live pid after the dispatch: `AppData/Local/CrashDumps` has **no** `stellaris.exe` entry;
+`Documents/Paradox Interactive/Stellaris/logs/error.log` stops at `[11:22:18]` (event-sound warnings,
+unrelated to us) and `system.log` at `[11:21:47] "Done creating device."` — minutes before the dispatch,
+nothing around it. The host's own logs record neither a foreign thread running `Sleep` inside it nor a
+crash. This is the same absence §39 noted for the dead shots, here on a host that survived.
+
+**Counts for §40**: 1 dispatch process (pid 13076), 1 calibration + 1 measured remote thread = 2 dispatches,
+0 QuickJS symbols executed, host alive after both, 1 reading retired ("a long remote thread is sufficient"),
+1 target named for the next plan (`JS_NewRuntime2`), 0 new exports, 0 new Zig files.
