@@ -22,7 +22,7 @@
 | 实机只记录 detour `0x1D08520` | **只在点名时** | 无常量可翻;装与拆都要明确指令 + 等热路径静默窗口 | 铁律:`ExecHookVerify != 0` 时绝不 `FreeLibrary` |
 | 实机枪预算 | 见在飞计划 | 预算归各计划自己的 Global Constraints,本表不重复数 | — |
 
-`AGENTS.md` 约束 1–7 的文本不在这里复制 —— 段2 只记**状态与改动点**,约束文本继续住在它唯一的权威位置。
+`AGENTS.md` 约束 1–8 的文本不在这里复制 —— 段2 只记**状态与改动点**,约束文本继续住在它唯一的权威位置。
 
 ## 3. 阶段状态表
 
@@ -47,12 +47,13 @@
 | api/scope 假偏移 | done | c1_validation §26/§26.3 | `2026-10-22-scope-false-offset-consolidation.md` | 无(§26.2 的真实布局仍未定 → 段4 那条线) |
 | C0 | done | pipeline §20/§21 | — | — |
 | C1 | done | c1_validation §24/§24.6 | — | — |
-| C2 | blocked | c1_validation §36–§43 | `2026-10-22-c2-live-death-localization.md`+`2026-10-22-c2-jsnewruntime2-boundary.md`(均已执行) | §42 把 §41 的分叉**判给引擎侧**:三次 `heap_malloc` 全部干净返回(`new_rt MmMmMm`,每个 `M` 都闭 `m`,无悬空)⇒ 死**不在**我们的 allocator/`HeapAlloc`,死在第 3 次返回后、第 4 次进入前。**§43(离线)** 把这段窗口钉到 `JS_InitAtoms` 首个 `__JS_NewAtomInit` 迭代(`:3430` 名字串分配 → `:3330` `atom_array` 增长)之间的一段**直线平凡代码**,并**否掉两条 QuickJS-内部假说**:跨线程 stack guard(`JS_UpdateStackTop` 在 `:2116`,晚于死点)、坏 hash/自由链游走(该处 `atom_hash` 刚清零,桶走 0 次)⇒ 6.9s 不可能耗在 QuickJS 控制流上;下一枪不是 hook QuickJS(那是**过早升级**),而是对远程线程 `Rip`+CPU-time 的**只读但新型**采样(超 `ReadProcessMemory` 级,需 点名) |
+| C2 | blocked | c1_validation §36–§45 | `2026-10-22-c2-live-death-localization.md`+`2026-10-22-c2-jsnewruntime2-boundary.md`(均已执行) | **§45 把靶从「host 在我们的 init 序列下死」改成「我们这份产物自己 abort 掉承载它的进程」**:同一份字节在**零游戏**的子进程里以退出码 3(`msvcrt!abort()` 的状态码)死掉,witness 文本与实机逐字相同,panic 离线钉到 `js_rc` 的 `container_of`(quickjs.c:1494)在 `__JS_NewAtomInit` 里 —— 头指针为 NULL 时 `__js_malloc` 仍返回 `b->user_data` = 8,`if (!p)` 拦不住 ⇒ **修复循环现在是离线的**(edit → `zig build` → scp 新文件名 → `dll_abort_repro.py`),不再需要枪。§44 那一枪(单发射,**已耗尽**)证明被杀后 2.1 s 的窗口是 teardown 不是执行:80 ms 起 `SuspendThread` 全 gle=5、`pr_user_us` 22 采样一动 0 µs、内存单调下降,两条对照分别判掉「仪器坏」与「线程已退出」 |
 
 为什么顺序是 C0→C1→C2:C0 在**离线**把「我们造的描述符到底像不像真的」证实到字节;C1 在**实机**把「别名式注册
 能不能活过 create + write + predicate 链」证实;C2 才轮到「让 keyword 执行 JS」—— QuickJS 不在注入环境里活下来,后面没有一步能开工。
 
-C2 实机状态(§38–§43,两计划落账):`C2Init rc = 3` **不是已确认的步骤码**(§38 撤回那种把 rc 当步骤码的读法);
+C2 实机状态(§38–§45,两计划落账):`C2Init rc = 3` **不是已确认的步骤码**(§38 撤回那种把 rc 当步骤码的读法;
+§45 进一步给出机制:`rc=3` 是 UCRT `abort()` 的进程退出状态,`rc=3 → bucket=intrinsic name=Date` 那整套解码作废);
 每发射击序列最后可见的标记都是 `new_rt ` —— 即 `JS_NewRuntime2` **之前**那一个(§39);分配风暴已排除,host 变得
 不可读之前先把自己约 8 GiB commit 释放干净(§39);注入 + `C2Sanity` + 20 s 观测可存活(§39 无 dispatch 控制枪);
 而 §40 那条只执行 `kernel32!Sleep(8000)` 的长远程线程让 host 活了下来 ⇒ 「一条长远程线程本身足以杀死游戏」这个
@@ -60,6 +61,18 @@ C2 实机状态(§38–§43,两计划落账):`C2Init rc = 3` **不是已确认�
 还不知道 —— §40 只指明先攻哪条轴,不是根因(§39 的排除项别误读成根因)。
 
 §41/§42 推进了上面那句「最后可见标记是 `new_rt `」:给 `heap_malloc` 打标记后,尾标到了 `new_rt MMM`(§41 只记入口)再到 `new_rt MmMmMm`(§42 加闭合 `m`/`!`)。**三次 `heap_malloc` 全部进入且全部返回,无悬空 `M`** ⇒ 死不在我们的 allocator/`HeapAlloc`,而在引擎第 3 次分配返回之后、第 4 次进入之前的 ~6.9s 零分配段。§39 的 no-alloc-storm 独立复现;`rc=3→Date` 仍非步骤码(§38.5)。**§43(离线读源码 + 忠实复刻 `heap_mf` 重放)把这段窗口钉到 `JS_InitAtoms` 首个 `__JS_NewAtomInit` 迭代**(`:3430` 名字串分配 → `:3330` `atom_array` 增长)之间的一段**直线平凡代码**,并**否掉两条 QuickJS-内部假说**:跨线程 stack guard(`JS_UpdateStackTop` 在 `:2116`,晚于死点)与坏 hash/自由链(该处 `atom_hash` 刚清零)—— ⇒ 6.9s 不可能耗在 QuickJS 控制流上,**「整段在 QuickJS 代码内、故要 hook QuickJS」这个 §42 收尾判读被 §43 取代**;只读 DLOG 打标确实到顶,但下一步是**对远程线程 `Rip`+CPU-time 的只读新型采样**(超 `ReadProcessMemory` 级,需 点名),它先于、并可能取消那次「hook QuickJS」升级。**C2 仍 blocked。**
+
+§44/§45 收了 §43 点的那笔账,并把方向整个换掉:§43 说「下一枪是对远程线程 `Rip`+CPU-time 的只读新型采样」,
+那一枪打了(§44,单发射,**已耗尽**),返回的是 22 次 `SuspendThread gle=5` + 进程 user CPU 一动 0 µs + 内存单调
+下降 ⇒ 我们盯的 2.2 s **不是 QuickJS 在算,是 host 已经在收尾**;§42 那段「6.9 s 零分配段在 QuickJS 自己代码内」
+连同它请求的「hook QuickJS = 升级授权」一起作废 —— 那个窗口不存在。**§45 无枪定位**:同一份字节在零游戏的
+子进程里以 `0x3` 死掉(witness 与实机逐字相同,两个 ASLR base 下帧集合一致 ⇒ 确定性),`.pdata` + UBSan 记录把
+trap 钉到 quickjs.c:1494 `js_rc`,持有它的 131 字节函数与第三帧 `__JS_NewAtomInit`(quickjs.c:3433/3434)各自
+独立对上 §43 离线缩窄的同一个函数。机制:arena 的 block header 为 NULL 时 `__js_malloc` 仍返回
+`b->user_data` = 8,`js_rc(ptr−8)` 的成员访问被 UBSan 抓住,Zig panic 运行时转成 `abort()`。
+**C2 仍 blocked,但阻塞项从「host 在我们 init 时死」搬到了「我们 build 的 QuickJS 在 atom-init 路径里踩
+null-header 并 abort」,而修复循环从此是离线的**(edit → `zig build` → scp 新文件名 → `dll_abort_repro.py`);
+为什么同一套 arena 算术在 Linux 上走得通、在 Windows 上给出 NULL header,三个未测候选按 §45.5 排序。
 
 ## 4. 候选条线
 
@@ -71,7 +84,7 @@ C2 实机状态(§38–§43,两计划落账):`C2Init rc = 3` **不是已确认�
 - **B4 九个 Meyers 惰性访问器绑定的关键字名字**（`0x388130`…`0x389224`，buffer 在镜像里是零）：判据 = 首次使用时铸出的 id 与名字。
   前置 = 游戏在跑；授权级 = 点名(只读)；不能成计划 = 它不影响 Phase C 任何判据，默认不做（§19）。
 - **C4 试点一 `chokepoint_score`**：判据 = 按图连通度给星系打上我们自己的新 effect，日志与行为都可见。
-  前置 = C2 活到能跑 JS（§40 之后即先让 `JS_NewRuntime2` 在注入环境里活下来）；授权级 = 一枪 + 实机可见行为（注册门已开,不需新常量）；不能成计划 = 「连通度数据从哪来」还没有答案,写步骤就是编造。
+  前置 = C2 活到能跑 JS（§45 之后即先在**离线**让 `dll_abort_repro.py` 跑到 `rt=`,那不需要枪与点名）；授权级 = 一枪 + 实机可见行为（注册门已开,不需新常量）；不能成计划 = 「连通度数据从哪来」还没有答案,写步骤就是编造。
 - **C5 试点二 种族占比 → 资源产出 / 对母国的外交与战争态度**：判据 = 段1 那句的第二个例子真的改变了游戏行为。
   前置 = 与 C4 同一面（跨 scope 聚合），授权级同 C4；不能成计划 = 没有 spec，且要读的字段还没按 4.4.4 钉过。
 - **C6 验收**：判据 = 日志 + 可复现行为，且官方 scripted_effects 路径不受影响。
