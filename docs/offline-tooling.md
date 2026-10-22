@@ -26,8 +26,9 @@ is the step that requires it — `zig build test` does not.
 
 **Host caveat**: two `zig build test` steps that link QuickJS cannot start here
 (`/lib64/libm.so.6: version GLIBC_2.35 not found`). Pre-existing toolchain mismatch, not a code failure;
-every compiling test passes (272/272; 293/293 until `effects/id_mapper.zig` and its 21 tests were retired
-— see §29 of `runtime_444_c1_validation.md`).
+every compiling test passes — 当前基线 `Build Summary: 22/25 steps succeeded (1 failed); 296/296 tests passed`
+(2026-10 实测)。历史计数:`293/293`,until `effects/id_mapper.zig` and its 21 tests were retired,
+then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不要拿这两个旧数当现在的门限。
 
 ## 基础:PE + capstone,不需要 IDA
 
