@@ -7,7 +7,9 @@
 //
 // The externs below bind only the project's own quickjs_wrapper.c symbols
 // (C2*, C2Write*, and that file's own JS_FreeValue/JS_DupValue/JS_NewString
-// wrappers), never QuickJS C symbols — PLAN §6 blocker 1 workaround holds.
+// wrappers), never QuickJS C symbols — the "Zig extern fn binding a QuickJS C
+// function crashes, so every QuickJS call goes through the C wrapper" constraint
+// (docs/roadmap.md 段5) holds.
 //
 // On non-Windows targets quickjs_wrapper.c falls back to a libc-backed
 // GetProcessHeap/HeapAlloc shim (same allocator logic, same accounting), so
@@ -496,6 +498,41 @@ test "C2TestQuickJS (the C2Init path) leaves a readable log — the §36.4 gap" 
     try std.testing.expect(std.mem.indexOf(u8, log, "diag_rc=0") != null);
 }
 
+test "the shared sequence tags every step before the runtime exists" {
+    // The 23:55 live shot polled the DLL's OWN g_diag_log static and found it empty
+    // for the whole 6.9 s the host stayed readable, then unreadable at the instant
+    // of death. A log whose first mark is `rt=` cannot separate "the thread never
+    // ran" from "it died inside JS_NewRuntime2", so each operation before the
+    // runtime exists has to leave its own mark — and the marks have to appear IN
+    // ORDER, because the last one present is the answer the live probe is buying.
+    try std.testing.expectEqual(@as(c_int, 0), C2TestQuickJS());
+
+    var buf: [512]u8 = undefined;
+    _ = C2CopyDiagLog(&buf);
+    const log = std.mem.span(@as([*:0]const u8, @ptrCast(&buf)));
+
+    const markers = [_][]const u8{
+        "enter ",     "heap_ok ",   "alloc_ok ",  "free_ok ",
+        "new_rt ",    "rt=",        "opaque_ok ", "limits_ok ",
+        "new_raw ",   "raw_ok ",    "new_diag ",  "diag_rc=0",
+    };
+    var prev: ?usize = null;
+    for (markers) |marker| {
+        const at = std.mem.indexOf(u8, log, marker) orelse {
+            std.debug.print("marker {s} absent from log: {s}\n", .{ marker, log });
+            return error.MissingStepMarker;
+        };
+        if (prev) |p| {
+            if (at <= p) {
+                std.debug.print("marker {s} at {d} is not after the previous at {d}: {s}\n",
+                               .{ marker, at, p, log });
+                return error.StepMarkersOutOfOrder;
+            }
+        }
+        prev = at;
+    }
+}
+
 test "C2CopyDiagLog is a pure read: byte-identical to the buffer C2DiagQuickJS filled" {
     // The live read path must not re-run any QuickJS step: C2DiagQuickJS writes
     // out_diag from the same static this reads, so the two must agree exactly.
@@ -549,4 +586,103 @@ test "JS_NewContextDiag still reports the step when the caller passes no buffer"
     // buffer must still get the numeric step back, and must not crash).
     const rc = C2DiagNewContextUnderMemoryLimit(OOM_MEM_LIMIT, null, 0);
     try std.testing.expectEqual(@as(c_int, 2), rc);
+}
+
+// ---------------------------------------------------------------------------
+// §38 (2026-10-21 live) — the diagnostic has to LEAVE the process.
+//
+// Both 2026-10-21 shots lost the host right after the remote thread returned its
+// exit code, and the 22:47 one settled the question of how much read-back can be
+// salvaged: it used the one-shot shape, so the log had already been copied into
+// the caller's remote buffer *inside* the dispatch, and the very next
+// ReadProcessMemory of that buffer returned ERROR_PARTIAL_COPY (gle 299). Text
+// that lives in the dying address space is gone with it. So c2_diag_sequence now
+// appends "rc=<n> <log>" to a per-pid file before returning, and the live probe
+// deletes that file pre-dispatch and reads it afterwards — a channel that works
+// whether or not the host is still there.
+// ---------------------------------------------------------------------------
+
+const DIAG_FILE_DIR = if (@import("builtin").os.tag == .windows) "C:/temp" else "/tmp";
+
+fn diagFilePath(buf: []u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{s}/c2_diag_{d}.log", .{ DIAG_FILE_DIR, std.c.getpid() }) catch {
+        @panic("diag file path does not fit in the caller's buffer");
+    };
+}
+
+fn readWholeFile(io: std.Io, path: []const u8, out: []u8) ![]const u8 {
+    var file = try std.Io.Dir.openFileAbsolute(io, path, .{});
+    defer file.close(io);
+    var total: usize = 0;
+    while (total < out.len) {
+        var bufs = [_][]u8{out[total..]};
+        const n = file.readStreaming(io, &bufs) catch break; // EOF or short read: keep what we have
+        if (n == 0) break;
+        total += n;
+    }
+    return out[0..total];
+}
+
+fn countLines(text: []const u8) usize {
+    if (text.len == 0) return 0;
+    var n: usize = 1;
+    for (text) |c| {
+        if (c == '\n') n += 1;
+    }
+    // A trailing newline must not count as an extra (empty) line.
+    if (text[text.len - 1] == '\n') n -= 1;
+    return n;
+}
+
+test "the init sequence appends rc + log to the on-disk diag file, and the last line matches C2CopyDiagLog" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    const io = threaded.io();
+
+    var path_buf: [128]u8 = undefined;
+    const path = diagFilePath(&path_buf);
+
+    try std.testing.expectEqual(@as(c_int, 0), C2TestQuickJS());
+
+    var content: [16 * 1024]u8 = undefined;
+    const text = try readWholeFile(io, path, &content);
+    try std.testing.expect(text.len > 0);
+
+    const trimmed = std.mem.trimEnd(u8, text, "\n");
+    const last_line = if (std.mem.lastIndexOfScalar(u8, trimmed, '\n')) |idx|
+        trimmed[idx + 1 ..]
+    else
+        trimmed;
+    try std.testing.expect(std.mem.startsWith(u8, last_line, "rc=0 "));
+
+    var buf: [512]u8 = undefined;
+    _ = C2CopyDiagLog(&buf);
+    const log = std.mem.span(@as([*:0]const u8, @ptrCast(&buf)));
+    try std.testing.expect(log.len > 0);
+    // The file line is "rc=<n> " ++ g_diag_log, so what a surviving host would
+    // read out of the remote buffer and what the dead host left on disk agree.
+    try std.testing.expect(std.mem.endsWith(u8, last_line, log));
+}
+
+test "the diag file accumulates one line per sequence run, and pure reads add none" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    const io = threaded.io();
+
+    var path_buf: [128]u8 = undefined;
+    const path = diagFilePath(&path_buf);
+    var content: [16 * 1024]u8 = undefined;
+    var buf: [512]u8 = undefined;
+
+    // Guarantee the file exists regardless of test order; this run is the
+    // baseline line whose presence the first test already checked.
+    try std.testing.expectEqual(@as(c_int, 0), C2TestQuickJS());
+    const before = countLines(std.mem.trimEnd(u8, try readWholeFile(io, path, &content), "\n"));
+
+    _ = C2CopyDiagLog(&buf); // must stay a pure read of g_diag_log
+    const after_read = countLines(std.mem.trimEnd(u8, try readWholeFile(io, path, &content), "\n"));
+
+    try std.testing.expectEqual(@as(c_int, 0), C2DiagQuickJS(&buf, @intCast(buf.len))); // one more full sequence
+    const after_seq = countLines(std.mem.trimEnd(u8, try readWholeFile(io, path, &content), "\n"));
+
+    try std.testing.expectEqual(before, after_read);
+    try std.testing.expectEqual(before + 1, after_seq);
 }

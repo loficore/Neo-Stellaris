@@ -290,10 +290,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_offsets_tests.step);
     test_step.dependOn(&run_detour_tests.step);
     test_step.dependOn(&run_api_gamestate_tests.step);
-    // NOTE: scope.zig standalone test disabled — pre-existing "import of file outside
-    // module path" error when scope.zig is the test root. Fix requires module import
-    // refactoring across bridge.zig/gamestate.zig/scope.zig (production code).
-    // test_step.dependOn(&run_api_scope_tests.step);
+    // scope.zig 的独立测试曾在 §26 之前以 `import of file outside module path` 被禁;
+    // `:26` 改用 `@import("offsets")` 后启用。读点处置见 `docs/scope-read-points.md`。
+    test_step.dependOn(&run_api_scope_tests.step);
     test_step.dependOn(&run_ui_window_tests.step);
     test_step.dependOn(&run_ui_callbacks_tests.step);
     test_step.dependOn(&run_ui_dynamic_text_tests.step);

@@ -258,9 +258,14 @@ pub const c_effect = struct {
 /// supplied pointer and is linked into the DLL, so until a real frame pointer is handed to it from the
 /// record-only detour, its numbers are not a scope type and object id — they are whatever the caller's
 /// frame happens to hold. The 3.x `+12` vs code `+16` discrepancy is moot until then.
+///
+/// 本 struct 内的编译期布局标志为 `false`,当且仅当没有任何实机帧指针证过上面这两个偏移的语义;它为空
+/// 者提供的是一个可断言的诚实状态,不是一个待填的正确数字。翻它的人必须先关掉 `docs/roadmap.md` 段4 里
+/// 「真正的 `CEventScope` 是哪个对象」那条候选线 —— 标志先于布局,不是反过来。
 pub const c_event_scope = struct {
     pub const OFFSET_SCOPE_TYPE: usize = 8; // +8 [FALSIFIED for Execute's arg2, §26]
     pub const OFFSET_OBJECT_ID: usize = 16; // +16 [UNVERIFIED 3.x]
+    pub const LAYOUT_CONFIRMED: bool = false;
 };
 
 /// Known scope type values for CEventScope (power-of-2 bit flags).
