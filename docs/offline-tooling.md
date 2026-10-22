@@ -234,10 +234,11 @@ optional header 读,没有任何地址是写死的 —— 换一份产物就把 
 `this function's code references no UBSan record`),后者的含义是"这一帧没有
 可归因的捕获",不是"这里没有 UBSan";**2 = 调用本身是错的,所以对产物什么都没下结论** ——
 工具没能读到产物(路径不存在、不可读、截断、非 PE32+),**或 `func` 拿到的数低于镜像基址**
-(那是 panic 栈打的裸 RVA,不是 vma;§47 加的口径护栏,打一行 stderr 并把该传的
+(那是 panic 栈打的裸 RVA,不是 vma;本批(§47 前置)加的口径护栏,打一行 stderr 并把该传的
 `image_base + rva` 原样回显)。修复循环会拿 `c2_selfabort_repro.py` 送来的任意文件名调它,
 把 2 误读成 1 就是「这份产物没有检查点」的假结论 —— 两条 exit-1 消息与 2 的措辞故意不同形,
-护栏就是为了不让"调用写错了"长得像"结论"。
+护栏就是为了不让"调用写错了"长得像"结论"。**本批围栏实测**:`scripts/test_c2_harness.py`
+**134 passed**(133 + 新增 1 条),`scripts/test_scripts_layout.py` **23 passed**。
 
 ```
 python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll site JSMallocBlockHeader
@@ -270,8 +271,8 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
    13,693 条记录**(`site JSMallocBlockHeader` 仍是 141,`quickjs.c:1494:12` 仍恰好 1 条),所以这条
    不改变任何已记录的计数 —— 它是给下一次链接准备的,届时布局器未必不把记录放进那段尾部。
 6. **记录行不带 `[ubsan_site]` 前缀,所以按前缀过滤会把证据丢掉。** `site`(`:253`)与 `func`
-   (`:289`)只有 header 行带前缀,而每条记录行是**两个空格**开头 —— `grep -F '[ubsan_site]'`
-   (或转义 `\[ubsan_site\]`)只留下 header。§47 对一次真实输出(`func 0x1800055f5`)实测 = 7 行
+   (`:279`)的 header 行带前缀,而每条记录行是**两个空格**开头(分别在 `:256`/`:292` 打印)—— `grep -F '[ubsan_site]'`
+   (或转义 `\[ubsan_site\]`)只留下 header。本批(§47 前置)对一次真实输出(`func 0x1800055f5`)实测 = 7 行
    (2 行 header + 5 行记录),过滤后**只剩 2 行**,5 条记录全丢。更糟的是另一种写法:
    不加转义的 `grep '[ubsan_site]'` 是**字符类**(任一字符 u/b/s/a/n/_/i/t/e),同一份
    7 行输出**一行都不会被滤掉** —— 看起来"过滤生效了、什么都没丢",其实过滤根本没起作用。

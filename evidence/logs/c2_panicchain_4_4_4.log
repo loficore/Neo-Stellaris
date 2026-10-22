@@ -16,11 +16,13 @@
 #   no frida, no ssh, no remote host touched).
 # DLL under test: stellaris_quickjs.dll, sha256 77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
 #   — the artifact already on disk, i.e. §46's `sqjs_s46.dll` bytes. Read as a file copy only.
+#   The §45 artifact (`863917f2…86617`) is also read, for comparison only; its path and sha are in (1).
 # Work at the time of reading: `git rev-parse HEAD` = 6f12d6558e08b4fb9ddf21ef262d07117ba941ff, branch
 #   c2-panic-chain. The bytes were NOT rebuilt and NOT modified (no `src/`, no `build.zig`, no `libs/quickjs/`
 #   edit); the digest is re-verified at the end of this file and is unchanged.
-# Scripts: scripts/dll_ubsan_site.py (maintained; the only thing this task changed about it is the exit
-#   contract in (8)). Batch notes: scripts/scratch/2026-10_panicchain/README.md.
+# Scripts: scripts/dll_ubsan_site.py (maintained; the only things this task changed about it are the exit
+#   contract in (8) and the docstring/comment wording of that guard). Batch notes:
+#   scripts/scratch/2026-10_panicchain/README.md.
 
 ## (1) which bytes, and why that is the first question
 
@@ -39,12 +41,41 @@ bytes right now:
     $ sha256sum zig-out/bin/stellaris_quickjs.dll
     77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0  zig-out/bin/stellaris_quickjs.dll
 
-which is the §46 artifact, not a rebuild of it. §45's `0x44d339` is therefore **not resolvable against
-these bytes** and is not attempted: no local copy of `863917f2…86617` exists on this host — the DLLs left
-in `/tmp` by earlier sessions were hashed this session and are `29086eae…` (§38), `35b0fb10…` (§39) and
-`77c0c35e…` (§46, the copy of the artifact in `zig-out/`) — and the §45 named artifact
-`C:\temp\sqjs_s43.dll` is on the Windows host, which this task does not touch. Everything below is the
-`0x44e399` set; resolving the §45 set would need those bytes handed back to the tool, not this log.
+which is the §46 artifact, not a rebuild of it.
+
+**Correction (fix round 1).** An earlier version of this section said §45's `0x44d339` was "not
+resolvable" because "no local copy of `863917f2…86617` exists on this host". That was false: the §45
+digest is in the build cache, not in `/tmp` (this task's first pass searched `/tmp` only). The exact
+bytes are still on disk and the maintained tool reads them:
+
+    $ sha256sum .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll
+    863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617  .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll
+
+The path is `.gitignore`d, but it is a local readable file, and the §45 named Windows copy
+(`C:\temp\sqjs_s43.dll`) was neither needed nor touched. So both eight-frame sets are resolved in this
+log: §46's in (3)/(4), §45's in (4a). The `/tmp` copies this task did hash are `29086eae…` (§38),
+`35b0fb10…` (§39) and `77c0c35e…` (§46, the copy of the artifact in `zig-out/`); none of them is §45's.
+
+The two sets, side by side (`func` on each artifact with `vma = image_base + rva`; image base
+`0x180000000` on both; offset = rva − span start; record counts are the number of `quickjs.c` lines the
+range loads):
+
+| frame | §45 rva | §45 span | §45 offset | §46 rva | §46 span | §46 offset | records (§45 / §46) |
+|---|---|---|---|---|---|---|---|
+| 1 | `0xbd9b` | `0xbd70..0xbdf3` (131 B) | +`0x2b` | `0xbd9b` | `0xbd70..0xbdf3` (131 B) | +`0x2b` | 1 / 1 |
+| 2 | `0xeede3` | `0xeed10..0xeeff1` (737 B) | +`0xd3` | `0xeede3` | `0xeed10..0xeeff1` (737 B) | +`0xd3` | 6 / 6 |
+| 3 | `0x1ebde` | `0x1ebb0..0x1eda4` (500 B) | +`0x2e` | `0x1ebde` | `0x1ebb0..0x1eda4` (500 B) | +`0x2e` | 4 / 4 |
+| 4 | `0x55f5` | `0x5320..0x570b` (1003 B) | +`0x2d5` | `0x55f5` | `0x5320..0x570b` (1003 B) | +`0x2d5` | 5 / 5 |
+| 5 | `0x43bc` | `0x3e40..0x4f6b` (4395 B) | +`0x57c` | `0x43bc` | `0x3e40..0x4f6b` (4395 B) | +`0x57c` | 31 / 31 |
+| 6 | `0x31b9c8` | `0x31ad90..0x31cbeb` (7771 B) | +`0xc38` | `0x31b9c8` | `0x31ad90..0x31cbeb` (7771 B) | +`0xc38` | 0 / 0 |
+| 7 | `0x31cc05` | `0x31cbf0..0x31cd30` (320 B) | +`0x15` | `0x31cc05` | `0x31cbf0..0x31cd30` (320 B) | +`0x15` | 0 / 0 |
+| 8 | `0x44d339` | `0x44d2f0..0x44d36c` (124 B) | +`0x49` | `0x44e399` | `0x44e350..0x44e3cc` (124 B) | +`0x49` | 0 / 0 |
+
+Frames 1–7 are identical in span, size, offset and record count; only the `record_rva` values differ
+(§45's data section sits `0x1000` lower: frame 1's record is `0x5aa430` there, `0x5ab430` here), which is
+section layout, not code. Frame 8 is the one that moved: `+0x60`, same 124-byte size, same +`0x49` offset.
+`list_exports` names `rva 0x44d2f0` `C2DiagQJSInto` on the §45 artifact and `rva 0x44e350`
+`C2DiagQJSInto` on the §46 one, so the moving function is the same function.
 
 ## (2) frame ORDER comes from the stderr dump, not from the sorted RVA line
 
@@ -193,7 +224,7 @@ rc=1
 ```
 
 Five of eight frames resolve to `quickjs.c` lines; three resolve to a `.pdata` range and nothing else
-(exit 1 = "references no UBSan record", see (9) for why that is a finding and not a failure). The
+(exit 1 = "references no UBSan record", see (7) trap 5 for why that is a finding and not a failure). The
 innermost one was **already** symbolized on disk before this task: `c2_mfrecords_4_4_4.log:179-181` prints
 the same command, the same `rva 0xbd70..0xbdf3 (131 bytes)` and the same `quickjs.c:1494:12` record, with
 `record_rva` moved only because the section layout moved (§45's copy at
@@ -215,9 +246,23 @@ each frame's cited source line:
 | 3 `0x1ebde` | `0x1ebb0..0x1eda4` (500 B) | start +`0x2e` (46) | 4 | `:3426 static JSAtom __JS_NewAtomInit(JSRuntime *rt, const char *str, int len,` (+ `:3427 int atom_type)`); records at `:3433`/`:3434` | **`__JS_NewAtomInit`** |
 | 4 `0x55f5` | `0x5320..0x570b` (1003 B) | start +`0x2d5` (725) | 5 | `:3169 static int JS_InitAtoms(JSRuntime *rt)`; records at `:3174-:3178` | **`JS_InitAtoms`** |
 | 5 `0x43bc` | `0x3e40..0x4f6b` (4395 B) | start +`0x57c` (1404) | 31 | `:2067 JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)`; records at `:2076 … :2118` | **`JS_NewRuntime2`** |
-| 6 `0x31b9c8` | `0x31ad90..0x31cbeb` (7771 B) | start +`0xc38` (3128) | 0 | no record ⇒ no source line to read; **unnamed** | (Zig side) |
-| 7 `0x31cc05` | `0x31cbf0..0x31cd30` (320 B) | start +`0x15` (21) | 0 | same | (Zig side) |
-| 8 `0x44e399` | `0x44e350..0x44e3cc` (124 B) | start +`0x49` (73) | 0 | same | (Zig side) |
+| 6 `0x31b9c8` | `0x31ad90..0x31cbeb` (7771 B) | start +`0xc38` (3128) | 0 | no record ⇒ no source line here; `quickjs_wrapper.c:497 static int c2_diag_sequence(void)`; this range loads the DLOG literal `"new_rt "` (`lea` at `0x31b926`) and calls `JS_NewRuntime2`'s range start `0x3e40` at `0x31b9c4` | **`c2_diag_sequence`** (C) |
+| 7 `0x31cc05` | `0x31cbf0..0x31cd30` (320 B) | start +`0x15` (21) | 0 | no record; `quickjs_wrapper.c:580 int C2DiagQuickJS(char *out_diag, int diag_size)`, whose `:581` calls `c2_diag_sequence`; this range calls `0x31ad90` at `0x31cc01` | **`C2DiagQuickJS`** (C) |
+| 8 `0x44e399` | `0x44e350..0x44e3cc` (124 B) | start +`0x49` (73) | 0 | no record; export table names rva `0x44e350` `C2DiagQJSInto`, `src/dll/exports.zig:240-241` calls `C2DiagQuickJS`; this range calls `0x31cbf0` at `0x44e395` | **`C2DiagQJSInto`** (Zig export) |
+
+Frames 6–8 have no UBSan record, so they cannot be named the way frames 1–5 are. Their names come from
+three checkable sources instead, and the `ip − 1` arithmetic in each is a byte-scan fact, not a guess:
+the call at `0x31b9c4` is 5 bytes, so its return is `0x31b9c9` and the printed frame is `0x31b9c8`; the
+call at `0x31cc01` returns `0x31cc06`, printed `0x31cc05`; the call at `0x44e395` returns `0x44e39a`,
+printed `0x44e399`. Sources: (a) `list_exports` on this artifact gives `C2DiagQJSInto` = `rva 0x44e350`
+(the only one of the three that is an export); (b) `quickjs_wrapper.c:497`/`:580-581` and
+`exports.zig:240-241` read from disk; (c) a read-only `E8 rel32` scan of each range, which finds exactly
+one call from frame 6's range to the `JS_NewRuntime2` span start (`0x3e40`), exactly one from frame 7's
+range to frame 6's start (`0x31ad90`), and one from frame 8's range to frame 7's start (`0x31cbf0`).
+Frame 6's range also loads the literals `"enter "`, `"heap_ok "`, `"new_rt "`, `"runtime2_null"` and
+`"rt=%p "` at `0x31af50`, `0x31b291`, `0x31b926`, `0x31badd` and `0x31bc85` — the DLOG sequence that
+only `c2_diag_sequence` emits in that source file. These are attributions of the *range to a source
+definition*, not link-time symbol names; the artifact still has no symbol table.
 
 The offsets are what a *return address* must look like, so they are recorded per frame rather than folded
 into the span. All eight are inside their own span, as they must be.
@@ -229,7 +274,9 @@ So the in-DLL chain, innermost first, is:
       ^ called from __JS_NewAtomInit    (:3426; frame 3 sits +46 into its 500-byte body)
       ^ called from JS_InitAtoms        (:3169; frame 4 sits +725 into its 1003-byte body)
       ^ called from JS_NewRuntime2      (:2067; frame 5 sits +1404 into its 4395-byte body)
-      ^ called from three Zig-side frames (frames 6-8, ranges above, unnamed)
+      ^ called from c2_diag_sequence    (quickjs_wrapper.c:497; frame 6 sits +3128 into its 7771-byte body)
+      ^ called from C2DiagQuickJS       (quickjs_wrapper.c:580; frame 7 sits +21 into its 320-byte body)
+      ^ called from C2DiagQJSInto       (src/dll/exports.zig:240; frame 8 sits +73 into its 124-byte body)
 
 **Every edge of that chain is independently present in the source**, which is what makes it a call chain
 and not eight coincident ranges:
@@ -246,16 +293,63 @@ Three things this pins that §45 could only infer (`c2_selfabort_4_4_4.log:163-1
 trap and `__JS_NewAtomInit` (RVA 0xeede3 …) has no `.pdata` entry covering it … the middle of the chain is
 inferred"):
 
-  1. **0xeede3 does have a `.pdata` entry** on the §46 bytes: `0xeed10..0xeeff1`. §45's non-coverage claim
-     was about §45's bytes (`863917f2…86617`), and it is stated there as a property of the incomplete
-     parse ("absence of an entry says nothing about the code"). On the bytes read here the parse covers
-     the frame, so the middle of the chain is no longer inferred from call order — it is attributed by a
-     range plus records plus the source line at the other end of each edge.
+  1. **0xeede3 has a `.pdata` entry, and §45's own bytes say so too.** On the cached §45 artifact the
+     same `func` gives `rva 0xeed10..0xeeff1` (737 B) with the same six records (`:2361`-`:2366`);
+     verbatim output in (4a). So §45's sentence "has no `.pdata` entry covering it"
+     (`c2_selfabort_4_4_4.log:163-166`) is not a property of those bytes and not a difference between
+     the two builds — it is contradicted by its own artifact. This is also **not** explained by a tool
+     version: the frozen original and the maintained tool share the same `.pdata` walk
+     (`scripts/scratch/2026-10_abortexit/ubsan_site.py:119-131` and `scripts/dll_ubsan_site.py:211-223`
+     are the same `size // 12` loop with the same `0 < begin < end` filter), and running the frozen
+     original on the §45 bytes reproduces the span and the six records. No `func 0xeede3` invocation is
+     recorded in §45 — the claim appears only as prose — so there is no old bound computation to blame.
+     The only parsing bound that changed after §45 is `iter_records`' scan end (`end - 32` →
+     `end - RECORD_READ_SIZE + 1`, `scripts/dll_ubsan_site.py:190`, commit 26589ac), which governs
+     which *records* a `site` scan can see, not which function spans exist. On the bytes read here —
+     and on §45's — the middle of the chain is attributed, not inferred.
   2. `__JS_NewAtomInit`'s span on §46 bytes is `0x1ebb0..0x1eda4` — numerically identical to §45's
      (`c2_selfabort_4_4_4.log:101`), so the recorder that moved the outer frame did not move this one.
   3. The 131-byte trapping function carries **exactly one** UBSan record (`:1494:12`). No second site in
      that range competes for the attribution, so the "which line of this function" question has one
      answer in these bytes. (Later tasks that change the build should re-measure this, not assume it.)
+
+## (4a) the §45 set, resolved on its own bytes
+
+The artifact is `.zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll`, sha256
+`863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617` (verified before the commands below),
+image base `0x180000000`, `.text` vsize `0x4c8b86`. All eight frames were resolved with the maintained
+tool; the spans/offsets are the §45 column of the table in (1). Verbatim for the two frames that carry
+the correction — frame 2 (the one §45 said had no entry) and frame 8 (the one that moved):
+
+```
+$ python3 scripts/dll_ubsan_site.py .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll func 0x1800eede3
+[ubsan_site] .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x1800eede3: rva 0xeed10..0xeeff1 (737 bytes)
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2361:17 member_access type='JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader') record_rva=0x5acbb0 loaded_at=0x1800eee07
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2362:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acbf0 loaded_at=0x1800eee7b
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2363:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acc10 loaded_at=0x1800eeec6
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2364:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acc30 loaded_at=0x1800eef0f
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2365:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acc50 loaded_at=0x1800eef4f
+  /var/lofibass_ssd/code/zig/Neo-Stellaris/libs/quickjs/quickjs.c:2366:10 member_access type='JSString' (aka 'struct JSString') record_rva=0x5acc70 loaded_at=0x1800eef92
+rc=0
+
+$ python3 scripts/dll_ubsan_site.py .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll func 0x18044d339
+[ubsan_site] .zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll image_base=0x180000000 mode=func
+[ubsan_site] function holding 0x18044d339: rva 0x44d2f0..0x44d36c (124 bytes)
+[ubsan_site] this function's code references no UBSan record
+rc=1
+```
+
+The other six were run the same way; their header/range lines are the §45 column in (1), and their record
+lines are the same lines/columns/kinds/types as the §46 output in (3), with `record_rva` shifted by
+`0x1000` (data-section layout). `list_exports` on these bytes names `rva 0x44d2f0` `C2DiagQJSInto`, the
+same name the §46 artifact gives `rva 0x44e350`.
+
+Two more measurements on the same bytes, for the trap-4 numbers: `runtime_functions` yields **4,818**
+entries here (`.text` `0x4c8b86`) and **4,824** on the §46 artifact (`.text` `0x4c9be6`). The **3,042**
+figure repeated in §45.4/`docs/offline-tooling.md` is that section's historical count, not what the
+current tool measures on the cached §45 bytes; both current numbers are still far below the image's real
+function count, so the incompleteness conclusion stands.
 
 ## (5) interlock with §46's last record — the arena size arithmetic
 
@@ -287,9 +381,12 @@ The sizes were **measured, not transcribed**. §46 got them from a throwaway pro
 (`c2_mfrecords_4_4_4.log:304`); they were re-measured here the same way: a /tmp-only replica of
 `struct list_head`, `JSString`, `JSMallocArena`, `JSMallocBlockHeader` typed out of `quickjs.c:583-599`,
 `:289-302`, `:270-280`. The replica has no `link` field because `DUMP_LEAKS` is not defined (`:99` is commented
-out and `build.zig:16-19` is the whole flag list), and the arena has no `bitmap` because `JS_MALLOC_USE_ITER`
-is likewise commented out (`:257`) — either `#ifdef` would move `blocks[]` and change `sizeof(JSMallocArena)`,
-so the replica is only valid for this configuration, which is the one that shipped. No repository file, no
+out and `build.zig:16-19` is the whole flag list): that `#ifdef` adds `struct list_head link` to
+`JSString` (`quickjs.c:595-597`) and changes `sizeof(JSString)`, not the arena. The arena has no `bitmap`
+because `JS_MALLOC_USE_ITER` is likewise commented out (`:257`): that one adds `uint32_t bitmap[…]` to
+`JSMallocArena` (`quickjs.c:296-301`) and is the only one of the two that moves `blocks[]` and changes
+`sizeof(JSMallocArena)`. So the replica is only valid for this configuration, which is the one that
+shipped. No repository file, no
 artifact, no game involved; the probe is deliberately not in git.
 
     $ zig cc /tmp/layout_probe.c -o /tmp/lp && /tmp/lp          # host = x86_64-linux
@@ -370,16 +467,20 @@ What this log does **not** establish:
 
   * **No function names are link-time names.** Attribution is `.pdata` range + UBSan record + the C read
     at that line, i.e. the §45 method. Nothing resolves a symbol.
-  * **Frames 6-8 are unnamed and stay unnamed.** The tool printed their ranges and nothing else; naming
-    them would need Zig-side attribution this task does not have (see (9)).
+  * **The three outer frames are attributed by other means, not by UBSan records.** Frames 6-8 carry no
+    record, so no source line names them. Frame 6 is the range that loads `c2_diag_sequence`'s DLOG
+    literals and calls `JS_NewRuntime2`; frame 7 is the range the exported `C2DiagQJSInto` calls and that
+    calls frame 6; frame 8 is the range the export table itself names `C2DiagQJSInto`. The evidence is the
+    export directory, the C/Zig source at `quickjs_wrapper.c:497`/`:580`/`exports.zig:240`, and an `E8`
+    call-site scan of each range (details under the table in (4)). None of that is a link-time symbol.
   * **The offsets inside each function were not decoded.** "Frame 2 = `js_alloc_string_rt` start +211" is
     arithmetic on `.pdata` bounds and the printed `ip − 1`; which instruction is at +211 and which call it
     returns from is a disassembly question, and no disassembler was run here. It belongs to the planned
     `pe_disrva` tool, not to this log.
   * **Nothing here observed why the header is null.** The mechanism is §45's open question and §46 left
     the candidate table incomplete; this log adds a location, not a cause.
-  * One artifact, one digest, one host. The determinism behind it (§45's two runs, §46's 84 children with
-    `distinct in-DLL RVA sets = 1`) is that of those logs, not re-measured here.
+  * Two artifacts, each with one digest, one host. The determinism behind them (§45's two runs, §46's 84
+    children with `distinct in-DLL RVA sets = 1`) is that of those logs, not re-measured here.
 
 ## (7) judging traps for anyone re-running this
 
@@ -423,26 +524,30 @@ What this log does **not** establish:
    instruction address.
 4. **"Not inside any range" proves nothing.** Re-measured here on these bytes: `runtime_functions` yields
    **4,824** entries against a `.text` of vsize 0x4c9be6 — a fraction of the functions the image actually
-   has, and `docs/offline-tooling.md` records **3,042** for §45's bytes (0x4c8b86). Frames 6-8 were NOT
-   flagged by that trap — they hit ranges — but the inverse reading ("this frame is data or padding") is
-   what §45 had to disclaim, and (4) above shows the same *kind* of address classified differently across
-   two builds (0xeede3: no entry per §45, a 737-byte entry here).
-
+   has; the current tool measures **4,818** on the cached §45 bytes (0x4c8b86), while the **3,042** figure
+   in §45.4/`docs/offline-tooling.md` is that section's historical count, not a current measurement. Frames
+   6-8 were NOT flagged by that trap — they hit ranges — but the inverse reading ("this frame is data or
+   padding") is what §45 had to disclaim, and (4a) above shows §45's own claim of *no* `.pdata` entry for
+   0xeede3 is contradicted by its own bytes (a 737-byte entry, not a build difference).
 5. **`this function's code references no UBSan record` is a finding, not an error.** It exits 1 and it
-   means: this function's bytes contain no `lea` of any record the scanner knows. For Zig-side code that
-   is expected (Zig's checks do not carry a `TypeMismatchData` record with a C file/line), which is exactly
-   why frames 6-8 came back this way. It does NOT mean the function is unreachable or misattributed.
+   means: this function's bytes contain no `lea` of any record the scanner knows — a fact about
+   instrumentation, not about the language of the frame. A C function with no check site produces the same
+   answer; frames 6-7 are exactly that, and frame 8 is Zig. It does NOT mean the function is unreachable
+   or misattributed.
 6. **`rc=3` is still not a step code.** Nothing in this log re-endorses reading the process exit status as
    a position in the init sequence (§38.5, §45.4).
 
 ## (8) the guard this job installed, and the exit-code contract
 
-A bare RVA was fed to `func` twice in the session that produced this log: once by accident (the
-concatenation slip of trap 1, answered by the exit-1 "not inside any `.pdata` function entry" sentence),
-and once on purpose against `git show HEAD:scripts/dll_ubsan_site.py` to record what the tool did **before**
-the change. A wrong number in the caller's own hand must not come out looking like a conclusion about the
-image, so `cmd_func` now checks the caliber before subtracting the base (`scripts/dll_ubsan_site.py`), and
-prints one line on **stderr**, the stream the tool's other caller-side errors already use:
+Two mis-calibered numbers were fed to `func` in the session that produced this log. One was the
+concatenation slip of trap 1 (`0x18000` + `1ebde` = `0x180001ebde`, **above** the image base), answered by
+the exit-1 "not inside any `.pdata` function entry" sentence; the guard does **not** catch that form — its
+tell was the echoed `rva 0x168001ebde`, wider than the image. The other was a bare RVA (below the base),
+fed on purpose against `git show HEAD:scripts/dll_ubsan_site.py` to record what the tool did **before**
+the change; that is the form the guard now turns into exit 2. A wrong number in the caller's own hand must
+not come out looking like a conclusion about the image, so `cmd_func` now checks the caliber before
+subtracting the base (`scripts/dll_ubsan_site.py`), and prints one line on **stderr**, the stream the
+tool's other caller-side errors already use:
 
     $ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x43bc
     [ubsan_site] zig-out/bin/stellaris_quickjs.dll image_base=0x180000000 mode=func      # stdout
@@ -455,7 +560,7 @@ later reader must not collapse them:
 | code | meaning | where it is printed |
 |---|---|---|
 | 0 | the artifact was read and something matched | `site` with rows; `func` with a covering range **and** ≥1 referenced record |
-| 1 | the artifact was read and **nothing** matched — a finding | `site`: no check site for that type name. `func`: **either** "rva `X` is not inside any `.pdata` function entry" (no covering range — uninformative, trap 4) **or** "this function's code references no UBSan record" (a range was found, no record inside it — the normal answer for Zig code, trap 5) |
+| 1 | the artifact was read and **nothing** matched — a finding | `site`: no check site for that type name. `func`: **either** "rva `X` is not inside any `.pdata` function entry" (no covering range — uninformative, trap 4) **or** "this function's code references no UBSan record" (a range was found, no record inside it — a normal answer for code with no check site, trap 5) |
 | 2 | the invocation was wrong, so nothing was concluded about the artifact | cannot read the path / truncated / not PE32+; **or** `func` was handed a number below the image base |
 
 Code 2's name in the module changed from `EXIT_READ_ERROR` to `EXIT_CALLER_ERROR` (the constant's old name
@@ -483,15 +588,19 @@ Nothing in `src/`, `build.zig`, or `libs/quickjs/` was touched, and the artifact
     - Zero shots, zero game, zero dispatch, zero Windows channel. No CreateRemoteThread, no frida, no ssh,
       no remote host contacted; §44's single-shot dispatch authorization stays spent and was neither used
       nor rehearsed.
-    - stellaris.exe was not started, not contacted, not opened from disk. The only file inputs were
-      `zig-out/bin/stellaris_quickjs.dll` (a file copy), `libs/quickjs/quickjs.c` (source), and two
-      EXISTING evidence logs, read-only.
+    - stellaris.exe was not started, not contacted, not opened from disk. The file inputs were
+      `zig-out/bin/stellaris_quickjs.dll` (a file copy), the cached §45 artifact
+      `.zig-cache/o/ecf27c97deb9b81534b0b477808ab19f/stellaris_quickjs.dll` (sha256 `863917f2…86617`,
+      verified first; a file copy, added in fix round 1), `libs/quickjs/quickjs.c`,
+      `src/dll/quickjs/quickjs_wrapper.c`, `src/dll/exports.zig` (sources), and two EXISTING evidence
+      logs, read-only. `scripts/c2_harness.py`'s `list_exports` was imported read-only to read the
+      export directory of both artifacts.
     - No existing file under `evidence/` was edited. This log is the only artifact created there;
       `scripts/scratch/2026-10_panicchain/README.md` is the only one created under `scripts/`.
     - The DLL bytes were not modified and not rebuilt: no `src/` edit, no `build.zig` edit, no
       `libs/quickjs/` edit. The digest at the top and in (8) is the same value, taken before and after.
     - The only code changed is `scripts/dll_ubsan_site.py` (a guard on its own input caliber plus the
       exit-code paragraph), `scripts/test_c2_harness.py` (one test), and `docs/offline-tooling.md` (the
-      existing `dll_ubsan_site.py` section). No conclusion previously recorded in §45/§46 was rewritten;
-      where this log's reading differs from §45's (trap on 0xeede3's `.pdata` coverage) the difference is
-      attributed to the bytes, in (4), and §45's own text stays as it is.
+      existing `dll_ubsan_site.py` section). §45's text and §46's text are untouched; where this log
+      corrects §45's prose claim that `0xeede3` had no `.pdata` entry, the correction is made in (4)/(4a)
+      against §45's own artifact, and §47 will carry the accounting.

@@ -60,9 +60,11 @@ inside any range" proves nothing; and a panic stack prints each return address a
 ``ip − 1``, so a frame's printed value is one byte *before* the call instruction — pass it
 to `func` as-is (the `.pdata` lookup is the inclusive ``begin <= rva < end``), but never
 read the printed address itself as the faulting or calling instruction. Two more that bite
-a caller: `func` takes a vma carrying the image base, so a bare rva (or bash's
-decimal `$(( ))` re-read as hex) is a caller-side error (exit 2) and not a fact about the
-image; and the record lines start with two spaces, **not** with the ``[ubsan_site]``
+a caller: `func` takes a vma carrying the image base, and a bare rva (below the base) is a
+caller-side error (exit 2), not a fact about the image. That guard is a **lower-bound check
+only**: a base-carrying address printed in decimal by bash's `$(( ))` and re-read as hex lands
+**above** the base and is not caught by it — the tell for that form is the echoed rva being
+wider than the whole image. And the record lines start with two spaces, **not** with the ``[ubsan_site]``
 prefix, so a *literal* prefix filter (``grep -F '[ubsan_site]'``, or the escaped
 ``grep '\\[ubsan_site\\]'``) silently drops every record line and leaves only the banner and
 the function-range line — while the unescaped ``grep '[ubsan_site]'`` is a BRE *character
@@ -260,12 +262,15 @@ def cmd_site(data, image_base, secs, want):
 def cmd_func(data, image_base, secs, va):
     if va < image_base:
         # A number below the image base cannot be a vma in this image: it is the
-        # bare RVA the panic stack prints (or a decimal re-read as hex), not the
-        # absolute address `func` asks for. Without this guard it fell through to
-        # "not inside any .pdata function entry" with exit 1 — the same sentence
-        # shape and code as the real finding, so a caliber bug in the caller read
-        # as a conclusion about the artifact. Exit 2 = the invocation was wrong;
-        # nothing here concluded anything about the image.
+        # bare RVA the panic stack prints, not the absolute address `func` asks
+        # for. Without this guard it fell through to "not inside any .pdata
+        # function entry" with exit 1 — the same sentence shape and code as the
+        # real finding, so a caliber bug in the caller read as a conclusion about
+        # the artifact. Exit 2 = the invocation was wrong; nothing here concluded
+        # anything about the image. This is a LOWER-BOUND check only: a
+        # base-carrying number mangled by decimal-re-read-as-hex lands above the
+        # base and is not caught here; an echoed rva wider than the image is the
+        # tell for that form.
         print(f"[ubsan_site] func takes a vma carrying the image base "
               f"({image_base:#x}); {va:#x} is below it, so it looks like a bare "
               f"rva — pass {image_base + va:#x} for rva {va:#x}", file=sys.stderr)
