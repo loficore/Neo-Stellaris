@@ -41,6 +41,80 @@ import time
 # Lazy Win32 binding (ruling P3): nothing here touches ctypes.WinDLL at import.
 # ---------------------------------------------------------------------------
 
+# --- §44: the Win32 shapes the read-only thread-state probe needs. Declared at
+# --- import because ctypes.Structure lays itself out without touching a DLL, so
+# --- `scripts/test_c2_harness.py` can assert the field offsets on a Linux host —
+# --- which is exactly the check that a CONTEXT we hand to the live shot is the
+# --- CONTEXT Windows expects. A wrong `Rip` offset would silently read padding
+# --- and print a plausible-looking address.
+#
+# Field order and offsets follow the documented AMD64 CONTEXT layout
+# (P1Home..P6Home, ContextFlags, MxCsr, the six segment words, EFlags, the six
+# debug registers, Rax..R15, Rip, then the floating-point/vector/debug tail).
+# Only ContextFlags and the GPR/RIP fields are ever read, so the tail is modeled
+# as opaque padding whose size is fixed to make sizeof == 1232, the real size:
+# under-sizing it would let Windows write past our buffer.
+CONTEXT_AMD64 = 0x00100000
+CONTEXT_CONTROL = 0x00000001   # SegCs..EFlags, Rsp, Rbp, Rip
+CONTEXT_INTEGER = 0x00000010   # Rax, Rcx, Rdx, Rbx, Rsi, Rdi, R8..R15
+# GetThreadContext / GetThreadTimes request mask used by the probe.
+CONTEXT_READ_MASK = CONTEXT_AMD64 | CONTEXT_CONTROL | CONTEXT_INTEGER
+
+# FILETIME is two DWORDs that are really one 64-bit 100 ns count; c_uint64 byref
+# is the honest shape for the four out-parameters of Get{Thread,Process}Times.
+# `_FILETIME` is the storage, `_FILETIME_OUT` the parameter type the API wants —
+# declaring the out-parameters by value would make every ctypes call below raise
+# a TypeError on the live shot, which is the one place no Linux test can see it.
+_FILETIME = ctypes.c_uint64
+_FILETIME_OUT = ctypes.POINTER(ctypes.c_uint64)
+
+
+class CONTEXT(ctypes.Structure):
+    _fields_ = [
+        ("P1Home", ctypes.c_uint64),
+        ("P2Home", ctypes.c_uint64),
+        ("P3Home", ctypes.c_uint64),
+        ("P4Home", ctypes.c_uint64),
+        ("P5Home", ctypes.c_uint64),
+        ("P6Home", ctypes.c_uint64),
+        ("ContextFlags", ctypes.c_uint32),
+        ("MxCsr", ctypes.c_uint32),
+        ("SegCs", ctypes.c_uint16),
+        ("SegDs", ctypes.c_uint16),
+        ("SegEs", ctypes.c_uint16),
+        ("SegFs", ctypes.c_uint16),
+        ("SegGs", ctypes.c_uint16),
+        ("SegSs", ctypes.c_uint16),
+        ("EFlags", ctypes.c_uint32),
+        ("Dr0", ctypes.c_uint64),
+        ("Dr1", ctypes.c_uint64),
+        ("Dr2", ctypes.c_uint64),
+        ("Dr3", ctypes.c_uint64),
+        ("Dr6", ctypes.c_uint64),
+        ("Dr7", ctypes.c_uint64),
+        ("Rax", ctypes.c_uint64),
+        ("Rcx", ctypes.c_uint64),
+        ("Rdx", ctypes.c_uint64),
+        ("Rbx", ctypes.c_uint64),
+        ("Rsp", ctypes.c_uint64),
+        ("Rbp", ctypes.c_uint64),
+        ("Rsi", ctypes.c_uint64),
+        ("Rdi", ctypes.c_uint64),
+        ("R8", ctypes.c_uint64),
+        ("R9", ctypes.c_uint64),
+        ("R10", ctypes.c_uint64),
+        ("R11", ctypes.c_uint64),
+        ("R12", ctypes.c_uint64),
+        ("R13", ctypes.c_uint64),
+        ("R14", ctypes.c_uint64),
+        ("R15", ctypes.c_uint64),
+        ("Rip", ctypes.c_uint64),
+        # Xmm/VectorRegister/VectorControl/DebugControl..LastExceptionFromRip,
+        # never read: 1232 - 0xF8 = 976 bytes.
+        ("_tail", ctypes.c_byte * 976),
+    ]
+
+
 _KERNEL32 = None
 _KERNEL32_CONFIGURED = False
 
@@ -98,6 +172,17 @@ def _kernel32():
         k32.GetExitCodeThread.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
         k32.GetExitCodeProcess.restype = ctypes.c_int
         k32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+        # §44 read-only thread-state probe (the ``thread_probe`` channel).
+        k32.SuspendThread.restype = ctypes.c_uint
+        k32.SuspendThread.argtypes = [ctypes.c_void_p]
+        k32.ResumeThread.restype = ctypes.c_uint
+        k32.ResumeThread.argtypes = [ctypes.c_void_p]
+        k32.GetThreadContext.restype = ctypes.c_int
+        k32.GetThreadContext.argtypes = [ctypes.c_void_p, ctypes.POINTER(CONTEXT)]
+        k32.GetThreadTimes.restype = ctypes.c_int
+        k32.GetThreadTimes.argtypes = [ctypes.c_void_p] + [_FILETIME_OUT] * 4
+        k32.GetProcessTimes.restype = ctypes.c_int
+        k32.GetProcessTimes.argtypes = [ctypes.c_void_p] + [_FILETIME_OUT] * 4
         _KERNEL32_CONFIGURED = True
 
     return _KERNEL32
@@ -223,6 +308,37 @@ def list_exports(local_dll_path: str) -> dict:
         exports[name_bytes.decode("ascii", errors="replace")] = func_rva
 
     return exports
+
+
+def pe_image_size(local_dll_path: str) -> int:
+    """Return the PE ``SizeOfImage`` — the span of the mapped image in bytes.
+
+    §44 needs an upper bound on the module's address range to classify a thread's
+    instruction pointer as *inside* or *outside* our DLL. The virtual address span
+    is exactly ``SizeOfImage`` (the same field the loader reserves at mapping
+    time), so reading it from the file is as authoritative as enumerating modules
+    in the target — and needs no dispatch.
+    """
+    with open(local_dll_path, "rb") as fh:
+        data = fh.read()
+
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        raise ValueError(f"not a PE file (no MZ header): {local_dll_path!r}")
+
+    e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
+    if data[e_lfanew:e_lfanew + 4] != b"PE\0\0":
+        raise ValueError(f"not a PE file (bad NT signature): {local_dll_path!r}")
+
+    opt = e_lfanew + 4 + 20
+    magic = struct.unpack_from("<H", data, opt)[0]
+    if magic not in (0x20B, 0x10B):
+        raise ValueError(f"unknown optional-header magic {magic:#x}: {local_dll_path!r}")
+
+    # SizeOfImage is a DWORD at optional-header offset 56 in both PE32 and PE32+.
+    size_of_image = struct.unpack_from("<I", data, opt + 56)[0]
+    if size_of_image == 0:
+        raise ValueError(f"SizeOfImage is 0 in {local_dll_path!r}")
+    return size_of_image
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +677,8 @@ def dispatch_watching_buffer(pid: int, base: int, rva: int, arg_value: int,
                              timeout_ms: int = 60000, poll_ms: int = 2,
                              note=None, witnesses=(), report=None,
                              sampler=None, sample_every_ms: int = 250,
-                             poll_addr: int | None = None) -> tuple[int, str]:
+                             poll_addr: int | None = None,
+                             thread_probe=None) -> tuple[int, str]:
     """Start a one-arg remote call and poll an output buffer WHILE it runs.
 
     Returns ``(exit_code, text)`` where ``text`` is the longest buffer contents
@@ -632,6 +749,19 @@ def dispatch_watching_buffer(pid: int, base: int, rva: int, arg_value: int,
     window — no extra dispatch, no code added to the target. A raising sampler is
     recorded once and then dropped: the game vanishing underneath it is the expected
     case, and it must not cost the exit code.
+
+    ``thread_probe`` (§44, authorized read-only) is a two-argument callable
+    ``(remote_thread_handle, process_handle) -> str`` consulted at most once per
+    ``sample_every_ms`` alongside ``sampler``, recorded in ``report["thread_samples"]``
+    as ``(elapsed_ms, text)``. It exists to answer the one question memory counters
+    cannot: during the ~6.9 s §42 window the log froze for, is OUR remote thread
+    *executing* (instruction pointer advancing inside the DLL, thread CPU time
+    burning) or merely *alive-but-blocked* (instruction pointer parked outside our
+    code, thread CPU time flat). The caller supplies the whole observation —
+    ``GetThreadContext``/``GetThreadTimes`` are its business, and this loop only
+    hands it the two handles it already holds; it never touches the target's memory
+    or adds a dispatch. A raising probe is recorded once and dropped exactly like
+    ``sampler``.
     """
     k32 = _kernel32()
     handle = _open_process(pid)
@@ -665,6 +795,8 @@ def dispatch_watching_buffer(pid: int, base: int, rva: int, arg_value: int,
                for label, _a, _s in witnesses}
         samples = []
         next_sample_ms = 0.0
+        thread_samples = []
+        next_probe_ms = 0.0
 
         def elapsed_ms() -> float:
             return (time.monotonic() - t0) * 1000.0
@@ -713,10 +845,31 @@ def dispatch_watching_buffer(pid: int, base: int, rva: int, arg_value: int,
                 return
             samples.append((ms, str(value)))
 
+        def poll_thread_probe():
+            nonlocal next_probe_ms, thread_probe
+            if thread_probe is None:
+                return
+            ms = elapsed_ms()
+            if ms < next_probe_ms:
+                return
+            next_probe_ms = ms + sample_every_ms
+            try:
+                value = thread_probe(thread, handle)
+            except Exception as exc:  # noqa: BLE001 - same policy as poll_sampler:
+                # a probe that can break the measurement it is watching is worse than
+                # no probe, and the thread/hosts vanishing underneath it is expected.
+                thread_samples.append((ms, f"thread_probe raised {exc}"))
+                if note:
+                    note(f"thread_probe raised at {ms:.1f}ms — {exc}; probing stopped")
+                thread_probe = None
+                return
+            thread_samples.append((ms, str(value)))
+
         while True:
             # Sampled at the top of every iteration, so the series covers the whole
             # window including the iteration the read/exit-code decision happens in.
             poll_sampler()
+            poll_thread_probe()
             # Read FIRST, then act on the thread state: if the callee has
             # returned, the read in this same iteration is already a post-return
             # read, which is the complete copy. Swapping the two orders
@@ -797,12 +950,120 @@ def dispatch_watching_buffer(pid: int, base: int, rva: int, arg_value: int,
                 "thread_returned_while_alive": returned_while_alive,
                 "witness": wit,
                 "samples": samples,
+                "thread_samples": thread_samples,
             })
     finally:
         if thread:
             k32.CloseHandle(thread)
         k32.CloseHandle(handle)
     return exit_code.value, best.split(b"\x00", 1)[0].decode("ascii", errors="replace")
+
+
+# ---------------------------------------------------------------------------
+# §44 read-only thread-state probe
+#
+# What this answers and what it does not: the log witness froze for ~6.9 s inside
+# ``JS_NewRuntime2`` (evidence §42) and the offline allocation map (§43) shows no
+# allocation in that window, so the open question is what OUR remote thread was
+# doing there. Two readings survive everything measured so far — the thread was
+# executing QuickJS code, or the thread was alive but blocked by the host. Only
+# the thread itself can tell them apart: an instruction pointer that sits inside
+# our module and thread CPU time that advances means execution; an instruction
+# pointer parked outside with flat CPU time means blockage.
+#
+# Boundary honored: this reads. ``GetThreadContext`` needs ``SuspendThread`` (a
+# documented requirement, not an option) and the suspend/resume is wrapped so the
+# thread is never left suspended; ``GetThreadTimes``/``GetProcessTimes`` need no
+# suspension at all. No hook, no ``WriteProcessMemory``, no code added to the
+# target, no new export.
+# ---------------------------------------------------------------------------
+
+def classify_rip(rip, base: int, image_size: int) -> str:
+    """Whether an instruction pointer falls in the mapped span of our DLL.
+
+    ``"unknown"`` when the capture failed — an absent address is not evidence of
+    blockage, and conflating the two would read a failed probe as a finding.
+    """
+    if rip is None:
+        return "unknown"
+    return "inside_dll" if base <= rip < base + image_size else "outside_dll"
+
+
+def filetime_us(ticks: int) -> int:
+    """Convert a FILETIME (100 ns units) to whole microseconds."""
+    return ticks // 10
+
+
+def format_thread_state(state: dict, base: int, image_size: int) -> str:
+    """Render one capture as the single line recorded in ``thread_samples``."""
+    where = classify_rip(state.get("rip"), base, image_size)
+    parts = [
+        f"rip={state['rip']:#x}" if state.get("rip") is not None else "rip=none",
+        f"rsp={state['rsp']:#x}" if state.get("rsp") is not None else "rsp=none",
+        f"where={where}",
+        f"th_kernel_us={state.get('thread_kernel_us')}",
+        f"th_user_us={state.get('thread_user_us')}",
+        f"pr_kernel_us={state.get('process_kernel_us')}",
+        f"pr_user_us={state.get('process_user_us')}",
+    ]
+    errors = [e for e in (state.get("context_err"), state.get("times_err")) if e]
+    if errors:
+        parts.append("err=" + ";".join(errors))
+    return " ".join(parts)
+
+
+def capture_thread_state(thread_handle, process_handle) -> dict:
+    """Read the remote thread's ``Rip``/``Rsp`` plus thread and process CPU times.
+
+    Returns ``{"rip", "rsp", "thread_kernel_us", "thread_user_us",
+    "process_kernel_us", "process_user_us", "context_err", "times_err"}`` —
+    ``None`` for any value that could not be read, with the reason in the matching
+    ``*_err`` key. Nothing here raises: the caller is measuring a process that may
+    vanish mid-read, and a vanished value is a measurement, not a bug.
+    """
+    k32 = _kernel32()
+    state = dict(rip=None, rsp=None, thread_kernel_us=None, thread_user_us=None,
+                 process_kernel_us=None, process_user_us=None,
+                 context_err=None, times_err=None)
+
+    # Times first and without suspension: they are the primary discriminator, so
+    # they must survive a failed or refused context read.
+    tk = _FILETIME(0); tu = _FILETIME(0); _tc = _FILETIME(0); _te = _FILETIME(0)
+    pk = _FILETIME(0); pu = _FILETIME(0); _pc = _FILETIME(0); _pe = _FILETIME(0)
+    if not k32.GetThreadTimes(thread_handle, ctypes.byref(_tc), ctypes.byref(_te),
+                              ctypes.byref(tk), ctypes.byref(tu)):
+        state["times_err"] = f"GetThreadTimes gle={_gle()}"
+    # Creation and exit times are discarded — this thread is ours and still running.
+    elif not k32.GetProcessTimes(process_handle, ctypes.byref(_pc), ctypes.byref(_pe),
+                                 ctypes.byref(pk), ctypes.byref(pu)):
+        state["times_err"] = f"GetProcessTimes gle={_gle()}"
+    else:
+        state["thread_kernel_us"] = filetime_us(tk.value)
+        state["thread_user_us"] = filetime_us(tu.value)
+        state["process_kernel_us"] = filetime_us(pk.value)
+        state["process_user_us"] = filetime_us(pu.value)
+
+    ctx = CONTEXT()
+    ctx.ContextFlags = CONTEXT_READ_MASK
+    # SuspendThread returns the PREVIOUS suspend count, (DWORD)-1 on failure; the
+    # resume is therefore conditional on the suspend having happened, and lives in
+    # ``finally`` so a raising read cannot park the game's thread forever.
+    suspended = k32.SuspendThread(thread_handle)
+    try:
+        if suspended == 0xFFFFFFFF:
+            state["context_err"] = f"SuspendThread gle={_gle()}"
+        elif not k32.GetThreadContext(thread_handle, ctypes.byref(ctx)):
+            state["context_err"] = f"GetThreadContext gle={_gle()}"
+        else:
+            state["rip"] = ctx.Rip
+            state["rsp"] = ctx.Rsp
+    finally:
+        if suspended != 0xFFFFFFFF:
+            if k32.ResumeThread(thread_handle) == 0xFFFFFFFF:
+                state["context_err"] = (state["context_err"] or "") + (
+                    f" ResumeThread gle={_gle()}")
+
+    return state
 
 
 def read_memory(pid: int, addr: int, size: int) -> bytes:

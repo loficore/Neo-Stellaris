@@ -43,15 +43,19 @@ bug like that is invisible to any test that only runs against a real process.
 """
 
 import ctypes
+import hashlib
 import os
 import struct
 
 import pytest
 
 import c2_harness
+import c2_init_threadstate
 import c2_task5_init
 from c2_harness import (
     list_exports, parse_module_base_from_ps, resolve_pid, dispatch_watching_buffer,
+    pe_image_size, classify_rip, filetime_us, format_thread_state, CONTEXT,
+    CONTEXT_READ_MASK, capture_thread_state,
 )
 from c2_task3_diag import parse_ctx
 from c2_task5_init import (
@@ -64,6 +68,10 @@ from c2_task5_init import (
 )
 from c2_control_sleep import plausible_sleep_ms
 from c2_task6_e2e import decode_probe_rc
+from c2_init_threadstate import (
+    EXECUTING_IN_DLL, EXECUTING_ELSEWHERE, BLOCKED, INCONCLUSIVE,
+    thread_cpu_us, thread_state_verdict, thread_state_lines, make_thread_probe,
+)
 
 # The built DLL is at <repo root>/zig-out/bin/... . Tests are invoked from the
 # repo root (``python3 -m pytest scripts/test_c2_harness.py``), but resolve the
@@ -1278,3 +1286,473 @@ def test_plausible_sleep_ms_rejects_a_function_that_outlives_the_timer():
     assert not plausible_sleep_ms(20_000.0, 1000)
     assert not plausible_sleep_ms(1501.0, 1000)
 
+
+
+# --- §44 the read-only thread-state probe ------------------------------------
+#
+# The window this exists to explain: §42's witness froze for 6.9 s with the log
+# tail at `new_rt MmMmMm`, and §43 showed offline that no allocation happens in
+# that window. Only two readings survive, and memory counters cannot separate
+# them — the thread is executing, or it is alive and blocked. The discriminator
+# is the thread's own `Rip` plus the CPU time charged to it, so the layout that
+# carries `Rip` is the thing most worth pinning: a wrong offset reads padding and
+# prints a plausible address while answering nothing.
+
+_S44_BASE = 0x1000_0000
+_S44_IMAGE_SIZE = 0x20_0000
+
+
+def _s44_record(rip, thread_kernel_us=0, thread_user_us=0, ms=0.0):
+    return {"rip": rip, "rsp": 0x8000_0000, "thread_kernel_us": thread_kernel_us,
+            "thread_user_us": thread_user_us, "process_kernel_us": 0,
+            "process_user_us": 0, "context_err": None, "times_err": None,
+            "ms": ms}
+
+
+def test_context_field_offsets_match_the_documented_amd64_layout():
+    # MSDN's CONTEXT (amd64) offsets. Every one of these is a place a silent
+    # 8-byte shift would put us in a neighbouring field — Rsp read as Rbp, Rip
+    # read as the Xmm area — and the probe would still return 0 and look fine.
+    for name, offset in (("P1Home", 0x00), ("P6Home", 0x28),
+                         ("ContextFlags", 0x30), ("MxCsr", 0x34),
+                         ("SegCs", 0x38), ("SegSs", 0x42), ("EFlags", 0x44),
+                         ("Dr0", 0x48), ("Dr7", 0x70),
+                         ("Rax", 0x78), ("Rcx", 0x80), ("Rdx", 0x88),
+                         ("Rbx", 0x90), ("Rsp", 0x98), ("Rbp", 0xA0),
+                         ("Rsi", 0xA8), ("Rdi", 0xB0),
+                         ("R8", 0xB8), ("R9", 0xC0), ("R10", 0xC8),
+                         ("R11", 0xD0), ("R12", 0xD8), ("R13", 0xE0),
+                         ("R14", 0xE8), ("R15", 0xF0), ("Rip", 0xF8)):
+        assert getattr(CONTEXT, name).offset == offset, name
+
+
+def test_context_is_sized_so_windows_cannot_write_past_it():
+    # The padding after Rip models the float/vector/debug tail we never read; if
+    # it were short, GetThreadContext would be writing out of bounds. 1232 is the
+    # documented sizeof(CONTEXT) on amd64.
+    assert ctypes.sizeof(CONTEXT) == 1232
+
+
+def test_rip_decodes_from_the_bytes_windows_writes_at_0xf8():
+    # Offsets alone are a claim about the struct; this is the claim about the
+    # wire. A 1232-byte buffer with a qword at 0xF8 is what Windows hands back.
+    buf = bytearray(1232)
+    struct.pack_into("<Q", buf, 0xF8, 0x7FF6_1234_5000)
+    struct.pack_into("<Q", buf, 0x98, 0x0000_00AF_11E0)
+
+    ctx = CONTEXT.from_buffer_copy(bytes(buf))
+
+    assert ctx.Rip == 0x7FF6_1234_5000
+    assert ctx.Rsp == 0x0000_00AF_11E0
+
+
+def test_context_read_mask_is_amd64_control_and_integer():
+    assert CONTEXT_READ_MASK == 0x0010_0011
+
+
+def test_classify_rip_calls_the_module_range_by_name():
+    assert classify_rip(_S44_BASE, _S44_BASE, _S44_IMAGE_SIZE) == "inside_dll"
+    assert classify_rip(_S44_BASE + _S44_IMAGE_SIZE - 1, _S44_BASE,
+                        _S44_IMAGE_SIZE) == "inside_dll"
+    # The span is [base, base+SizeOfImage): the byte past it is somebody else's.
+    assert classify_rip(_S44_BASE + _S44_IMAGE_SIZE, _S44_BASE,
+                        _S44_IMAGE_SIZE) == "outside_dll"
+    assert classify_rip(_S44_BASE - 1, _S44_BASE, _S44_IMAGE_SIZE) == "outside_dll"
+
+
+def test_classify_rip_refuses_to_call_a_failed_read_outside_the_dll():
+    # "No address" is not "an address elsewhere". Reading a failed capture as
+    # outside_dll would manufacture exactly the §44 blocked verdict the probe
+    # exists to test for.
+    assert classify_rip(None, _S44_BASE, _S44_IMAGE_SIZE) == "unknown"
+
+
+def test_filetime_us_converts_100ns_ticks_downward():
+    # FILETIME units are 100 ns, so a microsecond is 10 units; whole microseconds
+    # is the granularity worth printing, and rounding down keeps a flat counter
+    # flat instead of accumulating a phantom advance sample by sample.
+    assert filetime_us(10_000) == 1000
+    assert filetime_us(19_999) == 1999
+    assert filetime_us(9) == 0
+
+
+def test_pe_image_size_covers_the_exports_of_the_built_dll():
+    size = pe_image_size(DLL_PATH)
+
+    # The SizeOfImage span must contain every export RVA, or the classifier's
+    # upper bound would cut our own functions off and call them "outside".
+    assert size % 0x1000 == 0
+    assert max(list_exports(DLL_PATH).values()) < size
+
+
+def test_pe_image_size_rejects_a_file_that_is_not_a_pe():
+    with pytest.raises(ValueError, match="not a PE file"):
+        pe_image_size(os.devnull)
+
+
+def test_format_thread_state_names_the_range_and_the_counters():
+    line = format_thread_state(_s44_record(0x1000_0120, thread_kernel_us=1,
+                                           thread_user_us=2),
+                               _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert "rip=0x10000120" in line
+    assert "where=inside_dll" in line
+    assert "th_kernel_us=1" in line
+    assert "pr_user_us=0" in line
+    assert "err=" not in line
+
+
+def test_format_thread_state_keeps_the_failure_reason_visible():
+    line = format_thread_state({"rip": None, "rsp": None, "context_err":
+                                "GetThreadContext gle=87", "times_err": None,
+                                "thread_kernel_us": None, "thread_user_us": None,
+                                "process_kernel_us": None, "process_user_us": None},
+                               _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert "rip=none" in line
+    assert "where=unknown" in line
+    assert "err=GetThreadContext gle=87" in line
+
+
+def test_thread_cpu_us_sums_kernel_and_user():
+    assert thread_cpu_us({"thread_kernel_us": 100, "thread_user_us": 50}) == 150
+
+
+def test_thread_cpu_us_refuses_to_guess_a_missing_counter():
+    assert thread_cpu_us({"thread_kernel_us": 100, "thread_user_us": None}) is None
+    assert thread_cpu_us({}) is None
+
+
+def test_thread_state_verdict_calls_a_moving_thread_executing_in_our_module():
+    records = [_s44_record(0x1000_1000, thread_user_us=0, ms=0.0),
+               _s44_record(0x1000_9A40, thread_user_us=4_812, ms=6_900.0)]
+
+    label, reason = thread_state_verdict(records, _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert label == EXECUTING_IN_DLL
+    # The reason carries the numbers, because the shot's transcript is the record.
+    assert "4812 us" in reason and "2/2 Rips" in reason
+
+
+def test_thread_state_verdict_calls_a_parked_thread_blocked():
+    # Same address every sample, no CPU charged: the thread is alive and waiting.
+    records = [_s44_record(0x7FF6_0011_2233, ms=ms) for ms in (0.0, 100.0, 200.0)]
+
+    label, _reason = thread_state_verdict(records, _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert label == BLOCKED
+
+
+def test_thread_state_verdict_separates_running_from_running_in_our_code():
+    records = [_s44_record(0x7FF6_0011_2233, thread_kernel_us=9_000, ms=0.0),
+               _s44_record(0x7FF6_0011_2233, thread_kernel_us=9_000,
+                           thread_user_us=9_000, ms=6_900.0)]
+
+    label, _reason = thread_state_verdict(records, _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert label == EXECUTING_ELSEWHERE
+
+
+def test_thread_state_verdict_says_inconclusive_instead_of_inventing_a_blocked():
+    # One readable address shows neither motion nor a stall. This is the shape a
+    # shot that loses the host after two samples lands in, and it must not be
+    # reported as the finding.
+    records = [_s44_record(0x1000_1000, ms=0.0)]
+
+    label, reason = thread_state_verdict(records, _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert label == INCONCLUSIVE
+    assert "1 of 1" in reason
+
+
+def test_thread_state_verdict_stays_inconclusive_when_the_counters_are_unreadable():
+    records = [_s44_record(0x1000_1000, ms=0.0), _s44_record(0x1000_2000, ms=100.0)]
+    for r in records:
+        r["thread_user_us"] = None
+
+    label, reason = thread_state_verdict(records, _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert label == INCONCLUSIVE
+    assert "CPU counters" in reason
+
+
+def test_thread_state_verdict_does_not_read_a_stale_in_dll_address_as_execution():
+    # A thread blocked after returning into the DLL still shows the DLL as its
+    # last address. Flat CPU plus an in-module Rip is the ambiguous middle, and
+    # naming it is what keeps the §44 verdict honest when it is not clean.
+    records = [_s44_record(0x1000_1000, ms=0.0), _s44_record(0x1000_1000, ms=6_900.0)]
+
+    label, reason = thread_state_verdict(records, _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert label == INCONCLUSIVE
+    assert "parked" in reason
+
+
+def test_thread_state_lines_ends_with_the_verdict():
+    records = [_s44_record(0x1000_1000, thread_user_us=0, ms=0.0),
+               _s44_record(0x1000_2000, thread_user_us=7_000, ms=6_900.0)]
+
+    lines = thread_state_lines(records, _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert lines[0] == "captures=2"
+    assert any(line.startswith("inside_dll=2/2") for line in lines)
+    assert lines[-1].startswith(f"VERDICT {EXECUTING_IN_DLL}:")
+
+
+def test_thread_state_lines_survives_no_capture_at_all():
+    lines = thread_state_lines([], _S44_BASE, _S44_IMAGE_SIZE)
+
+    assert "captures=0" in lines[0]
+    assert lines[-1].startswith(f"VERDICT {INCONCLUSIVE}:")
+
+
+def test_make_thread_probe_stamps_the_clock_and_renders_the_line(monkeypatch):
+    # The clock is monotonic SECONDS; ms is what the transcript prints.
+    ticks = iter([1.0, 1.25])
+    seen = []
+
+    def fake_capture(thread_handle, process_handle):
+        seen.append((thread_handle, process_handle))
+        return _s44_record(0x1000_1000)
+
+    monkeypatch.setattr(c2_init_threadstate, "capture_thread_state", fake_capture)
+    records = []
+    probe = make_thread_probe(_S44_BASE, _S44_IMAGE_SIZE, records,
+                              clock=lambda: next(ticks))
+
+    line = probe(0x1234, 0x999)
+
+    assert seen == [(0x1234, 0x999)]
+    assert records[0]["ms"] == 250.0
+    assert "where=inside_dll" in line
+
+
+def test_watched_dispatch_hands_the_thread_probe_both_live_handles(monkeypatch):
+    _patch_watch_dispatch(monkeypatch, [b"\x00" * 512, b"raw_ok " + b"\x00" * 505],
+                          exit_code=3, finish_after=None)
+    seen_handles = []
+    report = {}
+
+    dispatch_watching_buffer(1, 0x10000, 0x10, 0x2000, 512, poll_ms=1,
+                             report=report, sample_every_ms=0,
+                             thread_probe=lambda t, p: seen_handles.append((t, p))
+                             or "rip=0x1")
+
+    # The handles are the ones the dispatch itself created and opened: the probe
+    # adds no dispatch and no second handle to the game.
+    assert seen_handles and set(seen_handles) == {(_FAKE_THREAD, _FAKE_PROCESS)}
+    assert [value for _ms, value in report["thread_samples"]] == (
+        ["rip=0x1"] * len(seen_handles))
+
+
+def test_capture_thread_state_reads_times_then_context_then_resumes(monkeypatch):
+    # The ordering claim, offline: the CPU counters — the axis that carries the
+    # verdict — are read WITHOUT suspending, so they survive a refused context
+    # read; and the resume happens whether or not the context read worked.
+    calls = []
+
+    class FakeK32:
+        def GetThreadTimes(self, thread, creation, exit_, kernel, user):
+            calls.append("GetThreadTimes")
+            for out, value in ((kernel, 12_000), (user, 340_000)):
+                ctypes.cast(out, ctypes.POINTER(ctypes.c_uint64)).contents.value = value
+            return 1
+
+        def GetProcessTimes(self, process, creation, exit_, kernel, user):
+            calls.append("GetProcessTimes")
+            ctypes.cast(kernel, ctypes.POINTER(ctypes.c_uint64)).contents.value = 99_0000
+            ctypes.cast(user, ctypes.POINTER(ctypes.c_uint64)).contents.value = 1_99_0000
+            return 1
+
+        def SuspendThread(self, thread):
+            calls.append("SuspendThread")
+            return 0
+
+        def GetThreadContext(self, thread, ctx):
+            calls.append("GetThreadContext")
+            real = ctypes.cast(ctx, ctypes.POINTER(CONTEXT)).contents
+            real.Rip = 0x1000_1230
+            real.Rsp = 0x0000_00AF_11E0
+            assert real.ContextFlags == CONTEXT_READ_MASK, (
+                "the mask we ask for is the mask the fields we read require")
+            return 1
+
+        def ResumeThread(self, thread):
+            calls.append("ResumeThread")
+            return 1
+
+    monkeypatch.setattr(c2_harness, "_kernel32", lambda: FakeK32())
+    monkeypatch.setattr(c2_harness, "_gle", lambda: 0)
+
+    state = capture_thread_state(0x1234, 0x999)
+
+    assert calls == ["GetThreadTimes", "GetProcessTimes", "SuspendThread",
+                     "GetThreadContext", "ResumeThread"]
+    assert state["rip"] == 0x1000_1230
+    assert state["rsp"] == 0x0000_00AF_11E0
+    assert state["thread_kernel_us"] == 1200
+    assert state["thread_user_us"] == 34000
+    assert state["process_kernel_us"] == 99000
+    assert state["process_user_us"] == 199000
+    assert state["context_err"] is None and state["times_err"] is None
+
+
+def test_capture_thread_state_resumes_only_what_it_suspended(monkeypatch):
+    # SuspendThread returns (DWORD)-1 when it failed, and there is nothing to
+    # resume — resuming anyway would take away a suspend count the probe never
+    # added, to another thread's or the thread's own account.
+    calls = []
+
+    class FakeK32:
+        def GetThreadTimes(self, *a):
+            calls.append("GetThreadTimes")
+            return 0
+
+        def GetProcessTimes(self, *a):
+            raise AssertionError("must not run after GetThreadTimes failed")
+
+        def SuspendThread(self, thread):
+            calls.append("SuspendThread")
+            return 0xFFFFFFFF
+
+        def GetThreadContext(self, thread, ctx):
+            raise AssertionError("must not read a context we cannot suspend for")
+
+        def ResumeThread(self, thread):
+            calls.append("ResumeThread")
+            return 0
+
+    monkeypatch.setattr(c2_harness, "_kernel32", lambda: FakeK32())
+    monkeypatch.setattr(c2_harness, "_gle", lambda: 87)
+
+    state = capture_thread_state(0x1234, 0x999)
+
+    assert calls == ["GetThreadTimes", "SuspendThread"]
+    assert state["rip"] is None
+    assert "SuspendThread gle=87" in state["context_err"]
+    assert "GetThreadTimes gle=87" in state["times_err"]
+
+
+def test_capture_thread_state_resumes_even_when_the_context_read_raises(monkeypatch):
+    # The one failure mode that would park the game's thread forever: an exception
+    # between suspend and resume. The finally has to resume regardless.
+    calls = []
+
+    class Boom(Exception):
+        pass
+
+    class FakeK32:
+        def GetThreadTimes(self, *a):
+            return 1
+
+        def GetProcessTimes(self, *a):
+            return 1
+
+        def SuspendThread(self, thread):
+            calls.append("SuspendThread")
+            return 0
+
+        def GetThreadContext(self, thread, ctx):
+            raise Boom("mid-read")
+
+        def ResumeThread(self, thread):
+            calls.append("ResumeThread")
+            return 1
+
+    monkeypatch.setattr(c2_harness, "_kernel32", lambda: FakeK32())
+    monkeypatch.setattr(c2_harness, "_gle", lambda: 0)
+
+    with pytest.raises(Boom):
+        capture_thread_state(0x1234, 0x999)
+
+    assert calls == ["SuspendThread", "ResumeThread"]
+
+
+def test_sha256_of_digests_the_file_it_is_given(tmp_path):
+    path = tmp_path / "artifact.bin"
+    payload = b"three-phase markers"
+    path.write_bytes(payload)
+
+    assert c2_init_threadstate.sha256_of(str(path)) == hashlib.sha256(
+        payload).hexdigest()
+
+
+def test_assert_same_bytes_refuses_an_artifact_that_is_not_s42(tmp_path, monkeypatch):
+    # §44's verdict is a comparison against §42's frozen window, so a rebuilt DLL
+    # with different bytes must stop the shot instead of silently invalidating it.
+    path = tmp_path / "rebuild.dll"
+    path.write_bytes(b"different")
+    monkeypatch.setattr(c2_init_threadstate, "S42_DLL_SHA256", "0" * 64)
+
+    with pytest.raises(AssertionError, match="not §42's"):
+        c2_init_threadstate.assert_same_bytes_as_s42(str(path))
+
+
+def test_assert_same_bytes_returns_the_hash_for_the_transcript(tmp_path, monkeypatch):
+    path = tmp_path / "same.dll"
+    path.write_bytes(b"x" * 4096)
+    digest = c2_init_threadstate.sha256_of(str(path))
+    monkeypatch.setattr(c2_init_threadstate, "S42_DLL_SHA256", digest)
+
+    assert c2_init_threadstate.assert_same_bytes_as_s42(str(path)) == digest
+
+
+def test_s42_sha_constant_describes_the_dll_in_this_tree():
+    # The gate's whole value is that it is the hash of the artifact the build
+    # produces. If `quickjs_wrapper.c` changes, this fails and says so in the
+    # language §44 cares about: the shot would no longer be comparable with §42.
+    assert c2_init_threadstate.S42_DLL_SHA256 == c2_init_threadstate.sha256_of(
+        DLL_PATH)
+
+
+def test_watched_dispatch_throttles_the_thread_probe_to_the_requested_interval(monkeypatch):
+    # The probe suspends the thread it is measuring, so its own rate is part of the
+    # perturbation budget: one context copy per sample_every_ms, not one per 2 ms
+    # poll iteration.
+    _patch_watch_dispatch(monkeypatch, [b"\x00" * 512, b"\x00" * 512, b"\x00" * 512,
+                                        b"raw_ok " + b"\x00" * 505], exit_code=3,
+                          finish_after=None)
+    report = {}
+
+    dispatch_watching_buffer(1, 0x10000, 0x10, 0x2000, 512, poll_ms=1, report=report,
+                             sample_every_ms=10_000, thread_probe=lambda t, p: "once")
+
+    assert len(report["thread_samples"]) == 1
+
+
+def test_watched_dispatch_records_no_thread_samples_without_a_probe(monkeypatch):
+    # Every §38-§42 shot runs through this same primitive with no probe; the key
+    # exists and is empty rather than absent, so callers read one shape.
+    _patch_watch_dispatch(monkeypatch, [b"raw_ok " + b"\x00" * 505], exit_code=3,
+                          finish_after=None)
+    report = {}
+
+    dispatch_watching_buffer(1, 0x10000, 0x10, 0x2000, 512, poll_ms=1, report=report)
+
+    assert report["thread_samples"] == []
+
+
+def test_watched_dispatch_drops_a_raising_thread_probe_after_recording_it(monkeypatch):
+    # Same policy as the sampler: the thread/process vanishing underneath the
+    # probe is the outcome being measured, so it must cost neither the rc nor the
+    # reason it failed.
+    _patch_watch_dispatch(monkeypatch, [b"\x00" * 512, b"\x00" * 512,
+                                        b"raw_ok " + b"\x00" * 505], exit_code=3,
+                          finish_after=None)
+    calls = []
+    report = {}
+
+    def probe(thread_handle, process_handle):
+        calls.append(1)
+        if len(calls) == 2:
+            raise OSError("pid 8288 no longer exists")
+        return f"n={len(calls)}"
+
+    rc, text = dispatch_watching_buffer(1, 0x10000, 0x10, 0x2000, 512, poll_ms=1,
+                                        report=report, sample_every_ms=0,
+                                        thread_probe=probe)
+
+    assert rc == 3
+    assert len(calls) == 2
+    assert "thread_probe raised" in report["thread_samples"][1][1]
+    assert "pid 8288 no longer exists" in report["thread_samples"][1][1]

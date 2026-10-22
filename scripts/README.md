@@ -53,14 +53,15 @@
 
 | 文件 | 干什么 |
 |---|---|
-| `c2_harness.py` | 共享 harness：PID/base 解析、`list_exports` 重解析 RVA（P10）、`inject_dll`、`remote_alloc`、`call_remote*`、`dispatch_watching_buffer`（调用进行中同时轮询输出 buffer、`g_diag_log` 见证静态、psutil 内存采样；§38/§39） |
+| `c2_harness.py` | 共享 harness：PID/base 解析、`list_exports` 重解析 RVA（P10）、`pe_image_size` 读 SizeOfImage（§44 的模块地址区间上界）、`inject_dll`、`remote_alloc`、`call_remote*`、`dispatch_watching_buffer`（调用进行中同时轮询输出 buffer、`g_diag_log` 见证静态、psutil 内存采样，§38/§39；§44 加 `thread_probe` 通道 = 只交句柄、不碰内存、不加 dispatch）、`capture_thread_state`（§44 只读线程状态：`GetThreadTimes`/`GetProcessTimes` + `SuspendThread`→`GetThreadContext`→`ResumeThread`，`finally` 保证不悬空挂起） |
 | `c2_task2_load.py` | Task 2：证明 harness 在实机读到真正的 64-bit DLL base |
 | `c2_task3_diag.py` | Task 3：从实机抓 `JS_NewContext` 失败的**步骤编号**（只观测，修是 Task 4 的事） |
 | `c2_task5_init.py` | Task 5：证明实机 `C2Init` 返回 0 且 `g_test_rt`/`g_test_ctx` 真存在；四观测通道的接线处 |
 | `c2_task6_e2e.py` | Task 6（验收门）：`1+1` 走 DLL 自己的 `JS_Eval` 并读回结果 |
 | `c2_control_watch.py` | §39 对照：注入 + `C2Sanity` + 20 s 纯观测，**不做 init dispatch** |
 | `c2_control_sleep.py` | §39 判别器：只执行 `kernel32!Sleep(8000)` 的长远程线程，不碰我们一个字节（先 `Sleep(1000)` 校准） |
-| `test_c2_harness.py` | 上述全部的主机侧测试：Linux 上跑，无游戏、无 Windows API（86 passed） |
+| `c2_init_threadstate.py` | §44 判别器：§42 那 6.9 s 冻结窗口里，我们自己的远程线程是在**跑**还是在**等**——`Rip` 落在 DLL 区间内 + 线程 CPU 时间推进 ⇒ 跑；`Rip` 在区间外 + CPU 平坦 ⇒ 等。先核 DLL sha256 等于 §42 那一枪的字节（不同产物就拒绝），门序照抄 `c2_task5_init.py` |
+| `test_c2_harness.py` | 上述全部的主机侧测试：Linux 上跑，无游戏、无 Windows API（119 passed，含 §44 的 `CONTEXT` 偏移/尺寸钉死与 `capture_thread_state` 调用次序假 kernel32 测试） |
 
 ## Frida 通道（保留在顶层，因为仍被引用）
 
