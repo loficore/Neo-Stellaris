@@ -115,6 +115,13 @@ def violates_family_depth(root):
 _SCRIPT_REF_RE = re.compile(r"(?:^|[\s`(])scripts/([A-Za-z0-9_./-]+\.(?:py|js|sh|bat))",
                             re.MULTILINE)
 
+# The living docs named by the convention (``AGENTS.md`` 「scripts/ 命名与目录约定」,
+# R-refs).  Single source of truth: both the R-refs scan and
+# test_named_living_docs_exist read this, so when a later task retires PLAN.md it
+# is removed *here* once and the existence assertion follows — a test that pinned
+# ``REPO / "PLAN.md"`` in its body would block that deletion.
+LIVING_DOCS_NAMED = [REPO / "AGENTS.md", REPO / "PLAN.md"]
+
 def dangling_script_refs(doc_paths):
     """R-refs: every ``scripts/<path>`` token written in a living doc must
     resolve — literally under ``REPO`` first, else as the basename of a file
@@ -131,6 +138,79 @@ def dangling_script_refs(doc_paths):
             if (REPO / ref).exists() or pathlib.PurePosixPath(ref).name in basenames:
                 continue
             out.append(f"{doc.name}: dangling reference scripts/{ref}")
+    return out
+
+ROADMAP_MAX_LINES = 140
+_ROADMAP_COLUMNS = ("阶段", "状态", "证据", "计划", "第一前置")
+_ROADMAP_STATUSES = {"done", "blocked", "in-progress", "planned"}
+_ROADMAP_PLAN_RE = re.compile(r"\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md")
+_ROADMAP_VOLUME_RE = re.compile(r"(structures|pipeline|c1_validation)")
+_ROADMAP_SECTION_RE = re.compile(r"§\d")
+_ROADMAP_SEP_RE = re.compile(r"^:?-+:?$")
+
+def _roadmap_cells(line):
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+def violates_roadmap_shape(roadmap_path):
+    """R-roadmap: ``docs/roadmap.md`` must stay a slim index, not re-inflate into
+    a PLAN.md.  Total line count is capped; the 阶段状态表 (the one table whose
+    header carries all five column names — located *by header name, not position*,
+    so a differently-shaped sibling table above it is not policed) must use a
+    status from the vocabulary and fill its evidence/plan cell per status; no
+    ``docs/superpowers/`` path may appear.  Violation strings are
+    ``"<label>: <reason>"`` — the file basename for doc-level hits, the row's
+    阶段 value for per-row hits — matching the neighboring-rule shape.
+    """
+    name = roadmap_path.name
+    text = _read(roadmap_path)
+    lines = text.splitlines()
+    out = []
+    if len(lines) > ROADMAP_MAX_LINES:
+        out.append(f"{name}: lines > {ROADMAP_MAX_LINES} ({len(lines)} lines)")
+    if "docs/superpowers/" in text:
+        out.append(f"{name}: references private plan path docs/superpowers/")
+
+    header_index = None
+    col = {}
+    for i, line in enumerate(lines):
+        if not line.strip().startswith("|"):
+            continue
+        cells = _roadmap_cells(line)
+        if all(c in cells for c in _ROADMAP_COLUMNS):
+            header_index = i
+            col = {c: cells.index(c) for c in _ROADMAP_COLUMNS}
+            break
+    if header_index is None:
+        return out
+
+    def evidence_ok(value):
+        return bool(_ROADMAP_VOLUME_RE.search(value) and _ROADMAP_SECTION_RE.search(value))
+
+    for line in lines[header_index + 1:]:
+        if not line.strip().startswith("|"):
+            break
+        cells = _roadmap_cells(line)
+        if cells and all(_ROADMAP_SEP_RE.match(c) for c in cells):
+            continue
+        if len(cells) <= max(col.values()):
+            continue
+        label = cells[col["阶段"]]
+        status = cells[col["状态"]]
+        evidence = cells[col["证据"]]
+        plan = cells[col["计划"]]
+        if status not in _ROADMAP_STATUSES:
+            out.append(f"{label}: unknown status '{status}' "
+                       f"(allowed: {sorted(_ROADMAP_STATUSES)})")
+            continue
+        if status in ("blocked", "in-progress") and not evidence_ok(evidence):
+            out.append(f"{label}: {status} row needs evidence — a volume alias "
+                       "(structures|pipeline|c1_validation) plus §<number>")
+        if status == "planned" and not _ROADMAP_PLAN_RE.search(plan):
+            out.append(f"{label}: planned row needs a plan filename matching "
+                       "YYYY-MM-DD-<topic>.md")
+        if status == "done" and not (evidence_ok(evidence) or _ROADMAP_PLAN_RE.search(plan)):
+            out.append(f"{label}: done row needs evidence (§ + volume alias) "
+                       "or a plan filename")
     return out
 
 def violates_hardcoded_rvas(files):
@@ -215,7 +295,7 @@ def test_real_family_is_at_depth_one():
     assert violates_family_depth(SCRIPTS) == []
 
 def test_living_docs_script_references_resolve():
-    docs = [REPO / "AGENTS.md", REPO / "PLAN.md"] + list((REPO / "docs").rglob("*.md"))
+    docs = LIVING_DOCS_NAMED + list((REPO / "docs").rglob("*.md"))
     docs = [d for d in docs if "superpowers" not in str(d)]
     assert dangling_script_refs(docs) == []
 
@@ -272,3 +352,38 @@ def test_c2_test_sanity_does_not_reach_into_the_other_plan():
     attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     assert not (names | attrs) & WORKTREE_ONLY, \
         "these symbols exist only in the uncommitted worktree copy of c2_harness.py"
+
+# --- living-docs input existence + roadmap shape fence (plan-decomposition Task 1) ---
+
+def test_named_living_docs_exist():
+    missing = [str(p) for p in LIVING_DOCS_NAMED if not p.exists()]
+    assert missing == []
+
+def test_roadmap_rule_flags_bloat_and_missing_pointers(tmp_path):
+    bad = tmp_path / "roadmap.md"
+    bad.write_text(
+        "## 3. 阶段状态表\n"
+        "| 阶段 | 状态 | 证据 | 计划 | 第一前置 |\n"
+        "|---|---|---|---|---|\n"
+        "| C2 | blocked | 无 | x.md | 重开游戏 |\n"
+        "| B3 | planned |  |  | 上传 dis.js |\n"
+        "| A | done | pipeline §17 |  |  |\n")
+    hits = violates_roadmap_shape(bad)
+    assert any("C2" in h and "evidence" in h for h in hits)
+    assert any("B3" in h and "plan filename" in h for h in hits)
+    assert not any("A:" in h for h in hits)          # done 行有 § 就够,不逼它再交计划名
+
+def test_roadmap_rule_flags_an_oversized_doc(tmp_path):
+    big = tmp_path / "roadmap.md"
+    big.write_text("\n".join(["| 阶段 | 状态 | 证据 | 计划 | 第一前置 |"] +
+                             ["| Cx | done | pipeline §17 |  |  |"] * (ROADMAP_MAX_LINES + 1)))
+    assert any("lines > 140" in h for h in violates_roadmap_shape(big))
+
+def test_roadmap_rule_flags_a_private_plan_path_and_unknown_status(tmp_path):
+    p = tmp_path / "roadmap.md"
+    p.write_text("see docs/superpowers/plans/2026-10-22-x.md\n"
+                 "| 阶段 | 状态 | 证据 | 计划 | 第一前置 |\n|---|---|---|---|---|\n"
+                 "| Q | open | pipeline §17 |  |  |\n")
+    hits = violates_roadmap_shape(p)
+    assert any("private plan path" in h for h in hits)
+    assert any("Q" in h and "status" in h for h in hits)
