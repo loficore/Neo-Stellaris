@@ -8,7 +8,7 @@
 
 **Tech Stack:** Zig 0.16 (DLL side), vendored QuickJS in `libs/quickjs/`, thin C wrapper `src/dll/quickjs/quickjs_wrapper.c`, Windows HeapAlloc custom allocator, Python 3 + ctypes + PowerShell for the remote harness, SSH alias `Windows_Jiaolong` for the target machine.
 
-**Spec:** `PLAN.md` §6 "C2 — QuickJS 运行时单例 + 自定义 vtable + JS 分发" (blockers 1–3) and `AGENTS.md` §"硬性约束" (constraints 1–7, which stay in force).
+**Spec:** `docs/roadmap.md` 段3 的 C2 行 + `AGENTS.md`「硬性约束」1–7（仍然有效）。
 
 ## Global Constraints
 
