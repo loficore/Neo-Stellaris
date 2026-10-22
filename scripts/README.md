@@ -9,6 +9,7 @@
 ## 离线静态 RE 工具（读 `stellaris.exe` 拷贝；不需要进程、不需要 IDA license）
 
 路径一律 `NS_STELLARIS_EXE` 可覆盖，见 `docs/offline-tooling.md` 的前置条件。
+例外：`pe_disrva.py` 的 PE 路径是**必填参数**（它读任意 PE，包括我们自己的产物），不找 `stellaris.exe`。
 
 | 文件 | 干什么 | 产出（`evidence/xrefs/`） |
 |---|---|---|
@@ -17,6 +18,7 @@
 | `fastcalls.py` | 字节级定位对某 RVA 的所有直接 call/jmp，按 `.pdata` 函数分桶并贴来源文件名 | `callers_0x<rva>_buckets.tsv` |
 | `disrva.py` | 反汇编一个 RVA 区间，标注每个 rip 操作数解析到的 RVA 与每个 call 目标 | — |
 | `cap.py` | 同样的反汇编，走 `.text` 手解 + capstone（`disrva.py` 的前身，仍在用） | — |
+| `pe_disrva.py` | 反汇编**任一份 PE**（路径必填；本仓库用它读自己的 `stellaris_quickjs.dll`，不是 `stellaris.exe`）的 RVA 区间，标注 call 目标与 rip 操作数解析到的 RVA，只解码可执行段；结束 RVA 不含，或传指令条数 | —（`js_rc` trap：131 字节 / 40 条） |
 | `pdata.py` | x64 `.pdata`(RUNTIME_FUNCTION) → 精确函数边界，无需分析 | — |
 | `pestr.py` | 读某 RVA 的字节 / C 串 | — |
 | `strfind.py` | 按名字定位镜像里的精确 C 串 | — |

@@ -329,6 +329,45 @@ python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码
    `VERDICT: inconclusive`,它对"这份产物会不会自杀"**什么都没证明**,不要当成阴性结果读
    (判据是纯函数 `child_loaded_the_dll`,120 s 超时也走同一条 `inconclusive` 形状)。
 
+## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
+
+`scripts/disrva.py` 与 `scripts/cap.py` 反汇编的是**游戏**:它们只收 RVA,自己去找 `stellaris.exe`
+(`NS_STELLARIS_EXE` / 固定候选)。`scripts/pe_disrva.py` 反汇编的是**你给的那份 PE**,路径是必填的
+第一个位置参数 —— 本仓库用它读自己构建的 `zig-out/bin/stellaris_quickjs.dll`(§45/§47 的 `js_rc` trap),
+不读游戏,所以没有默认路径、也不受 `NS_STELLARIS_EXE` 影响。
+
+```
+python3 scripts/pe_disrva.py <pe_path> <rva_start_hex> [<rva_end_hex>|<count>]
+python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 0xbdf3   # end 不含
+python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 40       # 40 条(默认 64,上限 4096)
+```
+
+- 第三个参数:`0x` 开头 = **结束 RVA,不含**;纯十进制数字 = **指令条数**。所以小的十六进制结束 RVA
+  必须带 `0x`(裸 `100` 是 100 条,不是 rva 0x100)。
+- 每条绝对 `call`/`jmp` 目标与每个 `rip+disp` 操作数标 `  #0x<rva>`;`#0x` 后是**相对 image base**
+  的 RVA(image base 从该 PE 的 optional header 读),所以能直接与 `dll_ubsan_site.py` 的
+  `record_rva=` 比。
+- **只解码带 `IMAGE_SCN_MEM_EXECUTE`(`0x20000000`)的段**。RVA 0 落在 PE 头里,capstone 会把 `MZ...`
+  当指令解出来,所以工具在喂给它之前按 section 位拒绝。可执行段外的起点、文件映射之外的起点、或解出
+  **0 条指令**,一律退出 1 —— 那是「这段不是代码」的结论。
+- 退出码三义与 `dll_ubsan_site.py` 一致:**0** = 至少解出 1 条;**1** = 不是可执行代码 / 0 条;
+  **2** = 调用错了(缺参、非 hex、文件读不到、非 PE32+、end < start、count <= 0),一行 stderr、无
+  traceback。
+- 上限 4096 条,超出打 `; truncated at 4096 insns`;头行给 `N insns, M bytes`,end 模式下 `M` 应等于
+  `end - start`(2026-10-22 实测:`.pdata` 的 `0xbd70..0xbdf3` = 131 字节 = 40 条)。
+
+**判读陷阱:**
+1. **反汇编证明的是「被检查的是哪个表达式」,永远不是运行时值。** 它读得出 `0xbd70` 的 `test r8,r8`
+   在 `add rcx,-8` 之前、测的是原始指针;它证明不了那一枪里 `r8` 是不是 NULL。
+2. **`#0x...` 是 image-base-relative 的 RVA,不是 VA**;rip 目标按 `address + size + disp` 算,不是从
+   指令起点算。
+3. **clang 的「减 8」可能是 `add reg,-8`**:本产物里 `container_of` 的 header 偏移是 `48 83 c1 f8`
+   (`add rcx,-8`)。按 mnemonic 找 `sub` 会漏 —— 读语义,不读拼写。
+4. **0 条的退出 1 是结论不是失败**,但别把它读成「这里没有 sub」:先看 stderr 是「不在可执行段」还是
+   「段内 0 条」,两者都与「成功但没有该指令」分开。
+5. 想验证「0 条 → 1」可以拿 RVA 0,但它走的是 section 门,不是 capstone 解失败;两条路都退出 1,
+   理由不同,不要混成一条判据。
+
 ## IDA headless 现状(环境状态,非规则)
 
 **IDA MCP**: registered in `~/.qoder/settings.json` (`/home/lofibass/.local/bin/idalib-mcp --stdio --unsafe`).
