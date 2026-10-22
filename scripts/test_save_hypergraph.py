@@ -75,11 +75,17 @@ def test_read_gamestate_from_zip(tmp_path):
 
 
 def test_parse_quoted_strings_and_comments():
-    root = parse_clausewitz('name="a b \\"c\\"" # note "ignored"\nplanet=162\n')
+    root = parse_clausewitz(
+        'name="a b \\"c\\"" # note "ignored"\n'
+        "planet=162\n"
+        'required_dlcs=\n{\n\t"Horizon Signal"\n}\n'
+    )
     assert [(key, value) for key, value in root.entries if key == "name"] == [
         ("name", 'a b "c"')
     ]
     assert ("planet", "162") in root.entries
+    dlcs = [value for key, value in root.entries if key == "required_dlcs"][0]
+    assert dlcs.entries == [(None, "Horizon Signal")]
 
 
 def test_parse_repeated_keys_preserved():
@@ -131,8 +137,14 @@ def test_self_loop_counted_and_excluded():
         "\t\t{\n\t\t\t{ to=0 length=1 }\n\t\t\t{ to=1 length=10 }",
         1,
     )
+    text = text.replace(
+        "\t\t\t{ to=1 length=10 }\n\t\t}",
+        "\t\t\t{ to=1 length=10 }\n\t\t\t{ to=1 length=10 }\n\t\t}",
+        1,
+    )
     adjacency, stats = _graph(text)
     assert stats["self_loops"] == 1
+    assert stats["duplicate_entries"] == 1
     assert adjacency[0] == {1: 10.0}
 
 

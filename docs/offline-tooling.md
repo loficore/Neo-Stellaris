@@ -131,6 +131,68 @@ usage. Findings: 1,609/1,609 keyword ids agree (§25.1), token lookup is **case-
 and the `count_*`/`any_*` iterator keywords exist in the image only as **two separate strings** that a
 name builder concatenates at runtime (§25.4).
 
+## 离线存档分析(C4)
+
+`scripts/save_hypergraph.py` 与 `scripts/chokepoint_scores.py` 读的是**玩家的 `.sav` 存档**,不是
+`stellaris.exe` —— 所以它们不受 `NS_STELLARIS_EXE` 影响,也不需要进程、注入或 dispatch。存档本身是
+用户数据,**不进 git**;`evidence/` 只记路径、大小、sha256 与派生统计,表与存档 sha 必须成对出现。
+
+### `scripts/save_hypergraph.py <save.sav> --edges <out.tsv> [--stats]`
+
+`.sav` 是 **ZIP**,本次两条 entry:`gamestate`(27,281,802 字节,**文本** Clausewitz,首行
+`version="Pegasus v4.4.4"`)与 `meta`(365 字节)。工具解 ZIP、读 `gamestate`、用 UTF-8 +
+`errors="replace"` 解码,取顶层 `galactic_object` 下每个系统块的 `hyperlane={ { to=… length=… } … }`,
+输出无向边表(列序 `a\tb\tlength`,去重成 `a<b`,按 `(a,b)` 升序)。`--stats` 把计数按 `key=value`
+逐行打 stdout;本存档实测:`systems=787`、`undirected_edges=1217`、`components=1`、`isolates=0`、
+`self_loops=0`、`duplicate_entries=8`、`asymmetric_edges=0`、`conflicting_edges=0`、
+`replacement_chars=0`(完整输出在 `evidence/logs/c4_chokepoint_offline_4_4_4.log`)。
+
+**判读陷阱:**
+1. **文本存档限定。** 同一账号下别的 `.sav` 可能是二进制 Clausewitz;`read_gamestate` 以「不是 ZIP /
+   ZIP 里没有 `gamestate`」或「解码后前 4096 字符出现 NUL」为硬错误退出 2,不把二进制喂给解析器。
+2. **解码不是无损的。** `errors="replace"` 让一个坏字节不至于杀掉整张图,但 `replacement_chars > 0`
+   意味着名字里有被替换的字符。图仍可能正确(边只依赖数字),不要把它读成「存档坏了」,也不要
+   静默当 0。
+3. **重复键与匿名块必须保留。** `planet=…` 会重复,`hyperlane` 内层是无键的 `{ to=… }`;普通 dict
+   会丢前者、把后者当非法输入。解析器的 `Block.entries` 是 `(key, value)` 列表,`key=None` 即匿名块;
+   值列表里的裸 token(`required_dlcs = { "Horizon Signal" }`)同样以 `key=None` 的标量保留。
+4. **不对称边与长度冲突是硬错误,不是统计项。** 每个系统自己列出出边,`a→b` 与 `b→a` 应成对且长度
+   相同;缺一半、或两个方向给的长度不同,一律退出 2 并打印样本。自环与**同长**的重复声明只计数
+   (`self_loops`、`duplicate_entries`)并从图里去掉 —— 本轮实测到 8 条重复声明,这是计数后继续的
+   口径,不是「静默去重」。
+5. **`galactic_object` 必须唯一。** 顶层出现 0 个或 2 个以上同名块,退出 2:选第一个等于悄悄改图。
+6. **`to=` 的全文件正则计数会高估。** 计划探针按行首 `to=<数字>` 数出 4,397 条,那是文件里所有
+   `to=` 键;工具只数 `galactic_object` 系统块内、`hyperlane` 匿名块里的 `to`,本轮 2,442 条
+   (= 1,217 对 + 8 条重复)。两个数字回答的不是同一个问题。
+7. **id 是存档局部的。** 这里的 `system_id` 只对这份存档(与它的 sha256)有意义;换一局、换一版,
+   同一个数字指向另一个星系。表不能当跨战役常量用。
+
+### `scripts/chokepoint_scores.py <edges.tsv> --out <scores.tsv> [--top N]`
+
+只读边表(无表头;第一行全是数字就当数据),算 `degree`、无向无权 Brandes `betweenness`、Tarjan
+割点/桥,输出固定七列:
+`system_id\tdegree\tbetweenness\tbetweenness_norm\tscore\tis_articulation\tis_bridge_endpoint`。
+数据行按 `system_id` 升序,浮点 `.6f`,`--top N` 按 `(score, betweenness, -system_id)` 降序打前 N 行。
+`betweenness_norm = b / ((n-1)(n-2)/2)`(n>2),`score = round(1000 * betweenness_norm)`。
+
+**判读陷阱:**
+1. **无向图只计一次。** Brandes 标准实现最后 `b[v] /= 2`,所以一条最短路只算一对端点;把无向图
+   当有向图跑会得到两倍分数。
+2. **`score` 是分量内的相对排序,不是绝对阈值。** 归一化用全图 `n`,断开的图里小分量的高分点会被
+   压低。本存档实测 `components=1`,这里两者一致 —— 换图先看 stats 再读分。
+3. **`betweenness` 与 `betweenness_norm` 不同分母。** 前者按无序对计数后的原始值,后者的分母是
+   `(n-1)(n-2)/2`;`score` 只由后者算。比较两轮分数时比 `betweenness_norm`,不要比原始值。
+4. **割点/桥是布尔,不是权重。** `is_bridge_endpoint=1` 只说明这个点挨着至少一条桥;`degree=2` 的
+   点也可能是割点。
+5. **空输入退出 2。** 空边表 / 坏行 / 自环 / 重复边 / 参数错误都是退出 2 —— 「0 个星系」不是正常结论。
+6. **输出的确定性是契约。** 同一输入两次 `--out` 应逐字节相等(测试钉住);若有差异,先查输入行序
+   (工具会排序,但重复边是硬错误)再查集合迭代。
+
+**把产物拿回 Linux 的传输陷阱:** 本轮 `scp` 下载 1.9 MB 存档会被主机重置,14 KB 的边表与 27 KB 的
+分数表也一样。最后用的是主机侧 `gzip` + base64、按 1,024 字符块走 SSH、本地逐块 `base64 -d >>` 并
+去掉 PowerShell 带回的 `\r`,再用 `sha256sum` 与主机 `Get-FileHash` 对账。存档留在主机,只回传小产物;
+小文件能直接 `scp` 时不用这套。
+
 ## C1 硬门
 
 ### `scripts/c1_preflight.py --name NAME [--name ...] [--db effects|triggers]`

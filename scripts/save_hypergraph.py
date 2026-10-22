@@ -31,6 +31,7 @@ STAT_KEYS = (
     "components",
     "isolates",
     "self_loops",
+    "duplicate_entries",
     "asymmetric_edges",
     "conflicting_edges",
     "replacement_chars",
@@ -108,7 +109,10 @@ class _Parser:
             key = self._token()
             self._skip()
             if self.pos >= len(self.text) or self.text[self.pos] != "=":
-                raise ValueError(f"expected '=' after {key!r}")
+                # Clausewitz lists (e.g. required_dlcs = { "Horizon Signal" })
+                # hold bare scalars with no key.
+                block.entries.append((None, key))
+                continue
             self.pos += 1
             self._skip()
             if self.pos >= len(self.text):
@@ -176,6 +180,7 @@ def extract_hypergraph(
     declaration: dict[tuple[int, int], float] = {}
     directed_entries = 0
     self_loops = 0
+    duplicate_entries = 0
 
     for key, value in universe.entries:
         system_id = _decimal(key, "galactic_object system key")
@@ -199,7 +204,13 @@ def extract_hypergraph(
                     continue
                 pair = (system_id, target)
                 if pair in declaration:
-                    raise ValueError(f"{what}: duplicate edge {system_id}->{target}")
+                    if declaration[pair] != length:
+                        raise ValueError(
+                            f"{what}: conflicting length for duplicate edge "
+                            f"{system_id}->{target}: {declaration[pair]} vs {length}"
+                        )
+                    duplicate_entries += 1
+                    continue
                 declaration[pair] = length
 
     asymmetric = [(a, b) for (a, b) in declaration if (b, a) not in declaration]
@@ -246,6 +257,7 @@ def extract_hypergraph(
         "components": components,
         "isolates": sum(1 for system_id in system_ids if not adjacency[system_id]),
         "self_loops": self_loops,
+        "duplicate_entries": duplicate_entries,
         "asymmetric_edges": 0,
         "conflicting_edges": 0,
         "replacement_chars": replacement_chars,

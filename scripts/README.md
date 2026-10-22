@@ -37,6 +37,13 @@
 | `emu_desc.py` | C0.3 oracle：用 unicorn 跑引擎自己的两个描述符写手，逐字节产出 golden 向量 | `descriptor_oracle_4_4_4.tsv` + `src/dll/scripted/keyword_registry_golden.zig` |
 | `c1_preflight.py` | **约束 4 的门**：候选 keyword 名进 `0x1D13270` 之前的离线只读预检，退出码必须 0 | — |
 
+## 离线存档分析（读玩家 `.sav`；不需要进程、不需要 exe）
+
+| 文件 | 干什么 | 什么时候用 |
+|---|---|---|
+| `save_hypergraph.py` | 解 `.sav` 的 ZIP、读文本 `gamestate`,抽 `galactic_object` 的 `hyperlane` 邻接,输出无向边表(`a\tb\tlength`)并核对对称/自环/重复不变量;`--stats` 打计数 | 换存档或换版本要重算星系连通度时;存档不上传、不进 git |
+| `chokepoint_scores.py` | 只读边表,算 degree / Brandes betweenness / 割点 / 桥,输出按 `system_id` 升序的七列分数表;`--top N` 打前 N 行 | 已有边表、要给 C4 试点排交通要道时;`system_id` 是存档局部 id |
+
 ## 实机注入通道：C1（已完成）
 
 `c1_*` 走的是 ctypes + `CreateRemoteThread`，在 Windows 那台机器上跑。
