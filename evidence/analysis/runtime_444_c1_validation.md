@@ -2324,3 +2324,91 @@ dangling `M`), 3 `heap_malloc` calls all returned (`MmMmMm`, no dangling `M`), 1
 6.9 s no-allocation window is inside QuickJS code → next probe needs 升级授权), 0 new capability (the third
 phase is read-only writes into the DLL's own static), 0 new exports, 1 new Zig test block (P15 306→307).
 
+## 43. Offline: the §42 window is a trivial straight-line span — the stack-guard suspect is ruled out, and the next observation is thread-state, not a QuickJS hook (2026-10-22, offline, no dispatch)
+
+§42 narrowed the live death to "after the 3rd `heap_malloc` returned intact, before any 4th" and named the
+ceiling ("that gap is QuickJS's own code; reading it needs 升级授权"). This section is the **offline** half of
+that gap: it costs no machine time and no capability, and it sharpens §42 in two ways — it pins the gap to a
+specific straight-line span inside `JS_InitAtoms`, and it eliminates the prime suspect §42's framing left
+standing (the cross-thread stack guard). It also re-frames what the next probe must be.
+
+**Method.** `scripts/scratch/2026-10_newrt_allocmap/allocmap.c` — a standalone Linux driver linking the SAME
+vendored `quickjs.c` the shipped DLL builds (build.zig:9), with a **verbatim port of `quickjs_wrapper.c`'s
+`heap_mf`** (same `AllocHeader` accounting, same `js_malloc_usable_size` = recorded size, same `MF_TAG_CAP=8`
+and `M/m/!/F/R` tagging), and `backtrace()` on every callback resolved with `addr2line` to a `quickjs.c` line.
+The faithful-mirror check is exact: the offline run completes `JS_NewRuntime2` with `g_diag_log ==`
+`MmMmMmMmMmMmMmMm` — **byte-identical to §42's Linux positive control** — and emits **zero `F` and zero `R`
+during `JS_NewRuntime2`** (every `F` is in `JS_FreeRuntime` afterwards), which is exactly the shape of the live
+`MmMmMm` witness (no `F`/`R`). So the offline stream and the live stream are the same object truncated at
+different points; the comparison below is sound.
+
+**The ordered allocation map** (`#` = `mf.js_malloc` call index, size, `quickjs.c` site):
+
+| # | bytes | path | site |
+|---|---|---|---|
+| 0 | 1440 | direct | `JS_NewRuntime2:2076` — the `JSRuntime` itself |
+| 1 | 2056 | `js_mallocz_rt`→`js_malloc_large` | `JS_ResizeAtomHash:3146` (the 512-bucket `atom_hash`) |
+| 2 | 4072 | `js_malloc_rt`→`js_alloc_string_rt`→`js_malloc_new_arena` | `__JS_NewAtomInit:3430` inside `JS_InitAtoms`' loop — **1st predefined-atom name string** |
+| 3 | 5696 | `js_realloc_rt`→`__js_realloc:1640`→`js_malloc_large` | `__JS_NewAtom:3330` — **`atom_array` 711-entry pre-grow** |
+| 4–7 | ~4072 | `js_alloc_string_rt`→`js_malloc_new_arena` | more predefined-atom name strings (`JS_InitAtoms:3191`) |
+| 8 | 2528 | `js_realloc_rt`→`js_malloc_large` | `JS_NewClass1:3978` via `init_class_range:2035` (`class_array`) |
+| 9 | 4072 | `js_mallocz_rt` | `init_shape_hash` reached from `JS_NewRuntime2:2112` |
+
+The live witness reached `#0, #1, #2` (all three closed with `m`) and **never emitted the `M` for `#3`**. So
+the §42 "post-3rd-allocation QuickJS window" is now: **inside the FIRST `__JS_NewAtomInit` call, between the
+name-string allocation (`:3430`, malloc #2) and the `atom_array` grow (`:3330`, malloc #3)** — the span
+`memcpy(p->u.str8, str, len)` + null-terminate + `hash_string` + one `atom_hash[h1]` load + `__JS_NewAtom`
+entry. That is straight-line, bounded, trivial code operating on a handful of ASCII bytes.
+
+### 43.1 Two QuickJS-internal hypotheses this eliminates
+
+- **The cross-thread stack guard is NOT this death.** `c2_diag_test.zig:359-440` documents
+  `CONFIG_STACK_CHECK`: `JS_NewRuntime2` captures `rt->stack_top` at `:2116` via `JS_UpdateStackTop`, and a
+  different evaluating thread's `sp` is then checked against the stale `stack_limit`. But `:2116` runs
+  **after** `JS_InitAtoms` (`:2096`); at the stall position (`:3430`→`:3330` of the first atom)
+  `rt->stack_top`/`stack_limit` are not set yet, and `js_check_stack_overflow` is never invoked on the
+  atom-init path. The guard remains a real hazard for the later `C2EvalProbe` (Task 6) — it just cannot
+  explain a hang inside `JS_NewRuntime2`. This closes the one named suspect §42 left open.
+- **A corrupted hash-bucket / free-index chain cannot loop here.** At the stall position `atom_hash` was just
+  zeroed by `js_mallocz_rt` (#1), so `__JS_NewAtom`'s bucket walk (`:3295 while (i != 0)`) runs **0**
+  iterations, and the `atom_free_index` chain (built at `:3354`) does not exist until after malloc #3. There
+  is no list for it to walk off the end of yet.
+
+### 43.2 What that leaves, and the actual next observation
+
+§42 read "the gap is inside QuickJS code" as "the next probe must hook QuickJS." The offline read refines it:
+the QuickJS **instructions** in that gap are trivial and finite, so a ~6.9 s stall there is **not explained by
+QuickJS's control flow**. The live-vs-offline divergence at this exact point must come from something the
+source cannot show — either (a) the injected remote thread is not permitted to *execute* those instructions
+(host scheduling, a foreign-thread suspension, or `stellaris.exe`'s own SEH repeatedly re-dispatching on this
+thread), or (b) an environment property of the block our `HeapAlloc` returned at #2. (b) only bites if a
+read/write there faults and the host turns the fault into a retry rather than a kill — but §42 already showed
+the three allocations' memory was used to completion (`m` after each), and a faulting span would AV-kill in
+sub-ms, not stay readable for 6.9 s. That tilts toward (a).
+
+**The discriminator is NOT a QuickJS code hook — it is sampling the remote thread's STATE across the death
+window.** §39 sampled the process's memory counters; nothing so far has sampled the thread's instruction
+pointer or CPU time. A handful of `GetThreadContext(hRemoteThread)` polls (its `Rip`) plus
+`GetProcessTimes`/`GetThreadTimes` deltas, taken while the init dispatch runs, separate the two:
+if `Rip` advances around `js_alloc_string_rt ↔ __JS_NewAtom` and CPU time burns → a genuine QuickJS-side stall,
+and *then* a QuickJS code hook is the warranted 升级授权. If `Rip` parks in a wait outside our DLL, or CPU time
+does not advance, or the thread is already terminated while the process lives → the stall is **host-driven**,
+C2 is blocked by the environment rather than by QuickJS, and that is a different roadmap consequence (and no
+QuickJS hook would help).
+
+**Boundary and honesty.** This is offline source-reading + a faithful offline replay; it proves nothing about
+what the live thread *does* during those 6.9 s — only that no QuickJS instruction sequence there can take that
+long, which relocates the question from "what is QuickJS computing" to "is the thread computing at all." C2
+stays blocked. Read-only DLOG tagging is confirmed at its ceiling (§42's conclusion holds), but the escalation
+it pointed at ("hook QuickJS") is **premature**: the cheaper thread-state sample must run first, and that is a
+new observation *kind* (thread context / timing), beyond the `ReadProcessMemory`-only level used so far, so it
+needs 点名 before any live shot.
+
+**Counts for §43**: 0 dispatch (pure offline), 1 scratch tool (`scripts/scratch/2026-10_newrt_allocmap`,
+basename kept, one-time probe), `JS_NewRuntime2` mallocs #0–#9 mapped to `quickjs.c` lines, 1 offline-stream ==
+§42-control faithfulness check (`MmMmMmMmMmMmMmMm`, 0 `F`/0 `R` in-create), 1 §42 window narrowed from
+"post-3rd-alloc QuickJS code" to "first `__JS_NewAtomInit` iteration, `:3430`→`:3330`", 2 hypotheses ruled out
+(cross-thread stack guard; corrupt hash/free-chain walk), 1 next observation named (live thread `Rip`+CPU-time
+sample — read-only but a new kind, needs 点名) that pre-empts the premature "hook QuickJS" escalation, 0 code
+change to the shipped DLL, 0 new Zig test, 0 new export.
+
