@@ -1,0 +1,185 @@
+# C2 thread-state shot (§44) — evidence
+
+# Purpose: the one shot authorized as "授权开线程状态观测这一枪(单发射,只读 GetThreadContext/
+# GetProcessTimes,不 hook、不改内存)". §42 left the death window as "between the 3rd heap_malloc
+# returning and a 4th being entered, ~6.9s with no allocation activity" and concluded that only
+# hooking QuickJS could see inside it. This shot tests the alternative: watch the remote THREAD
+# instead of our allocator — a Rip that moves says QuickJS is executing; a Rip parked in one place
+# says the thread is blocked (waiting on the loader, a lock, or a kernel call).
+# Binary question this answers: during the window before the host died, was our remote thread
+# running, blocked, or gone?
+# exe identity: stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56 (46,253,688 bytes)
+# DLL instrumented: stellaris_quickjs.dll (build.zig default x86_64-windows target, Debug optimize),
+#   deployed as C:\temp\sqjs_s43.dll. NO DLL change this shot: the bytes are §42's, so the witness is
+#   directly comparable with §42's live dying shot and the only new thing is what the DRIVER reads.
+# Tooling: scripts/c2_harness.py dispatch_watching_buffer(..., thread_probe=) + capture_thread_state,
+#   driven by scripts/c2_task5_init.py's §44 probe; this is the shot transcript.
+
+## (2) local DLL sha256 (zig-out/bin/stellaris_quickjs.dll)
+
+863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617  zig-out/bin/stellaris_quickjs.dll
+
+## (3) remote DLL sha256 (Get-FileHash C:\temp\sqjs_s43.dll -Algorithm SHA256)
+
+863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617
+
+local == remote, and equal to §42's recorded value: the same artifact that produced `new_rt MmMmMm`
+there produced it here. New filename (ruling P12), nothing had held it loaded.
+
+## (4) environment precondition (game running, before the dispatch)
+
+$ python3 scripts/windows/launch_stellaris.py        (transcript: 05:18:47Z–05:19:33Z)
+  LAUNCHER_HANDOFF  stellaris_pid=13804
+  GAME_OBSERVE      step=ok  pid=13804  alive_s=30
+
+Then, inside the driver, the standing gate:
+  [s44] C2Sanity == 42, game alive — init dispatch authorized
+
+After the dispatch:
+  [s44] host alive after dispatch = False     (pid 13804 is gone, as §36/§39 predicted)
+
+## (5) what the new channel reads (and what it does not)
+
+Per ~100 ms tick, `capture_thread_state` does, in this order:
+  GetThreadTimes + GetProcessTimes        (no suspend, no context — pure counters)
+  SuspendThread                           (returns the previous suspend count)
+  GetThreadContext                        (CONTEXT: Rip, Rsp — read only)
+  ResumeThread                            (only if SuspendThread succeeded)
+Nothing in it raises; a failure becomes `err=` text on the sample line. No WriteProcessMemory, no
+patchCode, no hook, no Interceptor, no Memory.protect, no new export in the DLL. `rip` is classified
+against the DLL's own image span (PE SizeOfImage from the loaded module) so "inside_dll" means the
+thread was executing our artifact's code.
+
+## (6) LIVE DYING SHOT — the one dispatch (python C:\temp\c2_task5_init.py C:\temp\sqjs_s43.dll)
+
+Key lines, verbatim:
+
+    [s44] pid=13804  dll=C:/temp/sqjs_s43.dll  every=100ms
+    [s44] sqjs_s43.dll base 0x7ffbeb7c0000 SizeOfImage 0x70f000 => span 0x7ffbeb7c0000..0x7ffbebecf000
+    [s44] g_diag_log       @ 0x7ffbebe657f0 (C2LogInto rva 0x44d270)
+    [s44] poll: primed 512 bytes @0x71a0000: read back 512 bytes, all zero
+    [s44] poll: witness g_diag_log: readable at 80.4ms, text 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+    [s44] poll: witness g_diag_log: unreadable at 2016.3ms — ReadProcessMemory @0x7ffbebe657f0 size=512 read 0 bytes (ok=0, gle=299)
+    [s44] poll: stop: process handle signalled — the host is gone after 73 failed read(s) at 2232.3ms
+    [s44] poll: exit code = 3 (thread had returned); process exit code = 0x3, thread returned while process alive = False
+    [s44] C2DiagQJSInto rc = 3
+    [s44] decoded rc       = bucket=intrinsic name=Date
+    [s44] poll report      = primed=512 reads=206 failures=73 first_read_ms=80.38540000052308 first_failure_ms=2016.281500000332
+    [s44] poll report      = thread exit code=3 process exit code=0x3 thread_returned_while_alive=False
+    [s44] poll report      = WARNING: the thread never returned while the process was alive, so rc=3 is not proven to be a step code — a terminated thread reports the PROCESS exit code (here 0x3); treat decode_init_rc's answer as unconfirmed
+    [s44] poll report      = witness g_diag_log: oks=133 fails=73 text='enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+    [s44] buffer log       = ''
+    [s44] on-disk log      = ''
+
+The witness is §42's, character for character. So the allocation story did not change: three
+`heap_malloc` calls, each entered ('M') and each handed back a block ('m'), no dangling 'M', no `rt=`.
+
+Thread state over the same window, every one of 22 samples, verbatim shape:
+
+    [s44] thr @     80.3ms = rip=none rsp=none where=unknown th_kernel_us=0      th_user_us=0 pr_kernel_us=4468750 pr_user_us=42218750 err=SuspendThread gle=5
+    [s44] thr @   1813.0ms = rip=none rsp=none where=unknown th_kernel_us=15625  th_user_us=0 pr_kernel_us=4484375 pr_user_us=42218750 err=SuspendThread gle=5
+    [s44] thr @   2117.8ms = rip=none rsp=none where=unknown th_kernel_us=125000 th_user_us=0 pr_kernel_us=4593750 pr_user_us=42218750 err=SuspendThread gle=5
+    [s44] thr @   2219.6ms = rip=none rsp=none where=unknown th_kernel_us=218750 th_user_us=0 pr_kernel_us=4687500 pr_user_us=42218750 err=SuspendThread gle=5
+    [s44] thread state     = captures=22 with_rip=0 rips=none readable
+    [s44] thread state     = VERDICT inconclusive: 0 of 22 captures yielded a readable Rip
+
+Two numbers in that series are the whole result, and neither is a Rip:
+  - `pr_user_us` is the SAME value, 42,218,750, in all 22 samples — the PROCESS accrued zero user CPU.
+  - `th_user_us` is 0 in all 22 while `th_kernel_us` advances 0 → 15,625 → 125,000 → 218,750 µs:
+    all of the CPU movement in the whole process belongs to our remote thread and it is all KERNEL time.
+
+Memory series over the same window (psutil, 250 ms), first and last lines:
+
+    mem @      0.1ms = rss=3210344K vms=8179876K private=8179876K
+    mem @   1209.8ms = rss=3120156K vms=5567640K private=5567640K
+    mem @   2123.0ms = rss=1511424K vms=1603704K private=NA
+    mem @   2223.9ms = rss=   18812K vms=    2156K private=NA
+
+Monotonic RELEASE from the first sample onward — no upward excursion anywhere.
+
+## (7) the two controls, both run with no DLL, no injection and no dispatch
+
+Both exist because §44's series is ambiguous in exactly the way §37 taught: "no readable Rip" and
+"frozen user CPU" can each mean an instrument failure or a real stop. Controls were run against a
+freshly launched, untouched game (pid 3160, launch transcript 05:22:59Z–05:23:51Z).
+
+### (7a) scripts/c2_control_cpuwatch.py — is a running game supposed to accrue user CPU?
+
+    [cpuwatch] pid=3160 watch=20000ms every=250ms dll=none injected=none dispatched=none
+    [cpuwatch] samples=80 user advanced 12828125us, system advanced 375000us over 20119.7ms with NO dispatch of ours
+    [cpuwatch] VERDICT: untouched game accrues user CPU, so §44's frozen pr_user_us is a real stop and not idleness
+
+So §44's "zero user CPU for the entire process" is not a game that happens to be idle and not a
+counter that does not work: the same counter, same OS, same exe advances ~12.8 s of user time in 20 s
+of watching when nothing of ours runs in it.
+
+### (7b) scripts/c2_control_suspendcap.py — can this session read a remote thread's Rip at all?
+
+    [cap] pid=3160 exe=D:\SteamLibrary\...\stellaris.exe base 0x7ff7d7dc0000 image=0x3927000 dll=none injected=none dispatched=none
+    [cap] attempts=12 host_still_running=True
+    [cap] VERDICT capable: readable_rip=12/12 suspend_denied_gle5=0/12 openthread_failed=0/12
+
+Twelve of the game's own threads, opened with the same `OpenThread` + `capture_thread_state` path the
+shot used: twelve readable Rips, zero `gle=5`, host still running afterwards. The instrument works.
+
+### (7c) scripts/scratch/2026-10_threadhandle_matrix/threadhandle_matrix.py — what does gle=5 mean?
+
+A 2×2 matrix (handle from `CreateRemoteThread` vs from `OpenThread`) × (thread alive vs thread exited),
+on a child python running `kernel32!Sleep(8000)` — a thread whose state we know exactly:
+
+    alive  + created handle  → SuspendThread ok, Rip readable
+    alive  + opened  handle  → SuspendThread ok, Rip readable
+    exited + created handle  → SuspendThread gle=5 (ERROR_ACCESS_DENIED)
+    exited + opened  handle  → SuspendThread gle=5 (ERROR_ACCESS_DENIED)
+
+`SuspendThread` on an already-terminated thread fails with ACCESS_DENIED whichever way the handle was
+obtained. So gle=5 is not a rights problem with our handle: it is the signature of a thread that can
+no longer be suspended.
+
+## (8) reading
+
+The thread-state channel did not show "running vs blocked". It showed something earlier and bigger:
+
+  1. The instrument is capable (7b: 12/12) and the counters move on an untouched game (7a).
+  2. Every one of the 22 samples — including the FIRST, at 80.3 ms, the same tick in which the
+     witness static first became readable — already had `SuspendThread gle=5`, which 7c pins to
+     "this thread is no longer suspendable".
+  3. A thread that cannot be suspended at t=80 ms, in a process whose total user CPU does not move by
+     one microsecond for 2.1 s and whose memory only ever decreases, is a thread in a process that has
+     ALREADY BEGUN TERMINATING.
+
+So the ~2.2 s we were watching was not QuickJS thinking. It was teardown, and the death had happened
+at or before the first tick. That is why no Rip was ever available: there was no running thread to
+read, not a parked one. §42's "6.9 s zero-allocation stretch inside QuickJS's own code" reads the same
+series and calls it execution; here the same window releases 8.18 GB → 2 MB of private memory, which
+is §39's teardown shape, not a computation.
+
+And that collapses the question §36–§42 were asking. The fork was "heap/environment side vs engine
+side" — whether the HOST's environment failed our allocator, or QuickJS's own code died. Both
+branches assume the host process was alive and executing our sequence. The observations are all
+compatible with a cheaper explanation: the sequence terminated its own host. §45 tests that without
+another shot.
+
+Honest boundaries:
+  - rc=3 is the PROCESS exit code, not a step code (the WARNING is printed by the harness; §38.5's
+    retraction stands, and `bucket=intrinsic name=Date` means nothing).
+  - The 单发射 is spent. This section consumed the one authorized killed-init dispatch; no further
+    dispatch was made, and the controls below involve no injection at all.
+  - "Already terminating at 80 ms" is an inference from gle=5 + flat pr_user_us + monotonic release,
+    each of which was separately controlled. It is not a direct observation of the termination moment;
+    our first sample is already after it.
+  - 22 captures, one thread, one shot. The counts are positions in one window, not a distribution.
+
+## (9) read-only self-attestation
+
+    - no hook/Interceptor/patchCode/writeByteArray/Memory.protect on any code line; no new capability
+      was added to the harness or to the DLL (the DLL bytes are unchanged from §42).
+    - GetThreadContext reads registers; SuspendThread/ResumeThread are paired and ResumeThread is
+      called only when SuspendThread succeeded, so no suspend count is taken away that the probe
+      did not add (pinned by scripts/test_c2_harness.py).
+    - GetThreadTimes/GetProcessTimes are read-only counters.
+    - the two controls and the matrix open NO process handle with anything but PROCESS_QUERY_* /
+      THREAD_QUERY_*|SUSPEND_RESUME rights and never write to any process; the game they observed was
+      untouched (dll=none injected=none dispatched=none) and was still running afterwards.
+    - the killed dispatch was authorized in the human partner's own words, quoted in the header, and
+      used once.
