@@ -1,0 +1,158 @@
+# C2 live shot after the §48 fix (§49) — evidence
+
+# Purpose: §48 made the zero-game repro survive (`SURVIVED rc=0`, `rt=` present) but left in-game
+# behavior unverified. This file records the authorized live shot (§49): launch Stellaris 4.4.4,
+# inject the fixed artifact (sha 79c8dc24…) into the running game, run the Task 5 init probe and the
+# Task 6 acceptance gate, and observe the host. Authorization: user's "授权实际调试" (2026-10-22).
+# exe identity: stellaris.exe 4.4.4 sha256
+#   9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56
+# Artifact of record: stellaris_quickjs.dll sha256
+#   79c8dc240ef87d3bc979efb78e3549b937b909d57939eb552832be0d1c5c230c (same bytes as §48's record)
+#   uploaded under three unused names (ruling P12): sqjs_s48live.dll, sqjs_s48e2e.dll,
+#   sqjs_s48e2e_noinit.dll — remote Get-FileHash matched all three before any dispatch.
+# Host: Windows_Jiaolong. One game launch (Steam, launcher script), one session, pid 9932.
+# Windows-side actions: launcher (Steam spawn + clicks), scp, Get-FileHash, Get-Process,
+#   Get-Content, and `python C:\temp\c2_task5_init.py` / `c2_task6_e2e.py`. No debugger attach,
+#   no hook/Interceptor/patchCode, no byte edit, no game-file modification. Game left running.
+
+## (1) Game bring-up (verbatim launcher transcript)
+
+    $ python C:\temp\launch_stellaris.py
+    2026-10-22T14:03:20Z  BOOT  app_id=281990  argv=default
+    2026-10-22T14:03:20Z  BRIDGE  task=stellaris-launch-25544-1792677800  marker=C:\Users\13229\AppData\Local\Temp\ls_25544_ce818d.txt  shim=C:\Users\13229\AppData\Local\Temp\stellaris-launch-25544-1792677800.cmd
+    2026-10-22T14:03:21Z  BOOT  app_id=281990  argv=default
+    2026-10-22T14:03:21Z  PREKILL  killed=[]
+    2026-10-22T14:03:21Z  STEAM_SPAWN  uri=steam://rungameid/281990
+    2026-10-22T14:03:21Z  STEAM_READY  steam_pid=14576
+    2026-10-22T14:03:37Z  LAUNCHER_WAIT  pid=9692  hwnd=658280
+    2026-10-22T14:03:37Z  LAUNCHER_CLICK  step=foreground_ok  hwnd=658280
+    2026-10-22T14:03:38Z  LAUNCHER_CLICK  step=click  attempt=1  x=1030  y=339  rect=(-11, 0, 2063, 1020)
+    2026-10-22T14:03:43Z  LAUNCHER_CLICK  step=click  attempt=2  x=1030  y=339  rect=(-11, 0, 2063, 1020)
+    2026-10-22T14:03:48Z  LAUNCHER_CLICK  step=click  attempt=3  x=1030  y=339  rect=(-11, 0, 2063, 1020)
+    2026-10-22T14:03:53Z  LAUNCHER_CLICK  step=handoff_after_click  attempt=3
+    2026-10-22T14:03:53Z  LAUNCHER_HANDOFF  stellaris_pid=9932
+    2026-10-22T14:04:24Z  GAME_OBSERVE  step=ok  pid=9932  alive_s=30
+    9932
+    2026-10-22T14:04:24Z  BRIDGE  result=inner_exit  code=0
+
+`PREKILL killed=[]`: no pre-existing game process was terminated. The game sat at the main menu.
+
+## (2) Task 5 live shot — one C2DiagQJSInto dispatch, then C2Init (verbatim)
+
+    $ python C:\temp\c2_task5_init.py C:\temp\sqjs_s48live.dll
+    [task5] pid=9932  dll=C:\temp\sqjs_s48live.dll
+    [task5] sqjs_s48live.dll base (64-bit): 0x7ffc14d00000
+    [task5] MZ header at base OK
+    [task5] C2Init RVA from PE reparse:                  0x44db30
+    [task5] C2DiagQJSInto RVA from PE reparse:           0x44d990
+    [task5] C2QuickJSPointersInto RVA from PE reparse:   0x44d870
+    [task5] C2LogInto RVA from PE reparse:               0x44d890
+    [task5] C2Sanity == 42, game alive �� init dispatch authorized
+    [task5] diag file        = C:/temp/c2_diag_9932.log (absent before dispatch)
+    [task5] C2DiagGetLogAddr �� truncated 0x153a65f0 �� g_diag_log rva 0x6a65f0 @ 0x7ffc153a65f0
+    [task5] g_diag_log before the dispatch = ''
+    [task5] log buffer @ 0x71a0000 (allocated BEFORE the dispatch)
+    [task5] mem sampler      = psutil 7.2.2 over pid 9932, every 250ms
+    [task5] poll: primed 512 bytes @0x71a0000: read back 512 bytes, all zero
+    [task5] poll: witness g_diag_log: readable at 83.4ms, text 'enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C59D8 opaque'
+    [task5] poll: buffer text now 158 bytes: b'enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C59D8 opaque'
+    [task5] poll: stop: text complete, 158 bytes in view at 84.1ms
+    [task5] poll: exit code = 0 (thread had returned); process exit code = 0x103, thread returned while process alive = True
+    [task5] C2DiagQJSInto rc = 0
+    [task5] decoded rc       = bucket=ok name=None
+    [task5] poll report      = primed=512 reads=1 failures=0 first_read_ms=83.33339999808231 first_failure_ms=None
+    [task5] poll report      = thread exit code=0 process exit code=0x103 thread_returned_while_alive=True
+    [task5] poll report      = witness g_diag_log: oks=1 fails=0 text='enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C59D8 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRFdiag_rc=0 ctx=00000001F0F6FC28'
+    [task5] mem @      0.1ms = rss=3202368K vms=8131472K private=8131472K
+    [task5] mem growth       = private KiB: first=8131472 last=8131472 delta=+0 samples=1 window=0.0ms
+    [task5] mem growth       = rss KiB: first=3202368 last=3202368 delta=+0 samples=1 window=0.0ms
+    [task5] mem growth       = vms KiB: first=8131472 last=8131472 delta=+0 samples=1 window=0.0ms
+    [task5] buffer log       = 'enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C59D8 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRFdiag_rc=0 ctx=00000001F0F6FC28'
+    [task5] on-disk log      = 'rc=0 enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C59D8 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRFdiag_rc=0 ctx=00000001F0F6FC28'
+    [task5] shared sequence rc == 0, game alive
+    [task5] C2Init rc = 0
+    [task5] C2Init rc == 0, game alive
+    [task5] pointer buffer @ 0x71b0000
+    [task5] g_test_rt  = 0x00000001ee8c7118
+    [task5] g_test_ctx = 0x00000001f0f7a758
+    Task 5: C2Init returns 0 and pointers are non-NULL (real 64-bit values above)
+
+(The `��` characters are the SSH console's codepage mangling of `→`, recorded as captured.)
+
+## (3) The on-disk diag log — produced for the first time in a live shot
+
+    $ Get-Content C:\temp\c2_diag_9932.log -Raw
+    rc=0 enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C59D8 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRFdiag_rc=0 ctx=00000001F0F6FC28
+    rc=0 enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C7118 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRFdiag_rc=0 ctx=00000001F0F7A758
+    rc=0 enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C76E8 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRFdiag_rc=0 ctx=0000000205585F68
+
+(The three lines are, in order: the Task 5 `C2DiagQJSInto` dispatch, the Task 5 `C2Init` dispatch,
+and the Task 6 `C2Init` dispatch; each appends at finish. §38 noted this file had never been created
+by a live shot — it exists now.)
+
+## (4) Task 6 acceptance gate — `1+1` through the DLL's own JS_Eval (verbatim)
+
+    $ python C:\temp\c2_task6_e2e.py C:\temp\sqjs_s48e2e.dll
+    [task6] pid=9932  dll=C:\temp\sqjs_s48e2e.dll
+    [task6] sqjs_s48e2e.dll base (64-bit): 0x7ffc145f0000
+    [task6] MZ header at base OK
+    [task6] C2Sanity == 42, game alive �� dispatch authorized
+    [task6] C2EvalProbeOnePlusOne RVA from PE reparse: 0x44d7e0
+    [task6] C2Init rc == 0, game alive
+    Task 6: `1+1` evaluated inside the game process and returned int32 2 (rc=11 = 2*4+3)
+
+## (5) Task 6 Step 6 guard — no C2Init in that module copy (verbatim)
+
+    $ python C:\temp\c2_task6_e2e.py --noinit C:\temp\sqjs_s48e2e_noinit.dll
+    [task6] pid=9932  dll=C:\temp\sqjs_s48e2e_noinit.dll
+    [task6] sqjs_s48e2e_noinit.dll base (64-bit): 0x7ffc134b0000
+    [task6] MZ header at base OK
+    [task6] C2Sanity == 42, game alive �� dispatch authorized
+    [task6] C2EvalProbeOnePlusOne RVA from PE reparse: 0x44d7e0
+    Task 6 (Step 6): C2EvalProbeOnePlusOne returned 0 with no C2Init in this module copy �� the !g_test_ctx guard holds and did not crash
+
+## (6) Host state after every dispatch (outside the probe)
+
+    $ Get-Process stellaris | Select-Object Id,Responding
+    9932       True
+
+The game was still running and responding after Task 5 and both Task 6 modes. No post-shot crash, no
+`SuspendThread gle=5` signature, no teardown window.
+
+## (7) Judgment
+
+- **The §48 fix holds in the game.** The same entry order the dying shots saw is present up to
+  `new_rt MmMmMm`; past the old death point the sequence now continues through eight complete `M`
+  entries, `rt=` (non-NULL), `opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRF`, and finishes
+  with `diag_rc=0` and a non-NULL `ctx`, in **83 ms**, not a multi-second freeze.
+- **Task 5 passes**: `C2Init rc = 0`, `g_test_rt = 0x1ee8c7118`, `g_test_ctx = 0x1f0f7a758`, both
+  non-NULL, read via `C2QuickJSPointersInto` (no pointer crosses the 32-bit exit code).
+- **Task 6 passes**: `1+1` evaluated by the DLL's own `JS_Eval` returns int32 2 (`rc=11 = 2*4+3`);
+  the no-init guard returns `0` instead of crashing. C2's acceptance gate is met in the live process.
+- **The disk log now exists**: `C:/temp/c2_diag_9932.log`, three `rc=0` lines with the same witness
+  text as the buffer/witness channels. §38's "live shots never create it" is resolved on this path.
+- **The host survives**: `Get-Process stellaris` still reports pid 9932, Responding=True, after all
+  three probes.
+
+## (8) Boundaries
+
+- One game launch, one session, main menu only. No scene load, no mod script evaluation, no
+  `CEffect::Execute` hot path. This proves the bootstrap, not the keyword→JS routing (C3) or a real
+  effect (C4).
+- Task 5 dispatched `C2DiagQJSInto` + `C2Init`; Task 6 dispatched `C2Init` +
+  `C2EvalProbeOnePlusOne`; the noinit mode dispatched `C2EvalProbeOnePlusOne` only. Each Task 6
+  module copy is a separate `LoadLibrary` of the same bytes under a different path (ruling P22).
+- `C2TestQuickJS` resets `g_test_rt`/`g_test_ctx` without freeing the previous runtime (ledgered
+  minor); this session therefore leaks one QuickJS runtime per module copy. It did not affect the
+  observations.
+- No debugger was attached; "live debugging" here means the maintained injection/observation
+  channel (`c2_task5_init.py`, `c2_task6_e2e.py`), not a breakpoint session.
+- The game remains running after the shot; nothing was unloaded (the standing `ExecHookVerify != 0`
+  rule is not in play — no detour was installed).
+
+## (9) Read-only self-attestation
+
+    - no hook/Interceptor/patchCode/writeByteArray/Memory.protect; no byte edit; no game-file change.
+    - Windows host ran the launcher, scp/Get-FileHash/Get-Process/Get-Content, and the two probe
+      scripts; all dispatches were the probes' own CreateRemoteThread calls.
+    - remote sha of all three uploaded copies equals 79c8dc24…c5c230c before any dispatch.

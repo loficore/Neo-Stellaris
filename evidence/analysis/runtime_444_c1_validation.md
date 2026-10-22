@@ -3123,3 +3123,74 @@ does not.
 1 UBSan site diff (141→133, 8 `container_of` expressions removed, `:1494:12` 1→0); 2 zero-game runs;
 1 test file re-anchored to the artifact (`trap_span()`; the pinned §47 span no longer exists);
 0 game processes, 0 injections, 0 dispatch, 0 hooks; 1 new evidence log.
+
+## 49. Live shot after the fix: `C2Init rc=0`, `1+1` through `JS_Eval`, host survives (2026-10-22, authorized, one game launch)
+
+Transcript: `evidence/logs/c2_live_s48_4_4_4.log`. Authorization: the user's "授权实际调试".
+Artifact of record: the same bytes as §48, sha256
+`79c8dc240ef87d3bc979efb78e3549b937b909d57939eb552832be0d1c5c230c`, uploaded under three unused
+names (`sqjs_s48live.dll`, `sqjs_s48e2e.dll`, `sqjs_s48e2e_noinit.dll`; remote `Get-FileHash`
+matched all three). One game launch via `scripts/windows/launch_stellaris.py` (Steam, pid 9932, main
+menu), one session. The Windows host ran the launcher, scp/`Get-FileHash`/`Get-Process`/`Get-Content`
+and the two maintained probes; no debugger attach, no hook, no byte edit.
+
+### 49.1 Task 5: init works in the game
+
+`python C:\temp\c2_task5_init.py C:\temp\sqjs_s48live.dll`, verbatim key lines:
+
+    [task5] C2Sanity == 42, game alive → init dispatch authorized
+    [task5] poll: witness g_diag_log: readable at 83.4ms, text 'enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=00000001EE8C59D8 opaque'
+    [task5] poll: stop: text complete, 158 bytes in view at 84.1ms
+    [task5] poll: exit code = 0 (thread had returned); process exit code = 0x103, thread returned while process alive = True
+    [task5] C2DiagQJSInto rc = 0
+    [task5] C2Init rc = 0
+    [task5] C2Init rc == 0, game alive
+    [task5] g_test_rt  = 0x00000001ee8c7118
+    [task5] g_test_ctx = 0x00000001f0f7a758
+
+The witness text continues past the §42 stop (`new_rt MmMmMm`) through eight closed `M`s,
+`rt=` non-NULL, `opaque_ok limits_ok new_raw RFraw_ok new_diag RFFFRFRFdiag_rc=0 ctx=…` — in 83 ms,
+not a multi-second freeze. `process exit code = 0x103` is `STILL_ACTIVE`; the thread returned while
+the process was alive. Both pointers are real 64-bit values read through `C2QuickJSPointersInto`.
+
+**The disk log exists now.** `C:/temp/c2_diag_9932.log` (absent before the dispatch) holds three
+`rc=0` lines after the session — Task 5's `C2DiagQJSInto`, Task 5's `C2Init`, and Task 6's `C2Init` —
+each identical in text to the buffer and witness channels. §38's "live shots never create it" is
+resolved on this path.
+
+### 49.2 Task 6: the acceptance gate passes
+
+    $ python C:\temp\c2_task6_e2e.py C:\temp\sqjs_s48e2e.dll
+    [task6] C2Init rc == 0, game alive
+    Task 6: `1+1` evaluated inside the game process and returned int32 2 (rc=11 = 2*4+3)
+
+`rc=11` is the fixed encoding `n*4+3` for `n=2` (ruling P20), read through the remote thread's exit
+code from the DLL's own `JS_Eval`. The guard case, in a second module copy of the same bytes:
+
+    $ python C:\temp\c2_task6_e2e.py --noinit C:\temp\sqjs_s48e2e_noinit.dll
+    Task 6 (Step 6): C2EvalProbeOnePlusOne returned 0 with no C2Init in this module copy → the !g_test_ctx guard holds and did not crash
+
+`Get-Process stellaris` after every dispatch: pid 9932, `Responding=True`. No death, no teardown
+window, no `SuspendThread gle=5` signature.
+
+### 49.3 What this settles and what it does not
+
+- (§42/§47 mechanism, closed) The live death was our own artifact's fallback `offsetof`; with the
+  builtin in place the same entry order reaches `rt=`, completes the diag sequence, and returns
+  `rc=0` in the game, not only in the zero-game child.
+- (Task 5, closed) `C2Init` returns 0 with non-NULL `g_test_rt`/`g_test_ctx` in the injected module.
+- (Task 6, closed) `1+1` is evaluated by QuickJS inside the game process and read back as int32 2;
+  the no-init guard returns 0 without crashing.
+- (§38 open item, closed on this path) The on-disk diag file is produced.
+- **(Not closed)** This is the main menu: no scene load, no mod script evaluation, no
+  `CEffect::Execute`. The keyword→JS routing layer (C3) and a visible new effect (C4) are untouched.
+  The session leaks one QuickJS runtime per extra module copy (the known `C2TestQuickJS` reset
+  without free); it did not affect the observations. No detour was installed, so the
+  `ExecHookVerify != 0` unloading rule was not in play; the game was left running.
+
+### 49.4 Counts for §49
+
+1 game launch (Steam + launcher), 1 session, 1 injected game process (pid 9932); 3 module copies of
+the same bytes (Task 5, Task 6, Task 6-noinit); 5 dispatches (`C2DiagQJSInto` ×1, `C2Init` ×2,
+`C2EvalProbeOnePlusOne` ×2 — the Task 6 pair includes the noinit call); 3 `rc=0` lines in the disk
+log; 0 debugger attaches, 0 hooks, 0 byte edits, 0 game-file changes; 1 new evidence log.
