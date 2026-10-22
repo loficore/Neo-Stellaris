@@ -69,7 +69,7 @@ _INNER_BUDGET_STEAM_READY_S = 30      # = --launcher-timeout-s default
 _INNER_BUDGET_LAUNCHER_WAIT_S = 30    # = --launcher-timeout-s default
 _INNER_BUDGET_LAUNCHER_CLICK_S = 19   # foreground + settle + 3 click/settle rounds
 _INNER_BUDGET_GAME_OBSERVE_S = 60     # = --game-timeout-s + --observe-s defaults
-_INNER_BUDGET_UNPAUSE_S = 35          # = --unpause-delay-s default + _UNPAUSE_SETTLE_S
+_INNER_BUDGET_UNPAUSE_S = 95          # = --unpause-delay-s default + _UNPAUSE_SETTLE_S
 _INNER_CHAIN_BUDGET_S = (
     _INNER_BUDGET_PREKILL_SPAWN_S
     + _INNER_BUDGET_STEAM_READY_S
@@ -77,9 +77,9 @@ _INNER_CHAIN_BUDGET_S = (
     + _INNER_BUDGET_LAUNCHER_CLICK_S
     + _INNER_BUDGET_GAME_OBSERVE_S
     + _INNER_BUDGET_UNPAUSE_S
-)  # 177s with all defaults
+)  # 237s with all defaults
 _BRIDGE_TIMEOUT_MARGIN_S = 33          # slack for monitor jitter + log I/O
-DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 210s
+DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 270s
 
 # Process images this chain looks for. Compared case-insensitively: Windows
 # file names are case-insensitive and psutil reports whatever the image has.
@@ -133,8 +133,14 @@ _UNPAUSE_SETTLE_S = 5.0
 _POLL_S = 0.5
 _OBSERVE_POLL_S = 1.0
 
-VK_SPACE = 0x20
+# Space is sent by scancode, never as VK_SPACE. Live on Windows_Jiaolong the
+# VK form was accepted by SendInput and silently swallowed before the game saw
+# it (the Chinese IME has a context on the game window); the scancode form
+# toggled pause on the same window immediately. wVk stays 0 so no layout or IME
+# translation happens on the way in.
+SPACE_SCANCODE = 0x39
 KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
 INPUT_KEYBOARD = 1
 
 # psutil status strings that mean the process is no longer running the game.
@@ -253,11 +259,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "unpause a person would otherwise do by hand. Off by "
                         "default: the keystroke goes to whatever owns the "
                         "foreground.")
-    p.add_argument("--unpause-delay-s", type=int, default=30,
+    p.add_argument("--unpause-delay-s", type=int, default=90,
                    help="How long to wait after the observe window before the "
-                        "unpause keystroke (default 30). Only used with "
-                        "--unpause. Raising it above the default may require "
-                        "raising --bridge-timeout-s too.")
+                        "unpause keystroke (default 90). Only used with "
+                        "--unpause. The default covers a large modded save: "
+                        "the game draws its campaign well after handoff, and a "
+                        "keypress into the loading screen is lost. Raising it "
+                        "above the default may require raising "
+                        "--bridge-timeout-s too.")
     p.add_argument("--bridge-timeout-s", type=int, default=DEFAULT_BRIDGE_TIMEOUT_S,
                    help="How long the outer waits for the inner's completion "
                         f"marker (default {DEFAULT_BRIDGE_TIMEOUT_S}, derived "
@@ -560,6 +569,17 @@ class _INPUT(ctypes.Structure):
     _fields_ = [("type", _wt.DWORD), ("u", _INPUTUNION)]
 
 
+def _space_key_events() -> list[tuple[int, int, int]]:
+    """(wVk, wScan, dwFlags) for the Space down and up events.
+
+    Scancode, not virtual-key — see SPACE_SCANCODE for the live evidence.
+    """
+    return [
+        (0, SPACE_SCANCODE, KEYEVENTF_SCANCODE),
+        (0, SPACE_SCANCODE, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP),
+    ]
+
+
 def _send_space() -> bool:
     """Press and release Space. True when both events were accepted.
 
@@ -573,12 +593,10 @@ def _send_space() -> bool:
     send_input.argtypes = [_wt.UINT, ctypes.POINTER(_INPUT), ctypes.c_int]
     send_input.restype = _wt.UINT
     events = (_INPUT * 2)()
-    events[0].type = INPUT_KEYBOARD
-    events[0].u.ki = _KEYBDINPUT(wVk=VK_SPACE, wScan=0, dwFlags=0, time=0,
-                                 dwExtraInfo=None)
-    events[1].type = INPUT_KEYBOARD
-    events[1].u.ki = _KEYBDINPUT(wVk=VK_SPACE, wScan=0, dwFlags=KEYEVENTF_KEYUP,
-                                 time=0, dwExtraInfo=None)
+    for i, (vk, scan, flags) in enumerate(_space_key_events()):
+        events[i].type = INPUT_KEYBOARD
+        events[i].u.ki = _KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags, time=0,
+                                     dwExtraInfo=None)
     return send_input(2, events, ctypes.sizeof(_INPUT)) == 2
 
 
@@ -894,6 +912,7 @@ def game_unpause(pid: int, delay_s: int) -> int:
     window, a refused focus and a blocked SendInput are the three ways this
     fails, and each is logged before the typed code goes back.
     """
+    log_event("GAME_UNPAUSE", step="waiting", pid=pid, delay_s=delay_s)
     _time.sleep(delay_s)
     hwnd = _hwnd_for_pid(pid)
     if not hwnd:

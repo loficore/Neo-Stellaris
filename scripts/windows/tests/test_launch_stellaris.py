@@ -1752,10 +1752,14 @@ def test_run_launch_chain_honours_non_default_game_windows():
 def test_unpause_flag_defaults_off():
     """Loading a save lands paused; leaving it to the caller's hands was the
     behavior before this flag existed. It stays the default so a launcher run
-    never injects a keystroke nobody asked for."""
+    never injects a keystroke nobody asked for.
+
+    The 90 s default covers a large modded save: live on Windows_Jiaolong the
+    campaign first drew ~95 s after handoff, so the 30 s default fired while
+    the loading screen still held the window and the Space was lost."""
     args = build_arg_parser().parse_args([])
     assert args.unpause is False
-    assert args.unpause_delay_s == 30
+    assert args.unpause_delay_s == 90
 
 
 def test_unpause_flag_and_delay_are_settable():
@@ -1809,6 +1813,23 @@ def test_unpause_reports_a_blocked_keystroke():
             patch("launch_stellaris.bring_to_foreground", return_value=True), \
             patch("launch_stellaris._send_space", return_value=False):
         assert game_unpause(5555, 0) == EXIT_GAME_UNPAUSE_FAILED
+
+
+def test_space_is_sent_as_a_scancode_not_a_virtual_key():
+    """Live 2026-10-23: SendInput with wVk=0x20 was silently eaten. ESC and
+    Space changed nothing while the game held verified foreground focus and a
+    click on its pause button worked; the scancode form (wVk=0, wScan=0x39,
+    KEYEVENTF_SCANCODE) toggled pause on the same window in the same second.
+    With the CM_IME attached to the game window, VK events are translated and
+    consumed before the game's input queue sees them; scancodes are not.
+    Pin the event shape so a revert to the VK path cannot pass this suite.
+    """
+    events = launch_stellaris._space_key_events()
+    assert events == [
+        (0, 0x39, launch_stellaris.KEYEVENTF_SCANCODE),
+        (0, 0x39,
+         launch_stellaris.KEYEVENTF_SCANCODE | launch_stellaris.KEYEVENTF_KEYUP),
+    ]
 
 
 def test_run_launch_chain_unpauses_after_observe_when_requested(capsys):
