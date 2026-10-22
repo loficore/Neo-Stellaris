@@ -29,13 +29,23 @@ record its code references — which names the function, by reading the C at tho
     python3 scripts/dll_ubsan_site.py [dll] site JSMallocBlockHeader
     python3 scripts/dll_ubsan_site.py [dll] func 0x18000bd9b
 
-The DLL path is the first argument when it ends in ``.dll``; with no argument it falls
-back to the artifact this repository builds (``zig-out/bin/stellaris_quickjs.dll``,
-resolved from this file's location, not from the cwd). Nothing here is hard-coded to one
-link: RVAs are recomputed from whichever image you hand it, and `image_base` is read from
-its own optional header.
+The DLL path is the first argument whenever that argument is not one of the two modes
+(``site``/``func``) — so ``C:/temp/S43_new.DLL`` is a path, not a mode, and an
+extension-less scp'd name is too. With no path argument it falls back to the artifact
+this repository builds (``zig-out/bin/stellaris_quickjs.dll``, resolved from this
+file's location, not from the cwd). Nothing here is hard-coded to one link: RVAs are
+recomputed from whichever image you hand it, and `image_base` is read from its own
+optional header.
 
 Read-only: opens a file copy, no process, no game, no dispatch.
+
+**Exit codes — 0/1/2 mean three different things, and a caller must be able to tell
+them apart.** 0 = the artifact was read and something matched. 1 = the artifact was read
+and *nothing* matched (no check site for that type name; no ``.pdata`` entry referencing
+a record) — that is a finding, not a failure. 2 = **the tool could not read the
+artifact** (missing path, unreadable file, truncated or non-PE32+ input), printed as one
+line on stderr instead of a traceback. A "no sites" 1 on a file that never opened would
+otherwise look exactly like an artifact with no matching checks.
 
 **Judgement traps (full write-up in ``docs/offline-tooling.md``):** `func` prints the
 `.pdata` range plus the records that range loads — that is frame *attribution*, not a
@@ -66,6 +76,23 @@ KIND_NAMES = [
 ]
 # The kinds clang routes through __ubsan_handle_type_mismatch_v1.
 TYPE_MISMATCH_KINDS = {3, 4, 5, 6, 7, 8, 9, 10, 11}
+
+# The CLI's two modes. `main` dispatches on membership, not on a ``.dll`` suffix: a
+# Windows path like ``C:\temp\S43_new.DLL`` does not end in lowercase ``.dll``, and
+# treating it as the mode silently analyzed the repo-default artifact instead.
+MODES = ("site", "func")
+
+# The fields `iter_records` reads, in the order it reads them: FileName, Line, Column,
+# TypeDescriptor*, log_align, kind. 26 bytes — the record's *stride* is 32, its *size*
+# is not, and `iter_records`' scan bound must come from this, not from a guess.
+RECORD_FMT = "<QIIQBB"
+RECORD_READ_SIZE = struct.calcsize(RECORD_FMT)
+
+# Exit code for "this input is not an artifact we could read". Deliberately distinct
+# from 1, which means "the artifact has no matching check sites" — see the docstring.
+# The number itself matches `c2_selfabort_repro.py`, which also uses 2 for "the path
+# you gave me is not an artifact", so the fix loop's two tools report alike.
+EXIT_READ_ERROR = 2
 
 
 def parse(data: bytes):
@@ -120,7 +147,7 @@ def iter_records(data: bytes, image_base: int, secs):
 
     A validated byte scan, not an offset walk: the linker places these records wherever
     it likes and nothing indexes them. Stride 8 because a record starts with a pointer
-    and is 32 bytes.
+    and they sit 32 bytes apart (the fields actually read below are 26 of those 32).
 
     **Each scan is bounded to its own section's raw bytes.** The frozen original scanned
     from each data section's file offset to EOF, so a record living in a section that
@@ -129,15 +156,24 @@ def iter_records(data: bytes, image_base: int, secs):
     `site JSMallocBlockHeader` printed 282 rows for **141** distinct records (the pairs
     share one `record_rva`) while §45.3 quotes the 141. The bound is the fix; the row
     content is unchanged, and so is the set of records found.
+
+    The last offset a scan may start at comes from `RECORD_READ_SIZE` (26), **not** from
+    the 32-byte stride: `end - 32`, inherited from the frozen original, cut off the
+    section's final 32 bytes although a record starting there is fully readable — a
+    plausible record in that tail was unreachable. `end - RECORD_READ_SIZE + 1` is the
+    exact bound. On this artifact it changes nothing observable (still 141 sites, same
+    13,693-record set), because no record lives in either tail; the bound is here so the
+    scan cannot quietly lose one on the next link, when the linker may well place a
+    record there.
     """
     off_of, rva_of = make_maps(secs)
     for name, _, _, s_raw, s_off in secs:
         if not name.startswith((".rdata", ".data")):
             continue
         end = min(s_off + s_raw, len(data))
-        for start in range(s_off, end - 32, 8):
+        for start in range(s_off, end - RECORD_READ_SIZE + 1, 8):
             (name_va, line, col, td_va, log_align, kind) = struct.unpack_from(
-                "<QIIQBB", data, start)
+                RECORD_FMT, data, start)
             if log_align > 7 or kind not in TYPE_MISMATCH_KINDS or line == 0:
                 continue
             name_off, td_off = off_of(name_va - image_base), off_of(td_va - image_base)
@@ -232,11 +268,29 @@ def cmd_func(data, image_base, secs, va):
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     path = DEFAULT_DLL
-    if argv and argv[0].endswith(".dll"):
+    # A first argument that is not a mode name is the artifact path. Case does not
+    # matter here and neither does the extension: `C:\temp\S43_new.DLL` and a
+    # suffix-less scp'd name must both be taken as paths, because keeping one as the
+    # mode falls through to `cmd_site` and analyzes the *default* artifact while the
+    # printed header names the argument — a wrong answer with no error.
+    if argv and argv[0].lower() not in MODES:
         path, argv = argv[0], argv[1:]
-    with open(path, "rb") as f:
-        data = f.read()
-    image_base, secs = parse(data)
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        image_base, secs = parse(data)
+    except OSError as e:
+        print(f"[ubsan_site] cannot read {path}: {e}", file=sys.stderr)
+        return EXIT_READ_ERROR
+    except (ValueError, struct.error) as e:
+        # `parse` raises ValueError for "not a PE image", for a PE32 (not PE32+) magic,
+        # and for header fields it cannot trust; `struct.error` is what a file too
+        # short for the DOS header, or with a section table running past the end,
+        # raises before `parse` ever gets to complain. All of them are "this is not an
+        # artifact", none of them is "this artifact has no sites".
+        print(f"[ubsan_site] {path} is not a readable PE32+ image: {e}",
+              file=sys.stderr)
+        return EXIT_READ_ERROR
     mode = argv[0] if argv else "site"
     arg = argv[1] if len(argv) > 1 else "JSMallocBlockHeader"
     print(f"[ubsan_site] {path} image_base={image_base:#x} mode={mode}")

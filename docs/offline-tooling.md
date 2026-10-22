@@ -220,9 +220,17 @@ log 还逐字引了它们的输出),提升是**复制**不是移动。两处都�
 
 无符号、无 debug 段的产物里,把 UBSan panic 钉到源文件行号:只读 DLL 文件,用 `.rdata`/`.data`
 里的 `TypeMismatchData` 记录(文件名、行、列、类型描述器名字)+ `.pdata`(x64 异常目录)的
-`{begin, end}` 函数区间。DLL 路径是第一个参数(不以 `.dll` 结尾就默认仓库自己构建的
+`{begin, end}` 函数区间。第一个参数**不是 `site`/`func` 就是 DLL 路径**(按小写比较模式名;
+所以 `C:\temp\S43_new.DLL` 这种大写扩展名、以及没有扩展名的 scp 文件名都是路径 —— 旧规则
+「以 `.dll` 结尾才算路径」会把它们当成模式,于是**分析仓库默认的产物却打印出你给的那个参数**,
+一个没有报错的错答案)。没有路径参数时才落到仓库自己构建的
 `zig-out/bin/stellaris_quickjs.dll`,按**本文件位置**解析,不是按 cwd);`image_base` 从镜像自己的
 optional header 读,没有任何地址是写死的 —— 换一份产物就把 RVA 重算一遍。
+
+**退出码有三种意思,调用方必须能分开**:0 = 读到了且有匹配;1 = 读到了但**没有**匹配(该类型名
+零个检查点、或 `func` 没命中任何引用记录的函数)—— 这是一个结论,不是故障;**2 = 工具没能读到
+产物**(路径不存在、不可读、截断、非 PE32+;打一行 stderr,不给 traceback)。修复循环会拿
+`c2_selfabort_repro.py` 送来的任意文件名调它,把 2 误读成 1 就是「这份产物没有检查点」的假结论。
 
 ```
 python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll site JSMallocBlockHeader
@@ -249,6 +257,11 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
    `site JSMallocBlockHeader` 打 **282** 行,其实是 **141** 个不同记录(成对共享同一个
    `record_rva`)。提升版把每趟扫描定到该段自己的 raw 字节 ⇒ 141 行,与 §45.3 记的数一致。
    **记录的集合本身没变**,只变了重复。
+5. **同一段扫描的上界要按「读多少」算,不是按「步长」算。** 记录之间隔 32 字节,但被读的字段
+   只有 26 字节(`struct.calcsize("<QIIQBB")`),原件的上界 `end - 32` 因此**够不着**落在某段最后
+   32 字节里那条完全可读的记录。提升版改成 `end - 26 + 1`。当前产物上两个界给出**逐条相同的
+   13,693 条记录**(`site JSMallocBlockHeader` 仍是 141,`quickjs.c:1494:12` 仍恰好 1 条),所以这条
+   不改变任何已记录的计数 —— 它是给下一次链接准备的,届时布局器未必不把记录放进那段尾部。
 
 ### `scripts/c2_selfabort_repro.py <dll_path>`(Windows 侧;§45 的自检器)
 

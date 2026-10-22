@@ -1714,12 +1714,28 @@ def test_assert_same_bytes_returns_the_hash_for_the_transcript(tmp_path, monkeyp
     assert c2_init_threadstate.assert_same_bytes_as_s42(str(path)) == digest
 
 
-def test_s42_sha_constant_describes_the_dll_in_this_tree():
-    # The gate's whole value is that it is the hash of the artifact the build
-    # produces. If `quickjs_wrapper.c` changes, this fails and says so in the
-    # language §44 cares about: the shot would no longer be comparable with §42.
-    assert c2_init_threadstate.S42_DLL_SHA256 == c2_init_threadstate.sha256_of(
-        DLL_PATH)
+def test_s42_sha_constant_stays_pinned_to_s42s_bytes():
+    # This constant is §42's HISTORICAL identity, not a description of whatever the
+    # tree currently builds: §44's verdicts in
+    # evidence/analysis/runtime_444_c1_validation.md are recorded against exactly these
+    # bytes, so re-pointing the constant at a convenient rebuild would silently
+    # re-base provenance. Do NOT "fix" a failure here by copying the current
+    # zig-out digest into it — that is the edit this test exists to make expensive.
+    #
+    # The old form of this test asserted equality with sha256(DLL_PATH), i.e. "the
+    # constant describes this tree". That can no longer be true by design: this plan
+    # deliberately instruments `src/dll/quickjs/quickjs_wrapper.c` (Task 1), so the
+    # artifact in the tree is different bytes from §42's and the only way to satisfy
+    # tree-equality would be to undo planned work.
+    #
+    # What still protects a §44-style re-run is the live gate, unchanged:
+    # `c2_init_threadstate.assert_same_bytes_as_s42` refuses any artifact whose digest
+    # differs from this constant before dispatching, and
+    # `test_assert_same_bytes_refuses_an_artifact_that_is_not_s42` pins that behaviour.
+    # What this test pins is the constant's immutability — it fails if anyone edits the
+    # constant, which is the whole behaviour under test here.
+    assert c2_init_threadstate.S42_DLL_SHA256 == (
+        "863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617")
 
 
 def test_watched_dispatch_throttles_the_thread_probe_to_the_requested_interval(monkeypatch):
