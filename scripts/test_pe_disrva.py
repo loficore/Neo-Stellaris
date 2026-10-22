@@ -21,6 +21,12 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 TOOL = REPO / "scripts" / "pe_disrva.py"
 DLL = REPO / "zig-out" / "bin" / "stellaris_quickjs.dll"
 
+# The annotation test cross-checks against the *other* offline reader of this same
+# artifact: record_rva values and .pdata function starts. Imported here, in the
+# test, so pe_disrva.py itself stays a single-file tool.
+sys.path.insert(0, str(REPO / "scripts"))
+import dll_ubsan_site  # noqa: E402
+
 # 131 bytes from .pdata (begin inclusive, end exclusive). The tool must print the
 # same byte count so "end exclusive" cannot silently become "end inclusive".
 TRAP_START, TRAP_END = "0xbd70", "0xbdf3"
@@ -78,8 +84,23 @@ def test_disasm_finds_the_sub_and_the_null_check_in_the_trap_function():
 
 
 def test_rip_relative_operands_are_annotated_with_resolved_rvas():
+    # Two independent witnesses from the artifact on disk, both derived (never
+    # pinned), so this survives a re-link:
+    #   (a) at least one `#0x…` equals a UBSan record_rva that dll_ubsan_site's
+    #       own scan yields for these bytes;
+    #   (b) at least one `#0x…` equals a .pdata function start (the handler call
+    #       targets in this function).
+    data = DLL.read_bytes()
+    image_base, secs = dll_ubsan_site.parse(data)
+    record_rvas = {rva for rva, *_rest in
+                   dll_ubsan_site.iter_records(data, image_base, secs)}
+    function_starts = {begin for begin, _end in
+                       dll_ubsan_site.runtime_functions(data, secs)}
     out = _disasm(TRAP_START, TRAP_END)
-    assert re.search(r"#0x[0-9a-f]+", out)      # 标注格式:<disasm>  #<resolved rva>
+    annotated = {int(m, 16) for m in re.findall(r"#0x([0-9a-f]+)", out)}
+    assert annotated, out
+    assert annotated & record_rvas, sorted(annotated)
+    assert annotated & function_starts, sorted(annotated)
 
 
 def test_bad_inputs_exit_2_not_a_traceback():

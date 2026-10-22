@@ -42,7 +42,8 @@ Read-only: opens a file copy, no process, no game, no dispatch.
 **Exit codes — 0/1/2 mean three different things, and a caller must be able to tell
 them apart.** 0 = the artifact was read and something matched. 1 = the artifact was read
 and *nothing* matched (no check site for that type name; no ``.pdata`` entry for that
-address; a function whose code references no record) — that is a finding, not a failure.
+address; a function whose code references no TypeMismatchData record (other UBSan record
+kinds are not decoded)) — that is a finding, not a failure.
 2 = **the invocation is wrong, so nothing was concluded about the artifact** (missing
 path, unreadable file, truncated or non-PE32+ input, or `func` handed a number below
 the image base — see the caliber guard in `cmd_func`), printed as one line on stderr
@@ -289,7 +290,8 @@ def cmd_func(data, image_base, secs, va):
             recs[r] = (f, l, c, k, t)
     hits = lea_record_targets(data, secs, begin, end, set(recs))
     if not hits:
-        print("[ubsan_site] this function's code references no UBSan record")
+        print("[ubsan_site] this function's code references no TypeMismatchData "
+              "record (other UBSan record kinds are not decoded)")
         return 1
     for hit_rva in sorted(hits):
         f, l, c, k, t = recs[hit_rva]

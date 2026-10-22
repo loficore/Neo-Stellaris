@@ -62,7 +62,9 @@ python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 0xbdf3
 ```
 
 The `#0x...` columns are RVAs (relative to `image_base=0x180000000`), not VAs; they compare
-directly with the `record_rva=` values `dll_ubsan_site.py` prints.
+directly with the `record_rva=` values `dll_ubsan_site.py` prints **for `TypeMismatchData`
+records**. That tool does not decode other UBSan record kinds, so `#0x5ab450` (a
+`PointerOverflowData`) has no `record_rva=` row there — see “The two UBSan records” below.
 
 ## Reading — operand order and encodings
 
@@ -102,9 +104,19 @@ here that tests the post-subtract `rcx` for null.
   pinned; `dll_ubsan_site.py func 0x18000bd9b` prints the same record with
   `loaded_at=0x18000bd8c`. `rdx` is zeroed before the call (`xor eax,eax` / `mov edx,eax`), so the
   reported pointer value is the literal 0, not `r8`.
-- `0xbddd` `lea rcx, [rip + 0x59f66c]` → `#0x5ab450`; `0xbde4` `call` → `#0x499cc0`. The record at
-  `0x5ab450` is `quickjs.c:1494:12 reference_binding`; the call's arguments are
-  `r8 = [rbp-0x18] = ptr-8` and `rdx = [rbp-0x20] = ptr`.
+- `0xbddd` `lea rcx, [rip + 0x59f66c]` → `#0x5ab450`; `0xbde4` `call` → `#0x499cc0`, which is
+  `__ubsan_handle_pointer_overflow`. The record at `0x5ab450` is a 16-byte `PointerOverflowData`
+  — only a `SourceLocation` (filename, line 1494, column 12; same location as the record above),
+  with no type descriptor and no kind byte. The handler's call shape is
+  `(Data*, Base=rdx, Result=r8)`: here `rdx = [rbp-0x20] = ptr` and `r8 = [rbp-0x18] = ptr-8`,
+  i.e. `Base = ptr`, `Result = ptr - 8`. It is **not** a `TypeMismatchData` record.
+- The `reference_binding` label this line carried in the first draft was a misparse of the
+  **adjacent** record at `0x5ab460` (`quickjs.h:699:9 member_access type='JSValue'`):
+  `0x5ab450+16` is that record's filename pointer (`0x1804d20de`), not a `TypeDescriptor`; the
+  bytes at `+24`/`+25` (`0xbb`/`0x02`) are the two bytes of that record's line field
+  (699 = `0x02bb`). Read as the misaligned record's `log_align`/`kind` they become 187 (invalid:
+  `log_align > 7`) and `2` (`KIND_NAMES[2]` → `reference_binding`). The label is withdrawn, and
+  none of this record's fields were decoded as a type-mismatch record.
 - §45's abort frame prints `0x18000bd9b` (``ip − 1``), which falls inside the first call
   (`0xbd97..0xbd9c`) — the `member_access` handler.
 

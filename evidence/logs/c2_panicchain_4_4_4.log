@@ -224,7 +224,8 @@ rc=1
 ```
 
 Five of eight frames resolve to `quickjs.c` lines; three resolve to a `.pdata` range and nothing else
-(exit 1 = "references no UBSan record", see (7) trap 5 for why that is a finding and not a failure). The
+(exit 1 = "references no UBSan record" [fix-round 2026-10-22: the tool's wording now names the record
+kind — "no TypeMismatchData record (other UBSan record kinds are not decoded)"], see (7) trap 5 for why that is a finding and not a failure). The
 innermost one was **already** symbolized on disk before this task: `c2_mfrecords_4_4_4.log:179-181` prints
 the same command, the same `rva 0xbd70..0xbdf3 (131 bytes)` and the same `quickjs.c:1494:12` record, with
 `record_rva` moved only because the section layout moved (§45's copy at
@@ -309,9 +310,16 @@ inferred"):
      and on §45's — the middle of the chain is attributed, not inferred.
   2. `__JS_NewAtomInit`'s span on §46 bytes is `0x1ebb0..0x1eda4` — numerically identical to §45's
      (`c2_selfabort_4_4_4.log:101`), so the recorder that moved the outer frame did not move this one.
-  3. The 131-byte trapping function carries **exactly one** UBSan record (`:1494:12`). No second site in
-     that range competes for the attribution, so the "which line of this function" question has one
-     answer in these bytes. (Later tasks that change the build should re-measure this, not assume it.)
+  3. The 131-byte trapping function carries **exactly one** UBSan **TypeMismatchData** record
+     (`0x5ab430`, `:1494:12`). No second site in that range competes for the attribution, so the
+     "which line of this function" question has one answer in these bytes. (Later tasks that change
+     the build should re-measure this, not assume it.)
+     *Fix-round note (2026-10-22):* this sentence first said "exactly one UBSan record"; the
+     machine code has **two** handler calls and two records. The second is `0x5ab450`, a 16-byte
+     `PointerOverflowData` at the same source location `:1494:12`, passed to
+     `__ubsan_handle_pointer_overflow` (`0x499cc0`). `func` prints one because it decodes only
+     `TypeMismatchData` kinds 3–11; the `:1494:12` attribution is unaffected because both records
+     share that location.
 
 ## (4a) the §45 set, resolved on its own bytes
 
@@ -529,7 +537,9 @@ What this log does **not** establish:
    6-8 were NOT flagged by that trap — they hit ranges — but the inverse reading ("this frame is data or
    padding") is what §45 had to disclaim, and (4a) above shows §45's own claim of *no* `.pdata` entry for
    0xeede3 is contradicted by its own bytes (a 737-byte entry, not a build difference).
-5. **`this function's code references no UBSan record` is a finding, not an error.** It exits 1 and it
+5. **`this function's code references no UBSan record` is a finding, not an error.** [Fix-round
+   2026-10-22: the tool's wording now names the record kind — "no TypeMismatchData record (other UBSan
+   record kinds are not decoded)"; the sentence below still describes the same exit-1 branch.] It exits 1 and it
    means: this function's bytes contain no `lea` of any record the scanner knows — a fact about
    instrumentation, not about the language of the frame. A C function with no check site produces the same
    answer; frames 6-7 are exactly that, and frame 8 is Zig. It does NOT mean the function is unreachable
@@ -560,7 +570,7 @@ later reader must not collapse them:
 | code | meaning | where it is printed |
 |---|---|---|
 | 0 | the artifact was read and something matched | `site` with rows; `func` with a covering range **and** ≥1 referenced record |
-| 1 | the artifact was read and **nothing** matched — a finding | `site`: no check site for that type name. `func`: **either** "rva `X` is not inside any `.pdata` function entry" (no covering range — uninformative, trap 4) **or** "this function's code references no UBSan record" (a range was found, no record inside it — a normal answer for code with no check site, trap 5) |
+| 1 | the artifact was read and **nothing** matched — a finding | `site`: no check site for that type name. `func`: **either** "rva `X` is not inside any `.pdata` function entry" (no covering range — uninformative, trap 4) **or** "this function's code references no UBSan record" (a range was found, no record inside it — a normal answer for code with no check site, trap 5) [fix-round 2026-10-22: the second message now reads "no TypeMismatchData record (other UBSan record kinds are not decoded)"] |
 | 2 | the invocation was wrong, so nothing was concluded about the artifact | cannot read the path / truncated / not PE32+; **or** `func` was handed a number below the image base |
 
 Code 2's name in the module changed from `EXIT_READ_ERROR` to `EXIT_CALLER_ERROR` (the constant's old name

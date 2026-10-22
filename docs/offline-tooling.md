@@ -231,7 +231,8 @@ optional header 读,没有任何地址是写死的 —— 换一份产物就把 
 一个结论,不是故障。**1 有两种不同的意思,别把它们并成一句话**:「该类型名零个检查点 / `func`
 的地址不在任何 `.pdata` 函数区间里」和「命中了函数、但**该函数代码不引用任何 UBSan 记录**」
 是两件事(工具分别打 `rva 0x… is not inside any .pdata function entry` 和
-`this function's code references no UBSan record`),后者的含义是"这一帧没有
+`this function's code references no TypeMismatchData record (other UBSan record
+kinds are not decoded)`),后者的含义是"这一帧没有
 可归因的捕获",不是"这里没有 UBSan";**2 = 调用本身是错的,所以对产物什么都没下结论** ——
 工具没能读到产物(路径不存在、不可读、截断、非 PE32+),**或 `func` 拿到的数低于镜像基址**
 (那是 panic 栈打的裸 RVA,不是 vma;本批(§47 前置)加的口径护栏,打一行 stderr 并把该传的
@@ -249,6 +250,8 @@ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000
 **141** 个检查点,其中 `quickjs.c:1494:12` 恰好 1 条;`func 0x18000bd9b` = 持有该地址的函数
 `rva 0xbd70..0xbdf3`(**131 bytes**),引用记录 `quickjs.c:1494:12 member_access
 type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— 与 §45.3 记的同一条。
+同一函数还 `call 0x499cc0`(`__ubsan_handle_pointer_overflow`),带的是 `0x5ab450` 处的 16 字节
+`PointerOverflowData`(同为 `:1494:12`);它**不在**上面这条记录的输出里 —— 见判读陷阱 7。
 
 **判读陷阱**:
 1. **`func` 打印的是 `.pdata` 区间和该区间加载了哪些记录,不是链接期函数名。** 帧归属靠的是
@@ -279,6 +282,15 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
    7 行输出**一行都不会被滤掉** —— 看起来"过滤生效了、什么都没丢",其实过滤根本没起作用。
    两种写法都别拿来取证据:要记录行就 `grep '^  '` 或 `grep 'quickjs\.c:'`(同一份输出各实测
    5 行)。
+7. **`#0x…` 标注只能和 `TypeMismatchData` 记录的 `record_rva=` 比。** `func`/`site` 只解码
+   `TypeMismatchData` 的 kind 3–11(`scripts/dll_ubsan_site.py:93`,`:196` 还要求 `log_align <= 7`),
+   其它 UBSan 记录种类**不解码** —— 例如 `PointerOverflowData` 是 16 字节、只有 `SourceLocation`,
+   没有类型描述器与 kind 字节,所以它没有 `record_rva=` 行,"no record" ≠ "no handler"。实例:
+   `js_rc` 的 131 字节函数有两次 handler 调用(`0x498170`/`0x5ab430` 的
+   `member_access type='JSMallocBlockHeader'` 与 `0x499cc0`/`0x5ab450` 的
+   `PointerOverflowData`),`func` 只打出前一条;`evidence/disasm/js_rc_trap_77c0c35e.md` 两次都列。
+   所以一个函数"恰好一条记录"只意味着**恰好一条可解码的 `TypeMismatchData`**,不是只有一次
+   UBSan handler 调用。
 
 ### `scripts/c2_selfabort_repro.py <dll_path>`(Windows 侧;§45 的自检器)
 
@@ -345,16 +357,18 @@ python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 40       #
 - 第三个参数:`0x` 开头 = **结束 RVA,不含**;纯十进制数字 = **指令条数**。所以小的十六进制结束 RVA
   必须带 `0x`(裸 `100` 是 100 条,不是 rva 0x100)。
 - 每条绝对 `call`/`jmp` 目标与每个 `rip+disp` 操作数标 `  #0x<rva>`;`#0x` 后是**相对 image base**
-  的 RVA(image base 从该 PE 的 optional header 读),所以能直接与 `dll_ubsan_site.py` 的
-  `record_rva=` 比。
+  的 RVA(image base 从该 PE 的 optional header 读),所以能和 `dll_ubsan_site.py` 的
+  `record_rva=` 比 —— 但那条只对**它解码的 `TypeMismatchData` 记录**成立(见上一节判读陷阱 7)。
 - **只解码带 `IMAGE_SCN_MEM_EXECUTE`(`0x20000000`)的段**。RVA 0 落在 PE 头里,capstone 会把 `MZ...`
   当指令解出来,所以工具在喂给它之前按 section 位拒绝。可执行段外的起点、文件映射之外的起点、或解出
   **0 条指令**,一律退出 1 —— 那是「这段不是代码」的结论。
 - 退出码三义与 `dll_ubsan_site.py` 一致:**0** = 至少解出 1 条;**1** = 不是可执行代码 / 0 条;
   **2** = 调用错了(缺参、非 hex、文件读不到、非 PE32+、end < start、count <= 0),一行 stderr、无
   traceback。
-- 上限 4096 条,超出打 `; truncated at 4096 insns`;头行给 `N insns, M bytes`,end 模式下 `M` 应等于
-  `end - start`(2026-10-22 实测:`.pdata` 的 `0xbd70..0xbdf3` = 131 字节 = 40 条)。
+- 上限 4096 条,超出打 `; truncated at 4096 insns`;头行给 `N insns, M bytes`。**未截断时** end 模式下
+  `M` 等于 `end - start`;可一旦超过 4096 条(或 end 越过段尾被裁剪),头行的 end 是**有效(裁剪后)
+  的 end**,`M` 小于请求的 `end - start`,同时带上截断提示(实测 `0xbd70 0x800000` 头行打
+  `0x4cac00` 并附 `; truncated at 4096 insns`;未截断的 `0xbd70..0xbdf3` = 131 字节 = 40 条)。
 
 **判读陷阱:**
 1. **反汇编证明的是「被检查的是哪个表达式」,永远不是运行时值。** 它读得出 `0xbd70` 的 `test r8,r8`
