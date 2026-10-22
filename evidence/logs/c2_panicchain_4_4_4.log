@@ -300,12 +300,12 @@ inferred"):
      (`c2_selfabort_4_4_4.log:163-166`) is not a property of those bytes and not a difference between
      the two builds — it is contradicted by its own artifact. This is also **not** explained by a tool
      version: the frozen original and the maintained tool share the same `.pdata` walk
-     (`scripts/scratch/2026-10_abortexit/ubsan_site.py:119-131` and `scripts/dll_ubsan_site.py:213-225`
+     (`scripts/scratch/2026-10_abortexit/ubsan_site.py:119-131` and `scripts/dll_ubsan_site.py:219-231`
      are the same `size // 12` loop with the same `0 < begin < end` filter), and running the frozen
      original on the §45 bytes reproduces the span and the six records. No `func 0xeede3` invocation is
      recorded in §45 — the claim appears only as prose — so there is no old bound computation to blame.
      The only parsing bound that changed after §45 is `iter_records`' scan end (`end - 32` →
-     `end - RECORD_READ_SIZE + 1`, `scripts/dll_ubsan_site.py:192`, commit 26589ac), which governs
+     `end - RECORD_READ_SIZE + 1`, `scripts/dll_ubsan_site.py:198`, commit 26589ac), which governs
      which *records* a `site` scan can see, not which function spans exist. On the bytes read here —
      and on §45's — the middle of the chain is attributed, not inferred.
   2. `__JS_NewAtomInit`'s span on §46 bytes is `0x1ebb0..0x1eda4` — numerically identical to §45's
@@ -464,8 +464,10 @@ clause. It landed.
 The shape is now: `JS_NewRuntime2` → `JS_InitAtoms` → first `__JS_NewAtomInit` → `js_alloc_string_rt` →
 `js_rc`, dying on a null `JSMallocBlockHeader` derived from a user pointer that is not NULL (§45's
 "the user pointer was 8" reading, `c2_selfabort_4_4_4.log:113-116`, which this log neither re-derives nor
-retracts). §43's "flat, trivial code between `:3430` and `:3330`" window and §46's "after the 40-byte
-arena was delivered, before any next `mf` call" are the same place: `js_alloc_string_rt`'s body from
+retracts). (superseded by (10)/§47: the report's pointer is the constant 0; the runtime str
+value/source is unobserved) §43's "flat, trivial code between `:3430` and `:3330`" window and §46's
+"after the 40-byte arena was delivered, before any next `mf` call" are the same place:
+`js_alloc_string_rt`'s body from
 `:2358` (the `js_malloc_rt` that consumed the arena) to `:2361` (the first `js_rc`), with **no `mf` call in
 between** — a block from the just-created arena, no callback to the host. So no additional allocator event
 was expected between the `Mx size=ff0` row and the panic, and none was observed. Consistent, and worth
@@ -564,7 +566,7 @@ tool's other caller-side errors already use:
     [ubsan_site] func takes a vma carrying the image base (0x180000000); 0x43bc is below it, so it looks like a bare rva — pass 0x1800043bc for rva 0x43bc   # stderr
     rc=2
 
-The contract, and the two exit-1 messages stay exactly as they were and keep **different meanings** — a
+The contract: the two exit-1 messages keep **distinct meanings** — a
 later reader must not collapse them:
 
 | code | meaning | where it is printed |
@@ -667,6 +669,7 @@ so the branch's earlier history is not this plan's:
     bfd4e65  Task 1 fix: §45's bytes live in .zig-cache; frames 6-8 attributed by checkable sources
     9d88ac6  Task 1 fix: line refs corrected; 3,042/4,824 restated as a tool-vs-tool difference
     e371c30  Task 2: scripts/pe_disrva.py + its tests + the offline-tooling.md section
+             (+ evidence/disasm/js_rc_trap_77c0c35e.md, the 40-insn listing, and scripts/README.md)
     1a7e720  Task 2 fix: the second record is PointerOverflowData; `func` wording names the record kind
     270a59e  Task 3: §47 appended — rows (i)/(ii)/(iii) fail, the fourth lands with a mechanism
     db87170  Task 3 fix: nine wording/reference corrections inside §47
@@ -691,3 +694,98 @@ Fence counts, measured on this commit's tree (not quoted from earlier sections):
     77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
 
 No game, no shot, no dispatch was used for §47 — zero of each.
+
+## (12) §47 final-review fix round (2026-10-22) — native header attribution; truncation exits 2
+
+Two Important findings and four minor ones from the whole-branch review at `bb5c2b4`. No shot, game,
+dispatch, build or DLL byte: the subjects are the vendored preprocessor, the two offline PE readers,
+this log and §47. The DLL digest below is unchanged.
+
+### (12.1) The native full `<stddef.h>` pull is `<malloc.h>` at `quickjs.c:38`, not `<stdlib.h>` at `:25`
+
+Review item 1 measured §47.4's old sentence false. Reproduced with the same preprocessor family the
+§47 build uses (Zig 0.16.0's clang). `-x c` is explicit because this Zig falls back to `/usr/include`
+for a bare `-` and then cannot find `stddef.h`; it is required for the stdin form in this environment.
+
+    $ zig cc -E -dM -x c -include stdlib.h - </dev/null | grep -w offsetof
+    $ echo rc=$?
+    rc=1
+    $ zig cc -E -dM -x c -include malloc.h - </dev/null | grep -w offsetof
+    #define offsetof(t,d) __builtin_offsetof(t, d)
+    $ echo rc=$?
+    rc=0
+
+and the whole translation unit's final definition, on each target:
+
+    $ zig cc -DCONFIG_VERSION='"2025-09-13"' -Wno-gnu-zero-variadic-macro-arguments \
+        -E -dM libs/quickjs/quickjs.c 2>/dev/null | grep -w offsetof
+    #define container_of(ptr,type,member) ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
+    #define offsetof(t,d) __builtin_offsetof(t, d)
+
+    $ zig cc -target x86_64-windows-gnu -DCONFIG_VERSION='"2025-09-13"' \
+        -Wno-gnu-zero-variadic-macro-arguments -E -dM libs/quickjs/quickjs.c 2>/dev/null | grep -w offsetof
+    #define container_of(ptr,type,member) ((type *)((uint8_t *)(ptr) - offsetof(type, member)))
+    #define offsetof(type,field) ((size_t) &((type *)0)->field)
+
+Why: glibc's `<stdlib.h>` asks `<stddef.h>` for `size_t`/`wchar_t`/`NULL` only
+(`__need_size_t`/`__need_wchar_t`/`__need_NULL`, `/usr/include/stdlib.h:27-31`), so
+`__stddef_offsetof.h` is not reached and no `offsetof` is defined. `<malloc.h>` — selected by
+`#elif defined(__linux__) || defined(__GLIBC__)` at `quickjs.c:37`, included at `:38` — includes
+`<stddef.h>` with no `__need_*` (line 23), and Zig's clang resource `__stddef_offsetof.h` defines
+`offsetof` as the builtin when it is not already defined. MinGW does not take that branch: its
+`<stdlib.h>` also defines no `offsetof` (same `-dM` command, no output), and `<inttypes.h>` reaches
+`<stddef.h>` only with `__need_wchar_t` (`any-windows-any/inttypes.h:13-14`, `quickjs.c:28`). So at
+`cutils.h:43` the fallback is the active definition on MinGW and the builtin on native. §47.4 was
+rewritten to this attribution; the constant-0 mechanism, the landing row and §45's withdrawal are
+unchanged.
+
+### (12.2) Truncated PE exits 2 instead of clipping to the surviving prefix
+
+Review item 2's repro, before the fix:
+
+    $ cp zig-out/bin/stellaris_quickjs.dll /tmp/trunc.dll && truncate -s $((0xb180)) /tmp/trunc.dll
+    $ python3 scripts/pe_disrva.py /tmp/trunc.dll 0xbd70 0xbdf3
+    ; trunc.dll .text rva 0xbd70..0xbd80 (end exclusive) image_base=0x180000000: 4 insns, 14 bytes
+      ...
+    rc=0
+
+after:
+
+    $ python3 scripts/pe_disrva.py /tmp/trunc.dll 0xbd70 0xbdf3
+    [pe_disrva] /tmp/trunc.dll is not a readable PE32+ image: section .text claims 0x4c9c00 raw bytes at file offset 0x400, past the end of the file (0xb180 bytes): truncated image
+    rc=2
+
+`parse` now rejects any section whose declared raw range runs past EOF (`raw_size == 0` skipped);
+`disassemble` already mapped `ValueError` to its one-line exit-2 message. The same guard went into
+`dll_ubsan_site.py`'s `parse`, whose docs already promised truncated input → 2 while `func` on a
+truncated copy answered 1 from the surviving empty `.pdata`; `main` maps the `ValueError` to
+`EXIT_CALLER_ERROR`. New tests:
+`test_pe_disrva.py::test_truncated_image_exits_2_instead_of_clipping_to_the_surviving_prefix`
+and `test_c2_harness.py::test_ubsan_site_truncated_input_exits_2_not_a_no_pdata_finding`.
+
+Out-of-section case (controller's ruling): an RVA that lands in no section, or in a non-executable
+section, still exits **1** by design — a definite "this range is not code in this file"; 2 is only
+for unreadable / non-PE / truncated input and bad invocations. `docs/offline-tooling.md` now says
+both. The real artifact's output is byte-identical before/after on `0xbd70..0xbdf3`, `0xbd70 40`,
+`0xbd70 0x800000`, `0x0 4`, `site JSMallocBlockHeader` and `func 0x18000bd9b` (six diffs, empty).
+
+### (12.3) The remaining minors
+
+Item 3: review said the two `dll_ubsan_site.py` refs were one line low at `bb5c2b4` (`:214-226`,
+`:193`). The five-line section-range guard above sits in `parse`, so in this commit's tree the same
+`.pdata` loop is `:219-231` and the `RECORD_READ_SIZE + 1` bound is `:198`; (1) cites those.
+Item 4: the forward pointer is in (6), and (8) now says the two exit-1 messages "keep distinct
+meanings" instead of "stay exactly as they were". Item 5: §47.5 says "**tests** `str` for null".
+Item 6: the `e371c30` ledger line names `evidence/disasm/js_rc_trap_77c0c35e.md` and
+`scripts/README.md`.
+
+Fence counts on the fix-round tree:
+
+    $ python3 -m pytest scripts/test_pe_disrva.py scripts/test_c2_harness.py scripts/test_scripts_layout.py -q
+    163 passed in 2.48s                    (5 + 135 + 23; pe_disrva was 4, harness 134)
+    $ PYTHONPATH=scripts/windows python3 -m pytest scripts/windows/tests -q
+    169 passed in 4.75s
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
+
+The Zig suite was not re-run (no Zig/C source changed).

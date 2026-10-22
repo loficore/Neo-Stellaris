@@ -2009,7 +2009,7 @@ def test_ubsan_site_func_rejects_a_bare_rva_instead_of_guessing(capsys):
     §45's boundary section had to warn about in prose. A caliber bug must not be able
     to produce a conclusion about the artifact, so the invocation error now exits 2
     on stderr (the tool's error stream, per the read-error paths in ``main``) and the
-    two exit-1 messages stay exactly as they were.
+    two exit-1 messages keep distinct meanings.
 
     The address is derived from the image, not hard-coded, for the reason stated in
     ``test_ubsan_site_func_mode_reports_function_range_and_records``: pinning §45's
@@ -2040,3 +2040,37 @@ def test_ubsan_site_func_rejects_a_bare_rva_instead_of_guessing(capsys):
     capsys.readouterr()
     assert site.cmd_func(data, image_base, secs, image_base + begin) == 0
     assert "not inside any .pdata" not in capsys.readouterr().err
+
+
+def test_ubsan_site_truncated_input_exits_2_not_a_no_pdata_finding(tmp_path, capsys):
+    """A file cut inside ``.text`` must be an invocation error (2), not a finding.
+
+    ``parse`` validated the headers but not the section ranges, so a truncated
+    copy reached ``runtime_functions`` with the surviving (empty) ``.pdata`` and
+    answered exit 1 — "rva X is not inside any .pdata function entry", the same
+    code and shape as a real conclusion about the artifact, while the docs
+    already promised truncated input → 2. The cut is placed at the trap
+    function's own file offset, derived from the image, so it is inside a
+    section whose declared raw size runs past EOF.
+    """
+    site = importlib.import_module("dll_ubsan_site")
+    with open(DLL_PATH, "rb") as f:
+        data = f.read()
+    image_base, secs = site.parse(data)
+    records = [r for r in site.iter_records(data, image_base, secs)
+               if "JSMallocBlockHeader" in r[5]]
+    want = {r[0] for r in records if r[0] is not None}
+    begin = next(b for b, e in site.runtime_functions(data, secs)
+                 if site.lea_record_targets(data, secs, b, e, want))
+    off_of, _rva_of = site.make_maps(secs)
+    cut = off_of(begin)
+    assert cut is not None and 0 < cut < len(data), (cut, len(data))
+
+    trunc = tmp_path / "trunc.dll"
+    trunc.write_bytes(data[:cut])
+    rc = site.main([str(trunc), "func", f"{image_base + begin:#x}"])
+    assert rc == 2, "a truncated image is an invocation error, not a no-sites finding"
+    err = capsys.readouterr().err
+    assert "Traceback" not in err, err
+    assert err.startswith("[ubsan_site] "), err
+    assert err.count("\n") == 1, err

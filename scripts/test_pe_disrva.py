@@ -5,9 +5,10 @@ The subject is the shipping ``zig-out/bin/stellaris_quickjs.dll``. §45 pinned t
 UBSan trap to ``quickjs.c:1494`` (``js_rc`` -> ``container_of``) inside the 131-byte
 function at ``rva 0xbd70..0xbdf3`` (end exclusive, per ``.pdata``); §47 needs a
 disassembly of those bytes to decide whether the null check tests the pointer
-before or after the ``-8``. These four tests pin the tool's surface — a range with
-a subtract-8 and a zero test, rip annotations, exit 2 for bad invocations, and
-exit 1 (not 0) for a range that is not code.
+before or after the ``-8``. These five tests pin the tool's surface — a range with
+a subtract-8 and a zero test, rip annotations, exit 2 for bad invocations, exit 1
+(not 0) for a range that is not code, and exit 2 for a truncated image whose
+section table claims bytes past EOF.
 
 Everything runs as a subprocess against the built artifact: no game, no process
 to attach to, no Windows channel.
@@ -119,3 +120,18 @@ def test_zero_instruction_range_exits_1_not_0():
     # RVA 0 lies in the PE headers; capstone would otherwise decode "MZ..." as
     # instructions, so the executability gate (IMAGE_SCN_MEM_EXECUTE) decides this.
     assert _run_args("0x0", 4).returncode == 1
+
+
+def test_truncated_image_exits_2_instead_of_clipping_to_the_surviving_prefix(tmp_path):
+    # A file cut at 0xb180 — inside .text by RVA, but 4.9 MB short of the raw
+    # bytes the section table claims. Before the section-range check the tool
+    # decoded the surviving 14 bytes of the trap range and exited 0: a truncated
+    # input read as "the listing is the artifact". Truncation is an invocation
+    # error (2), the same class as a non-PE file, not a finding.
+    trunc = tmp_path / "trunc.dll"
+    trunc.write_bytes(DLL.read_bytes()[:0xb180])
+    r = _run([str(trunc), TRAP_START, TRAP_END])
+    assert r.returncode == 2, (r.returncode, r.stderr)
+    assert "Traceback" not in r.stderr, r.stderr
+    assert r.stderr.startswith("[pe_disrva] "), r.stderr
+    assert r.stderr.count("\n") == 1, r.stderr

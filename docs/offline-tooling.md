@@ -240,6 +240,9 @@ kinds are not decoded)`),后者的含义是"这一帧没有
 把 2 误读成 1 就是「这份产物没有检查点」的假结论 —— 两条 exit-1 消息与 2 的措辞故意不同形,
 护栏就是为了不让"调用写错了"长得像"结论"。**本批围栏实测**:`scripts/test_c2_harness.py`
 **134 passed**(133 + 新增 1 条),`scripts/test_scripts_layout.py` **23 passed**。
+**§47 终评修复轮**(2026-10-22)`parse` 补上 section 越界检查后,截断输入真的走 2 了(此前
+`func` 会拿空 `.pdata` 答 1);新增 1 条截断测试,`test_c2_harness.py` 变为 **135 passed**,
+`test_pe_disrva.py` 变为 **5 passed**。
 
 ```
 python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll site JSMallocBlockHeader
@@ -283,7 +286,7 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
    两种写法都别拿来取证据:要记录行就 `grep '^  '` 或 `grep 'quickjs\.c:'`(同一份输出各实测
    5 行)。
 7. **`#0x…` 标注只能和 `TypeMismatchData` 记录的 `record_rva=` 比。** `func`/`site` 只解码
-   `TypeMismatchData` 的 kind 3–11(`scripts/dll_ubsan_site.py:93`,`:196` 还要求 `log_align <= 7`),
+   `TypeMismatchData` 的 kind 3–11(`scripts/dll_ubsan_site.py:93`,`:201` 还要求 `log_align <= 7`),
    其它 UBSan 记录种类**不解码** —— 例如 `PointerOverflowData` 是 16 字节、只有 `SourceLocation`,
    没有类型描述器与 kind 字节,所以它没有 `record_rva=` 行,"no record" ≠ "no handler"。实例:
    `js_rc` 的 131 字节函数有两次 handler 调用(`0x498170`/`0x5ab430` 的
@@ -367,8 +370,10 @@ python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbd70 40       #
   当指令解出来,所以工具在喂给它之前按 section 位拒绝。可执行段外的起点、文件映射之外的起点、或解出
   **0 条指令**,一律退出 1 —— 那是「这段不是代码」的结论。
 - 退出码三义与 `dll_ubsan_site.py` 一致:**0** = 至少解出 1 条;**1** = 不是可执行代码 / 0 条;
-  **2** = 调用错了(缺参、非 hex、文件读不到、非 PE32+、end < start、count <= 0),一行 stderr、无
-  traceback。
+  **2** = 调用错了(缺参、非 hex、文件读不到、非 PE32+、**截断的镜像**(section 表声明的 raw 字节
+  越过 EOF)、end < start、count <= 0),一行 stderr、无 traceback。
+- **起点不落在任何段里、或落在非可执行段里,是 1 而不是 2**(控制器的裁定):那是「这个文件里这段
+  确定不是代码」的结论;2 只留给**读不了 / 非 PE / 截断的输入**和写错的调用参数。
 - 上限 4096 条,超出打 `; truncated at 4096 insns`;头行给 `N insns, M bytes`。**未截断时** end 模式下
   `M` 等于 `end - start`;可一旦超过 4096 条(或 end 越过段尾被裁剪),头行的 end 是**有效(裁剪后)
   的 end**,`M` 小于请求的 `end - start`,同时带上截断提示(实测 `0xbd70 0x800000` 头行打

@@ -131,6 +131,11 @@ def parse(data: bytes):
         at = table + i * 40
         name = data[at:at + 8].rstrip(b"\0").decode("ascii", "replace")
         vsize, rva, raw_size, raw_off = struct.unpack_from("<IIII", data, at + 8)
+        if raw_size and raw_off + raw_size > len(data):
+            raise ValueError(
+                f"section {name} claims {raw_size:#x} raw bytes at file offset "
+                f"{raw_off:#x}, past the end of the file ({len(data):#x} bytes): "
+                "truncated image")
         secs.append((name, rva, vsize, raw_size, raw_off))
     return image_base, secs
 

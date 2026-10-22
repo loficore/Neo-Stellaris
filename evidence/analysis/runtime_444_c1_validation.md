@@ -2906,16 +2906,21 @@ expands the body to `__builtin_offsetof(JSMallocBlockHeader, user_data)`:
     static inline JSMallocBlockHeader *js_rc(void *ptr)
     { return ((JSMallocBlockHeader *)((uint8_t *)(ptr) - __builtin_offsetof(JSMallocBlockHeader, user_data))); }
 
-The preprocessor trace explains it: glibc's `<stdlib.h>` (included at `quickjs.c:25`, before
-`cutils.h:43`) pulls `<stddef.h>` in **fully**, so `offsetof` is already the builtin when the
-`#ifndef` is reached. On the MinGW headers this build uses, `<stdlib.h>` does not, and
-`<inttypes.h>` (`quickjs.c:28`) reaches `<stddef.h>` only with `__need_wchar_t` — so `offsetof` is
-still undefined at `cutils.h:43`, the fallback is defined, and the later full `<stddef.h>`
-inclusion (via `libregexp.h:27`) cannot override it because `__stddef_offsetof.h` guards its
-definition with `#if !defined(offsetof)`. That is a preprocessor-level difference sufficient to
-explain why the native control completes; whether the native test binary also carries
-`-fsanitize=null` was not measured, so this is the source-level reason the check exists on one
-target and not the other, not a claim about that binary's flags.
+The preprocessor trace explains it: on the native target `__linux__` selects the `<malloc.h>` branch
+at `quickjs.c:38`, and that header includes `<stddef.h>` **fully** (no `__need_*`), so `offsetof` is
+already the builtin when the `#ifndef` is reached. `<stdlib.h>` (`quickjs.c:25`) is not the source
+of the pull: glibc's copy asks `<stddef.h>` for `size_t`/`wchar_t`/`NULL` only (`__need_size_t`,
+`__need_wchar_t`, `__need_NULL`) and defines no `offsetof` — measured, the stdin probe
+`zig cc -E -dM -x c -include stdlib.h - </dev/null` prints no `offsetof`, while the same command
+with `-include malloc.h` prints `#define offsetof(t,d) __builtin_offsetof(t, d)` (verbatim output
+in `c2_panicchain_4_4_4.log` (12)). On the MinGW headers this build uses, the `__linux__`/`__GLIBC__`
+branch is not taken, `<stdlib.h>` defines no `offsetof`, and `<inttypes.h>` (`quickjs.c:28`)
+reaches `<stddef.h>` only with `__need_wchar_t` — so `offsetof` is still undefined at `cutils.h:43`,
+the fallback is defined, and the later full `<stddef.h>` inclusion (via `libregexp.h:27`) cannot
+override it because `__stddef_offsetof.h` guards its definition with `#if !defined(offsetof)`. That
+is a preprocessor-level difference sufficient to explain why the native control completes; whether
+the native test binary also carries `-fsanitize=null` was not measured, so this is the source-level
+reason the check exists on one target and not the other, not a claim about that binary's flags.
 
 **What this does to the death window.** `js_rc` cannot return in this build, so the first call to
 it is the death. The chain says that call is at `0xeeddf` — `js_alloc_string_rt`'s `:2361`, inside
@@ -2927,8 +2932,8 @@ allocator event needs to explain the stop.
 ### 47.5 What the report does **not** say
 
 - **`str`'s runtime value and source are unobserved.** The report carries a type and the literal
-  0; the only instruction in the function that looks at `str` is `0xbda0`, and the check it feeds
-  never runs. §46's boundary — "nothing in this section observes the value that `js_rc` was
+  0; the only instruction in the function that **tests** `str` for null is `0xbda0`, and the check
+  it feeds never runs. §46's boundary — "nothing in this section observes the value that `js_rc` was
   handed" — stands unchanged. §45's inference `str == 8` is **withdrawn**: it was derived from
   treating the `ptr − 8 == 0` check as the one that fired, and the check that fired does not test
   `ptr − 8`.
