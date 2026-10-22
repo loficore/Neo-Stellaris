@@ -73,7 +73,9 @@ rpc.exports = {
                 continue;
             }
             const off = '+' + '0x' + p.sub(start).toString(16).padStart(4, '0');
-            const hex = Array.from(insn.bytes)
+            // Frida's Instruction exposes no .bytes — read the decoded span back from the live
+            // image (readByteArray, read-only) so the hex column matches offline disrva.py.
+            const hex = Array.from(new Uint8Array(p.readByteArray(insn.size)))
                 .map(b => b.toString(16).padStart(2, '0')).join(' ');
             lines.push(off.padEnd(9) + hex.padEnd(20) + insn.mnemonic + ' ' + targetNote(insn));
             p = p.add(insn.size);

@@ -162,14 +162,57 @@ typedef struct {
     size_t size;  // usable size (not including header)
 } AllocHeader;
 
+/* Live-readable diagnostic buffer + write cursor, hoisted above the allocator
+   callbacks so heap_malloc/free/realloc can tag themselves. g_diag_log is the
+   SAME static C2CopyDiagLog reads back live (§38: the only channel that works
+   while the host is dying). */
+static char g_diag_log[512];
+static int g_diag_pos = 0;
+/* Rate limit: a live JS_NewRuntime2 does dozens of mallocs; unbounded tagging
+   would overflow the 512 buffer and push the `enter…new_rt` prefix off the end,
+   so the LAST tag read would be the buffer tail, not the death point. Cap each
+   callback kind, then stop appending (counting keeps going via s->malloc_count).
+   NOTE: heap_malloc/free/realloc are reached ONLY via mf (the sequence's own
+   alloc_ok/free_ok tags use HeapAlloc directly), so the first 'M' here proves
+   JS code called back into our allocator. */
+#define MF_TAG_CAP 8
+static int g_mf_malloc_tagged = 0;
+static int g_mf_free_tagged = 0;
+static int g_mf_realloc_tagged = 0;
+
+static void mf_tag(char c) {
+    if (g_diag_pos < 511) {
+        g_diag_log[g_diag_pos++] = c;
+        g_diag_log[g_diag_pos] = '\0';
+    }
+}
+
+/* heap_malloc leaves a matched pair of read-only markers so the LIVE witness can
+   tell WHICH phase of a single allocation the host died in — the one seam §41
+   could not split. 'M' = entered the callback (what §41 alone recorded); the char
+   that follows is how the call ENDED:
+     'm' = HeapAlloc returned a block (allocation completed)
+     '!' = returned NULL (size 0 / malloc_limit reject / HeapAlloc failed)
+     <dangling 'M', nothing follows> = the call never returned ⇒ death was inside
+     GetProcessHeap()/HeapAlloc, not in QuickJS's own code.
+   §41 only tagged entry, so `new_rt MMM` read the same for "died between two
+   mallocs inside JS_NewRuntime2" and "died inside the 3rd HeapAlloc". These are
+   §36's two hypotheses (engine-side vs heap/environment-side) and this decides
+   them. Both markers are just writes to our OWN g_diag_log — no hook, detour,
+   patchCode, or new capability, the same authorization level as §41's tags.
+   g_mf_malloc_tagged increments once per CALL, so MF_TAG_CAP bounds the number
+   of allocation LIFECYCLES shown (up to 2 chars each), not raw chars. */
 static void *heap_malloc(JSMallocState *s, size_t size) {
-    if (size == 0) return NULL;
-    if (s->malloc_size + size > s->malloc_limit) return NULL;
-    
+    int tag_this_call = (g_mf_malloc_tagged < MF_TAG_CAP);
+    if (tag_this_call) { mf_tag('M'); g_mf_malloc_tagged++; }
+    if (size == 0) { if (tag_this_call) mf_tag('!'); return NULL; }
+    if (s->malloc_size + size > s->malloc_limit) { if (tag_this_call) mf_tag('!'); return NULL; }
+
     HANDLE heap = GetProcessHeap();
     AllocHeader *h = (AllocHeader *)HeapAlloc(heap, 0, sizeof(AllocHeader) + size);
-    if (!h) return NULL;
-    
+    if (!h) { if (tag_this_call) mf_tag('!'); return NULL; }
+    if (tag_this_call) mf_tag('m');
+
     h->size = size;
     s->malloc_count++;
     s->malloc_size += size;
@@ -177,6 +220,7 @@ static void *heap_malloc(JSMallocState *s, size_t size) {
 }
 
 static void heap_free(JSMallocState *s, void *ptr) {
+    if (g_mf_free_tagged < MF_TAG_CAP) { mf_tag('F'); g_mf_free_tagged++; }
     if (!ptr) return;
     
     AllocHeader *h = ((AllocHeader *)ptr) - 1;
@@ -196,6 +240,7 @@ static void heap_free(JSMallocState *s, void *ptr) {
 }
 
 static void *heap_realloc(JSMallocState *s, void *ptr, size_t size) {
+    if (g_mf_realloc_tagged < MF_TAG_CAP) { mf_tag('R'); g_mf_realloc_tagged++; }
     if (!ptr) return heap_malloc(s, size);
     if (size == 0) {
         heap_free(s, ptr);
@@ -234,7 +279,6 @@ static const JSMallocFunctions heap_mf = {
 // ---------------------------------------------------------------------------
 static JSRuntime *g_test_rt = NULL;
 static JSContext *g_test_ctx = NULL;
-static char g_diag_log[512];
 
 // ---------------------------------------------------------------------------
 // Exported functions
@@ -338,20 +382,26 @@ static int c2_diag_sequence(void) {
     g_test_rt = NULL;
     g_test_ctx = NULL;
     g_diag_log[0] = '\0';
+    g_diag_pos = 0;
+    g_mf_malloc_tagged = 0;
+    g_mf_free_tagged = 0;
+    g_mf_realloc_tagged = 0;
     int result = 0;
-    int pos = 0;
     char err[C2_DIAG_ERR_SIZE];
-    /* snprintf returns the WOULD-BE length, so an unguarded `pos +=` can
-       overshoot 512; a later `512 - pos` would then be negative (huge size_t)
-       and g_diag_log + pos would be past the end of the static. Clamp pos to
-       stay within the buffer forever. (Not the crash cause for the 2026-10-08
-       run — the actual log content is ~90 bytes max — but a latent overflow
-       the moment more steps are logged.) */
+    /* snprintf returns the WOULD-BE length, so an unguarded `g_diag_pos +=` can
+       overshoot 512; a later `512 - g_diag_pos` would then be negative (huge
+       size_t) and g_diag_log + g_diag_pos would be past the end of the static.
+       Clamp g_diag_pos to stay within the buffer forever. It is a FILE STATIC
+       (not a local) so the heap_mf callbacks — which run DURING JS_NewRuntime2,
+       between the `new_rt ` and `rt=` tags — share this one write cursor; that
+       is exactly what mf_tag() needs. (The clamp is not the 2026-10-08 crash
+       cause — real content stays well under 512 — but a latent overflow the
+       moment more steps are logged.) */
     #define DLOG(...) do { \
-        int n_ = snprintf(g_diag_log + pos, 512 - pos, __VA_ARGS__); \
+        int n_ = snprintf(g_diag_log + g_diag_pos, 512 - g_diag_pos, __VA_ARGS__); \
         if (n_ < 0) n_ = 0; \
-        pos += n_; \
-        if (pos > 511) pos = 511; \
+        g_diag_pos += n_; \
+        if (g_diag_pos > 511) g_diag_pos = 511; \
     } while(0)
 
     HANDLE heap = GetProcessHeap();
@@ -403,7 +453,7 @@ static int c2_diag_sequence(void) {
 
 finish:
     #undef DLOG
-    c2_diag_write_file(result, pos);
+    c2_diag_write_file(result, g_diag_pos);
     return result;
 }
 

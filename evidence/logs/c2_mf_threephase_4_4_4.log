@@ -1,0 +1,112 @@
+# C2 three-phase heap_malloc shot (4.4.4) — evidence §42
+
+# Purpose: close the seam §41 left open. §41 tagged heap_malloc only on ENTRY ('M'), so the live
+# `new_rt MMM` could not separate "died inside the 3rd HeapAlloc" (heap/environment side) from
+# "died in QuickJS's own code between two allocations" (engine side) — the two §36 hypotheses.
+# This shot writes a MATCHED PAIR per malloc: 'M' on entry, then 'm' (HeapAlloc returned a block) or
+# '!' (returned NULL). A dangling 'M' (nothing after it) is the positive signature of "the allocation
+# call never returned."
+# Binary question this answers: did our allocator RETURN the three allocations it was entered for?
+# exe identity: stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56 (46,253,688 bytes)
+# DLL instrumented: stellaris_quickjs.dll (build.zig default x86_64-windows target), deployed as
+#   C:\temp\sqjs_c42.dll. Tooling change is commit c90a8e2 (heap_malloc three-phase + the offline
+#   no-dangling-M positive-control test in c2_diag_test.zig).
+
+## (2) local DLL sha256 (zig-out/bin/stellaris_quickjs.dll)
+
+863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617  zig-out/bin/stellaris_quickjs.dll
+
+## (3) remote DLL sha256 (Get-FileHash C:\temp\sqjs_c42.dll -Algorithm SHA256)
+
+863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617
+
+local == remote. The copy that ran is byte-identical to the committed source build. New name (sqjs_c42.dll,
+ruling P12) — nothing ever held it loaded, so no file lock / stale copy interfered.
+
+## (4) environment precondition (game running, before the dispatch)
+
+$ ssh Windows_Jiaolong "Get-Process stellaris | Select Id,Responding"
+  Id  Responding
+8288        True
+
+The host was brought up THIS session by scripts/windows/launch_stellaris.py (the standing "do not boot the
+game to advance the plan" norm was retired by the human partner as documented in the session; the launcher's
+known exit-23 defect did NOT fire this run — handoff succeeded on the 2nd click, GAME_OBSERVE ok, pid 8288).
+
+After the dispatch:
+$ ssh Windows_Jiaolong "Get-Process stellaris"
+  (no line)  ->  the init sequence killed pid 8288, as §36/§39 predicted and the shot was authorized for.
+
+## (5) OFFLINE POSITIVE CONTROL (Linux host, no crash — sequence runs to completion)
+
+Native test step `c2_diag_tests` (build.zig:123) runs the SAME c2_diag_sequence against the real vendored
+QuickJS; here JS_NewRuntime2 returns, so every malloc completes and each 'M' must close with 'm'/'!'. The
+new c2_diag_test.zig block "a completed heap_malloc always closes its M marker" asserts that NO 'M' between
+`new_rt ` and `rt=` dangles. Observed offline witness (on-disk /tmp/c2_diag_<pid>.log, rc=0 line):
+
+    enter heap_ok alloc_ok free_ok new_rt MmMmMmMmMmMmMmMmrt=0x2235f28 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFRFRFdiag_rc=0 ctx=0x223ef58
+
+Reading: alive, `new_rt ` is followed by 8 matched `Mm` pairs (malloc lifecycles, capped at MF_TAG_CAP=8)
+then `rt=`. This is what licenses the LIVE "dangling M" reading — it is NOT "the close tag never compiled."
+(Contrast the §41 entry-only build in the same dir, which read `new_rt MMMMMMMMrt=`.)
+
+## (6) LIVE DYING SHOT — the one dispatch (python C:\temp\c2_task5_init.py C:\temp\sqjs_c42.dll)
+
+Key lines, verbatim (full driver stdout):
+
+    [task5] pid=8288  dll=C:\temp\sqjs_c42.dll
+    [task5] sqjs_c42.dll base (64-bit): 0x7ffbee4a0000
+    [task5] C2Sanity == 42, game alive — init dispatch authorized
+    [task5] C2DiagGetLogAddr → truncated 0xeeb457f0 → g_diag_log rva 0x6a57f0 @ 0x7ffbeeb457f0
+    [task5] g_diag_log before the dispatch = ''
+    [task5] poll: witness g_diag_log: readable at 72.4ms, text 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+    [task5] poll: witness g_diag_log: unreadable at 6947.1ms — ReadProcessMemory @0x7ffbeeb457f0 size=512 read 0 bytes (ok=0, gle=299)
+    [task5] poll: stop: process handle signalled — the host is gone after 70 failed read(s) at 7135.8ms; last: ReadProcessMemory @0xa90000 ... (ok=0, gle=299)
+    [task5] poll: exit code = 3 (thread had returned); process exit code = 0x3, thread returned while process alive = False
+    [task5] C2DiagQJSInto rc = 3
+    [task5] decoded rc       = bucket=intrinsic name=Date
+    [task5] poll report      = WARNING: the thread never returned while the process was alive, so rc=3 is not proven to be a step code — a terminated thread reports the PROCESS exit code (here 0x3); treat decode_init_rc's answer as unconfirmed
+    [task5] poll report      = witness g_diag_log: oks=1892 fails=70 text='enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+    [task5] buffer log       = ''
+    [task5] on-disk log      = ''
+
+Memory series over the death (psutil, 250ms), key samples:
+    mem @      0.1ms = rss=3142956K private=8189716K
+    mem @   4770.0ms = rss=3041252K private=8189716K     (FLAT through ~4.8s — no upward excursion)
+    mem @   5271.3ms = rss=3050632K private=7760892K     (teardown release begins)
+    mem @   7024.9ms = rss=1683660K private=NA           (collapse)
+    private KiB first=8189716 last=4004528 delta=-4185188; rss first=3142956 last=1683660 delta=-1459296
+    (the drop is release-at-teardown, §39's shape — NOT an allocation storm.)
+
+## (7) reading
+
+    offline alive : new_rt MmMmMmMmMmMmMmMm rt=   (8 mallocs through mf, EACH returned, then returns)
+    live dying    : new_rt MmMmMm                     (3 mallocs through mf, ALL THREE returned cleanly, then reads die at 6947ms, no rt=)
+
+All three `heap_malloc` calls COMPLETED — each 'M' is closed by a lowercase 'm', i.e. HeapAlloc handed back a
+block each time. **No dangling 'M'.** A heap/environment-side death (our allocator or GetProcessHeap failing
+to return under the injected remote thread) is EXCLUDED: that would leave a dangling 'M', and there is none.
+§41's fork resolves to the ENGINE side — the death is in QuickJS's own JS_NewRuntime2 code, after the 3rd
+allocation returned and before a 4th heap_malloc was entered. The 1892 successful polls spanning 72.4ms →
+6947.1ms never advanced the static past `MmMmMm`: ~6.9s of ZERO further allocation activity.
+
+Honest boundaries:
+  - rc=3 is the PROCESS exit code, NOT a step code (the WARNING + §38.5 retraction apply — not "the Date
+    intrinsic"). buffer log and the on-disk C:/temp/c2_diag_8288.log are both '' (written only at finish:,
+    never reached); the static is the only channel that carried text, exactly as §38 designed.
+  - This is ONE shot; "3" is a position, not shown stable across shots (§40's budget rule bars a reflexive
+    re-fire). It does not make JS_NewRuntime2 survive — C2 stays blocked.
+  - The next probe crosses a capability line: the window that matters now (3rd alloc returned → 4th alloc, a
+    6.9s no-allocation gap) is entirely INSIDE QuickJS's own code. Our allocator observes only allocation
+    boundaries, so read-only instrumentation has hit its ceiling. Seeing into that gap requires hooking
+    QuickJS code = a capability escalation (升级授权), which the current read-only level does not grant and
+    which was NOT done here.
+
+## (8) read-only self-attestation
+
+    - no hook/Interceptor/patchCode/writeByteArray/Memory.protect on code lines; no new capability added.
+    - the third phase ('m'/'!') is a one-char write into the DLL's OWN g_diag_log static — same operation
+      class as §41's entry 'M', same authorization level.
+    - heap_malloc's alloc/free LOGIC is unchanged; only the marker emission split entry vs outcome.
+    - mf callbacks were OBSERVED via tags only; the disk file still produced nothing (write only at finish:,
+      never reached).

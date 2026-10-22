@@ -43,21 +43,23 @@
 | 阶段 | 状态 | 证据 | 计划 | 第一前置 |
 |---|---|---|---|---|
 | A | done | pipeline §17/§18/§19,c1_validation §25 | — | — |
-| B3 | planned | — | `2026-10-22-b3-fridadis-bringup.md` | 把 `scripts/dis.js` 送到 `C:\ns\dis.js` |
+| B3 | done | c1_validation §26 + `evidence/disasm/fridadis_live_0x1D08520.c` | `2026-10-22-b3-fridadis-bringup.md` | — |
 | api/scope 假偏移 | done | c1_validation §26/§26.3 | `2026-10-22-scope-false-offset-consolidation.md` | 无(§26.2 的真实布局仍未定 → 段4 那条线) |
 | C0 | done | pipeline §20/§21 | — | — |
 | C1 | done | c1_validation §24/§24.6 | — | — |
-| C2 | blocked | c1_validation §36–§40 | `2026-10-22-c2-live-death-localization.md`(已执行) | §40 之后要写的下一个计划(靶 = `JS_NewRuntime2`;需 Windows 机时 + SSH 隧道) |
+| C2 | blocked | c1_validation §36–§42 | `2026-10-22-c2-live-death-localization.md`+`2026-10-22-c2-jsnewruntime2-boundary.md`(均已执行) | §42 把 §41 的分叉**判给引擎侧**:三次 `heap_malloc` 全部干净返回(`new_rt MmMmMm`,每个 `M` 都闭 `m`,无悬空)⇒ 死**不在**我们的 allocator/`HeapAlloc`,死在第 3 次返回后、第 4 次进入前;那 ~6.9s 零分配窗口整段在 QuickJS 自己代码里 —— 只读插桩到顶,再往里要 hook QuickJS = **升级授权**,当前只读级不给 |
 
 为什么顺序是 C0→C1→C2:C0 在**离线**把「我们造的描述符到底像不像真的」证实到字节;C1 在**实机**把「别名式注册
 能不能活过 create + write + predicate 链」证实;C2 才轮到「让 keyword 执行 JS」—— QuickJS 不在注入环境里活下来,后面没有一步能开工。
 
-C2 实机状态(§38–§40,本计划落账):`C2Init rc = 3` **不是已确认的步骤码**(§38 撤回那种把 rc 当步骤码的读法);
+C2 实机状态(§38–§42,两计划落账):`C2Init rc = 3` **不是已确认的步骤码**(§38 撤回那种把 rc 当步骤码的读法);
 每发射击序列最后可见的标记都是 `new_rt ` —— 即 `JS_NewRuntime2` **之前**那一个(§39);分配风暴已排除,host 变得
 不可读之前先把自己约 8 GiB commit 释放干净(§39);注入 + `C2Sanity` + 20 s 观测可存活(§39 无 dispatch 控制枪);
 而 §40 那条只执行 `kernel32!Sleep(8000)` 的长远程线程让 host 活了下来 ⇒ 「一条长远程线程本身足以杀死游戏」这个
 读法死了,靶精确落到 `JS_NewRuntime2`。**尚未结论**:引擎为何退出、`C:\temp\c2_diag_<pid>.log` 为何从不生成,两条都
 还不知道 —— §40 只指明先攻哪条轴,不是根因(§39 的排除项别误读成根因)。
+
+§41/§42 推进了上面那句「最后可见标记是 `new_rt `」:给 `heap_malloc` 打标记后,尾标到了 `new_rt MMM`(§41 只记入口)再到 `new_rt MmMmMm`(§42 加闭合 `m`/`!`)。**三次 `heap_malloc` 全部进入且全部返回,无悬空 `M`** ⇒ 死不在我们的 allocator/`HeapAlloc`,而在引擎第 3 次分配返回之后、第 4 次进入之前的 ~6.9s 零分配段——整段在 QuickJS 自己代码内,只读插桩到此**到顶**;再往里要 hook QuickJS = 升级授权。§39 的 no-alloc-storm 独立复现;`rc=3→Date` 仍非步骤码(§38.5)。**C2 仍 blocked。**
 
 ## 4. 候选条线
 

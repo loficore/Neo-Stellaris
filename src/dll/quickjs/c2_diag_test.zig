@@ -533,6 +533,73 @@ test "the shared sequence tags every step before the runtime exists" {
     }
 }
 
+test "JS_NewRuntime2 calls back into heap_mf between new_rt and rt= (offline positive control)" {
+    // heap_malloc is reached ONLY via the mf table (the sequence's own alloc_ok/
+    // free_ok tags use HeapAlloc directly), so the first 'M' tag lands inside
+    // JS_NewRuntime2. This offline run succeeds fully, so 'M' MUST appear after
+    // the "new_rt " tag and before "rt=". That is the positive control the live
+    // shot is interpreted against: alive, new_rt is followed by M; if the live
+    // witness stops at "new_rt " with no M, JS_NewRuntime2 died in its own
+    // prologue before the first allocation — a different target than "died
+    // inside our allocator". Without this, a bare "new_rt " live read could just
+    // as mean the instrumentation failed to compile in.
+    try std.testing.expectEqual(@as(c_int, 0), C2TestQuickJS());
+
+    var buf: [512]u8 = undefined;
+    _ = C2CopyDiagLog(&buf);
+    const log = std.mem.span(@as([*:0]const u8, @ptrCast(&buf)));
+
+    const new_rt_at = std.mem.indexOf(u8, log, "new_rt ") orelse return error.MissingNewRtTag;
+    const rt_at = std.mem.indexOf(u8, log, "rt=") orelse return error.MissingRtTag;
+    try std.testing.expect(new_rt_at < rt_at);
+
+    const between = log[new_rt_at + "new_rt ".len .. rt_at];
+    try std.testing.expect(std.mem.indexOfScalar(u8, between, 'M') != null);
+
+    // Review Focus 1 guard: the MF_TAG_CAP rate limit must keep the prefix
+    // alive — if mf tagging overflowed the 512 buffer, "enter " would be gone
+    // and the last tag read would be the buffer tail, not the death point.
+    try std.testing.expect(std.mem.indexOf(u8, log, "enter ") != null);
+    try std.testing.expect(std.mem.count(u8, between, "M") <= 8);
+}
+
+test "a completed heap_malloc always closes its M marker (offline no-dangling-M)" {
+    // §42 read scheme: heap_malloc tags 'M' on entry and 'm' (returned a block)
+    // or '!' (returned NULL) on exit. The live shot buys exactly one fact from
+    // the tail — a DANGLING 'M' (nothing after it) means the host died inside
+    // GetProcessHeap()/HeapAlloc, whereas 'Mm'/'M!' followed by more means the
+    // allocation returned and death came later, inside QuickJS. That reading is
+    // only sound if, on a run that does NOT die, no 'M' ever dangles — otherwise
+    // a live dangling M could just be "the close tag is missing from the build".
+    // Linux runs the whole JS_NewRuntime2 to completion, so here every M is
+    // paired: assert the structural invariant, not counts (a malloc(0) returns
+    // NULL and correctly yields M!).
+    try std.testing.expectEqual(@as(c_int, 0), C2TestQuickJS());
+
+    var buf: [512]u8 = undefined;
+    _ = C2CopyDiagLog(&buf);
+    const log = std.mem.span(@as([*:0]const u8, @ptrCast(&buf)));
+
+    const new_rt_at = std.mem.indexOf(u8, log, "new_rt ") orelse return error.MissingNewRtTag;
+    const rt_at = std.mem.indexOf(u8, log, "rt=") orelse return error.MissingRtTag;
+    const between = log[new_rt_at + "new_rt ".len .. rt_at];
+    try std.testing.expect(std.mem.indexOfScalar(u8, between, 'M') != null);
+
+    var i: usize = 0;
+    while (i < between.len) : (i += 1) {
+        if (between[i] != 'M') continue;
+        // An M at the very end of the window would be a dangling marker even on
+        // a run that reaches rt= — impossible on the success path, so fail.
+        if (i + 1 >= between.len) return error.DanglingMallocMarker;
+        const nxt = between[i + 1];
+        if (nxt != 'm' and nxt != '!') {
+            std.debug.print("M at {d} followed by '{c}', expected m or !: {s}\n",
+                            .{ i, nxt, between });
+            return error.MallocMarkerNotClosed;
+        }
+    }
+}
+
 test "C2CopyDiagLog is a pure read: byte-identical to the buffer C2DiagQuickJS filled" {
     // The live read path must not re-run any QuickJS step: C2DiagQuickJS writes
     // out_diag from the same static this reads, so the two must agree exactly.

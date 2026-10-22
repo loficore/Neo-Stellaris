@@ -2199,3 +2199,128 @@ crash. This is the same absence §39 noted for the dead shots, here on a host th
 **Counts for §40**: 1 dispatch process (pid 13076), 1 calibration + 1 measured remote thread = 2 dispatches,
 0 QuickJS symbols executed, host alive after both, 1 reading retired ("a long remote thread is sufficient"),
 1 target named for the next plan (`JS_NewRuntime2`), 0 new exports, 0 new Zig files.
+
+## 41. `JS_NewRuntime2` reaches our allocator three times, then the host goes unreadable — the death is inside the call, after the 3rd `heap_malloc` (2026-10-22, live)
+
+§40 put the target on `JS_NewRuntime2` itself. This shot asks the one question §40 could not: **does the
+death happen before `JS_NewRuntime2` ever calls back into our `heap_mf`, or after it starts?** The three
+allocator callbacks (`heap_malloc`/`heap_free`/`heap_realloc`) now append a rate-limited tag (`M`/`F`/`R`,
+cap 8) into the DLL's own `g_diag_log` — the same static the live poller reads (§38), so the tags are
+captured incrementally even on a shot that dies. Full command + witness in `evidence/logs/c2_mf_instrument_4_4_4.log`.
+
+### 41.1 The offline positive control is what makes the live read mean anything
+
+On the Linux host the identical `c2_diag_sequence` runs to completion (`JS_NewRuntime2` returns), so the
+allocator tags land without bound until the cap:
+
+```
+enter heap_ok alloc_ok free_ok new_rt MMMMMMMMrt=0x31b2648 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFRFRFdiag_rc=0
+```
+
+Alive, `new_rt ` is followed by 8 `M` and then `rt=`. Without this, a live log stopping at `new_rt ` could
+only mean "the tagging never compiled in." It is a real observation now (`c2_diag_test.zig` asserts it).
+
+### 41.2 The live shot, verbatim
+
+```
+[task5] poll: witness g_diag_log: readable at 13.1ms, text 'enter heap_ok alloc_ok free_ok new_rt MMM'
+[task5] poll: witness g_diag_log: unreadable at 1851.7ms — ReadProcessMemory @0x7ffbed5157f0 ... (ok=0, gle=299)
+[task5] poll: stop: process handle signalled — the host is gone after 70 failed read(s) at 2018.7ms
+[task5] poll report = witness g_diag_log: oks=731 fails=70 text='enter heap_ok alloc_ok free_ok new_rt MMM'
+```
+
+`new_rt ` then **three `M`, no `rt=`**. Reads die at 1851.7 ms; the process handle signalled at 2018.7 ms.
+Memory falls monotonically across the window (vms 8,147,640K → 45,872K, `private` → NA at the last sample) —
+the same self-release shape as §39, no upward excursion.
+
+### 41.3 What this settles, and what it deliberately does not
+
+- **§40's reading (a) is excluded.** `JS_NewRuntime2` did NOT die in its prologue before the first
+  allocation: our `heap_malloc` was entered and returned **three times** (a live runtime does ≥8 before
+  returning — §41.1). The allocator is demonstrably wired and working; §33's "our allocator is broken"
+  family stays dead (and §38.5/§39 already retired it).
+- **The target reproduces inside the call.** It is NOT reading (c) — `rt=` never appeared — so the death is
+  still in `JS_NewRuntime2`, now narrowed to *after the 3rd mf allocation, before the call returns*.
+- **"Stopped after 3 M" is a position, not a cause.** We do not know what in `JS_NewRuntime2`'s init past
+  the third allocation faults in the injected environment, nor whether `3` is stable across shots (this is
+  one shot; §40's budget rule bars a reflexive re-fire). The 3-allocation prefix is the new floor for the
+  next probe.
+- **`rc = 3` is still not a step code.** The thread never returned while the process was alive (§38.5
+  retraction holds); `decoded rc = bucket=intrinsic name=Date` is the process exit code, not evidence of
+  the Date intrinsic. The on-disk `C:/temp/c2_diag_13076.log` produced nothing (write only at `finish:`,
+  never reached) and the caller buffer log was `''` — the static witness is the only channel that carried
+  text, exactly as §38 designed.
+- **C2 remains blocked.** This did not make `JS_NewRuntime2` survive; it moved the black box from "the whole
+  call" to "the call's interior, past the third allocation."
+
+**Counts for §41**: 1 dispatch (pid 13076, killed — authorized), 1 offline positive control (Linux, full
+return), 3 `heap_malloc` entries reached before death (vs ≥8 alive), 1 §40 reading excluded (prologue
+death), 1 target confirmed inside `JS_NewRuntime2` (not past `rt=`), 0 new capability (tags are read-only
+`snprintf` into the DLL's own static), 0 new exports, 1 new Zig test block (P15 305→306).
+
+## 42. All three allocations RETURN — the death is engine-side, after the 3rd `heap_malloc` returns and before a 4th is entered (2026-10-22, live)
+
+§41 recorded `new_rt MMM` from an entry-only `M` tag, so it could NOT separate two cases that §36 framed as
+the two competing hypotheses: **died inside the 3rd `HeapAlloc`** (heap/environment side — the allocator or
+`GetProcessHeap` failed to return under the injected thread) vs **died in QuickJS's own code between two
+allocations** (engine side). This shot closes that seam. `heap_malloc` now writes a *matched pair*: `M` on
+entry, then `m` if `HeapAlloc` returned a block or `!` if it returned NULL. A `M` with nothing after it — a
+**dangling `M`** — is the positive signature of "the allocation call never returned." Full command + witness
+in `evidence/logs/c2_mf_threephase_4_4_4.log`; the tooling change is commit `c90a8e2`, the injected DLL is
+`C:/temp/sqjs_c42.dll` (sha256 `863917f2579ae8c4472be13baeca4bed64dc2ccffc7b620fdb2b016134a86617`, verified
+byte-identical on the box before the dispatch).
+
+### 42.1 The offline positive control is what licenses the "dangling M" reading
+
+The new `c2_diag_test.zig` block "a completed heap_malloc always closes its M marker" runs the whole
+sequence on the Linux host (where `JS_NewRuntime2` returns) and asserts the structural invariant that
+**every `M` between `new_rt ` and `rt=` is immediately followed by `m` or `!`** — no `M` dangles on a run
+that completes. Without that, a live dangling `M` could just mean the close-tag never compiled in; with it,
+a dangling `M` is a real observation. (P15 306→307; the +1 is this block, the step count is unchanged.)
+
+### 42.2 The live shot, verbatim
+
+```
+[task5] poll: witness g_diag_log: readable at 72.4ms, text 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+[task5] poll: witness g_diag_log: unreadable at 6947.1ms — ReadProcessMemory @0x7ffbeeb457f0 size=512 read 0 bytes (ok=0, gle=299)
+[task5] poll: stop: process handle signalled — the host is gone after 70 failed read(s) at 7135.8ms
+[task5] poll report = witness g_diag_log: oks=1892 fails=70 text='enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+```
+
+`new_rt ` then **`MmMmMm`** — three `heap_malloc` entries, **each closed by a lowercase `m`**, i.e. all three
+`HeapAlloc` calls returned a block. No dangling `M`. The static did not advance past `MmMmMm` across 1892
+successful polls spanning 72.4 ms → 6947.1 ms; reads die at 6947.1 ms, the handle signalled at 7135.8 ms.
+Memory is **flat** at ~3.14 GB rss / ~8.19 GB private for samples 0.1 ms → 4770 ms, then falls (private
+8.19 GB → 4.0 GB, rss collapses at 7024 ms) — the §39 self-release-at-teardown shape again, no upward
+excursion. `buffer log` and the on-disk `C:/temp/c2_diag_8288.log` are both `''` (the file is written only at
+`finish:`, never reached), so as designed the static is the only channel that carried text.
+
+### 42.3 What this settles, and what it deliberately does not
+
+- **§41's fork resolves to the engine side.** All three allocations *completed*: `HeapAlloc` handed back a
+  block each time and returned cleanly through our accounting. A heap/environment-side death (our allocator
+  or `GetProcessHeap` failing under the injected remote thread) is **excluded** — it would show a dangling
+  `M`, and there is none. The death is in QuickJS's own code **after** the 3rd allocation returned and
+  **before** it entered a 4th.
+- **§39's "no allocation storm" is re-confirmed independently.** ~4.8 s of flat memory then teardown release;
+  nothing in `JS_NewRuntime2`'s first 3 allocations grows the working set.
+- **`rc = 3` is still not a step code.** The thread never returned while the process was alive (§38.5's
+  retraction holds — the harness prints the same WARNING); `decoded rc = bucket=intrinsic name=Date` is the
+  process exit code `0x3`, not evidence of the Date intrinsic.
+- **The next probe crosses a capability line, and this shot cannot.** The window that matters now is between
+  the 3rd allocation returning and the 4th being entered — and it is ~6.9 s of *zero allocation activity*,
+  entirely inside QuickJS's own `JS_NewRuntime2` code. Our allocator only observes allocation boundaries, so
+  read-only instrumentation has reached its ceiling: seeing what runs in that gap requires hooking QuickJS's
+  own code, which is a capability escalation (升级授权), not something the current read-only level grants.
+  A single shot also cannot establish whether "3" is stable across shots (§40's budget rule bars a reflexive
+  re-fire).
+- **C2 remains blocked.** The host still dies in `JS_NewRuntime2`; this narrowed *where within the call* —
+  from §41's "past the 3rd allocation, before return" to "past the 3rd allocation returning intact, before
+  any 4th." The suspect moved off our allocator and onto QuickJS's post-allocation code path.
+
+**Counts for §42**: 1 dispatch (pid 8288, killed — authorized), 1 offline positive control (Linux, no
+dangling `M`), 3 `heap_malloc` calls all returned (`MmMmMm`, no dangling `M`), 1 §36 branch excluded
+(heap/environment-side death), 1 §39 finding re-confirmed (no allocation storm), 1 new ceiling named (the
+6.9 s no-allocation window is inside QuickJS code → next probe needs 升级授权), 0 new capability (the third
+phase is read-only writes into the DLL's own static), 0 new exports, 1 new Zig test block (P15 306→307).
+
