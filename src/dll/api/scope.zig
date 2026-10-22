@@ -30,9 +30,13 @@ const offsets = @import("../shared/offsets.zig");
 // ---------------------------------------------------------------------------
 
 /// Byte offset to the scope type field in CEventScope.
+/// UNCONFIRMED LAYOUT — §26 falsified this for the object `CEffect::Execute` receives: `[arg2+8]` there
+/// is a call-depth counter. The value is our reader's assumption, not a confirmed 4.4.4 field.
 const OFFSET_SCOPE_TYPE: usize = offsets.c_event_scope.OFFSET_SCOPE_TYPE; // 8
 
 /// Byte offset to the object ID field in CEventScope.
+/// UNCONFIRMED LAYOUT — never confirmed on 4.4.4 (§26.2 leaves the real frame object undecided); it is
+/// 3.x inheritance, not a measured field.
 const OFFSET_OBJECT_ID: usize = offsets.c_event_scope.OFFSET_OBJECT_ID; // 16
 
 // ---------------------------------------------------------------------------
@@ -98,6 +102,11 @@ pub const ScopeTypeName = enum {
 
 /// Read the scope type from a CEventScope.
 ///
+/// UNCONFIRMED LAYOUT — §26 disassembled `0x1D08520` and found the `+8` dword incremented around
+/// `call [vptr+0x10]`, so nothing observed so far establishes that this reads a scope type. The caller
+/// decides which object to pass; until a real frame pointer arrives, the result is a raw i64 from the
+/// caller's frame, not a verified engine field.
+///
 /// The scope type is a bit flag indicating what kind of game object
 /// the scope represents. Multiple flags can be set simultaneously.
 ///
@@ -113,6 +122,9 @@ pub fn getScopeType(scope: ScopeHandle) i64 {
 }
 
 /// Read the object ID from a CEventScope.
+///
+/// UNCONFIRMED LAYOUT — `+16` is 3.x inheritance that §26 left unconfirmed for 4.4.4; the i64 returned
+/// here has not been observed to be an object id on any engine-supplied frame.
 ///
 /// The object ID is the numeric identifier for the game object
 /// that the scope is targeting (e.g., planet ID, country ID).
@@ -130,6 +142,9 @@ pub fn getScopeObjectId(scope: ScopeHandle) i64 {
 
 /// Get a human-readable name for the scope type.
 ///
+/// UNCONFIRMED LAYOUT — inherits `getScopeType`'s unconfirmed read, so `.unknown` here cannot
+/// distinguish "not a scope type field" from "a scope type we do not enumerate".
+///
 /// # Arguments
 /// * `scope` - Pointer to the CEventScope object
 ///
@@ -141,6 +156,9 @@ pub fn getScopeTypeName(scope: ScopeHandle) ScopeTypeName {
 }
 
 /// Check if the scope has a specific type flag set.
+///
+/// UNCONFIRMED LAYOUT — bit-masks whatever `getScopeType` read, so a `true` here is consistent with
+/// our own constants but is not evidence that the frame carries a scope-type field at all.
 ///
 /// # Arguments
 /// * `scope` - Pointer to the CEventScope object
@@ -239,7 +257,10 @@ test "ScopeTypeName.name: correct strings" {
     try std.testing.expectEqualStrings("unknown", ScopeTypeName.unknown.name());
 }
 
-test "offsets: constants match expected values" {
+// 这条测试把两个常量与 offsets.c_event_scope 里的定义绑在一起,防止两边的数值各自漂移。
+// 它不主张引擎的字段布局 —— §26 已证伪「+8 是 scope type」;这里断言的是「我们的读法匹配我们自己的
+// 常量」,不是 4.4.4 的事实。数值 8/16 保持原样,要改它们的人必须先拿到实机帧指针(roadmap 段4)。
+test "c_event_scope: our reader matches our own constants (layout unconfirmed, §26)" {
     try std.testing.expectEqual(@as(usize, 8), OFFSET_SCOPE_TYPE);
     try std.testing.expectEqual(@as(usize, 16), OFFSET_OBJECT_ID);
 }
