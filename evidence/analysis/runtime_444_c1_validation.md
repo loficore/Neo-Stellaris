@@ -1904,3 +1904,203 @@ C2EvalProbeOnePlusOne        0x44BF00   C2TestQJS                          0x44E
 (4 new tests), `scripts/c2_task5_init.py` (`fetch_diag_log`, `report_init_failure`, wired into `main`),
 `scripts/c2_task3_diag.py` (renumbered tables), `scripts/test_c2_harness.py` (5 new tests + docstring).
 No live dispatch, no game relaunch.
+
+## 38. The four observation channels settle the read-back race — and `rc = 3` stops proving anything (2026-10-21/22, live + host)
+
+Times below are the game host's local time (UTC+8); the session timestamps in brackets are UTC. This
+section is measurement, and each line is verbatim from a shot log on `Windows_Jiaolong`. Where a
+sentence is not a measurement it says **inference**.
+
+**Provenance of the copies.** §36/§37's shots ran on `sqjs_c37.dll`/`sqjs_c38.dll`; the two shots that
+answered with a witness ran on **`C:/temp/sqjs_c39.dll`, sha256 `35b0fb1008c4af52d42a7bf3d43d2e6674bc3dc5dd38b76bae1d878c75d37fd0`
+(7,163,392 bytes)** — the same value from the local `zig-out/bin/stellaris_quickjs.dll`, from
+`/tmp/sqjs_c39.dll`, and from `Get-FileHash` on the host, so ruling P12's "which copy answered" is closed
+by the MZ check + `C2Sanity == 42` + that sha triple, not by hope. The Python side is **not** the current
+tree: at upload time `scripts/c2_harness.py` hashed
+`4c668e298a4838fae2f5c4622eb4959b407223b01354d9d7b9857e2d39a6de06` (local and `remote c2_harness.py` both
+agree), while the file on disk today hashes `b0524205…` — later edits that touched only the harness and
+its test. So the numbers here are what **harness@4c668e29** measured; they are not a claim that today's
+uncommitted harness would print them. `c2_task5_init.py` (`2e1a902f…`) and `c2_control_watch.py`
+(`09fd0e03…`) are byte-identical to what ran.
+
+### 38.1 The four shapes that lost the race, and how each lost it
+
+Before the poll loop existed, every read-back happened **after** `WaitForSingleObject`, i.e. after the
+host was already gone. Four dispatches, four different failures of the same idea:
+
+- **22:40 [14:40] pid 17992, `sqjs_c37.dll`** — the read-back never got a chance:
+  `[task5] C2Init rc = 3` / `[task5] diag log   = (host gone before the read-back: game (pid 17992) is no longer alive)`.
+  The script still printed `decoded rc   = bucket=intrinsic name=Date`, which §38.5 retracts.
+- **22:47 [14:47] pid 20284, `sqjs_c37.dll`** — the buffer was allocated up front
+  (`log buffer @ 0xa90000 (allocated BEFORE the dispatch)`) and the post-wait read raised instead of
+  returning: `RuntimeError: ReadProcessMemory @0xa90000 size=512 read 0 bytes (ok=0, gle=299)`.
+  `gle=299` is `ERROR_PARTIAL_COPY`: the address is valid in a process that is no longer readable as a whole.
+- **23:25 [15:25] pid 2264, `sqjs_c38.dll`** — polling, but with the **old five-strikes rule**: reads #1–#5
+  all failed with `gle=299` inside roughly the first 10 ms, the loop gave up, and the thread reported
+  `exit code = 259 (STILL_ACTIVE — the call had not returned)` → `decoded rc = UNMAPPED — rc=259 is not a
+  C2Init code in this build (valid: 0, 1..12, 100..104) — wrong/stale module copy, or the exit code came
+  from somewhere else`. 259 is `STILL_ACTIVE`, i.e. the harness's own sentinel, not a step code.
+- **23:42 [15:42] pid 17516, `sqjs_c38.dll`** — five-strikes removed, the loop ran to the real end of the
+  host: `poll: stop: process handle signalled — the host is gone after 88 failed read(s)` then
+  `exit code = 3 (thread had returned)`, with `buffer log = ''` and `on-disk log = ''`.
+
+What the last two lines of every shape have in common: the buffer was never read successfully **after**
+the dispatch started, so "no bytes appeared" could not yet be distinguished from "we could not look".
+
+### 38.2 The disk channel is a permanent negative, and why
+
+`[task5] diag file = C:/temp/c2_diag_<pid>.log (absent before dispatch)` in every shot, and
+`[task5] on-disk log = ''` in every shot. The script deletes any stale copy before dispatching
+(`c2_task5_init.py:389`), so the empty read means the file was **never created**, not truncated. The cause
+is structural: `c2_diag_write_file` is called from exactly one place, `quickjs_wrapper.c:406`, which sits
+**after** the `finish:` label at `:404`; all failure branches reach it via `goto finish` (`:364`, `:367`,
+`:374`, `:381`, `:391`). A remote thread that is terminated mid-sequence therefore never reaches the only
+write. **Inference (mechanical, from the source layout, not from a measurement):** the disk channel cannot
+discriminate a dying call; it only ever reports a call that returned.
+
+### 38.3 Priming — the page is provably readable before anyone dies
+
+`poll: primed 512 bytes @0xa30000: read back 512 bytes, all zero` (same line shape at `@0xa00000`,
+`@0xa70000`, `@0xad0000`, `@0xaf0000`). The `remote_alloc` page is written by us and read back by us
+**before** the dispatch, so its readability is not in question while the host is alive; when the same
+address later fails with `gle=299` the target is the process, not the page. This is what turns
+`buffer log = ''` in §38.4 from "we couldn't look" into "the callee never wrote".
+
+### 38.4 The static witness: two shots where the only channel that worked was the module's own log
+
+The witness is `g_diag_log` itself, addressed from a **truncated** return of `C2DiagGetLogAddr`
+(ruling P4's one permitted exception): `C2DiagGetLogAddr — truncated 0xd01456f0 → g_diag_log rva 0x6a56f0
+@ 0x7ffcd01456f0`. The address is *believed* because of what appeared at it, not because it was verified
+in advance — an empty static reads zero whether or not the address is right, so pre-dispatch there is no
+check. The shape of the arriving text (`enter heap_ok alloc_ok free_ok new_rt `, five known `DLOG` tags in
+their source order) is the verification.
+
+- **23:57 [15:57] pid 4248, `sqjs_c38.dll`, rva `0x6a4170`** — the split that named the problem: the static
+  was readable from the first poll (`witness g_diag_log: readable at 0.1ms, text ''`, `oks=3000 fails=81`)
+  while the buffer was unreadable throughout (`first_read_ms=0.085`, then
+  `unreadable at 6917.9ms`, `the host is gone after 81 failed read(s) at 7105.5ms`). Same process, same
+  moment, one channel readable and one not — so the buffer's silence was about the *buffer*, and the
+  witness reads `''` because the sequence had not written yet at 0.1 ms.
+- **00:02 [16:02] pid 21032, `sqjs_c39.dll`** — `witness g_diag_log: oks=3011 fails=81 text='enter heap_ok alloc_ok free_ok new_rt '`,
+  `readable at 0.1ms`, `unreadable at 7018.9ms`, `exit code = 3 (thread had returned); process exit code =
+  0x3, thread returned while process alive = False`, `buffer log = ''`, `on-disk log = ''`.
+- **00:18 [16:18] pid 7820, `sqjs_c39.dll`, base `0x7ffccfaa0000`** — the same witness text, caught earlier:
+  `readable at 107.1ms`, `unreadable at 7931.7ms`, `primed=512 reads=1792 failures=129
+  first_read_ms=107.11959999753162 first_failure_ms=7931.668299999728`, `oks=1663 fails=129`,
+  `the host is gone after 129 failed read(s) at 8263.0ms`, and again `buffer log = ''` / `on-disk log = ''`.
+
+The disagreement **is** the finding: the callee's copy into our buffer never appeared, while the module's
+own static carried the sequence up to and including `new_rt `. A `DLOG` into a caller-owned buffer that
+never arrives, next to the same tags landing in the module's own memory, is what §39's memory series then
+had to explain.
+
+### 38.5 §36.4 retracted, plainly
+
+`rc = 3` is **not** proven to be the Date intrinsic. Both c39 shots printed, verbatim:
+
+```
+[task5] poll report      = thread exit code=3 process exit code=0x3 thread_returned_while_alive=False
+[task5] poll report      = WARNING: the thread never returned while the process was alive, so rc=3 is not proven to be a step code — a terminated thread reports the PROCESS exit code (here 0x3); treat decode_init_rc's answer as unconfirmed
+```
+
+A thread that never returned while its process was alive reports the **process** exit code, so 3 is a
+property of how the process ended, and `decode_init_rc`'s `bucket=intrinsic name=Date` is decoration on a
+number that was never a step code. Every earlier section that read an `rc` as a step (including §36.4) is
+to be read through this caveat. The disambiguator that actually worked is the witness text in §38.4, which
+needs no integer interpretation at all.
+
+**Counts for §38**: four dispatch shapes (pids 17992, 20284, 2264, 17516) on `sqjs_c37`/`sqjs_c38`, three
+witness shots (4248 on c38; 21032, 7820 on c39), one no-dispatch control (§39.3), 0 new exports, 0 new Zig
+`extern fn`, 1 retraction (§36.4). Harness@4c668e29, DLL@35b0fb10.
+
+## 39. The memory series rules out an allocation storm — the host releases its own commit before it goes (2026-10-21/22, live)
+
+Sampler: `psutil 7.2.2 over pid 7820, every 250ms`, running **inside** the poll loop of
+`dispatch_watching_buffer` (ruling: a monitoring channel may never cost the exit code, so an exception
+from it is recorded once and the channel is dropped). `vms`/`private` are the process's commit, `rss` its
+resident set; all three are read from outside the target, so nothing here depends on our module answering.
+
+### 39.1 pid 7820 — 33 samples across the death, condensed
+
+```
+[task5] mem @      0.1ms = rss=3209316K vms=8159644K private=8159644K
+[task5] mem @    251.2ms = rss=3208692K vms=8158532K private=8158532K
+[task5] mem @   4773.7ms = rss=3208236K vms=8158532K private=8158532K
+[task5] mem @   5024.1ms = rss=3208236K vms=8158532K private=8158516K
+[task5] mem @   5275.1ms = rss=3179904K vms=8158332K private=8158332K
+[task5] mem @   5525.7ms = rss=3117120K vms=7574180K private=7574180K
+[task5] mem @   6528.0ms = rss=3116976K vms=6085216K private=6085216K
+[task5] mem @   7281.6ms = rss=3116616K vms=4769204K private=4769204K
+[task5] mem @   7785.2ms = rss=3110820K vms=3788488K private=3788488K
+[task5] mem @   8035.6ms = rss=1981468K vms=2068988K private=NA
+[task5] mem growth       = vms KiB: first=8159644 last=2068988 delta=-6090656 samples=33 window=8035.6ms
+[task5] mem growth       = rss KiB: first=3209316 last=1981468 delta=-1227848 samples=33 window=8035.6ms
+[task5] mem growth       = private KiB: first=8159644 last=3788488 delta=-4371156 samples=32 window=7785.2ms
+```
+
+The shape, stated exactly: for the first ~5 s the commit is **flat** — `vms` constant at `8,158,532K`
+across 20 consecutive samples, `rss` drifting down by 1,080 KiB in total. Then `vms` falls monotonically
+(`8,158,332 → 7,574,180 → 6,085,216 → 4,769,204 → 3,788,488 → 2,068,988K`) and `rss` follows
+(`3,117,120 → 1,981,468K`). `private` goes `NA` on the final sample, i.e. the counter itself became
+unreadable before the process did. Against §38.4's poll clock on the same pid: the witness was readable at
+107.1 ms, the reads died at 7,931.7 ms — which lands between the `7,785.2 ms` (still readable, `vms`
+3.79 GB) and `8,035.6 ms` samples — and the handle signalled at 8,263.0 ms.
+
+### 39.2 pid 7812 — the same shape, independently
+
+`StartTime 2026/10/22 0:24:21`, shot at 00:27 [16:27], same `sqjs_c39.dll`:
+
+```
+[task5] mem @      0.1ms = rss=3219328K vms=8172392K private=8172392K
+[task5] mem @   4781.4ms = rss=3218724K vms=8171300K private=8171300K
+[task5] mem @   5535.5ms = rss=3125536K vms=7588372K private=7555552K
+[task5] mem @   7544.9ms = rss=3123012K vms=4022984K private=4003220K
+[task5] mem @   8048.9ms = rss=154628K vms=129764K private=NA
+[task5] mem growth       = vms KiB: first=8172392 last=129764 delta=-8042628 samples=33 window=8048.8ms
+[task5] mem growth       = rss KiB: first=3219328 last=154628 delta=-3064700 samples=33 window=8048.8ms
+```
+
+`vms 8,171,300K → 129,764K` and `rss → 154,628K`, with the witness again readable (`readable at 85.5ms`,
+`oks=1959 fails=97 text='enter heap_ok alloc_ok free_ok new_rt '`) and the reads dying at 7,820.6 ms
+against a handle that signalled at 8,071.4 ms. Two processes, two pid values, one shape.
+
+### 39.3 The no-dispatch control, verbatim
+
+`scripts/c2_control_watch.py` at 00:26 [16:26] — the same sampler, the same poll loop, **zero bytes of our
+module executed in the target** and no `C2Init`/`C2DiagQJSInto` dispatch at all:
+
+```
+[control] mem @   6121.2ms = rss=3220372K vms=8173524K private=8173524K
+[control] mem @  19708.2ms = rss=3219768K vms=8173324K private=8173324K
+[control] growth         = vms KiB: first=8173524 last=8173324 delta=-200 samples=59 window=19708.2ms
+[control] growth         = rss KiB: first=3220216 last=3219768 delta=-448 samples=59 window=19708.2ms
+[control] watched 20000ms, samples=59, init dispatch made=none, host alive=True
+```
+
+The control is what makes §39.1's baseline meaningful: **8.17 GB of commit is this game's steady state**,
+unchanged to within 200 KiB over 19.7 s while the host stays alive. The dying shots start from the same
+number and end near zero.
+
+### 39.4 What this excludes, and what it only suggests
+
+- **Excluded — an allocation storm inside `JS_NewRuntime2`.** No sample on either dying shot exceeds the
+  pre-dispatch commit; `vms` is flat for five seconds and then falls. A call that OOMs or churns gigabytes
+  would have to put an upward excursion somewhere in a 250 ms-resolution series that spans the whole
+  death, and there is none. §33's `heap_free` use-after-free → "QuickJS OOM" reading is therefore not what
+  these two shots show, and the earlier `rc = 3`-based framing is already retracted (§38.5).
+- **Excluded — "the host was killed by our read-back".** The control runs the identical loop, reads the
+  identical counters, and the host answers `alive=True` after 20 s with 59 samples.
+- **Inference, not measurement — orderly teardown rather than an unhandled exception.** A process that
+  releases ~8 GB of commit progressively over ~2.5 s, with `rss` following and the counters going `NA` only
+  at the last sample, looks like a shutdown path unwinding rather than a fault that terminates immediately.
+  Nothing observed here proves that: no stack, no Win32 error, no `WerFault` record was captured for these
+  pids, and the alternative (a crash path that happens to run the same destructors) is not excluded by a
+  memory series.
+- **Still open.** Both dying shots stop at the same witness tag (`new_rt `, the tag that precedes
+  `JS_NewRuntime2`), and the control that would separate *that call* from *a long remote thread* is
+  `scripts/c2_control_sleep.py` — written, tested offline, not yet fired. See §40 for its verdict, which
+  does not exist yet at the time of writing.
+
+**Counts for §39**: 2 dispatch shots with full series (7820, 7812; 33 samples each), 1 no-dispatch control
+(59 samples), 0 new code paths measured, 1 hypothesis retired (allocation storm), 1 hypothesis left open
+(teardown vs crash) and 1 discriminator pending (§40).
