@@ -46,6 +46,7 @@ P15 的绿定义在本计划里被改动一次,两句都记在这里,免得下�
 
 - **旧(2026-10-22 实测,Task 1 之后一字未变)**:`Build Summary: 22/25 steps succeeded (1 failed); 296/296 tests passed`。`296` 是图里 **11 个 `run test` 步**的 pass 数之和:`21 + 21 + 15 + 42 + 11 + 21 + 16 + 31 + 18 + 21 + 79`。
 - **新(Task 2 Step 5 实测,启用 scope 独立测试步之后)**:`Build Summary: 24/27 steps succeeded (1 failed); 305/305 tests passed`。`run test` 步从 **11 → 12**,与预测逐字一致。
+- **再新(C2 mf 标记计划 Task 1 实测)**:`Build Summary: 24/27 steps succeeded (1 failed); 306/306 tests passed`。**step 数不变**(仍是 24/27),因为本改动只往**已有的** `c2_diag_tests` 步(`build.zig:123`)加了 1 条 test block,没新增 build 步;`+1 test` = `src/dll/quickjs/c2_diag_test.zig` 新增的 `JS_NewRuntime2 calls back into heap_mf between new_rt and rt= (offline positive control)`。那 1 个 failed 与前一条同一句 kernel32 undefined-symbol,未变。
 - **增量来源**:`+2 step` = `build.zig:295` 的 `test_step.dependOn(&run_api_scope_tests.step);` 由注释变成活代码,带来 `api_scope_tests` 的 compile 步与 `run_api_scope_tests` 的 run 步各一个;`+9 test` = `src/dll/api/scope.zig` 的 9 条 `test` block —— 其中 8 条改动前就写在文件里但**不在 test 图内**,第 9 条是本 Task 新增的 `scope.zig:268`(钉住 `LAYOUT_CONFIRMED == false`)。
 - **那 1 个 failed 未变**:仍是 `exports.zig` 根步骤的 8 条 kernel32 undefined-symbol(`CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`)—— ELF 主机上的环境事实,种类与条数都与本计划无关,依 ruling P15 不「顺手修」。
 - **围栏**:`python3 -m pytest scripts/test_scripts_layout.py -q` 实测 **23 passed**(2026-10-22;commit `6459731` 加进第八条规则 `violates_missing_roadmap_header` 之后的数,此前该处的记录是 22)。本清单只引它作执行者,不对它做任何改动。
