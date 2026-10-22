@@ -1,0 +1,307 @@
+# C2 mf-records read-back (4.4.4) — evidence
+
+# Purpose: §45 ranked three candidates for why the arena's block header comes back NULL on Windows
+# and not on Linux (§45.5 (a) alignment, (b) our `size == 0 → NULL`, (c) a split `JSMallocState`), and
+# every one of them was ranked on an UNOBSERVED value: §45's own boundary says "the faulting pointer
+# value was never observed — '8' is derived from what the emitted check tests". Task 1 put a bounded
+# ring recorder inside the three `heap_mf` callbacks and exported a renderer; this log is the Windows
+# read-back of that ring, so the discrimination is decided by data instead of by ranking.
+# Second purpose: say plainly which judgment-table row the data selects — and, when it selects the
+# "all three fail" row, that the candidate table, not the measurement, is what came back short.
+# exe identity: stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56 — NOT INVOLVED IN ANY OBSERVATION BELOW.
+# DLL under test (local): stellaris_quickjs.dll, sha256 77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
+#   (7,171,072 bytes), built at HEAD 26589ac on the c2-mf-records branch. This is NOT §42/§44's
+#   `863917f2…86617` — Task 1's recorder changed `src/dll/quickjs/quickjs_wrapper.c`, so the bytes moved,
+#   exactly as the plan predicted. §45's artifact C:\temp\sqjs_s43.dll was not touched or overwritten.
+# DLL under test (remote): C:\temp\sqjs_s46.dll, same bytes (see (3)).
+# Scripts: scripts/c2_selfabort_repro.py (maintained since Task 2; deployed as C:\temp\c2_selfabort_repro.py,
+#   sha256 947cb0055cd2038278de0146469da05ed8dcc4260310574cfabdf58ae53eea37), scripts/dll_ubsan_site.py
+#   (offline, file copy only). Batch notes: scripts/scratch/2026-10_mfrecords/.
+
+## (2) local DLL sha256 (zig-out/bin/stellaris_quickjs.dll)
+
+    $ timeout 600 zig build && sha256sum zig-out/bin/stellaris_quickjs.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0  zig-out/bin/stellaris_quickjs.dll
+
+Reproducibility check, because "the bytes in the log are the bytes that ran" is provenance: the tree's
+artifact was moved aside and the build run again from an empty output position:
+
+    $ mv zig-out/bin/stellaris_quickjs.dll /tmp/s46_prev.dll && timeout 900 zig build
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll /tmp/s46_prev.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0  zig-out/bin/stellaris_quickjs.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0  /tmp/s46_prev.dll
+
+Identical — this build is byte-reproducible on this host, so the digest above names the source, not one
+lucky link. `git rev-parse HEAD` = `26589ac018e1c5410b6a8bf8be3c723ad5344091`.
+
+Zig suite re-measured before the run: `timeout 900 zig build test` →
+`Build Summary: 24/27 steps succeeded (1 failed); 314/314 tests passed` — the one failed step is the
+ELF-host `exports.zig` test binary linking against kernel32 (`undefined symbol: CloseHandle`,
+`GetModuleHandleA`, `CreateFileA`, `WriteFile`), an environment fact already recorded in
+`docs/scope-read-points.md`, not a defect introduced here.
+
+## (3) remote DLL sha256 (certutil -hashfile C:\temp\sqjs_s46.dll SHA256)
+
+    SHA256 为 C:\temp\sqjs_s46.dll 的哈希:
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
+    CertUtil: -hashfile 命令成功完成。
+
+local == remote. The script was deployed too and verified by digest, because the plan's Step 2 named
+only the DLL and `C:\temp` did not contain the script:
+
+    Name                   Length
+    sqjs_s46.dll          7171072
+    c2_selfabort_repro.py   14567
+    (Get-FileHash C:\temp\c2_selfabort_repro.py -Algorithm SHA256).Hash
+    947CB0055CD2038278DE0146469DA05ED8DCC4260310574CFABDF58AE53EEA37   == local sha256sum
+
+## (4) environment
+
+Windows host `Windows_Jiaolong`, `python -V` = Python 3.13.2, 16 logical processors, load ~6 % idle
+before the batches. The remote shell is PowerShell, so remote commands are chained with `;` (`&&` is
+not a valid separator there). No game process was running or contacted; the only processes involved
+were the ssh session, `python` parents, and the `python` children those parents spawned.
+
+## (5) what the channel reads
+
+`scripts/c2_selfabort_repro.py <dll_path>` loads OUR artifact into a child python with `ctypes.WinDLL`
+and runs the shot's own gate order (`C2Sanity` → `C2DiagQJSInto`). Two daemon reader threads run in
+that child:
+
+  - `WITNESS <n>` — the §45 channel: 96 bytes of the DLL's own `g_diag_log` static, polled every
+    0.2 ms, change-gated.
+  - `MFREC <seq> <watch|post> '<rendering>'` — Task 1's channel: the 8-slot heap_mf ring rendered to
+    text by the DLL's own export `C2DiagMfRecordsInto` (caller buffer 4096, the size baked into the
+    export's contract), polled every 2 ms, change-gated, self-capped at 400. `post` is the dump taken
+    after the sequence returns; on a defective artifact it never prints.
+
+Row grammar as rendered (`watch`), oldest→newest, always exactly 8 rows:
+`"<kind><filled> size=<hex, unpadded> ptr=<hex, unpadded> st=<exactly 12 hex = low 48 bits of the
+JSMallocState*>"` with `kind ∈ {M,F,R,_}` and `filled ∈ {x,_}`. A `__ size=0 ptr=----------------` row is
+a slot that was NEVER WRITTEN; a `<kind>_ … ptr=----------------` row is a slot entered and not exited
+(either a death mid-callback or a row the renderer judged unstable). `Fx size=` is the released block's
+own header size, not a request size. Parsing was done on the literal tokens `" size="`, `" ptr="`,
+`" st="` — never by column offset, because the hex columns are unpadded.
+
+## (6) verbatim output
+
+First run, and the one that had to be diagnosed before it became useful:
+
+    $ ssh Windows_Jiaolong "python C:\temp\c2_selfabort_repro.py C:\temp\sqjs_s46.dll"
+
+    [repro] dll=C:\temp\sqjs_s46.dll
+    [repro] --- child stdout (verbatim) ---
+    BASE sqjs_s46.dll 0x7ffc125b0000
+    LOGADDR 0x7ffc12c56e70
+    RECORDER ok
+    WITNESS ''
+    SANITY 42
+    MFREC 0 watch '__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n'
+    WITNESS 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+    [repro] --- child stderr (verbatim) ---
+    thread 21460 panic: member access within null pointer of type 'JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader')
+    ???:?:?: 0x7ffc125bbd9b in ??? (sqjs_s46.dll)
+    … 7 further in-DLL frames, then libffi-8.dll / _ctypes.pyd / python313.dll / python.exe / KERNEL32.DLL / ntdll.dll …
+    [repro] child returncode = 3 (0x3)
+    [repro] child key lines = BASE=1, LOGADDR=1, MFREC=1, RECORDER=1, SANITY=1, WITNESS=2
+    [repro] in-DLL RVAs from the panic stack: 0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44e399
+    [repro] VERDICT: the DLL terminated its own host with exit status 3 — the abort() signature, reproduced with no game involved
+
+Seven further sequential runs and six lightly concurrent ones returned the SAME shape: `MFREC=1`
+(the empty ring), `WITNESS=2`, `SURVIVED` never printed, returncode 3, the same 8-RVA frame set. That is
+a sampling absence, not a renderer absence — see (7).
+
+The read-back itself, verbatim (24 concurrent children; `ov3` is the one that landed):
+
+    BASE sqjs_s46.dll 0x7ffc11e30000
+    LOGADDR 0x7ffc124d6e70
+    RECORDER ok
+    WITNESS ''
+    SANITY 42
+    MFREC 0 watch '__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n'
+    WITNESS 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'
+    MFREC 1 watch '__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\nMx size=5a0 ptr=154ba68 st=0000006dec18\nMx size=808 ptr=1884708 st=00000154be70\nMx size=ff0 ptr=1884f28 st=00000154be70\n'
+    thread 8296 panic: member access within null pointer of type 'JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader')
+    [repro] child returncode = 3 (0x3)
+    [repro] child key lines = BASE=1, LOGADDR=1, MFREC=2, RECORDER=1, SANITY=1, WITNESS=2
+    [repro] in-DLL RVAs from the panic stack: 0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44e399
+    [repro] VERDICT: the DLL terminated its own host with exit status 3 — the abort() signature, reproduced with no game involved
+
+A later batch of 24 concurrent children produced three more renders of the same three-row shape and
+one stale render (see (9)); the data-bearing `MFREC` lines from that batch, verbatim and complete:
+
+    MFREC 0 watch '__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\nMx size=5a0 ptr=181f388 st=0000006dec18\nMx size=808 ptr=8ad018 st=00000181f790\nMx size=ff0 ptr=8ad838 st=00000181f790\n'
+    MFREC 1 watch '__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\nMx size=5a0 ptr=17e7128 st=0000006dec18\nMx size=808 ptr=1587df8 st=0000017e7530\nMx size=ff0 ptr=183b378 st=0000017e7530\n'
+    MFREC 1 watch '__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\nMx size=5a0 ptr=17c67b8 st=0000006dec18\nMx size=808 ptr=84bf98 st=0000017c6bc0\nMx size=ff0 ptr=84c7b8 st=0000017c6bc0\n'
+    MFREC 0 watch '__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\nMx size=ff0 ptr=188c118 st=0000018451c0\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n__ size=0 ptr=---------------- st=000000000000\n'
+
+Run tally, all batches (an invocation is one `ssh … python c2_selfabort_repro.py …`; a *real* child run
+is one that printed `child returncode`; 10 invocations died in `kex_exchange_identification: read:
+Connection reset by peer` under 24-way ssh concurrency, i.e. no child ever started for them):
+
+    invocations = 94   real child runs = 84   data-bearing renders = 5   children that printed SURVIVED = 0
+    children that died with returncode 3 = 84 (84/84)   distinct in-DLL RVA sets = 1
+
+## (7) the sampling diagnosis, in the order it was worked through
+
+`RECORDER ok` proves the export exists in these bytes; the renderer emitted eight well-formed rows; the
+remote digest matched; the buffer is the contract's 4096; both reader threads start before the gate
+order. So the first read-back was NOT a broken channel — it was a poll that landed before the first
+allocator event, and a next poll (2 ms later) that never happened because the child was already dead:
+
+  - `MFREC 0 watch` showed 5 pristine slots + 3 `Mx` rows in the later runs, so the ring IS written on
+    Windows; the empty-ring renders were simply taken earlier than the events.
+  - The two readers' cadences bracket the window: the 0.2 ms `WITNESS` thread landed a sample after
+    `new_rt MmMmMm` was written in every run, the 2 ms `MFREC` thread landed one in 5 of 84 runs. The
+    death therefore follows the last allocator event by roughly a fraction of a millisecond to ~2 ms.
+  - Remedy that added no code and no capability: oversubscribe the CPU so the scheduler preempts the
+    sequence thread inside that window. The 14 runs taken sequentially or at light concurrency produced
+    0 data-bearing renders; the oversubscribed batches (71 real child runs at 16–24-way concurrency)
+    produced 5. The instrument was never changed — only when the existing reader got a timeslice.
+  - Every data-bearing run died with the identical 8-RVA frame set, the identical witness text, and
+    returncode 3, so the concurrency that made the read possible did not change the behaviour being
+    read (see also (10): the trap site re-pins to the same source line on these bytes).
+
+## (8) contrast with §45
+
+WITNESS channel, §45's `sqjs_s43.dll` vs this `sqjs_s46.dll` (different bytes — the recorder is in them):
+
+    §45: 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'   (live text, character for character)
+    §46: 'enter heap_ok alloc_ok free_ok new_rt MmMmMm'   ← identical
+
+    §45 in-DLL RVAs: 0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44d339
+    §46 in-DLL RVAs: 0x43bc, 0x55f5, 0xbd9b, 0x1ebde, 0xeede3, 0x31b9c8, 0x31cc05, 0x44e399
+                                                            last frame moved 0x44d339 → 0x44e399
+
+Five of eight frames are the same RVA; only the outermost moved, which is what adding ~4 KB of recorder
+code in front of later functions does. `scripts/dll_ubsan_site.py` on the bytes that ran:
+
+    $ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000bd9b
+    [ubsan_site] function holding 0x18000bd9b: rva 0xbd70..0xbdf3 (131 bytes)
+      /var/…/libs/quickjs/quickjs.c:1494:12 member_access type='JSMallocBlockHeader' (aka 'struct JSMallocBlockHeader') record_rva=0x5ab430 loaded_at=0x18000bd8c
+    $ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll site JSMallocBlockHeader
+    [ubsan_site] 141 UBSan check sites for a type containing 'JSMallocBlockHeader'
+
+Same function range (`0xbd70..0xbdf3`, 131 bytes), same source site (quickjs.c:1494:12), same 141 sites;
+only the record's `.rdata` address moved (`0x5aa430` → `0x5ab430`). So Task 1 added a read point and moved
+neither the trap nor its address.
+
+What `MFREC` adds that `WITNESS` could not: the witness can only say *how many* allocation lifecycles
+finished (`MmMmMm` = three `heap_malloc` calls, all returned, no fourth entered) and it caps at 8 tags;
+§45.5's three candidates are questions about VALUES — a size, a pointer's low bits, which
+`JSMallocState` drove the call. Those three numbers exist only in the ring, and (6) is the first time
+this project has printed them.
+
+Native positive control for the same recorder (Linux, `c2_diag_tests`, sequence completes): Task 1's
+probe rendered `Mx size=fe8 ptr=2dc2e18 st=000002d9f7c0`, `Rx size=378 ptr=2dc50a8`,
+`Fx size=268 ptr=2dc4e28`. Note the native `ptr` values are `≡ 8 (mod 16)` too — the Windows rows in (6)
+have the same shape, which is the point of (10) below.
+
+## (9) reading, judgment table applied per render
+
+Parsed from the text with the literal tokens, 13 event rows across 5 renders; all 13 are `Mx`
+(completed `heap_malloc`), none is `Fx`/`Rx`, none is an entered-but-not-exited `<kind>_`.
+
+**Row 1 of the table (`size == 0` on an `M`/`R` row → candidate (b)).** Sizes observed, in order:
+`0x5a0` (1440), `0x808` (2056), `0xff0` (4080) — four renders agree on exactly that triple, and the
+fifth (stale, below) shows `0xff0`. No zero-size `M`/`R` row. **This is agreement with a fact already
+established offline, not new evidence**: `__js_malloc(s, 0)` is served from the embedded
+`zero_size_block` (`quickjs.c:1549-1556`) and `js_new_string8_len` short-circuits `len <= 0` (`:4018`),
+so a zero-size request never reaches `mf.js_malloc` on this vendored revision. Candidate (b) is
+therefore NOT "excluded by this run"; it was excluded before it, and this run is consistent with that.
+The 5 pristine `__ size=0` rows in every render are never-written slots, not zero-size requests, and the
+table's row 1 reads only `M`/`R` rows — they cannot enter the test.
+
+**Row 2 (`ptr` alignment → candidate (a)).** Evaluated as **`ptr % 8 != 0`**, the reading mandated by
+`JS_MALLOC_ALIGN = 8` (`quickjs.c:243`) and `offsetof(JSMallocBlockHeader, user_data) == 8` (`:270-280`),
+because UBSan's misalignment check on `JSMallocBlockHeader` fires iff a pointer is not 8-aligned. All 13
+pointers have `ptr % 8 == 0`, so candidate (a) is not selected. The observed set of `ptr % 16` is
+exactly `{0x8}` — every pointer we hand back is `≡ 8 (mod 16)`, which is the structural consequence of
+`AllocHeader` being one `size_t` and `heap_malloc` returning `h + 1` on a 16-aligned `HeapAlloc` block
+(`quickjs_wrapper.c:161-163, :312`). Per that same ruling, `ptr & 0xf != 0` on its own is NOT evidence
+for (a): the native (unbroken) sequence renders the same `≡ 8 (mod 16)` shape, so the plan's second
+clause — "原生同一序列全是 16 对齐" — is measured false by this read-back. What the data does support is
+narrower and worth keeping straight: **every pointer our callbacks returned is 8-aligned, i.e. satisfies
+what QuickJS's own header arithmetic requires.** The panic we are chasing is
+`member access within NULL POINTER`, a nullness trip, not a misalignment trip; this run says our returned
+pointers are not the null source.
+
+**Row 3 (`st` → candidate (c), split `JSMallocState`).** Distinct `st` **per complete render = 2**
+(count printed, as required, because the plan's wording "某条记录的 `st` 与 `JS_NewRuntime2` 那次 `st` 不同"
+would fire on a healthy runtime too): `quickjs.c:2070` declares `JSMallocState ms` as a STACK local,
+`:2076 rt = mf->js_malloc(&ms, sizeof(JSRuntime))` carries that stack address, and only `:2082
+rt->malloc_ctx.malloc_state = ms` makes the heap copy every later call carries. Two values in one
+`JS_NewRuntime2` are structurally required. The observed pattern is exactly the expected-healthy one:
+
+    render  row1 st            row2/row3 st      row1 ptr        (st − row1 ptr)
+    ov3     0x6dec18           0x154be70         0x154ba68       +0x408
+    C3      0x6dec18           0x181f790         0x181f388       +0x408
+    C15     0x6dec18           0x17e7530         0x17e7128       +0x408
+    C22     0x6dec18           0x17c6bc0         0x17c67b8       +0x408
+
+  - the first value is **identical across four different child processes** (`0x6dec18`) — a stack
+    address, which is where a per-process-independent value belongs;
+  - the second value moves with the heap and equals the runtime block pointer **+ 0x408 = 1032**, and
+    1032 is the computed `offsetof(JSMallocContext, malloc_state)` with `offsetof(JSRuntime, malloc_ctx)`
+    = 0 (`arena_list[31] + free_arena_list[31]` = 992, `zero_size_block[8]` = 1000, `mf` (4 pointers) =
+    1032) — measured from this TU with `zig cc`: `sizeof(JSRuntime)=1440`, and `JSRuntime` contains no
+    `long`/`time_t`/`wchar_t`, so the number carries to the LLP64 target;
+  - the stack value never reappears after the runtime row, and the runtime-sized row (`0x5a0` =
+    `sizeof(JSRuntime)`) is present in every complete render.
+
+So candidate (c) is not selected — and not by absence: the healthy 2-value pattern with the +0x408
+identity was positively observed, four times, in four different address spaces.
+
+**The fifth render is a stale one, and pooling renders would have fabricated candidate (c).**
+`MFREC 0 watch` in `C5` prints a single `Mx size=ff0` row in the third slot with slots 0 and 1 rendered
+pristine. No sequential ring history can produce that: with three events the cursor is 3 and the walk is
+5 pristine + 3 events (the other four renders). It is the documented limit of reading the cursor ONCE
+before the walk (`quickjs_wrapper.c:666-671`) while the writer advances: the cursor was read at 0, and by
+the time the walk reached slot 2 the third event had landed, while slots 0 and 1 had already been read as
+pristine. The render therefore shows an ordering that was never a ring state — and if its `st` were
+pooled with the complete renders, the distinct-`st` count would rise from 2 to 6 and the table's row 3
+would "select" candidate (c) purely from a reader artifact. Classification is per render; the stale one
+contributes nothing except corroboration that its one row is `≡ 8 (mod 16)` and `size > 0`.
+
+**Which row of the table the data selects: the fourth.** No `M`/`R` row has `size == 0` (row 1 — and per
+the ruling above that fact was already established offline, so it is not booked as this run's exclusion);
+every returned pointer is 8-aligned (row 2 fails); the `st` pattern is the healthy two-value one with
+the runtime copy at +0x408 (row 3 fails). The three §45.5 candidates are therefore not the explanation,
+and by the plan's own instruction the candidate table is declared incomplete: the raw `MFREC` text and
+the last record before the death go back to the human and **this plan stops — no fourth candidate is
+invented here.**
+
+The last record before the death, in all four complete renders, is the same event:
+
+    Mx size=ff0 ptr=1884f28 st=00000154be70        (ov3; +0x408 identity holds in each render)
+
+**What those three rows are**, read off the vendored source after the fact (arithmetic, not observation):
+`0x5a0` = `sizeof(JSRuntime)` = the `mf->js_malloc(&ms, sizeof(JSRuntime))` at `:2076`; `0x808` =
+`js_malloc_large`'s `sizeof(JSMallocLargeBlockHeader) (8) + 2048` = the `js_mallocz_rt(sizeof(uint32_t) *
+512)` inside `JS_ResizeAtomHash(rt, 512)`, the first thing `JS_InitAtoms` does (`:3180`); `0xff0` =
+4080 = `sizeof(JSMallocArena) (40) + 101 * 40` — the new-arena request of the **40-byte block class**,
+which is unique to that class among the 31 (`js_malloc_block_sizes`). In `JS_InitAtoms` order that is:
+runtime, atom hash, then the arena created by the FIRST `__JS_NewAtomInit`'s name-string request
+(`js_alloc_string_rt(rt, len, 0)` at `:3430`). §43 parked the death exactly between ":3430 名字串分配" and
+":3330 atom_array 增长", and §45 pinned the trap inside `__JS_NewAtomInit`; the ring now shows the death
+sitting **after the 40-byte arena was handed over successfully** and before any further `mf` call — the
+`atom_array` growth (which would have been a `0x1640` large-block row) is absent from every render.
+The identification of rows 2 and 3 by name is arithmetic plus call order, not an observed label; it is
+stated as such and belongs in the boundaries below.
+
+## (10) read-only self-attestation
+
+    - Nothing was injected. No CreateRemoteThread, no hook/Interceptor/patchCode/writeByteArray/
+      Memory.protect, no Frida session, no read or write of any game process's memory.
+    - stellaris.exe was not started, not contacted, not even opened from disk by these commands;
+      §44's single-shot dispatch authorization stays spent and was not used or rehearsed.
+    - The only processes that loaded the DLL were child pythons that scripts/c2_selfabort_repro.py
+      spawned and owns; 84 of them died with status 3 and none printed SURVIVED, so no behaviour change
+      was introduced by the recorder's presence (the plan's Step 3 stop-condition was never reached).
+    - The DLL bytes were not modified by this task: no src/ edit, no new export, no new probe; the
+      measurement came from re-running an existing tool, and the only thing varied was host load.
+    - scripts/dll_ubsan_site.py read a file copy of the DLL. The struct sizes/offsets were computed by
+      compiling the vendored quickjs.c into a throwaway /tmp probe — no repository file, no shipped
+      artifact involved.
+    - C:\temp\sqjs_s43.dll (§45's named artifact) was neither overwritten nor reused; the new bytes went
+      to C:\temp\sqjs_s46.dll.
