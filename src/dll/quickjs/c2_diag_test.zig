@@ -7,7 +7,9 @@
 //
 // The externs below bind only the project's own quickjs_wrapper.c symbols
 // (C2*, C2Write*, and that file's own JS_FreeValue/JS_DupValue/JS_NewString
-// wrappers), never QuickJS C symbols — PLAN §6 blocker 1 workaround holds.
+// wrappers), never QuickJS C symbols — the "Zig extern fn binding a QuickJS C
+// function crashes, so every QuickJS call goes through the C wrapper" constraint
+// (docs/roadmap.md 段5) holds.
 //
 // On non-Windows targets quickjs_wrapper.c falls back to a libc-backed
 // GetProcessHeap/HeapAlloc shim (same allocator logic, same accounting), so

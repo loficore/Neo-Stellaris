@@ -16,7 +16,7 @@ registration pipeline and identify extension points for new effects/triggers.
 |---|---|
 | 取证过程 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
 | 取证过程 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性)+ §31–§39(C2 QuickJS bootstrap:harness、`heap_free` use-after-free、native Task 5/6、2026-10-21 实机 `C2Init rc=3` 与游戏退出、§37 探针双义缺陷的修复、**§38** 四条观测通道与读回竞态(`rc=3` 当步骤码的读法在此**撤回**)、**§39** 内存序列排除分配风暴 —— host 死前先把自己释放干净) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性)+ §31–§40(C2 QuickJS bootstrap:harness、`heap_free` use-after-free、native Task 5/6、2026-10-21 实机 `C2Init rc=3` 与游戏退出、§37 探针双义缺陷的修复、**§38** 四条观测通道与读回竞态(`rc=3` 当步骤码的读法在此**撤回**)、**§39** 内存序列排除分配风暴 + §39.5 pre-context 标记把失败位置钉到 `JS_NewRuntime2`(host 死前先把自己释放干净)、**§40** 只执行 `kernel32!Sleep(8000)` 的长远程线程让 host 存活 ⇒ 死因专属于我们的序列、不是「有条长线程」,靶 = `JS_NewRuntime2`) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 离线脚本用法与判读陷阱 | `docs/offline-tooling.md` |
 | `api/scope` 假偏移的逐条读点处置(16 行 `src/` + 1 行 `build.zig`)与 P15 绿定义的旧/新句、增量出处 | `docs/scope-read-points.md` |
 | 脚本速查表(哪个读什么、产出哪个 artifact)+ 命名与目录约定 | `scripts/README.md`、`scripts/test_scripts_layout.py`(约定的执行者)、本文件「scripts/ 命名与目录约定」 |
