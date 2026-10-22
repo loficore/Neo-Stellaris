@@ -125,7 +125,7 @@ const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
 const INVALID_HANDLE_VALUE: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(i64, -1))));
 
 /// C1: register a new trigger keyword into the live engine's BST.
-/// PLAN §6 C1 — alias form, donor = has_crisis_perk (0x269CAA8).
+/// c1_validation §24/§24.6 — alias form, donor = has_crisis_perk (0x269CAA8).
 /// Resolves the game's module base via GetModuleHandleA, so it does not
 /// depend on PushCApplicationPtr being called first.
 /// Can be invoked via CreateRemoteThread from the injector, or from DllMain.

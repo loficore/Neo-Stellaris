@@ -1,6 +1,6 @@
 // keyword_registry.zig — builds the 0x120 token descriptor the engine itself builds.
 //
-// PLAN.md §6 C0 item 2/3. Byte contract from evidence/analysis/runtime_444_keyword_pipeline.md
+// C0 item 2/3 (pipeline §20/§21). Byte contract from evidence/analysis/runtime_444_keyword_pipeline.md
 // §17 (layout), §18 (shared writer), §20 (the ctors' exact stores, decoded instruction by
 // instruction). Reproduced here because it is the whole point of the module:
 //
@@ -198,16 +198,16 @@ comptime {
 // than construct an object, so `ClassInfo{ .class_info = <official address>, .docstring = ... }` is
 // the whole of step 4 and nothing here has to guess a vtable.
 //
-// It is HARD-GATED: `authorize.c1_registration` is comptime false, so `register` returns
-// error.NotAuthorized without touching a pointer, and enabling it is a deliberate source
-// edit (PLAN.md §1: inserting into `0x33746E8`/`0x32611C8` is engine state, not recording).
+// It is GATED at runtime (docs/roadmap.md segment 2: inserting into `0x33746E8`/`0x32611C8` is
+// engine state, not recording). `authorize.c1_registration` is now `true` (C1 authorized); flip it
+// back to `false` to withdraw: `register` returns error.NotAuthorized without touching a pointer.
 // The gate is a runtime path, not @compileError, on purpose — it is what lets the call
 // sequence be unit-tested offline against fake function pointers.
 // ---------------------------------------------------------------------------
 
 pub const authorize = struct {
     /// The single switch between "this module can only build bytes" and "this module can
-    /// mutate the live engine". Flip it only with PLAN §6 C1 explicitly authorized.
+    /// mutate the live engine". Flip it only with docs/roadmap.md segment 2's C1 explicitly authorized.
     pub const c1_registration: bool = true;
 };
 
@@ -563,7 +563,7 @@ test "§24.6 donor ClassInfo: the trigger db is C1's first target" {
 }
 
 test "substitution: changing (id, name) touches only the id and the name bytes" {
-    // PLAN §6 C0.3's actual criterion, restated for an oracle we generate ourselves:
+    // C0.3's actual criterion (pipeline §21), restated for an oracle we generate ourselves:
     // no byte may depend on the inputs except the id field and the name characters.
     const a = buildDescriptor(10104, "add_modifier", 0x5000_0000, 0x14000_0000) catch unreachable;
     const b = buildDescriptor(0x00FF_FFFF, "sub_modifier", 0x5000_0000, 0x14000_0000) catch unreachable;
@@ -722,7 +722,7 @@ fn expectOps(comptime want: []const Op) !void {
     for (want, 0..) |op, i| try std.testing.expectEqual(op, trace.ops[i]);
 }
 
-test "gate: c1_registration is authorized (PLAN §6 C1)" {
+test "gate: c1_registration is authorized (roadmap 段2)" {
     try std.testing.expectEqual(true, authorize.c1_registration);
 }
 

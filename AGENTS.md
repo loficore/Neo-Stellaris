@@ -169,7 +169,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | 曾经的断言 | 实况 | 证据 |
 |---|---|---|
 | `0xCCCEB0` = master keyword registrar | **false**;唯一调用方 `0x266D3D` 是把 token 解析成对象的通用运行时处理 | §15 |
-| `0x337A844` = 一次性注册守卫 | 是 trace-enable bool(PLAN §6 C3 旧触发条件作废) | §16 |
+| `0x337A844` = 一次性注册守卫 | 是 trace-enable bool(C3 旧触发条件作废,论证见 §16) | §16 |
 | effect dispatch switch(`3.x 0x180B050`) | 4.4.x **不存在**;改为 per-class vtable 派发 | §3 §14 |
 | lexer/parser 会从脚本文本 mint token | **false**;567 个调用点分 139 桶无一处在解析器里,且 `0x1D13270` **零 qword 引用**。mod 脚本里的新词**不会**有 id,DLL 必须自己调 | §19 |
 | `0x5350D0` = keyword 执行器 / 真实扩展面 | 是按 token-id 的属性 getter,22 个派发消息里混着 `graphicsSettings`/`sendgame`;**0 个直接调用点** | §26.1 §28 |

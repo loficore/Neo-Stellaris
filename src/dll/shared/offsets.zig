@@ -99,7 +99,7 @@ pub const scripted_lookup = struct {
     pub const RVA_TRIGGER_SOURCE_FILE: usize = 0x25182C0; // ...\source\scriptedtrigger.cpp, line 0x12 = 18
 };
 
-/// Registration surface for a genuinely new hardcoded keyword — PLAN.md §6 C0/C1.
+/// Registration surface for a genuinely new hardcoded keyword — the recipe, pipeline §20/§21.
 /// Every item here is [VERIFIED 4.4.4 STATIC]: read off the shipped exe with
 /// `scripts/disrva.py`, field-by-field in evidence/analysis/runtime_444_keyword_pipeline.md §20.
 /// None of it has been observed in a running process, which is what C1 is for.
