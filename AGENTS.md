@@ -18,6 +18,7 @@ registration pipeline and identify extension points for new effects/triggers.
 | 取证过程 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
 | 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性)+ §31–§37(C2 QuickJS bootstrap:harness、`heap_free` use-after-free、native Task 5/6、2026-10-21 实机 `C2Init rc=3` 与游戏退出、§37 探针双义缺陷的修复) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 离线脚本用法与判读陷阱 | `docs/offline-tooling.md` |
+| `api/scope` 假偏移的逐条读点处置(16 行 `src/` + 1 行 `build.zig`)与 P15 绿定义的旧/新句、增量出处 | `docs/scope-read-points.md` |
 | 脚本速查表(哪个读什么、产出哪个 artifact)+ 命名与目录约定 | `scripts/README.md`、`scripts/test_scripts_layout.py`(约定的执行者)、本文件「scripts/ 命名与目录约定」 |
 | 4.4.4 锚点全表(Frida 重锚定) | `evidence/xrefs/anchors_4_4_4.md` |
 | keyword→behaviour 机器可读转储(3,900 条) | `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`(`scripts/thunkarrays.py`) |
@@ -178,7 +179,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x5350D0` = keyword 执行器 / 真实扩展面 | 是按 token-id 的属性 getter,22 个派发消息里混着 `graphicsSettings`/`sendgame`;**0 个直接调用点** | §26.1 §28 |
 | `0x1D092C0` 可作 JS 作用域变量桥的候选锚点 | **已否**(§30):它是 parse-error 表追加器 —— `new(0x80)` 节点写进 `[obj+0x10]/+0x18/count +0x20` 链表、置 `[obj+0x28]=1`,尾调 tokenizer 推进 `0x1D09130`;`0x1D09330` 的 **22** 个调用方全部传**错误文案**(`'Unexpected token'`/`'Unreadable String'`/`'Unhandled Entry'`/`'Expected list start'`)。真正的按名变量查找**仍未定位**,不要再从这里找 | §28.3 → **§30** |
 | `0x337ACBC` 像"脚本错误计数" | 是**递归深度** global:全镜像只有 2 处引用,都在 `0x1D09130` 内(入口 `inc`、提前返回路径 `dec`),净为零 | §30 |
-| 3.x `CEventScope` 布局(`+8` scope type / `+16` object id) | 被 §26 证伪;但 `src/dll/api/scope.zig` **仍在读 `+8`/`+16` 且已链进 DLL** | §26 |
+| 3.x `CEventScope` 布局(`+8` scope type / `+16` object id) | 被 §26 证伪;`src/dll/api/scope.zig` **仍在读 `+8`/`+16` 且已链进 DLL** —— 但自 2026-10-22 起每个读点自带 `UNCONFIRMED LAYOUT` 标注、`offsets.c_event_scope.LAYOUT_CONFIRMED = false` 由一条测试钉住,逐条处置见 `docs/scope-read-points.md`。语义未改:真实布局仍未定(§26.2),那条线在 roadmap 段4 等实机帧指针 | §26 §26.3 |
 
 ## 新硬编码 keyword 配方(Phase A 结论 — 全程离线,不 patch 静态表)
 
