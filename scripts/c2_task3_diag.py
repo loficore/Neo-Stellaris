@@ -20,7 +20,7 @@ Instead we `remote_alloc` a 512-byte buffer, pass its address as the single
 CreateRemoteThread lpParameter to `C2DiagQJSInto`, take the 32-bit return as the
 step code, and `read_memory` the buffer for the log. One call, no pointer ever
 crosses the exit code. The DLL-side symbol bound is OUR wrapper, never a QuickJS
-C symbol (global constraint / PLAN §6 blocker 1 workaround).
+C symbol (global constraint / docs/roadmap.md segment 5 C-wrapper workaround).
 
 Decode table (ruling P7) is derived from the ACTUAL code, not the brief's table.
 See evidence §32 for the derivation and how it differs from the brief.

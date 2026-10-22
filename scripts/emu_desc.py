@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """C0.3 oracle — run the engine's OWN descriptor writers under an emulator.
 
-PLAN §6 C0.3 asked for a byte diff between a descriptor we build and a "real" one.
+C0.3 (pipeline §21) asked for a byte diff between a descriptor we build and a "real" one.
 There are no real bytes to diff against: the 0x120 x 9,863 array at 0x337B400 lives
 past the .data raw data (BSS-style, loader zero-fills it) and is filled at start-up
 by the driver — §20. So this script makes the binary itself the authority instead:

@@ -156,7 +156,7 @@ rpc.exports = {
 EFFECT_MONITOR_SCRIPT = """
 'use strict';
 
-// Record-only detour of the 4.4.4 hot path — PLAN §1 forbids anything that changes behaviour.
+// Record-only detour of the 4.4.4 hot path — docs/roadmap.md segment 2 forbids anything that changes behaviour.
 // The old hook target here was the 3.x "effect dispatch switch-case at 0x14180B050", which is
 // doubly wrong on 4.4.4: that switch does not exist (runtime_444_structures.md §3/§14 — effects are
 // polymorphic CEffect::Execute via vtable), and an absolute image-base address is meaningless under

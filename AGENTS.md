@@ -23,7 +23,9 @@ registration pipeline and identify extension points for new effects/triggers.
 | keyword→behaviour 机器可读转储(3,900 条) | `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`(`scripts/thunkarrays.py`) |
 | CEffect 类图(1,805 个 vtable,**是下限不是类数**,§14/§17) | `evidence/xrefs/ceffect_vtable_map_4_4_4.txt` |
 | descriptor 回放 oracle | `evidence/xrefs/descriptor_oracle_4_4_4.tsv` |
-| 阶段计划与授权状态 | `PLAN.md` |
+| 阶段计划与授权状态 | `docs/roadmap.md` |
+
+**细计划在 `docs/superpowers/plans/`,该目录不进 git**;要状态与前置看 `docs/roadmap.md`,要步骤得在本地私有目录里找名字。
 
 ## 硬性约束(每次动手前核对)
 
@@ -33,10 +35,10 @@ registration pipeline and identify extension points for new effects/triggers.
 2. **不得对 session `f3ea6101` 调用 `ida_auto.plan_and_wait`** — 它把 IDA 主线程卡死 785 s。
    交叉引用用 `scripts/find_refs.py`(离线、完整)而不是 IDA xrefs。IDB 是**从 exe 建的**,没有
    Windows 侧的命名/类型历史。
-3. **C1(真机注册一个新 keyword)未授权**:`src/dll/scripted/keyword_registry.zig:208` 的
-   `authorize.c1_registration = false`,所以 `pub fn register`(`:419`)直接返回
-   `RegisterError.NotAuthorized`,真正的执行器 `registerSequence`(`:432`)是 file-private。
-   翻转那一个常量就是 C1 的授权步骤。
+3. **C1(真机注册一个新 keyword)的门现在是开的**:`src/dll/scripted/keyword_registry.zig:211` 的
+   `authorize.c1_registration = true`(2026-10 由 C1 的授权动作翻转;`:725` 的测试断言它为 true),所以
+   `pub fn register`(`:419`)会走到执行器 `registerSequence`(`:432`,仍 file-private)。
+   **翻回 `false` 即撤回** —— 翻转那一个常量就是 C1 的授权步骤,动实机注册前先核对这条。
 4. **任何新 keyword 名在进 `0x1D13270` 之前必须先过 `scripts/c1_preflight.py` 且退出码 0**
    (§25.5):token 查找**大小写不敏感**,`Add_Modifier` 会拿回 `add_modifier` 的 `10104`,
    我们的插入会**接管一个官方 keyword**,而 `eax` 分不清 mint 与命中。运行时同一条规则由
@@ -85,7 +87,7 @@ All analysis artifacts go to `evidence/` at project root:
 也不能下沉一级目录。
 
 **这一节里可机械判定的部分现在是机器判据**,由 `python3 -m pytest scripts/test_scripts_layout.py -q` 执行;
-六条规则各是一个纯函数。`R-env` **`violates_env_var`** 只管**从磁盘读 `stellaris.exe`** 的脚本 —— 判据是行为
+八条规则各是一个纯函数。`R-env` **`violates_env_var`** 只管**从磁盘读 `stellaris.exe`** 的脚本 —— 判据是行为
 (带 `CreateRemoteThread` 的实机脚本被排除),不看族名;缺的是 `NS_STELLARIS_EXE` 候选而非绝对路径本身,
 候选链旁边的 `D:\SteamLibrary\…` fallback(现 5 个)**是合规的,不是缺陷**。
 `R-pair` **`violates_pairing`** 只扫顶层,`scratch/` 里 `body.js` 那种历史孤儿由它自己的 README 解释。
@@ -93,8 +95,14 @@ All analysis artifacts go to `evidence/` at project root:
 `R-depth` **`violates_family_depth`** 管 `c1_*`/`c2_*`/`test_c2_harness.py`,`windows/` 不在范围内。
 `R-rva` **`violates_hardcoded_rvas`** 就是 P10:和 `R-pair` 同一口径**只扫顶层** —— `scratch/` 是冻结的历史、
 `windows/` 是 launcher,都不在 `top_level_scripts` 范围内;顶层维护脚本里模块级 `RVAS = {…}` 字面量一个都不许留。
-`R-refs` **`dangling_script_refs`** 要求 living docs(`AGENTS.md`、`PLAN.md`、`docs/**`,剔掉私有的
+`R-refs` **`dangling_script_refs`** 要求 living docs(`AGENTS.md`、`docs/**`,剔掉私有的
 `docs/superpowers/`)里写出的 `scripts/<path>` 解析得到,scratch 按 basename 兜底;`evidence/` 不可变,永不扫。
+`R-roadmap` **`violates_roadmap_shape`** 管 `docs/roadmap.md` 这个尺寸与指针:≤140 行、不许写私有计划目录的路径、
+阶段状态表**按状态**必填出处(`blocked`/`in-progress` 要卷名 + §,`planned` 要计划文件名,`done` 两者之一)——
+这是「状态表不会再长回一份叙述性计划」的唯一机械防线。
+`R-header` **`violates_missing_roadmap_header`** 是 `R-roadmap` 的同伴:`R-roadmap` 靠那五个列名定位状态表,
+所以**改掉一个列名**会让它找不到表、静默解除所有按行检查而真树测试照样绿 —— 这条规则只钉「存在一行同时带齐
+五个列名」,让降级表头这件事必须响。
 **加豁免 = 把文件名写进那条规则函数的 docstring,不是 `xfail`** —— `xfail` 会藏掉这座围栏就是为了防的漂移,
 所以连 P10 都不给豁免。反过来,改名要写文档、每个维护中的工具在 `docs/offline-tooling.md` 有一节 —— 这两条
 **不在围栏里**(改名留下的死引用只被 `R-refs` 兜住一半:它只看 living docs,不看 `evidence/`),仍然只有人在读。
@@ -164,7 +172,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | 曾经的断言 | 实况 | 证据 |
 |---|---|---|
 | `0xCCCEB0` = master keyword registrar | **false**;唯一调用方 `0x266D3D` 是把 token 解析成对象的通用运行时处理 | §15 |
-| `0x337A844` = 一次性注册守卫 | 是 trace-enable bool(PLAN §6 C3 旧触发条件作废) | §16 |
+| `0x337A844` = 一次性注册守卫 | 是 trace-enable bool(C3 旧触发条件作废,论证见 §16) | §16 |
 | effect dispatch switch(`3.x 0x180B050`) | 4.4.x **不存在**;改为 per-class vtable 派发 | §3 §14 |
 | lexer/parser 会从脚本文本 mint token | **false**;567 个调用点分 139 桶无一处在解析器里,且 `0x1D13270` **零 qword 引用**。mod 脚本里的新词**不会**有 id,DLL 必须自己调 | §19 |
 | `0x5350D0` = keyword 执行器 / 真实扩展面 | 是按 token-id 的属性 getter,22 个派发消息里混着 `graphicsSettings`/`sendgame`;**0 个直接调用点** | §26.1 §28 |
@@ -223,8 +231,8 @@ scripted effects & triggers。注册类别:Types, Promotes, Functions, Callbacks
 
 **关键约束的现状**:「没有公开项目成功新增过 hardcoded effect keyword」— 这条**已被正面满足**
 (2026-09-29,Phase A + C0):上面的配方通过引擎自己的 `0x1D13270` + BST 插入注册**真正全新**的
-keyword,不 patch 静态表,Zig 侧已写好并对引擎自己的写手做了字节校验。门是
-`authorize.c1_registration = false`。
+keyword,不 patch 静态表,Zig 侧已写好并对引擎自己的写手做了字节校验。门
+`authorize.c1_registration` 已由 C1 的授权动作翻为 `true`(状态与改动点见 `docs/roadmap.md` 段2)。
 
 ## External References
 
