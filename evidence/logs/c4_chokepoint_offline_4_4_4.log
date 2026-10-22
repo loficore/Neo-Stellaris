@@ -1,0 +1,164 @@
+# C4 offline chokepoint data — Stellaris 4.4.4 — 2026-10-22
+
+Offline analysis log. No game process was opened, started, injected, or dispatched to.
+The only Windows actions were read-only file hashing/reading, a read-only copy of one save,
+copying two standard-library tools into `C:\temp`, and running them there.
+
+## 存档身份 (read-only)
+
+```
+save_path=C:\Users\13229\Documents\Paradox Interactive\Stellaris\save games\_1474567734\autosave_2226.01.01.sav
+save_size_bytes=1913464
+save_last_write=2026/9/29 0:39:43
+save_sha256=6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e
+copy_path=C:\temp\stellaris_2226.sav
+copy_sha256=6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e
+sav_zip_entries=gamestate:27281802,meta:365
+gamestate_first_line=version="Pegasus v4.4.4"
+gamestate_version_control_revision=28
+ids_are_save_local=yes
+save_sha256=6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e
+```
+
+Commands used for the identity check (the remote shell is PowerShell):
+
+```
+ssh Windows_Jiaolong "(Get-Item 'C:\Users\13229\Documents\Paradox Interactive\Stellaris\save games\_1474567734\autosave_2226.01.01.sav') | Select-Object Length,LastWriteTime | Format-List"
+ssh Windows_Jiaolong "(Get-FileHash 'C:\Users\13229\Documents\Paradox Interactive\Stellaris\save games\_1474567734\autosave_2226.01.01.sav' -Algorithm SHA256).Hash.ToLower()"
+ssh Windows_Jiaolong "(Get-FileHash 'C:\temp\stellaris_2226.sav' -Algorithm SHA256).Hash.ToLower()"
+ssh Windows_Jiaolong "python -c \"import zipfile; z=zipfile.ZipFile('C:/temp/stellaris_2226.sav'); print([(i.filename,i.file_size) for i in z.infolist()]); print(z.read('gamestate')[:22])\""
+```
+
+The original save and the `C:\temp` copy hash identically. The save is user data and is not
+in this repository; this log records only its identity and derived statistics.
+
+## Tools (offline, standard library only)
+
+```
+python3 scripts/save_hypergraph.py <save.sav> --edges <edges.tsv> [--stats]
+python3 scripts/chokepoint_scores.py <edges.tsv> --out <scores.tsv> [--top N]
+```
+
+Host: `Windows_Jiaolong`, Windows Python **3.13.2**.
+
+Source hashes at the time of this run:
+
+```
+ff5b8c4619244a561a2860c09078c23902751e51b6b53ff9e79ebeac2997c662  scripts/save_hypergraph.py
+84e1b1b48d2d6ed185b59bd420ee93429f2e5aaf05d969ec8fb1e629ef2502a8  scripts/chokepoint_scores.py
+ec37c8c13dc51abab5f48f0c48edf4a999d9eac9f7afe1987456a902da2eea77  scripts/test_save_hypergraph.py
+761c4a494781b9a0fc94026b1f884e925336bbfa10ce51cf5feb702a13ffe0f4  scripts/test_chokepoint_scores.py
+```
+
+## Commands and verbatim output
+
+Upload (the byte-identical tools were run on the host):
+
+```
+scp scripts/save_hypergraph.py scripts/chokepoint_scores.py Windows_Jiaolong:C:/temp/
+```
+
+Graph extraction:
+
+```
+ssh Windows_Jiaolong "python C:\temp\save_hypergraph.py C:\temp\stellaris_2226.sav --edges C:\temp\edges.tsv --stats"
+```
+
+```
+systems=787
+directed_entries=2442
+undirected_edges=1217
+components=1
+isolates=0
+self_loops=0
+duplicate_entries=8
+asymmetric_edges=0
+conflicting_edges=0
+replacement_chars=0
+```
+
+Scoring (`--top 10`):
+
+```
+ssh Windows_Jiaolong "python C:\temp\chokepoint_scores.py C:\temp\edges.tsv --out C:\temp\scores.tsv --top 10"
+```
+
+```
+system_id	degree	betweenness	betweenness_norm	score	is_articulation	is_bridge_endpoint
+578	4	88288.927339	0.286183	286	0	0
+705	5	80062.845021	0.259519	260	0	0
+610	3	78664.628253	0.254987	255	0	0
+771	4	78382.321496	0.254071	254	0	0
+126	6	78179.032282	0.253413	253	1	0
+587	2	76794.497548	0.248925	249	0	0
+486	2	76771.394770	0.248850	249	0	0
+82	3	72738.565191	0.235778	236	0	0
+274	3	72259.604465	0.234225	234	0	0
+364	4	63087.989268	0.204496	204	0	0
+```
+
+## Graph invariants and the two parser findings
+
+- `systems=787`, `undirected_edges=1217`, `directed_entries=2442`; the relation is
+  `2 * 1217 + 8 = 2442`, i.e. the 8 duplicate declarations are counted in
+  `directed_entries` and in `duplicate_entries`.
+- `asymmetric_edges=0`, `conflicting_edges=0`: every declared edge has its reverse and
+  both directions agree on length. No silent repair was needed or performed.
+- `self_loops=0`, `isolates=0`, `components=1`: this galaxy is one connected component.
+- `replacement_chars=0`: the UTF-8 decode had no replacement characters.
+- There is exactly one root-level `galactic_object` entry; the save also contains 36 other
+  `galactic_object=` substrings inside unrelated structures, which are not system blocks.
+- **Finding 1 (bare list values).** The real gamestate contains
+  `required_dlcs = { "Horizon Signal" }`. That is a keyless scalar entry inside a block.
+  The original plan grammar only named `key=value`, `key={...}` and anonymous `{...}`;
+  the parser was extended to represent such entries as `(None, "<scalar>")`, matching the
+  existing `Block.entries` interface. Existing tests were extended rather than adding a
+  12th test, keeping the planned fence at 11 + 8 = 19 new tests.
+- **Finding 2 (duplicate declarations).** Five systems declare a `to` twice with the same
+  `length`: 489 (`571` ×2, `688` ×2), 571 (`489` ×2, `688` ×2), 616 (`624` ×2),
+  624 (`616` ×2), 688 (`571` ×2, `489` ×2) — 8 extra directed declarations in total.
+  Per the plan's Review Focus ("重复同长边 … 计数后继续"), these are counted as
+  `duplicate_entries=8` and the simple-graph adjacency keeps one copy. A repeated `to`
+  with a different length would be a hard error (not present in this save).
+
+## Products
+
+```
+edges.tsv=1217 data rows,14,209 bytes,sha256=aef86565678394a73444ff859b26e083029d1114fa6dc0f24b4ab1b4f86a2d06
+scores.tsv=788 rows (header + 787 systems),26,716 bytes,sha256=009270815a22369cc650ef5c5c21e1201b9814f621f781cc08d4e947e9fa49dd
+evidence/xrefs/chokepoint_scores_4_4_4.tsv=byte-for-byte copy of scores.tsv (same sha256)
+```
+
+Line-count relation: `scores rows = systems + 1` → `788 = 787 + 1`.
+
+The files were produced on Windows, so `write_text` wrote **CRLF** line endings; the
+evidence TSV is the byte-for-byte Windows product. Both tools read with `splitlines()`,
+so they accept either CRLF or LF input.
+
+`scp` downloads of the two TSVs were reset by the host (`rc=255`; the same host resets
+larger downloads). The planned fallback was used: host-side `gzip` + base64, 1024-character
+base64 chunks over SSH, local concatenation, then `sha256sum` compared with the host-side
+`Get-FileHash`. Both hashes match exactly. Each chunk had its PowerShell CR stripped before
+concatenation.
+
+## Boundaries
+
+- This table is valid for **one save**, `autosave_2226.01.01.sav`, one galaxy shape, and
+  game version 4.4.4. System ids are **local to this save**; do not treat them as
+  cross-campaign constants.
+- The tools only parse a **text** `gamestate`. A binary/compressed gamestate is a hard
+  error (exit 2), by design.
+- Nothing in the game has consumed this table yet: the C4 execution path (donor wrapper
+  vtable / DLL lifetime) is a separate, not-yet-started plan.
+- `betweenness` is unweighted; the `length` column is parsed and preserved in the edge
+  table but not used by the metrics.
+
+## Read-only self-attestation
+
+- `stellaris.exe` was not opened; the game was not started, injected, or dispatched to.
+  The pre-existing game instance (pid 9932) was not touched.
+- No game file or save file was modified. `C:\temp` holds only: the read-only save copy,
+  the two tool copies, `edges.tsv`, and `scores.tsv`. One-time diagnostic probes were
+  deleted after use.
+- All game-process-adjacent machinery from previous phases (Frida, remote threads, QuickJS)
+  was unused.
