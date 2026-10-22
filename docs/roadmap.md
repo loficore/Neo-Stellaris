@@ -47,7 +47,7 @@
 | api/scope 假偏移 | done | c1_validation §26/§26.3 | `2026-10-22-scope-false-offset-consolidation.md` | 无(§26.2 的真实布局仍未定 → 段4 那条线) |
 | C0 | done | pipeline §20/§21 | — | — |
 | C1 | done | c1_validation §24/§24.6 | — | — |
-| C2 | blocked | c1_validation §36–§40 | `2026-10-22-c2-live-death-localization.md`(已执行) | §40 之后要写的下一个计划(靶 = `JS_NewRuntime2`;需 Windows 机时 + SSH 隧道) |
+| C2 | blocked | c1_validation §36–§41 | `2026-10-22-c2-live-death-localization.md`+`2026-10-22-c2-jsnewruntime2-boundary.md`(均已执行) | §41 把黑箱从「整个 `JS_NewRuntime2`」缩到「其内部:过 3 次 `heap_malloc` 后、`rt=` 前」;再往下要新的机时一枪,选点缺 §41 之后的新观测 |
 
 为什么顺序是 C0→C1→C2:C0 在**离线**把「我们造的描述符到底像不像真的」证实到字节;C1 在**实机**把「别名式注册
 能不能活过 create + write + predicate 链」证实;C2 才轮到「让 keyword 执行 JS」—— QuickJS 不在注入环境里活下来,后面没有一步能开工。

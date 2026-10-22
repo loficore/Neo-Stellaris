@@ -1,0 +1,78 @@
+# C2 mf-instrument shot (4.4.4)
+
+# Purpose: localize the JS_NewRuntime2 death §40 named — with the heap_mf callbacks now
+# tagged (M=heap_malloc / F=heap_free / R=heap_realloc, rate-limited MF_TAG_CAP=8, read-only).
+# Binary question this answers: did JS_NewRuntime2 ever call back into our allocator before dying?
+# exe identity: stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56 (46,253,688 bytes)
+# DLL instrumented: stellaris_quickjs.dll (build.zig native target), deployed as C:\temp\sqjs_mf.dll.
+
+## (2) local DLL sha256 (zig-out/bin/stellaris_quickjs.dll)
+
+2fbe5e58d870fdb3e72bdbd589414a471f6a8df50a799e12e1750d2ad41088ea  zig-out/bin/stellaris_quickjs.dll
+
+## (3) remote DLL sha256 (certutil -hashfile C:\temp\sqjs_mf.dll SHA256)
+
+2fbe5e58d870fdb3e72bdbd589414a471f6a8df50a799e12e1750d2ad41088ea
+
+local == remote. The instrumented copy that ran is the one built from the committed source.
+
+## (4) environment precondition (game running, before the dispatch)
+
+$ ssh Windows_Jiaolong "tasklist | findstr /i stellaris"
+stellaris.exe                13076 Console                    1    353,852 K
+
+After the dispatch:
+$ ssh Windows_Jiaolong "tasklist | findstr /i stellaris"
+(no line)  ->  the init sequence killed pid 13076, as §36/§39 predicted and the plan authorized.
+
+## (5) OFFLINE POSITIVE CONTROL (Linux host, no crash — sequence runs to completion)
+
+Native test step `c2_diag_tests` (build.zig:123) runs the SAME c2_diag_sequence against the
+real vendored QuickJS; on this host JS_NewRuntime2 returns, so the allocator tags keep landing:
+
+    enter heap_ok alloc_ok free_ok new_rt MMMMMMMMrt=0x31b2648 opaque_ok limits_ok new_raw RFraw_ok new_diag RFFRFRFdiag_rc=0 ctx=0x31bb678
+
+Reading: alive, `new_rt ` is followed by 8 `M` (capped at MF_TAG_CAP) then `rt=`. This is what makes
+the live `new_rt MMM` interpretable — it is NOT "instrumentation failed to compile in".
+
+## (6) LIVE DYING SHOT — the one dispatch (C:\temp\c2_task5_init.py C:\temp\sqjs_mf.dll)
+
+Key lines, verbatim (full driver stdout is what was captured):
+
+    [task5] C2Sanity == 42, game alive — init dispatch authorized
+    [task5] C2DiagGetLogAddr → truncated 0xed5157f0 → g_diag_log rva 0x6a57f0 @ 0x7ffbed5157f0
+    [task5] g_diag_log before the dispatch = ''
+    [task5] poll: witness g_diag_log: readable at 13.1ms, text 'enter heap_ok alloc_ok free_ok new_rt MMM'
+    [task5] poll: witness g_diag_log: unreadable at 1851.7ms — ReadProcessMemory @0x7ffbed5157f0 size=512 read 0 bytes (ok=0, gle=299)
+    [task5] poll: stop: process handle signalled — the host is gone after 70 failed read(s) at 2018.7ms; last: ReadProcessMemory @0xf40000 ... (ok=0, gle=299)
+    [task5] poll: exit code = 3 (thread had returned); process exit code = 0x3, thread returned while process alive = False
+    [task5] poll report      = WARNING: the thread never returned while the process was alive, so rc=3 is not proven to be a step code — a terminated thread reports the PROCESS exit code (here 0x3); treat decode_init_rc's answer as unconfirmed
+    [task5] poll report      = witness g_diag_log: oks=731 fails=70 text='enter heap_ok alloc_ok free_ok new_rt MMM'
+    [task5] buffer log       = ''
+    [task5] on-disk log      = ''
+
+Memory series over the death (psutil, 250ms):
+    vms KiB: first=8147640 last=45872 delta=-8101768 samples=9 window=2010.0ms
+    rss KiB: first=350028 last=55368 delta=-294660 samples=9 window=2010.0ms
+    (monotonic release from ~1254ms; private goes NA at the last sample — same self-release
+     shape as §39; no upward excursion, allocation storm already excluded there.)
+
+## (7) reading
+
+    offline alive : new_rt MMMMMMMM rt=    (≥8 mallocs through mf, then returns)
+    live dying    : new_rt MMM               (3 mallocs through mf, then reads die at 1851.7ms, no rt=)
+
+JS_NewRuntime2 reached our allocator THREE times before the host went unreadable. That excludes §40's
+reading (a) ("died in the QuickJS prologue before the first allocation") — the mf is demonstrably driven
+and returning. It is reading (b): the death is INSIDE JS_NewRuntime2 after the 3rd mf heap_malloc, before
+the call returns. It is NOT reading (c) — rt= never appeared, so §40's JS_NewRuntime2 target reproduces.
+
+Honest boundary: this does NOT make JS_NewRuntime2 survive. rc=3 is the PROCESS exit code, not a step
+code (the WARNING + §38.5 retraction apply — not "the Date intrinsic"). "Stopped after 3 M" is a position,
+not a cause; §41 writes where, not why. C2 stays blocked. Single dispatch, no re-fire.
+
+## (8) read-only self-attestation
+
+    - no hook/Interceptor/patchCode added; instrumentation is a snprintf into the DLL's own g_diag_log static.
+    - mf callbacks were only OBSERVED via tags; their alloc/free logic unchanged.
+    - disk file C:/temp/c2_diag_13076.log still produced nothing (write only at finish:, never reached).
