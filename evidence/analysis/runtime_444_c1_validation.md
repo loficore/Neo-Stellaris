@@ -2811,10 +2811,10 @@ Verbatim from the Task 2 listing (reproduced here with
     0000bde4  call    0x180499cc0            # pointer_overflow
 
 - **`0xbd86..0xbd97` — the check that aborted, on the compile-time constant 0.** `xor eax,eax` at
-  `0xbd86`; `test al,1` at `0xbd88`; `jne 0xbd9c` at `0xbd8a`. On the entry the panic frame names
-  (`0xbd70`) `al` has just been zeroed and nothing writes it before the test, so the jump can never
-  be taken; whether a caller also branches into the function elsewhere was not scanned for, so the
-  claim is about this entry only.
+  `0xbd86`; `test al,1` at `0xbd88`; `jne 0xbd9c` at `0xbd8a`. The panic frame names `0xbd9b`, which
+  resolves to the function entry `0xbd70`; at that entry `al` has just been zeroed and nothing writes
+  it before the test, so the jump can never be taken; whether a caller also branches into the function
+  elsewhere was not scanned for, so the claim is about this entry only.
   `lea rcx,[0x5ab430]`, then `xor eax,eax` / `mov edx,eax` put **0** in the handler's pointer
   slot and `call 0x498170` at `0xbd97`. The record decodes to `quickjs.c:1494:12`, kind
   `member_access`, type `JSMallocBlockHeader`, `log_align = 3` (8-byte alignment), `kind = 3`.
@@ -2849,7 +2849,7 @@ exist; the plan's single-check premise does not describe this code. The check th
 |---|---|---|---|
 | **(i)** | zero test after `sub 8`, on the subtraction result ⇒ the header is checked ⇒ `str == 8` | the aborting report is `0xbd97`, **before** `add rcx,-8` at `0xbdab`; its operand is `edx = 0`, not `rcx` | **does not hold** |
 | **(ii)** | zero test before `sub 8`, on `str` ⇒ `str == NULL` at `:2361` ⇒ `:2359` contradicted ⇒ attribution unreliable, Task 1 redo | a pre-subtraction `test r8,r8` does exist at `0xbda0`, but it feeds the `0xbde4` pointer-overflow report, not the aborting call; the aborting operand is 0 whatever `str` is | **does not hold** |
-| **(iii)** | the test and the subtraction are in different blocks, or the trapping function is a thunk ⇒ handler hook | the straight-line path actually taken runs from `0xbd86` through the aborting call at `0xbd97` (conditional branches exist at `0xbd8a` and `0xbdd3`, but neither is on that path); the 131-byte function is `js_rc`'s own body (record at `:1494:12`), not a thunk | **does not hold** |
+| **(iii)** | the test and the subtraction are in different blocks, or the trapping function is a thunk ⇒ handler hook | the straight-line path actually taken runs from `0xbd86` through the aborting call at `0xbd97` (conditional branches exist at `0xbd8a` and `0xbdd3`, but neither is taken on that path), and the zero test at `0xbda0` with the `add rcx,-8` at `0xbdab` are in the same basic block; the 131-byte function is `js_rc`'s own body (record at `:1494:12`), not a thunk | **does not hold** |
 | **4** | none of the above | fallback `offsetof`'s compile-time null member access; constant-0 report; Zig abort; exit 3 | **lands** |
 
 Row (ii)'s consequence deserves its own sentence, because it is the one that would have thrown

@@ -229,7 +229,7 @@ optional header 读,没有任何地址是写死的 —— 换一份产物就把 
 
 **退出码有三种意思,调用方必须能分开**:0 = 读到了且有匹配;1 = 读到了但**没有**匹配 —— 这是
 一个结论,不是故障。**1 有两种不同的意思,别把它们并成一句话**:「该类型名零个检查点 / `func`
-的地址不在任何 `.pdata` 函数区间里」和「命中了函数、但**该函数代码不引用任何 UBSan 记录**」
+的地址不在任何 `.pdata` 函数区间里」和「命中了函数、但**该函数代码不引用任何 `TypeMismatchData` 记录**」
 是两件事(工具分别打 `rva 0x… is not inside any .pdata function entry` 和
 `this function's code references no TypeMismatchData record (other UBSan record
 kinds are not decoded)`),后者的含义是"这一帧没有
@@ -274,8 +274,8 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
    32 字节里那条完全可读的记录。提升版改成 `end - 26 + 1`。当前产物上两个界给出**逐条相同的
    13,693 条记录**(`site JSMallocBlockHeader` 仍是 141,`quickjs.c:1494:12` 仍恰好 1 条),所以这条
    不改变任何已记录的计数 —— 它是给下一次链接准备的,届时布局器未必不把记录放进那段尾部。
-6. **记录行不带 `[ubsan_site]` 前缀,所以按前缀过滤会把证据丢掉。** `site`(`:255`)与 `func`
-   (`:284`)的 header 行带前缀,而每条记录行是**两个空格**开头(分别在 `:258`/`:297` 打印)—— `grep -F '[ubsan_site]'`
+6. **记录行不带 `[ubsan_site]` 前缀,所以按前缀过滤会把证据丢掉。** `site`(`:256`)与 `func`
+   (`:285`)的 header 行带前缀,而每条记录行是**两个空格**开头(分别在 `:259`/`:299` 打印)—— `grep -F '[ubsan_site]'`
    (或转义 `\[ubsan_site\]`)只留下 header。本批(§47 前置)对一次真实输出(`func 0x1800055f5`)实测 = 7 行
    (2 行 header + 5 行记录),过滤后**只剩 2 行**,5 条记录全丢。更糟的是另一种写法:
    不加转义的 `grep '[ubsan_site]'` 是**字符类**(任一字符 u/b/s/a/n/_/i/t/e),同一份
@@ -291,6 +291,10 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
    `PointerOverflowData`),`func` 只打出前一条;`evidence/disasm/js_rc_trap_77c0c35e.md` 两次都列。
    所以一个函数"恰好一条记录"只意味着**恰好一条可解码的 `TypeMismatchData`**,不是只有一次
    UBSan handler 调用。
+8. **报告里的 `pointer == 0` 可能是编译期常量,不是被检查的那个运行时指针。** §47 的实例:fallback
+   `offsetof`(`cutils.h:43-45` 的 `&((type *)0)->field`)把一次**空成员访问**编译进 `container_of`
+   (`quickjs.c:1494`),于是 `type_mismatch` 的指针操作数是字面 0;handler 文本里的 "null pointer"
+   因此**不是**「运行时指针为 0」的观测,allocator 形状或记录器数据都不能拿来判它。
 
 ### `scripts/c2_selfabort_repro.py <dll_path>`(Windows 侧;§45 的自检器)
 

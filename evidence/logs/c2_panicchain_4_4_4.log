@@ -636,7 +636,8 @@ The three rows the plan expected, tested against the 131-byte `js_rc` body (rva 
   whatever `str` is. The check at `0xbd97` is a third check, on neither quantity.
 - **(iii) does not hold.** (iii) needs the test and the subtraction in different basic blocks, or a
   thunk. The straight-line path actually taken runs from `0xbd86` through the aborting call at `0xbd97`
-  (conditional branches exist at `0xbd8a` and `0xbdd3`, but neither is on that path); the function's
+  (conditional branches exist at `0xbd8a` and `0xbdd3`, but neither is taken on that path), and the
+  zero test at `0xbda0` with the `add rcx,-8` at `0xbdab` are in the same basic block; the function's
   own record `0x5ab430` carries `quickjs.c:1494:12`, so the 131 bytes are `js_rc`'s body, not a thunk.
 
 **Fourth row: lands — as a mechanism, not as "offline disassembly cannot judge".** Mechanism
@@ -656,3 +657,37 @@ choice among repair options — (a) make `offsetof` well-defined (`__builtin_off
 `<stddef.h>`), (b) exclude `libs/quickjs` from UBSan null checks, (c) non-aborting Zig handler under
 separate authorization — belongs to the human. None was implemented. Full write-up:
 `evidence/analysis/runtime_444_c1_validation.md` §47.
+
+## (11) closing ledger for this plan (2026-10-22)
+
+Commits in branch order. The plan is stacked on `c2-mf-records` @ `6f12d65` (PR #7, still unmerged),
+so the branch's earlier history is not this plan's:
+
+    5405c73  Task 1: the eight-frame chain off the disk dump; dll_ubsan_site `func` caliber guard exits 2
+    bfd4e65  Task 1 fix: §45's bytes live in .zig-cache; frames 6-8 attributed by checkable sources
+    9d88ac6  Task 1 fix: line refs corrected; 3,042/4,824 restated as a tool-vs-tool difference
+    e371c30  Task 2: scripts/pe_disrva.py + its tests + the offline-tooling.md section
+    1a7e720  Task 2 fix: the second record is PointerOverflowData; `func` wording names the record kind
+    270a59e  Task 3: §47 appended — rows (i)/(ii)/(iii) fail, the fourth lands with a mechanism
+    db87170  Task 3 fix: nine wording/reference corrections inside §47
+    (<this commit>)  Task 5: bookkeeping only — AGENTS.md index `§31–§47` + constraint 8, tool-doc
+             line refs, the three §47/(10) wording nits, this ledger; no src/, build.zig or libs/ byte
+    Task 4: no dispatch (ruling); no `src/` change, no 314 -> 315
+
+Fence counts, measured on this commit's tree (not quoted from earlier sections):
+
+    $ python3 -m pytest scripts/test_scripts_layout.py -q
+    23 passed in 0.12s
+    $ python3 -m pytest scripts/test_c2_harness.py -q
+    134 passed in 1.11s
+    $ python3 -m pytest scripts/test_pe_disrva.py -q
+    4 passed in 0.94s
+    $ PYTHONPATH=scripts/windows python3 -m pytest scripts/windows/tests -q
+    169 passed in 4.73s
+    $ timeout 900 zig build test --summary all
+    Build Summary: 24/27 steps succeeded (1 failed); 314/314 tests passed
+    (the 1 failed is exports.zig's kernel32 link step — the known Linux environment fact, not code)
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll
+    77c0c35ec5b74abc8ccb849515621aaf53abd3fdc0a5e6ab8b9466acc0c11ad0
+
+No game, no shot, no dispatch was used for §47 — zero of each.
