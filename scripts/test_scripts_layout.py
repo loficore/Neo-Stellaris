@@ -262,6 +262,19 @@ def violates_hardcoded_rvas(files):
     return [f"{f.name}: hard-coded RVAS dict (ruling P10 — re-parse with list_exports)"
             for f in files if rvas_re.search(_read(f))]
 
+def stray_windows_literal_paths(scripts_dir):
+    """Files whose basename is a Windows path (``C:\\temp\\x.jsonl``).
+
+    ``game_supervisor`` reads ``LOG_PATH``/``STATUS_PATH`` from module globals,
+    so a host test that calls ``_handle_command`` without redirecting them
+    creates these under ``scripts/windows/`` on Linux.
+    """
+    out = []
+    for path in sorted(scripts_dir.rglob("*")):
+        if path.is_file() and ("\\" in path.name or ":" in path.name):
+            out.append(path.relative_to(scripts_dir).as_posix())
+    return out
+
 def test_env_var_rule_names_a_disk_reader_without_the_var(tmp_path):
     bad = tmp_path / "peek.py"
     bad.write_text('EXE = r"D:\\SteamLibrary\\steamapps\\common\\Stellaris\\stellaris.exe"\n'
@@ -455,3 +468,11 @@ def test_roadmap_header_fence_bites_and_the_real_header_is_policied(tmp_path):
         "阶段|状态|证据|计划|第一前置 — the per-row checks of "
         "violates_roadmap_shape would silently not run"]
     assert violates_missing_roadmap_header(REPO / "docs" / "roadmap.md") == []
+
+def test_stray_rule_flags_a_backslash_named_file(tmp_path):
+    (tmp_path / "C:\\temp\\ns_game_log.jsonl").write_text("")
+    assert stray_windows_literal_paths(tmp_path)
+
+
+def test_real_scripts_tree_has_no_stray_windows_paths():
+    assert stray_windows_literal_paths(SCRIPTS) == []

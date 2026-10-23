@@ -185,7 +185,9 @@ def test_console_key_plan_taps_only_to_open_a_closed_console():
     assert gs.console_key_plan(open_console=False) == _console_tail()
 
 
-def test_console_command_does_not_tap_a_console_it_left_open(monkeypatch):
+def test_console_command_does_not_tap_a_console_it_left_open(monkeypatch, tmp_path):
+    monkeypatch.setattr(gs, "LOG_PATH", str(tmp_path / "supervisor.jsonl"))
+    monkeypatch.setattr(gs, "STATUS_PATH", str(tmp_path / "status.json"))
     sent = []
     monkeypatch.setattr(gs, "focus", lambda hwnd: True)
     monkeypatch.setattr(gs, "_set_clipboard_text", lambda text: True)
@@ -209,7 +211,10 @@ def test_close_is_a_graceful_verb_not_a_kill():
     assert gs.parse_command("close") == {"verb": "close"}
 
 
-def test_console_sync_lets_an_operator_declare_the_console_state():
+def test_console_sync_lets_an_operator_declare_the_console_state(monkeypatch,
+                                                                 tmp_path):
+    monkeypatch.setattr(gs, "LOG_PATH", str(tmp_path / "supervisor.jsonl"))
+    monkeypatch.setattr(gs, "STATUS_PATH", str(tmp_path / "status.json"))
     state = {"want": "paused", "console_open": False}
     gs._handle_command({"verb": "console_sync", "open": True}, 7, state)
     assert state["console_open"] is True
