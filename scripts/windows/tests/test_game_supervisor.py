@@ -164,22 +164,49 @@ def test_grace_reread_returns_the_fresh_reading_only_when_it_applies():
     assert gs.reread_after_grace("playing", "playing", 2.0, playing, never) == "playing"
 
 
-def test_console_key_plan_clears_the_input_instead_of_closing_console():
-    # Live 2026-10-23: 4.4.4 does not close an open console on the console key.
-    # Sent while the console is up, the key is typed into the input line as
-    # '~', so the next paste arrived as "~effect ..." and died as "Unknown
-    # command".  The plan opens, clears the stray character with backspaces,
-    # pastes, submits — and never taps the console key again (the console is
-    # left open for the next command).
-    plan = gs.console_key_plan()
+def _console_tail():
     down, up = 0x0008, 0x000A
-    assert plan[:2] == [(0, 0x29, down, 0.08), (0, 0x29, up, 0.08)]
-    burst = [(0, 0x0E, down, 0.02), (0, 0x0E, up, 0.02)]
-    assert plan[2:2 + 2 * gs.BACKSPACE_CLEAR] == burst * gs.BACKSPACE_CLEAR
-    assert plan[2 + 2 * gs.BACKSPACE_CLEAR:] == [
+    burst = [(0, 0x0E, down, 0.02), (0, 0x0E, up, 0.02)] * gs.BACKSPACE_CLEAR
+    return burst + [
         (0, 0x1D, down, 0.08),
         (0, 0x2F, down, 0.08), (0, 0x2F, up, 0.08),
         (0, 0x1D, up, 0.08),
         (0, 0x1C, down, 0.08), (0, 0x1C, up, 0.08),
     ]
-    assert (0, 0x29, down, 0.08) not in plan[2:]
+
+
+def test_console_key_plan_taps_only_to_open_a_closed_console():
+    down, up = 0x0008, 0x000A
+    tap = [(0, 0x29, down, 0.08), (0, 0x29, up, 0.08)]
+    assert gs.console_key_plan(open_console=True) == tap + _console_tail()
+    # Live 2026-10-23 (C4 shot): a submitted command leaves the console OPEN,
+    # and the console key toggles — the capture command's opening tap closed
+    # it and its keystrokes went to the game.  0 of 783 sentinel lines ran.
+    assert gs.console_key_plan(open_console=False) == _console_tail()
+
+
+def test_console_command_does_not_tap_a_console_it_left_open(monkeypatch):
+    sent = []
+    monkeypatch.setattr(gs, "focus", lambda hwnd: True)
+    monkeypatch.setattr(gs, "_set_clipboard_text", lambda text: True)
+    monkeypatch.setattr(gs, "_send_input_event",
+                        lambda vk, scan, flags: sent.append((vk, scan)))
+    monkeypatch.setattr(gs.time, "sleep", lambda s: None)
+    state = {"want": "paused"}
+    gs._handle_command({"verb": "console", "text": "one"}, 7, state)
+    first = list(sent)
+    sent.clear()
+    gs._handle_command({"verb": "console", "text": "two"}, 7, state)
+    second = list(sent)
+    assert first[:2] == [(0, 0x29), (0, 0x29)]
+    assert (0, 0x29) not in second
+    assert state["console_open"] is True
+
+
+def test_console_sync_lets_an_operator_declare_the_console_state():
+    state = {"want": "paused", "console_open": False}
+    gs._handle_command({"verb": "console_sync", "open": True}, 7, state)
+    assert state["console_open"] is True
+    assert gs.parse_command("console_sync closed") == {"verb": "console_sync",
+                                                       "open": False}
+    assert gs.parse_command("console_sync sideways") is None

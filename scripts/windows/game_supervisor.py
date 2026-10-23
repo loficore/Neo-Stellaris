@@ -169,6 +169,10 @@ def parse_command(line: str):
         if len(head) == 1 or not head[1].strip():
             return None
         return {"verb": "console", "text": head[1]}
+    if verb == "console_sync":
+        if len(head) == 2 and head[1].strip().lower() in ("open", "closed"):
+            return {"verb": "console_sync", "open": head[1].strip().lower() == "open"}
+        return None
     parts = line.split()
     args = parts[1:]
     if verb in ("pause", "unpause", "toggle", "shot", "status", "quit", "dismiss"):
@@ -293,15 +297,16 @@ CF_UNICODETEXT = 13
 REF_W, REF_H = 2160, 1440  # spike reference resolution
 
 
-def console_key_plan():
-    """Open the console, clear its input, paste with Ctrl+V, submit with Enter.
+def console_key_plan(open_console: bool = True):
+    """Clear the console input, paste with Ctrl+V, submit with Enter.
 
-    The console key does not close an open console in 4.4.4 (live 2026-10-23):
-    sent while the console is up it is typed into the input line as '~', so the
-    next paste arrived as ``~effect ...`` and was rejected as "Unknown
-    command".  There is therefore no closing tap — the console stays open and
-    every plan starts by backspacing away the character the opening tap leaves
-    when the console was already open.  Each event carries its own delay:
+    The console key is a toggle in 4.4.4 (live 2026-10-23): it opens a closed
+    console, and a submitted command leaves the console open — so the next
+    command's tap CLOSED it and its keystrokes went to the game (the C4 shot's
+    capture command ran zero of its 783 sentinels).  ``open_console`` is False
+    once this daemon has submitted a command itself, or when an operator
+    declares the console open with ``console_sync open``.  The backspace burst
+    clears whatever the input line held.  Each event carries its own delay:
     backspaces go out at 20 ms, everything else at 80 ms.
 
     Ctrl is held across V: its down/up wrap the paste events, so the plan
@@ -309,7 +314,9 @@ def console_key_plan():
     """
     down = KEYEVENTF_SCANCODE
     up = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-    plan = [(0, CONSOLE_SCAN, down, 0.08), (0, CONSOLE_SCAN, up, 0.08)]
+    plan = []
+    if open_console:
+        plan += [(0, CONSOLE_SCAN, down, 0.08), (0, CONSOLE_SCAN, up, 0.08)]
     for _ in range(BACKSPACE_CLEAR):
         plan.append((0, BACKSPACE_SCAN, down, 0.02))
         plan.append((0, BACKSPACE_SCAN, up, 0.02))
@@ -740,10 +747,17 @@ def _handle_command(cmd, hwnd, state):
         elif not _set_clipboard_text(cmd["text"]):
             _log({"event": "console_clipboard_failed", "chars": len(cmd["text"])})
         else:
-            for vk, scan, flags, delay in console_key_plan():
+            opened = not state.get("console_open", False)
+            for vk, scan, flags, delay in console_key_plan(open_console=opened):
                 _send_input_event(vk, scan, flags)
                 time.sleep(delay)
             time.sleep(0.3)
+            state["console_open"] = True
+            _log({"event": "console_sent", "chars": len(cmd["text"]),
+                  "opened": opened})
+    elif verb == "console_sync":
+        state["console_open"] = cmd["open"]
+        _log({"event": "console_sync", "console_open": cmd["open"]})
     elif verb == "dismiss" and hwnd and state.get("last_bbox") \
             and state.get("paused") == "paused":
         click_close(hwnd, state["last_bbox"])
@@ -760,14 +774,20 @@ def serve(args) -> int:
     rng = random.Random()
     state = {"want": "playing", "policy": args.policy, "paused": "unknown",
              "resume": False, "last_bbox": None, "speed_sha": None,
-             "shot": None}
+             "shot": None, "console_open": False}
     handled = 0
     last_cmd = None
     last_status = 0.0
+    last_pid = None
     quit_now = False
     _log({"event": "serve_start", "pid": os.getpid()})
     while not quit_now:
         pid, hwnd = find_game()
+        if pid != last_pid:
+            # A launched game starts with its console closed; carrying the
+            # previous process's belief over would drop the first command.
+            state["console_open"] = False
+            last_pid = pid
         one_shot = None
         line = read_command(CMD_PATH, CMD_SEEN_PATH)
         cmd = parse_command(line) if line else None
@@ -894,6 +914,7 @@ def serve(args) -> int:
                            "gold": stats["gold"], "rows": len(stats["rows"]),
                            "bbox": stats["bbox"]},
                 "speed_sha": state["speed_sha"], "shot": state["shot"],
+                "console_open": state.get("console_open", False),
                 "last_cmd": last_cmd,
             })
         if acted:

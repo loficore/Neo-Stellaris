@@ -535,7 +535,9 @@ C4 接线驱动,一枪一进程:`capture` 跑一遍找出 `ctx`/`a3` 里承载 s
 
 **前置**:supervisor 必须已在 Windows 机上跑着(见下一节)。驱动先写 `want paused` 并等到状态
 `paused`(状态文件超过 5 s 未更新按「没在跑」判),然后才注入。**三条 console 命令都经 supervisor
-的 `console` 动词**(剪贴板 + 按键),不直接对游戏发键:
+的 `console` 动词**(剪贴板 + 按键),不直接对游戏发键。控制台键是**开关**,而命令执行完面板不关
+(2026-10-23 实机),所以 supervisor 自己记 `console_open`:首条命令按一下打开,后两条只清行、
+粘贴、回车;换进程时这个标记复位。
 
 ```
 effect every_system = { log = "C4_PREFLIGHT_<pid>_[This.GetName]" }             # 预检，应得 783 行
@@ -647,6 +649,7 @@ just game click 1400 861     # 屏幕绝对坐标(窗口在 (0,0) 时等于窗�
 just game console effect every_system = { log = "X" }   # 原样写进控制台(剪贴板粘贴)
                                              # 注意 keyword 在 effect 后、= 前;带括号的命令经
                                              # just/ssh 转手会被远端 shell 改写,驱动直接写命令文件
+just game console_sync open | closed         # 人工声明控制台当前是否开着(校正 supervisor 的标记)
 just game dismiss            # 只在 paused 且有窗口 bbox 时生效(需 serve --auto-dismiss)
 just game shot               # 存 C:\temp\ns_game_shot.png
 just game stop | quit
@@ -678,14 +681,18 @@ just game stop | quit
 6. **数字键不选选项**(实测),必须点行中心。同一组行签名连点 3 次后记 `choice_stuck` 并停手,
    防止在无响应窗口上打转。
 7. **`console <text>` 走剪贴板,不是逐字符打字**:`parse_command` 保留 `<text>` 的大小写、内部空白
-   与引号,`_set_clipboard_text` 以 UTF-16LE + 双 NUL 写进剪贴板,再发固定序列:反引号开控制台 →
-   64 个退格 → Ctrl+V → Enter。**没有收尾的反引号**:4.4.4 里控制台开着时这个键不关面板,而是往
-   输入行打一个 `~`,于是下一条命令变成 `~effect ...` 被判成 `Unknown command`(2026-10-23 实机)。
-   控制台就留在开着;64 个退格清掉「开面板那一下」留在输入行的字符(面板本来就开着时才会留),
-   退格 20 ms/个、其余 80 ms/个。`focus(hwnd)` 3 s 内拿不到前台就写 `console_refused`(不按键);
-   剪贴板失败写 `console_clipboard_failed`。`_send_key_events` 是**成对** down/up,修饰键必须跨 V 的
-   down/up 按住,所以 Ctrl 只能用 `_send_input_event` 逐事件发。数效果 marker 用驱动里的
-   `count_marker_lines`(只数同时含 `Log effect, file:` 与 marker 的行,控制台回显匹配不上)。
+   与引号,`_set_clipboard_text` 以 UTF-16LE + 双 NUL 写进剪贴板,再发:反引号(仅在
+   `console_open` 为假时)→ 64 个退格 → Ctrl+V → Enter,**不发收尾反引号**。两条实机事实
+   (2026-10-23):控制台键是**开关**,开着的面板被再按一下会**关掉**;命令执行完面板**不关**。
+   不做状态记录时,同一会话的第二条命令的「开面板」那一下会把面板关掉,退格/粘贴/回车全打进游戏,
+   命令一行都不执行(实测 783 条哨兵 0 行 —— 这正是 C4 首枪 `capture_not_delivered` 的机制)。
+   所以 supervisor 用 `console_open` 记状态:首条命令按一下打开,之后只清行、粘贴、回车;换游戏
+   进程时复位,人工看屏后可 `console_sync open|closed` 校正。64 个退格清输入行残留,退格 20 ms/个、
+   其余 80 ms/个。`focus(hwnd)` 3 s 内拿不到前台就写 `console_refused`(不按键);剪贴板失败写
+   `console_clipboard_failed`;成功写 `console_sent`(带 `opened` 标记)。`_send_key_events` 是
+   **成对** down/up,修饰键必须跨 V 的 down/up 按住,所以 Ctrl 只能用 `_send_input_event` 逐事件发。
+   数效果 marker 用驱动里的 `count_marker_lines`(只数同时含 `Log effect, file:` 与 marker 的行,
+   控制台回显匹配不上)。
 7. **`speed up/down` 实机已验证**:`up` 让标签从「常速」变「快速」,`down` 回落。命令会把 `speed_sha`
    的前后值写进状态,但绿色标签背景会脉冲,哈希自己也会变 —— 判结果要读截图里的两个字,不要只看哈希。
 8. **scp 上传可用,批量下载会把 SSH 连接重置**:取产物用分块 base64,单次输出 **≤700 字节**稳定
