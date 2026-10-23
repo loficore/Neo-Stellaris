@@ -73,9 +73,22 @@ REQUIRED_EXPORTS = (
     "C4WireDrainInto", "C4WireLayout", "C4WireDisarm", "C4ScoredStatsInto",
 )
 
-CAPTURE_CONSOLE = ('effect every_system = { neo_action = { '
-                   'log = "NEO_CHOKE_EFFECT_[This.GetName]" '
-                   'set_name = "NEO_CHOKE" } }')
+SENTINEL_PREFIX = "C4_%sSTART_%d_[This.GetName]"
+
+
+def _armed_console(pid, phase):
+    return ('effect every_system = { log = "%s" '
+            'neo_action = { log = "NEO_CHOKE_EFFECT_[This.GetName]" '
+            'set_name = "NEO_CHOKE" } }'
+            % (SENTINEL_PREFIX % (phase, pid)))
+
+
+def capture_console(pid):
+    return _armed_console(pid, "CAP")
+
+
+def apply_console(pid):
+    return _armed_console(pid, "APP")
 
 
 def preflight_console(pid):
@@ -340,6 +353,14 @@ def preflight_gate(count):
     return "ok"
 
 
+def classify_delivery(sentinel_count, phase):
+    if sentinel_count == 0:
+        return phase + "_not_delivered"
+    if sentinel_count != PREFLIGHT_MARKERS:
+        return phase + "_sentinel_mismatch"
+    return "ok"
+
+
 def count_marker_lines(text, marker):
     return sum(1 for line in text.splitlines()
                if "Log effect, file:" in line and marker in line)
@@ -471,6 +492,11 @@ def _send_console(cmd_path, text):
             return True
         time.sleep(0.05)
     return False
+
+
+def _send_console_or_abort(cmd_path, text):
+    if not _send_console(cmd_path, text):
+        raise _Abort("console_send_failed", text)
 
 
 def _wait_marker(path, offset, marker, expected, timeout):
@@ -620,7 +646,7 @@ def _flow(args, result, state):
     # Preflight: prove the console path and the campaign shape before capture.
     preflight = f"C4_PREFLIGHT_{pid}"
     offset = _file_size(log_path)
-    _send_console(args.supervisor_cmd, preflight_console(pid))
+    _send_console_or_abort(args.supervisor_cmd, preflight_console(pid))
     preflight_count = _wait_marker(
         log_path, offset, preflight, PREFLIGHT_MARKERS, timeout=30.0)
     if preflight_count is None:
@@ -635,7 +661,18 @@ def _flow(args, result, state):
 
     # Capture: find the scope column.
     sbuf = harness.remote_alloc(pid, 80)
-    _send_console(args.supervisor_cmd, CAPTURE_CONSOLE)
+    pred_before = None  # Task 4 接上；此处保持 None
+    cap_offset = _file_size(log_path)
+    _send_console_or_abort(args.supervisor_cmd, capture_console(pid))
+    cap_sentinel = _wait_marker(
+        log_path, cap_offset, "C4_CAPSTART_%d" % pid, PREFLIGHT_MARKERS,
+        timeout=30.0)
+    if cap_sentinel is None:
+        raise _Abort("log_unreadable", log_path)
+    result["capture"]["sentinel"] = cap_sentinel
+    gate = classify_delivery(cap_sentinel, "capture")
+    if gate != "ok":
+        raise _Abort(gate, f"capture sentinel {cap_sentinel} != {PREFLIGHT_MARKERS}")
     _, reached = _poll_calls(pid, base, exports["C4WireStatsInto"], sbuf,
                              SCORE_COUNT, 0, timeout=30.0)
     if reached:
@@ -680,7 +717,16 @@ def _flow(args, result, state):
     if mode_rc != 0:
         raise _Abort("apply_setup_failed", f"C4WireSetMode(2)={mode_rc}")
 
-    _send_console(args.supervisor_cmd, CAPTURE_CONSOLE)
+    _send_console_or_abort(args.supervisor_cmd, apply_console(pid))
+    app_sentinel = _wait_marker(
+        log_path, apply_offset, "C4_APPSTART_%d" % pid, PREFLIGHT_MARKERS,
+        timeout=30.0)
+    if app_sentinel is None:
+        raise _Abort("log_unreadable", log_path)
+    result["apply"]["sentinel"] = app_sentinel
+    gate = classify_delivery(app_sentinel, "apply")
+    if gate != "ok":
+        raise _Abort(gate, f"apply sentinel {app_sentinel} != {PREFLIGHT_MARKERS}")
     _, reached = _poll_calls(pid, base, exports["C4WireStatsInto"], sbuf,
                              SCORE_COUNT, before_wire["calls"], timeout=30.0)
     if reached:

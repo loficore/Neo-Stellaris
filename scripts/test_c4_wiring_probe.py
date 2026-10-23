@@ -7,9 +7,11 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import c4_wiring_probe as mod
 from c4_wiring_probe import (
-    CAPTURE_CONSOLE, EXPECTED_TIERS, PREFLIGHT_MARKERS, RECORD_SIZE, SAVE_SHA,
-    SCORE_COUNT, campaign_gate, classify_apply, classify_capture,
+    EXPECTED_TIERS, PREFLIGHT_MARKERS, RECORD_SIZE, SAVE_SHA,
+    SCORE_COUNT, apply_console, campaign_gate, capture_console,
+    classify_apply, classify_capture, classify_delivery,
     column_sequences, count_marker_lines, decode_records, decode_scored_stats,
     decode_wire_stats, expected_tiers, find_scope_column, pack_spec,
     preflight_console, preflight_gate, supervisor_ready, unpack_spec,
@@ -190,12 +192,42 @@ def test_campaign_gate_matrix():
     assert campaign_gate(None, SAVE_SHA, True) == "campaign_unverified"
 
 def test_console_commands_use_keyword_shape_and_a_per_system_name_token():
-    assert CAPTURE_CONSOLE.startswith("effect every_system = {")
-    assert "effect = {" not in CAPTURE_CONSOLE
-    assert "[This.GetName]" in CAPTURE_CONSOLE
+    cap = capture_console(4242)
+    app = apply_console(4242)
+    assert cap.startswith("effect every_system = {")
+    assert app.startswith("effect every_system = {")
+    assert "effect = {" not in cap
+    assert "NEO_CHOKE_EFFECT_[This.GetName]" in cap
+    assert "NEO_CHOKE_EFFECT_[This.GetName]" in app
     command = preflight_console(4242)
     assert command.startswith("effect every_system = {")
     assert "C4_PREFLIGHT_4242_[This.GetName]" in command
+
+
+def test_phase_sentinels_carry_pid_and_phase():
+    cap = capture_console(4242)
+    app = apply_console(4242)
+    assert "C4_CAPSTART_4242_[This.GetName]" in cap
+    assert "C4_APPSTART_4242_[This.GetName]" in app
+    assert cap != app
+    assert "C4_APPSTART_4242" not in cap
+    assert "C4_CAPSTART_4242" not in app
+
+
+def test_classify_delivery_matrix():
+    assert classify_delivery(0, "capture") == "capture_not_delivered"
+    assert classify_delivery(PREFLIGHT_MARKERS, "capture") == "ok"
+    assert classify_delivery(PREFLIGHT_MARKERS - 1, "capture") == "capture_sentinel_mismatch"
+    assert classify_delivery(0, "apply") == "apply_not_delivered"
+    assert classify_delivery(PREFLIGHT_MARKERS, "apply") == "ok"
+    assert classify_delivery(PREFLIGHT_MARKERS + 1, "apply") == "apply_sentinel_mismatch"
+
+
+def test_send_console_failure_aborts_before_the_game_runs_the_command(monkeypatch):
+    monkeypatch.setattr(mod, "_send_console", lambda path, text: False)
+    with pytest.raises(mod._Abort) as exc:
+        mod._send_console_or_abort("cmd.txt", "effect every_system = { }")
+    assert exc.value.verdict == "console_send_failed"
 
 def test_preflight_gate_uses_the_logsink_collapsed_count():
     assert preflight_gate(0) == "console_unavailable"

@@ -534,13 +534,18 @@ C4 接线驱动,一枪一进程:`capture` 跑一遍找出 `ctx`/`a3` 里承载 s
 也走参数,脚本不读环境变量。
 
 **前置**:supervisor 必须已在 Windows 机上跑着(见下一节)。驱动先写 `want paused` 并等到状态
-`paused`(状态文件超过 5 s 未更新按「没在跑」判),然后才注入。**两次 console 命令都经 supervisor
+`paused`(状态文件超过 5 s 未更新按「没在跑」判),然后才注入。**三条 console 命令都经 supervisor
 的 `console` 动词**(剪贴板 + 按键),不直接对游戏发键:
 
 ```
-effect every_system = { log = "C4_PREFLIGHT_<pid>_[This.GetName]" }            # 预检,应得 783 行
-effect every_system = { neo_action = { log = "NEO_CHOKE_EFFECT_[This.GetName]" set_name = "NEO_CHOKE" } }
+effect every_system = { log = "C4_PREFLIGHT_<pid>_[This.GetName]" }             # 预检，应得 783 行
+effect every_system = { log = "C4_CAPSTART_<pid>_[This.GetName]" neo_action = { … } }   # capture 哨兵
+effect every_system = { log = "C4_APPSTART_<pid>_[This.GetName]" neo_action = { … } }   # apply 哨兵
 ```
+
+> 哨兵与预检共用 `[This.GetName]` 的 783 行去重形状，但带 pid 与相位：capture/apply 的哨兵在
+> 同一会话里互不冒充。1 s 内没有被 supervisor 消费 → `console_send_failed`；0 行 → `*_not_delivered`；
+> 非 783 行 → `*_sentinel_mismatch`。
 
 **命令形状**:keyword 要写在 `effect` 与 `=` 之间(`effect every_system = { … }`)。写成
 `effect = { every_system = { … } }` 时引擎往 error.log 打 `Invalid scripted effect: =`,盒子根本不跑 ——
@@ -582,7 +587,10 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 | `sanity_failed` / `quickjs_init_failed` / `c1_failed` | `C2Sanity≠42` / `C2Init≠0` / `C1Run==0` 或 `C1EffectId==0` | C1/C2 前置门 |
 | `layout_drift` | layout 导出 ≠ 8 个字或字段不匹配 | 驱动与 DLL 解码契约断了 |
 | `install_failed` | `C4WireInstall != 0` | 谓词 detour/arm 失败,**不重试**,换进程 |
+| `console_send_failed` | 命令写入 1 s 内 supervisor 未消费（seen-key 不变） | 键盘/supervisor 通道坏了，游戏没收到命令 |
 | `console_unavailable` / `log_unreadable` | 预检 marker 0 行 / 日志读不了 | 键盘路径 / 路径问题 |
+| `capture_not_delivered` / `capture_sentinel_mismatch` | capture 哨兵 0 行 / ≠ 783 行 | 命令没进游戏 / 战役形状不对 |
+| `apply_not_delivered` / `apply_sentinel_mismatch` | apply 哨兵 0 行 / ≠ 783 行 | 第二次命令没生效 / 战役形状不对 |
 | `no_calls` | capture `calls == 0` | 没有 `neo_action` 执行 —— 环境结论 |
 | `no_readable_ctx` | capture 记录 0 条 | ctx 读不出来 |
 | `count_mismatch` | capture calls/records ≠ 787、有 dropped、或 drain 条数不符 | 调用数/记录数不对 |
