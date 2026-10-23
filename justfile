@@ -22,7 +22,11 @@ fence:
 host-tests:
     cd scripts/windows && python3 -m pytest tests -q
 
-check: build test fence host-tests
+# Score-table drift fence: regenerate src/dll/c2/chokepoint_table.zig in memory and compare.
+chokepoints-check:
+    python3 scripts/chokepoints_emit.py --tsv evidence/xrefs/chokepoint_scores_4_4_4.tsv --out src/dll/c2/chokepoint_table.zig --save-sha 6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e --check
+
+check: build test fence host-tests chokepoints-check
 
 deploy:
     scp scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py {{WIN_HOST}}:{{WIN_TEMP}}/

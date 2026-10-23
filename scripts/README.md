@@ -48,6 +48,7 @@
 |---|---|---|
 | `save_hypergraph.py` | 解 `.sav` 的 ZIP、读文本 `gamestate`,抽 `galactic_object` 的 `hyperlane` 邻接,输出无向边表(`a\tb\tlength`)并核对对称/自环/重复不变量;`--stats` 打计数 | 换存档或换版本要重算星系连通度时;存档不上传、不进 git |
 | `chokepoint_scores.py` | 只读边表,算 degree / Brandes betweenness / 割点 / 桥,输出按 `system_id` 升序的七列分数表;`--top N` 打前 N 行 | 已有边表、要给 C4 试点排交通要道时;`system_id` 是存档局部 id |
+| `chokepoints_emit.py` | 把七列分数表编译成 `src/dll/c2/chokepoint_table.zig` 的 787 项 `u16` 与 save sha;`--check` 是漂移围栏 | 分数表变了、或换存档后重新生成时;改了 TSV 不重生会让围栏红 |
 
 ## 实机注入通道：C1（已完成）
 

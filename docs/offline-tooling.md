@@ -201,6 +201,16 @@ name builder concatenates at runtime (§25.4).
 去掉 PowerShell 带回的 `\r`,再用 `sha256sum` 与主机 `Get-FileHash` 对账。存档留在主机,只回传小产物;
 小文件能直接 `scp` 时不用这套。
 
+### `scripts/chokepoints_emit.py --tsv PATH --save-sha SHA [--out PATH] [--check]`
+
+把 `chokepoint_scores.py` 的七列表编译成 DLL 侧常量 `src/dll/c2/chokepoint_table.zig`:
+`SCORE_COUNT`、`TIER1_MIN=100`、`TIER2_MIN=200`、`SAVE_SHA256` 与 787 项 `[u16]` 分数表。
+`system_id` 是**存档局部**的(见上一节陷阱 10),所以生成的表与 save sha 必须成对出现;换一局、
+换版本都要重新生成并把 `--save-sha` 换成新存档的 sha256。`--check` 不写文件,现有产物与 TSV
+渲染结果不同(或文件缺失)时退出 **2**;根目录 `just chokepoints-check` 与 `just check` 都跑它。
+生成器自己复现 `zig fmt` 的多行列对齐,所以 `zig fmt --check src/dll/c2/chokepoint_table.zig`
+必须为 0 —— 若不为 0,先修生成器的排版,不要在产物上手改(下次 `--out` 会覆盖)。
+
 ## C1 硬门
 
 ### `scripts/c1_preflight.py --name NAME [--name ...] [--db effects|triggers]`
