@@ -562,10 +562,10 @@ just game stop | quit
    `serve --auto-dismiss` 默认关,因为点 ✖ 的几何只在实测过的窗口类型上可信。
 6. **数字键不选选项**(实测),必须点行中心。同一组行签名连点 3 次后记 `choice_stuck` 并停手,
    防止在无响应窗口上打转。
-7. **`speed up/down` 仍是未证实的动作**:`VK_ADD`/`VK_SUBTRACT` 与点击都没让「常速」变化。命令会把
-   `speed_sha` 的前后值写进状态;没变就是没变,不要当成功。
-8. **scp 上传可用,批量下载会把 SSH 连接重置**:取产物用分块 base64,不要 `scp -r`。远端控制台是
-   cp936,shim 与命令行都刻意保持 ASCII。
+7. **`speed up/down` 实机已验证**:`up` 让标签从「常速」变「快速」,`down` 回落。命令会把 `speed_sha`
+   的前后值写进状态,但绿色标签背景会脉冲,哈希自己也会变 —— 判结果要读截图里的两个字,不要只看哈希。
+8. **scp 上传可用,批量下载会把 SSH 连接重置**:取产物用分块 base64,单次输出 **≤700 字节**稳定
+   (900 字节起连接被重置),不要 `scp -r`。远端控制台是 cp936,shim 与命令行都刻意保持 ASCII。
 9. 纯逻辑(暂停判读、窗口分类、策略、命令词表、几何归一化)在 Linux 上跑:`just host-tests`
    (= `cd scripts/windows && python3 -m pytest tests -q`)。Windows 专有路径只在实机被调用。
 
