@@ -175,7 +175,8 @@ def parse_command(line: str):
         return None
     parts = line.split()
     args = parts[1:]
-    if verb in ("pause", "unpause", "toggle", "shot", "status", "quit", "dismiss"):
+    if verb in ("pause", "unpause", "toggle", "shot", "status", "quit",
+                "dismiss", "close"):
         return {"verb": verb}
     if verb == "want":
         if len(args) == 1 and args[0].lower() in ("playing", "paused"):
@@ -758,6 +759,13 @@ def _handle_command(cmd, hwnd, state):
     elif verb == "console_sync":
         state["console_open"] = cmd["open"]
         _log({"event": "console_sync", "console_open": cmd["open"]})
+    elif verb == "close" and hwnd:
+        # WM_CLOSE is the window's own close path (what clicking X does), not
+        # TerminateProcess; the plan forbids killing stellaris.exe.
+        if not _user32().PostMessageW(hwnd, 0x0010, 0, 0):
+            _log({"event": "close_refused", "hwnd": hwnd})
+        else:
+            _log({"event": "close_posted", "hwnd": hwnd})
     elif verb == "dismiss" and hwnd and state.get("last_bbox") \
             and state.get("paused") == "paused":
         click_close(hwnd, state["last_bbox"])

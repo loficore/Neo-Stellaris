@@ -203,6 +203,12 @@ def test_console_command_does_not_tap_a_console_it_left_open(monkeypatch):
     assert state["console_open"] is True
 
 
+def test_close_is_a_graceful_verb_not_a_kill():
+    # The plan forbids killing stellaris.exe; `close` posts WM_CLOSE (the
+    # window's own close path) so a relaunch does not need taskkill.
+    assert gs.parse_command("close") == {"verb": "close"}
+
+
 def test_console_sync_lets_an_operator_declare_the_console_state():
     state = {"want": "paused", "console_open": False}
     gs._handle_command({"verb": "console_sync", "open": True}, 7, state)

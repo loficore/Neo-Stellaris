@@ -651,6 +651,7 @@ just game console effect every_system = { log = "X" }   # 原样写进控制台(
                                              # just/ssh 转手会被远端 shell 改写,驱动直接写命令文件
 just game console_sync open | closed         # 人工声明控制台当前是否开着(校正 supervisor 的标记)
 just game dismiss            # 只在 paused 且有窗口 bbox 时生效(需 serve --auto-dismiss)
+just game close              # WM_CLOSE 优雅关窗口(游戏会话内 PostMessage;不是 kill)
 just game shot               # 存 C:\temp\ns_game_shot.png
 just game stop | quit
 ```
