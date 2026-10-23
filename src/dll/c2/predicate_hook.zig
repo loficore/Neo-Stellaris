@@ -110,6 +110,20 @@ pub fn getStats() Stats {
     };
 }
 
+pub const STATS_SIZE: usize = 24;
+
+/// Read-only snapshot for the driver: <QQII> = calls, patched, last_token,
+/// installed (1/0). Returns false when the caller's buffer is too small.
+pub fn statsInto(out: []u8) bool {
+    if (out.len < STATS_SIZE) return false;
+    const s = getStats();
+    std.mem.writeInt(u64, out[0..][0..8], s.calls, .little);
+    std.mem.writeInt(u64, out[8..][0..8], s.patched, .little);
+    std.mem.writeInt(u32, out[16..][0..4], s.last_token, .little);
+    std.mem.writeInt(u32, out[20..][0..4], if (s.installed) 1 else 0, .little);
+    return true;
+}
+
 pub fn isInstalled() bool {
     return installed;
 }
@@ -243,4 +257,20 @@ test "resetForTest clears installation state" {
     try std.testing.expect(!isInstalled());
     try std.testing.expectEqual(@as(u32, 0), token());
     try std.testing.expect(!fingerprintMatches());
+}
+
+test "statsInto writes a 24-byte little-endian snapshot" {
+    resetForTest();
+    stat_calls = 7;
+    stat_patched = 3;
+    last_token = 0xABCD;
+    var buf: [24]u8 = [_]u8{0} ** 24;
+    try std.testing.expect(statsInto(&buf));
+    try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, buf[0..8], .little));
+    try std.testing.expectEqual(@as(u64, 3), std.mem.readInt(u64, buf[8..16], .little));
+    try std.testing.expectEqual(@as(u32, 0xABCD), std.mem.readInt(u32, buf[16..20], .little));
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, buf[20..24], .little));
+    var short: [23]u8 = [_]u8{0} ** 23;
+    try std.testing.expect(!statsInto(&short));
+    resetForTest();
 }

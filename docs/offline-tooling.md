@@ -547,6 +547,9 @@ effect every_system = { log = "C4_APPSTART_<pid>_[This.GetName]" neo_action = { 
 > 同一会话里互不冒充。1 s 内没有被 supervisor 消费 → `console_send_failed`；0 行 → `*_not_delivered`；
 > 非 783 行 → `*_sentinel_mismatch`。
 
+**谓词计数器**：`C4PredStatsInto` 是 `<QQII>` 24 B（calls, patched, last_token, installed）；驱动取
+capture 前后的**增量**，不是绝对值 —— `pred_patched` 是进程累计值，预检的 effect 也会进 detour。
+
 **命令形状**:keyword 要写在 `effect` 与 `=` 之间(`effect every_system = { … }`)。写成
 `effect = { every_system = { … } }` 时引擎往 error.log 打 `Invalid scripted effect: =`,盒子根本不跑 ——
 这个形状曾经让预检只数到 1 行。
@@ -580,7 +583,7 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 | `supervisor_not_paused` | 状态新鲜但 15 s 内没到 `paused` | 战役没暂停成功,不要注入 |
 | `campaign_unverified` | 存档 sha256 读不到 | 路径/权限问题 |
 | `campaign_mismatch` | sha256 不匹配(且未 `--allow-drift`),或预检行数 ≠ 783 | 不是那场 787 系统的测试战役 |
-| `dll_exports_missing` | 缺 8 个 `C4Wire*`/`C4ScoredStatsInto` 或 `C2Sanity`/`C2Init`/`C1Run`/`C1EffectId` | 产物不对 |
+| `dll_exports_missing` | 缺 9 个 `C4Wire*`/`C4ScoredStatsInto`/`C4PredStatsInto` 或 `C2Sanity`/`C2Init`/`C1Run`/`C1EffectId` | 产物不对 |
 | `game_not_running` | `resolve_pid("stellaris")` 失败 | 环境结论 |
 | `stale_module` | 注入前 base 已能解析(含 `ambiguous base`),或非 `is not loaded` 的解析失败 | 进程里已有 DLL 副本,**换新进程**,不重装 |
 | `inject_failed` | `inject_dll` 或注入后的 base 解析失败 | 注入通道问题 |
@@ -591,7 +594,10 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 | `console_unavailable` / `log_unreadable` | 预检 marker 0 行 / 日志读不了 | 键盘路径 / 路径问题 |
 | `capture_not_delivered` / `capture_sentinel_mismatch` | capture 哨兵 0 行 / ≠ 783 行 | 命令没进游戏 / 战役形状不对 |
 | `apply_not_delivered` / `apply_sentinel_mismatch` | apply 哨兵 0 行 / ≠ 783 行 | 第二次命令没生效 / 战役形状不对 |
-| `no_calls` | capture `calls == 0` | 没有 `neo_action` 执行 —— 环境结论 |
+| `no_calls` | capture `calls == 0` 且未提供谓词计数（纯函数默认） | 没有 `neo_action` 执行 —— 环境结论 |
+| `predicate_not_reached` | capture `calls=0` 且谓词 detour 增量 `calls=0` | detour 没被调用：脚本没实例化 effect，或 detour 不在路径上 |
+| `predicate_not_matched` | capture `calls=0`、detour 有调用、`patched=0` | detour 在跑，但没有任何对象带 armed token |
+| `execute_not_reached` | capture `calls=0`、`patched>0` | vtable 已换，但 slot[1] Execute 没被调用 |
 | `no_readable_ctx` | capture 记录 0 条 | ctx 读不出来 |
 | `count_mismatch` | capture calls/records ≠ 787、有 dropped、或 drain 条数不符 | 调用数/记录数不对 |
 | `no_scope_column` | 没有一列严格等于 `0..786` | 这次 capture 里没有可用的 scope 列 |

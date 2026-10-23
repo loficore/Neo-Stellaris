@@ -524,6 +524,11 @@ export fn C4ScoredStatsInto(out: [*]u8) callconv(.c) i32 {
     return C2ExecScoredStats(out, 1024);
 }
 
+export fn C4PredStatsInto(out: [*]u8) callconv(.c) i32 {
+    return if (c2_predicate_hook.statsInto(out[0..c2_predicate_hook.STATS_SIZE]))
+        @intCast(c2_predicate_hook.STATS_SIZE) else 0;
+}
+
 // ---------------------------------------------------------------------------
 // C4 forensics: read-only execution-frame sampler (0x1D08520)
 // ---------------------------------------------------------------------------

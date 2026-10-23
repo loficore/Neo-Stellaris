@@ -71,6 +71,7 @@ REQUIRED_EXPORTS = (
     "C2Sanity", "C2Init", "C1Run", "C1EffectId",
     "C4WireInstall", "C4WireSetMode", "C4WireSetSpec", "C4WireStatsInto",
     "C4WireDrainInto", "C4WireLayout", "C4WireDisarm", "C4ScoredStatsInto",
+    "C4PredStatsInto",
 )
 
 SENTINEL_PREFIX = "C4_%sSTART_%d_[This.GetName]"
@@ -138,6 +139,23 @@ def decode_wire_stats(data):
     if len(data) != 80:
         raise ValueError(f"wire stats must be exactly 80 B, got {len(data)}")
     return dict(zip(WIRE_KEYS, struct.unpack("<20I", data)))
+
+
+PRED_SIZE = 24
+PRED_KEYS = ["pred_calls", "pred_patched", "last_token", "installed"]
+
+
+def decode_pred_stats(data):
+    if len(data) != PRED_SIZE:
+        raise ValueError("pred stats length %d != %d" % (len(data), PRED_SIZE))
+    calls, patched, token, installed = struct.unpack("<QQII", data)
+    return {"pred_calls": calls, "pred_patched": patched,
+            "last_token": token, "installed": installed}
+
+
+def predicate_delta(before, after):
+    return {"calls": after["pred_calls"] - before["pred_calls"],
+            "patched": after["pred_patched"] - before["pred_patched"]}
 
 
 def decode_scored_stats(text):
@@ -383,9 +401,15 @@ def supervisor_ready(rec, now, max_age_s=5.0):
     return "ok"
 
 
-def classify_capture(wire, records, find):
+def classify_capture(wire, records, find, pred=None):
     if wire.get("calls", 0) == 0:
-        return "no_calls"
+        if pred is None:
+            return "no_calls"
+        if pred.get("calls", 0) == 0:
+            return "predicate_not_reached"
+        if pred.get("patched", 0) == 0:
+            return "predicate_not_matched"
+        return "execute_not_reached"
     if not records:
         return "no_readable_ctx"
     if (wire.get("calls") != SCORE_COUNT or wire.get("records") != SCORE_COUNT
@@ -541,6 +565,13 @@ def _read_wire_stats(pid, base, rva, buf):
     return decode_wire_stats(harness.read_memory(pid, buf, 80))
 
 
+def _read_pred_stats(pid, base, rva, buf):
+    size = _signed32(harness.call_remote_with_arg(pid, base, rva, buf))
+    if size != PRED_SIZE:
+        raise _Abort("stats_drift", f"C4PredStatsInto returned {size}")
+    return decode_pred_stats(harness.read_memory(pid, buf, PRED_SIZE))
+
+
 def _read_snapshots(pid, base, exports, sbuf, cbuf):
     wire = _read_wire_stats(pid, base, exports["C4WireStatsInto"], sbuf)
     size = _signed32(harness.call_remote_with_arg(
@@ -661,7 +692,9 @@ def _flow(args, result, state):
 
     # Capture: find the scope column.
     sbuf = harness.remote_alloc(pid, 80)
-    pred_before = None  # Task 4 接上；此处保持 None
+    pbuf = harness.remote_alloc(pid, PRED_SIZE)
+    pred_before = _read_pred_stats(
+        pid, base, exports["C4PredStatsInto"], pbuf)
     cap_offset = _file_size(log_path)
     _send_console_or_abort(args.supervisor_cmd, capture_console(pid))
     cap_sentinel = _wait_marker(
@@ -683,6 +716,11 @@ def _flow(args, result, state):
         raise _Abort("mode_failed", f"C4WireSetMode(0)={mode_rc}")
     stats = _read_wire_stats(pid, base, exports["C4WireStatsInto"], sbuf)
     result["capture"]["stats"] = stats
+    pred_after = _read_pred_stats(
+        pid, base, exports["C4PredStatsInto"], pbuf)
+    pred = predicate_delta(pred_before, pred_after)
+    result["capture"]["pred"] = {
+        "before": pred_before, "after": pred_after, "delta": pred}
     buf = harness.remote_alloc(pid, RING_CAP * RECORD_SIZE)
     n = harness.call_remote_with_arg(pid, base, exports["C4WireDrainInto"], buf)
     if n > RING_CAP:
@@ -697,7 +735,7 @@ def _flow(args, result, state):
     except ValueError as exc:
         raise _Abort("scan_drift", str(exc))
     result["capture"]["find"] = find
-    verdict = classify_capture(stats, records, find)
+    verdict = classify_capture(stats, records, find, pred)
     if verdict != "ok":
         raise _Abort(verdict, f"capture stats={stats} find={find}")
     result["spec"] = find["spec"]

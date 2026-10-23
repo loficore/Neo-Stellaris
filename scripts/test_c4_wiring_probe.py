@@ -12,9 +12,10 @@ from c4_wiring_probe import (
     EXPECTED_TIERS, PREFLIGHT_MARKERS, RECORD_SIZE, SAVE_SHA,
     SCORE_COUNT, apply_console, campaign_gate, capture_console,
     classify_apply, classify_capture, classify_delivery,
-    column_sequences, count_marker_lines, decode_records, decode_scored_stats,
-    decode_wire_stats, expected_tiers, find_scope_column, pack_spec,
-    preflight_console, preflight_gate, supervisor_ready, unpack_spec,
+    column_sequences, count_marker_lines, decode_pred_stats, decode_records,
+    decode_scored_stats, decode_wire_stats, expected_tiers, find_scope_column,
+    pack_spec, preflight_console, preflight_gate, predicate_delta,
+    supervisor_ready, unpack_spec,
 )
 
 CTX_OFF, A3_OFF, TARGETS_OFF, WINDOWS_OFF = 56, 1000, 1256, 1320
@@ -92,6 +93,32 @@ def test_decode_wire_stats_reads_every_field():
         decode_wire_stats(raw[:76])
     with pytest.raises(ValueError):
         decode_wire_stats(raw + b"\0\0\0\0")
+
+
+def test_decode_pred_stats_reads_every_field():
+    data = struct.pack("<QQII", 7, 3, 0xABCD, 1)
+    assert decode_pred_stats(data) == {
+        "pred_calls": 7, "pred_patched": 3,
+        "last_token": 0xABCD, "installed": 1}
+    with pytest.raises(ValueError):
+        decode_pred_stats(data[:23])
+
+
+def test_predicate_delta_subtracts_the_pre_capture_counters():
+    before = {"pred_calls": 100, "pred_patched": 90,
+              "last_token": 7, "installed": 1}
+    after = {"pred_calls": 1087, "pred_patched": 877,
+             "last_token": 7, "installed": 1}
+    assert predicate_delta(before, after) == {"calls": 987, "patched": 787}
+
+
+def test_classify_capture_separates_delivery_from_routing():
+    find = {"status": "none"}
+    empty = {"calls": 0, "records": 0, "dropped": 0}
+    assert classify_capture(empty, [], find) == "no_calls"
+    assert classify_capture(empty, [], find, {"calls": 0, "patched": 0}) == "predicate_not_reached"
+    assert classify_capture(empty, [], find, {"calls": 787, "patched": 0}) == "predicate_not_matched"
+    assert classify_capture(empty, [], find, {"calls": 787, "patched": 787}) == "execute_not_reached"
 
 def test_decode_scored_stats_requires_every_key_once():
     got = decode_scored_stats(SCORED_LINE)
