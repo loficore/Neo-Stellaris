@@ -187,13 +187,18 @@ const c2_vtable = main.c2_vtable;
 const c2_predicate_hook = main.c2_predicate_hook;
 const c2_live_probe = main.c2_live_probe;
 const c2_scope_probe = main.c2_scope_probe;
+const c2_wire = main.c2_wire;
+const chokepoint_table = @import("c2/chokepoint_table.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
 extern fn C2ExecArmToken(token: u32, budget: u32) c_int;
+extern fn C2ExecArmScores(scores: ?[*]const u16, count: u32, token: u32, budget: u32, tier1_min: u32, tier2_min: u32) c_int;
 extern fn C2ExecStats(out: [*]u8, out_size: c_int) c_int;
+extern fn C2ExecScoredStats(out: [*]u8, out_size: c_int) c_int;
 extern fn C2ExecDisarmState() c_int;
 const C2EXEC_BUDGET: u32 = 64;
+const C4WIRE_BUDGET: u32 = 4096;
 
 /// Sanity check: returns 42 if the new DLL code is loaded.
 /// Pure Zig, no C wrapper — proves the DLL binary is correct.
@@ -441,6 +446,82 @@ export fn C2ExecStatsInto(out: [*]u8) callconv(.c) i32 {
 
 export fn C2ExecProbeStatsInto(out: [*]u8) callconv(.c) i32 {
     return @intCast(c2_live_probe.statsInto(out[0..512]));
+}
+
+// ---------------------------------------------------------------------------
+// C4 chokepoint wiring (Task 4): scored tier routing + capture readback
+// ---------------------------------------------------------------------------
+
+/// One-shot arming of the wire path, in dependency order:
+/// vtable → predicate token → predicate install → scored table → capture session.
+/// Return codes: 0 ok | -1 bad token/game base | -2 vtable build | -3 predicate
+/// setToken | -4 predicate install | -5 no JS ctx | -6 arm eval threw | -7 not a
+/// function | -8 bad args | -9 already armed | -10 lock busy.
+export fn C4WireInstall(token: u32) callconv(.c) i32 {
+    const exe_name: [*:0]const u8 = "stellaris.exe";
+    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    if (token == 0 or game_base == 0) return -1;
+    c2_vtable.buildFromGame(game_base) catch return -2;
+    c2_predicate_hook.setToken(token) catch return -3;
+    c2_predicate_hook.install() catch return -4;
+    return switch (C2ExecArmScores(
+        chokepoint_table.scores[0..].ptr,
+        @intCast(chokepoint_table.SCORE_COUNT),
+        token,
+        C4WIRE_BUDGET,
+        chokepoint_table.TIER1_MIN,
+        chokepoint_table.TIER2_MIN,
+    )) {
+        0 => blk: {
+            c2_wire.beginSession(token);
+            _ = c2_wire.setMode(1);
+            break :blk 0;
+        },
+        1 => -5,
+        2 => -6,
+        3 => -7,
+        4 => -8,
+        5 => -9,
+        6 => -10,
+        else => -1,
+    };
+}
+
+export fn C4WireSetMode(m: u32) callconv(.c) i32 {
+    return if (c2_wire.setMode(m)) 0 else -1;
+}
+
+export fn C4WireSetSpec(bits: u64) callconv(.c) i32 {
+    return if (c2_wire.setSpecPacked(bits)) 0 else -1;
+}
+
+export fn C4WireStatsInto(out: [*]u8) callconv(.c) i32 {
+    return if (c2_wire.statsInto(out[0..c2_wire.STATS_SIZE])) @intCast(c2_wire.STATS_SIZE) else 0;
+}
+
+/// Caller must allocate `RING_CAP * RECORD_SIZE` (6,897,664) bytes.
+export fn C4WireDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_wire.drainInto(out[0 .. c2_wire.RING_CAP * c2_wire.RECORD_SIZE]);
+}
+
+export fn C4WireLayout(out: [*]u32) callconv(.c) u32 {
+    const words: *[8]u32 = @ptrCast(@alignCast(out));
+    return c2_wire.layoutInto(words);
+}
+
+/// Returns -1 when the C bridge lock was busy; clearToken + uninstall still run,
+/// so the engine bytes are restored even then. -6 = uninstall failed: do NOT
+/// FreeLibrary this process.
+export fn C4WireDisarm() callconv(.c) i32 {
+    _ = c2_wire.setMode(0);
+    const was = C2ExecDisarmState();
+    c2_predicate_hook.clearToken();
+    c2_predicate_hook.uninstall() catch return -6;
+    return if (was < 0) -1 else 0;
+}
+
+export fn C4ScoredStatsInto(out: [*]u8) callconv(.c) i32 {
+    return C2ExecScoredStats(out, 1024);
 }
 
 // ---------------------------------------------------------------------------

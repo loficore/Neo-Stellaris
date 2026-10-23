@@ -551,3 +551,113 @@ test "readProcessMemory is inert off Windows" {
     var b = [_]u8{0} ** 4;
     try std.testing.expect(!windows.readProcessMemory(@intFromPtr(&b), &b));
 }
+
+test "wire off mode keeps the legacy sentinel path" {
+    vtable.resetForTest();
+    wire.resetForTest();
+    try liveCtx();
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmToken(4242, 4));
+    const donor = fakeDonorSlots();
+    try vtable.buildFromSlots(donor[0..]);
+    const vt = vtable.getVtable() orelse return error.NoVtable;
+    const exec: *const fn (u64, u64, u64) callconv(.c) u64 = @ptrFromInt(vt[1]);
+    var obj: [64]u8 align(8) = [_]u8{0} ** 64;
+    std.mem.writeInt(u32, obj[0x20..0x24], 4242, .little);
+    const self = @intFromPtr(&obj);
+    donor_calls = 0;
+    try std.testing.expectEqual(@as(u64, 0), exec(self, 0x1234, 0));
+    var buf: [512]u8 = undefined;
+    const n = C2ExecStats(&buf, @intCast(buf.len));
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "js_ok=1") != null);
+    try std.testing.expectEqual(@as(u32, 0), donor_calls);
+    vtable.setChainEnabled(true);
+    try std.testing.expectEqual(@as(u64, 0xD0), exec(self, 0x1234, 0));
+    try std.testing.expectEqual(@as(u32, 1), donor_calls);
+    _ = C2ExecDisarmState();
+}
+
+test "wire capture mode records the call and never chains" {
+    vtable.resetForTest();
+    wire.resetForTest();
+    try liveCtx();
+    fake_mem = .{};
+    wire.setReaderForTest(&fakeRead);
+    wire.beginSession(4242);
+    try std.testing.expect(wire.setMode(1));
+    const donor = fakeDonorSlots();
+    try vtable.buildFromSlots(donor[0..]);
+    vtable.setChainEnabled(true); // chain 开关为真也不许在 capture 模式链
+    const vt = vtable.getVtable() orelse return error.NoVtable;
+    const exec: *const fn (u64, u64, u64) callconv(.c) u64 = @ptrFromInt(vt[1]);
+    var obj: [64]u8 align(8) = [_]u8{0} ** 64;
+    std.mem.writeInt(u32, obj[0x20..0x24], 4242, .little);
+    donor_calls = 0;
+    try std.testing.expectEqual(@as(u64, 0), exec(@intFromPtr(&obj), FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    var stats: [wire.STATS_SIZE]u8 = undefined;
+    try std.testing.expect(wire.statsInto(&stats));
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 4)); // records
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 12)); // calls
+    try std.testing.expectEqual(@as(u32, 0), donor_calls);
+}
+
+test "wire apply chains tier1 and tier2 but not tier0" {
+    vtable.resetForTest();
+    wire.resetForTest();
+    try liveCtx();
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmScores(chokepoint_table.scores[0..].ptr, @intCast(chokepoint_table.SCORE_COUNT), 4242, 16, 100, 200));
+    fake_mem = .{};
+    wire.setReaderForTest(&fakeRead);
+    wire.beginSession(4242);
+    try std.testing.expect(wire.setSpecPacked(@as(u64, 0x38) << 16)); // 直读 ctx+0x38
+    try std.testing.expect(wire.setMode(2));
+    const donor = fakeDonorSlots();
+    try vtable.buildFromSlots(donor[0..]); // chain_enabled 保持 false:apply 由 wire 决定
+    const vt = vtable.getVtable() orelse return error.NoVtable;
+    const exec: *const fn (u64, u64, u64) callconv(.c) u64 = @ptrFromInt(vt[1]);
+    var obj: [64]u8 align(8) = [_]u8{0} ** 64;
+    std.mem.writeInt(u32, obj[0x20..0x24], 4242, .little);
+    const self = @intFromPtr(&obj);
+    donor_calls = 0;
+    const ids = [_]u32{ 0, 7, 578 };
+    const want = [_]u64{ 0, 0xD0, 0xD0 };
+    for (ids, want) |id, rc| {
+        std.mem.writeInt(u32, fake_mem.ctx[0x38..0x3c], id, .little);
+        try std.testing.expectEqual(rc, exec(self, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    }
+    try std.testing.expectEqual(@as(u32, 2), donor_calls);
+    var stats: [wire.STATS_SIZE]u8 = undefined;
+    try std.testing.expect(wire.statsInto(&stats));
+    try std.testing.expectEqual(@as(u32, 3), readU32At(&stats, 16)); // resolved
+    try std.testing.expectEqual(@as(u32, 0), readU32At(&stats, 20)); // unresolved
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 24)); // tier0
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 28)); // tier1
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 32)); // tier2
+    try std.testing.expectEqual(@as(u32, 2), readU32At(&stats, 40)); // chain
+    _ = C2ExecDisarmState();
+}
+
+test "wire rejects an invalid mode and an unset spec" {
+    vtable.resetForTest();
+    wire.resetForTest();
+    try liveCtx();
+    try std.testing.expect(!wire.setMode(3));
+    try std.testing.expectEqual(wire.Mode.off, wire.mode());
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmScores(chokepoint_table.scores[0..].ptr, @intCast(chokepoint_table.SCORE_COUNT), 4242, 16, 100, 200));
+    fake_mem = .{};
+    wire.setReaderForTest(&fakeRead);
+    wire.beginSession(4242);
+    try std.testing.expect(wire.setMode(2));
+    const donor = fakeDonorSlots();
+    try vtable.buildFromSlots(donor[0..]);
+    const vt = vtable.getVtable() orelse return error.NoVtable;
+    const exec: *const fn (u64, u64, u64) callconv(.c) u64 = @ptrFromInt(vt[1]);
+    var obj: [64]u8 align(8) = [_]u8{0} ** 64;
+    std.mem.writeInt(u32, obj[0x20..0x24], 4242, .little);
+    donor_calls = 0;
+    try std.testing.expectEqual(@as(u64, 0), exec(@intFromPtr(&obj), FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    var stats: [wire.STATS_SIZE]u8 = undefined;
+    try std.testing.expect(wire.statsInto(&stats));
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 20)); // unresolved
+    try std.testing.expectEqual(@as(u32, 0), donor_calls);
+    _ = C2ExecDisarmState();
+}

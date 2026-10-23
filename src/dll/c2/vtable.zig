@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const offsets = @import("../shared/offsets.zig");
+const wire = @import("wire.zig");
 
 pub const SlotCount: usize = offsets.keyword_reg.EFFECT_VTBL_COPY_SLOTS;
 
@@ -57,6 +58,13 @@ pub fn buildFromGame(game_base: usize) !void {
 fn effectExecute(self: u64, ctx: u64, a3: u64) callconv(.c) u64 {
     const token = readU32(self, offsets.keyword_reg.EFFECT_OBJECT_TOKEN_ID);
     if (token == 0) return 0;
+    if (wire.mode() != .off) {
+        if (wire.onExecute(token, self, ctx, a3) and donor_execute_addr != 0) {
+            const donor: *const fn (u64, u64, u64) callconv(.c) u64 = @ptrFromInt(donor_execute_addr);
+            return donor(self, ctx, a3);
+        }
+        return 0;
+    }
     const rc = C2ExecCall(token, ctx);
     if (rc == 1 and chain_enabled and donor_execute_addr != 0) {
         const donor: *const fn (u64, u64, u64) callconv(.c) u64 = @ptrFromInt(donor_execute_addr);

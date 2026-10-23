@@ -42,6 +42,7 @@ pub const c2_vtable = @import("c2/vtable.zig");
 pub const c2_predicate_hook = @import("c2/predicate_hook.zig");
 pub const c2_live_probe = @import("c2/live_probe.zig");
 pub const c2_scope_probe = @import("c2/scope_probe.zig");
+pub const c2_wire = @import("c2/wire.zig");
 
 comptime {
     _ = scripted;
@@ -52,6 +53,7 @@ comptime {
     _ = c2_predicate_hook;
     _ = c2_live_probe;
     _ = c2_scope_probe;
+    _ = c2_wire;
 }
 
 // ---------------------------------------------------------------------------
