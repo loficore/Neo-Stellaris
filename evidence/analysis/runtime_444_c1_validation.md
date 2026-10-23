@@ -3666,3 +3666,35 @@ JS 侧数据(system id / scope 指针)得到;④ 从 DLL 里以普通函数指�
 
 本节的 `selected` 只是**首选入口**;本次一个都没有 `selected`。最终以 §53.3 的实机链为输入在
 §53.4 复核。
+
+### §53.3 实机采样(未执行)
+
+点名未给出,按 roadmap 授权表停在此处。采样器与驱动已就绪(Task 3–5),下一次点名后直接执行 Task 6。
+本次会话未 scp、未注入、未 dispatch,故无 transcript;`evidence/logs/scope_probe_4_4_4.log` 未生成。
+
+### §53.4 判定
+
+**下一步 = 点名后执行 Task 6**(`2026-10-23-c4-scope-forensics.md` 的实机只读一枪)。在那之前本卷没有
+任何关于 arg2 类型、链字段语义、应用入口的实机观测;以下六条按计划要求逐条回答,全部因同一个缺口停住。
+
+1. **arg2 是栈帧、堆对象还是引擎全局?** `unresolved(点名未给出)`。缺的观测:§53.1 只说明 17 个
+   已判读的直接调用点把调用方入口 `rdx` 原样转发,没有定位任何帧构造点;`ctx_ptr` 的跨样本稳定性与
+   8 个 qword 的分布只有 §53.3 能取。
+2. **`[arg2+0x08]` / `[+0x18]` / `[+0x30]` 各观测到了什么?`X` 在样本间是否恒定?** `unresolved(点名未给出)`。
+   缺的观测:采样器已按 `Entry.ctx_words` 记录这 8 个 qword,但没有任何一份实机记录可读。
+3. **`X→S→id` 的 id 在 `descriptor_oracle` 里 join 到了什么名字?它是不是 keyword 空间 id(§30.1)?**
+   `unresolved(点名未给出)`。缺的观测:链只在驱动侧跟(`follow_chain`),没有 ctx 就没有 id;
+   「id 是 keyword token id、不是 system id」仍只是离线推论。
+4. **`S+0x20` 处的 qword 是什么?若像指针,再读一次它的首 qword;vptr 落在哪个已知 vtable 区间
+   (`ceffect_vtable_map`)?** `unresolved(点名未给出)`。缺的观测:同第 3 条;与 `ceffect_vtable_map`
+   的比对需要实机读到的 vptr。
+5. **应用入口:复核 Task 2 的 `selected`。** `unresolved(点名未给出)`。现状:A/B/C/D 四条全是
+   `unresolved`,没有 `selected` 可维持或改判;§53.2 的结论原样保留,不因本计划执行而升级。
+6. **C4 接线计划可以假设什么、必须自己再测什么?** 「可以假设什么」= `unresolved(点名未给出)`。
+   必须自己再测的两项与本计划是否开枪无关,照旧生效:① scope/system 指针怎么从 JS 侧拿到
+   (§53.2 候选 A 缺的判据 ③);② effect 施加后引擎的提交时机(append 之后谁在何时调用 child slot[1];
+   `0x3b0c2d` 窗口只到调用点,没有时序证据)。
+
+### §53.5 边界
+
+本计划不证明任何「按 system 施加」的行为;它只给出帧与入口的现场 —— 本次因点名未给出,连现场也还没有。
