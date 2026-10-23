@@ -23,6 +23,25 @@ fn fakeDonor(self: u64, ctx: u64, a3: u64) callconv(.c) u64 {
     return 0xD0;
 }
 
+var synth_capture: struct { parent: u64 = 0, ctx: u64 = 0, token: u32 = 0, r9: u64 = 0 } = .{};
+var synth_calls: u32 = 0;
+
+fn fakeInstantiate(parent: u64, ctx: u64, token: u32, r9: u64) callconv(.c) u64 {
+    synth_capture = .{ .parent = parent, .ctx = ctx, .token = token, .r9 = r9 };
+    synth_calls += 1;
+    return 77;
+}
+
+fn readU32(addr: usize, off: usize) u32 {
+    const p: [*]const u8 = @ptrFromInt(addr);
+    return std.mem.readInt(u32, p[off..][0..4], .little);
+}
+
+fn readU64(addr: usize, off: usize) u64 {
+    const p: [*]const u8 = @ptrFromInt(addr);
+    return std.mem.readInt(u64, p[off..][0..8], .little);
+}
+
 fn liveCtx() !void {
     var diag: [512]u8 = undefined;
     try std.testing.expectEqual(@as(c_int, 0), C2DiagQuickJS(&diag, @intCast(diag.len)));
@@ -158,6 +177,72 @@ test "ctxUsable rejects only the lexer sentinel 0xb" {
     try std.testing.expect(live_probe.ctxUsable(0));
     try std.testing.expect(live_probe.ctxUsable(0xc));
     try std.testing.expect(!live_probe.ctxUsable(0xb));
+}
+
+test "synthetic parse context satisfies every hit-path context read" {
+    live_probe.resetForTest();
+    const ctx = live_probe.syntheticCtxAddr();
+    try std.testing.expectEqual(@as(u32, 0), readU32(ctx, 0x38));
+    try std.testing.expectEqual(@as(u32, 0), readU32(ctx, 0x278));
+    const a = readU64(ctx, 0x30);
+    try std.testing.expect(a != 0);
+    const b = readU64(a, 8);
+    try std.testing.expect(b != 0);
+    try std.testing.expectEqual(@as(u64, 0), readU64(b, 0x70));
+    try std.testing.expectEqual(@as(u32, 0), readU32(b, 8));
+    try std.testing.expectEqual(@as(u32, 0), readU32(b, 0xc));
+    try std.testing.expectEqual(@as(u64, 0), readU64(b, 0x40));
+    try std.testing.expectEqual(@as(u64, 0), readU64(b, 0x48));
+    const parent = live_probe.syntheticParentAddr();
+    // Container lives at parent+8 (0x3B0C3F: mov rcx,[rbp+0x530]; add rcx,8).
+    // +0x08 vptr is never read on the append fast path, +0x10 begin, +0x18
+    // capacity, +0x1c size.
+    try std.testing.expectEqual(@as(u64, 0), readU64(parent, 0x08));
+    const begin = readU64(parent, 0x10);
+    try std.testing.expect(begin != 0);
+    try std.testing.expectEqual(@as(u64, 0), begin & 7);
+    try std.testing.expectEqual(@as(u32, 0), readU32(parent, 0x1c));
+    try std.testing.expect(readU32(parent, 0x18) > 0);
+}
+
+test "synthetic parent pre-sizes the effect container onto 0x22C4A0's fast path" {
+    // 0x22C4A0 compares [container+0x14] (size) with [container+0x10]
+    // (capacity) and only on equality takes the grow branch, whose first
+    // engine instruction is `call [container_vptr+0x18]` — a null vptr is the
+    // 0x18 access violation seen in the 2026-10-23 crash dump. Capacity must
+    // therefore stay strictly above size for every append the probe can cause.
+    live_probe.resetForTest();
+    const parent = live_probe.syntheticParentAddr();
+    const container = parent + 8;
+    const begin = readU64(container, 8);
+    const cap = readU32(container, 0x10);
+    const size = readU32(container, 0x14);
+    try std.testing.expectEqual(@as(u32, 0), size);
+    try std.testing.expect(cap > size);
+    // Simulate the fast-path store the helper performs: begin[size] = child.
+    const slot: [*]u8 = @ptrFromInt(begin + @as(u64, size) * 8);
+    std.mem.writeInt(u64, slot[0..8], 0xDEAD_BEEF, .little);
+    try std.testing.expectEqual(@as(u64, 0xDEAD_BEEF), readU64(begin, 0));
+    // The probe fires once, but leave headroom so a repeat fire would not grow.
+    try std.testing.expect(cap >= 2);
+}
+
+test "synthetic fire passes fake parent/ctx and fires only once" {
+    live_probe.resetForTest();
+    try live_probe.setToken(68637);
+    live_probe.setInstantiateForTest(@intFromPtr(&fakeInstantiate));
+    synth_calls = 0;
+    synth_capture = .{};
+    const first = live_probe.fireOnceForTest();
+    const second = live_probe.fireOnceForTest();
+    try std.testing.expectEqual(@as(u64, 77), first);
+    try std.testing.expectEqual(@as(u64, 0), second);
+    try std.testing.expectEqual(@as(u32, 1), synth_calls);
+    try std.testing.expectEqual(@as(u64, live_probe.syntheticParentAddr()), synth_capture.parent);
+    try std.testing.expectEqual(@as(u64, live_probe.syntheticCtxAddr()), synth_capture.ctx);
+    try std.testing.expectEqual(@as(u32, 68637), synth_capture.token);
+    try std.testing.expectEqual(@as(u64, 0), synth_capture.r9);
+    live_probe.resetForTest();
 }
 
 test "live probe setToken and non-Windows install" {
