@@ -147,18 +147,34 @@ fn scopeDetour(self: u64, ctx: u64, a3: u64, a4: u64) callconv(.c) u64 {
 // Install / uninstall
 // ---------------------------------------------------------------------------
 
-pub fn install() !void {
+pub const InstallError = error{
+    Unsupported,
+    AlreadyInstalled,
+    ExecHookActive,
+    ModuleNotFound,
+    AlreadyHooked,
+    UnexpectedPrologue,
+    PatchTooWide,
+    DetourUnavailable,
+};
+
+pub fn install() InstallError!void {
     if (!is_windows) return error.Unsupported;
     if (installed) return error.AlreadyInstalled;
     if (exec_hook.isInstalled()) return error.ExecHookActive;
 
-    const target = try windows.moduleFunction(RVA_BASE_EXECUTE);
+    const target = windows.moduleFunction(RVA_BASE_EXECUTE) catch return error.ModuleNotFound;
     img_base = @intFromPtr(target) - RVA_BASE_EXECUTE;
     img_end = img_base + 0x400_0000;
     exec_hook.installWith(@ptrCast(@constCast(&scopeDetour))) catch |err| {
         img_base = 0;
         img_end = 0;
-        return err;
+        return switch (err) {
+            error.AlreadyHooked => error.AlreadyHooked,
+            error.UnexpectedPrologue => error.UnexpectedPrologue,
+            error.PatchTooWide => error.PatchTooWide,
+            else => error.DetourUnavailable,
+        };
     };
     installed = true;
     stats.patch_size = exec_hook.patchSize();

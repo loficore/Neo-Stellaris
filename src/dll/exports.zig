@@ -186,6 +186,7 @@ const c2_handler = main.c2_handler;
 const c2_vtable = main.c2_vtable;
 const c2_predicate_hook = main.c2_predicate_hook;
 const c2_live_probe = main.c2_live_probe;
+const c2_scope_probe = main.c2_scope_probe;
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
@@ -440,6 +441,50 @@ export fn C2ExecStatsInto(out: [*]u8) callconv(.c) i32 {
 
 export fn C2ExecProbeStatsInto(out: [*]u8) callconv(.c) i32 {
     return @intCast(c2_live_probe.statsInto(out[0..512]));
+}
+
+// ---------------------------------------------------------------------------
+// C4 forensics: read-only execution-frame sampler (0x1D08520)
+// ---------------------------------------------------------------------------
+
+/// 只记录采样器(0x1D08520)。依赖码:0 OK | -1 其它 | -2 该进程已有 detour(换新进程)
+/// | -3 stellaris.exe 未找到 | -4 目标已被 hook | -5 指纹不符 | -6 patch 过宽。
+export fn C2ScopeProbeInstall() callconv(.c) i32 {
+    c2_scope_probe.install() catch |err| return switch (err) {
+        error.AlreadyInstalled, error.ExecHookActive => -2,
+        error.ModuleNotFound => -3,
+        error.AlreadyHooked => -4,
+        error.UnexpectedPrologue => -5,
+        error.PatchTooWide => -6,
+        else => -1,
+    };
+    return 0;
+}
+
+/// 0 = 引擎字节已验证还原。-7 = 还原没成功:不要信任该进程,且**绝不 FreeLibrary**。
+export fn C2ScopeProbeUninstall() callconv(.c) i32 {
+    c2_scope_probe.uninstall() catch return -7;
+    return 0;
+}
+
+export fn C2ScopeProbeVerify() callconv(.c) i32 {
+    return c2_scope_probe.verify();
+}
+
+export fn C2ScopeProbeLayout(out: [*]u32) callconv(.c) u32 {
+    return c2_scope_probe.layoutInto(out);
+}
+
+export fn C2ScopeProbeStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_scope_probe.statsInto(out[0..512]));
+}
+
+export fn C2ScopeProbeDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_scope_probe.drainInto(out);
+}
+
+export fn C2ScopeProbeReset() callconv(.c) void {
+    c2_scope_probe.reset();
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.
