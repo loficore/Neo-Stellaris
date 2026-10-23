@@ -431,6 +431,18 @@ static int32_t g_exec_last_rc = 0;
 static uint32_t g_exec_last_token = 0;
 static int32_t g_exec_last_value = 0;
 
+/* §54 scored tier bridge: one score table behind the same lock/function slot. */
+#define C2_EXEC_SCORES_MAX 2048
+#define C2_EXEC_SCORES_SRC_CAP 16384
+static uint16_t g_scored_scores[C2_EXEC_SCORES_MAX];
+static uint32_t g_scored_count, g_scored_tier1, g_scored_tier2;
+static int g_scored_table_valid = 0;
+static uint64_t g_scored_calls, g_scored_skipped, g_scored_busy;
+static uint64_t g_scored_js_err, g_scored_invalid, g_scored_tier[3];
+static uint32_t g_scored_last_id = 0;
+static int32_t g_scored_last_tier = -1;
+static char g_scored_src[C2_EXEC_SCORES_SRC_CAP];
+
 static int c2_exec_try_lock(void) {
     return __sync_lock_test_and_set(&g_exec_lock, 1) == 0;
 }
@@ -1077,6 +1089,7 @@ int C2ExecArmSrcForTest(const char *src, uint32_t token, uint32_t budget) {
     g_exec_token = token;
     g_exec_budget_left = budget;
     g_exec_armed = 1;
+    g_scored_table_valid = 0;
     c2_exec_unlock();
     return 0;
 }
@@ -1156,12 +1169,136 @@ int C2ExecDisarmState(void) {
     g_exec_armed = 0;
     g_exec_token = 0;
     g_exec_budget_left = 0;
+    g_scored_table_valid = 0;
     if (g_exec_fn_valid && g_test_ctx) {
         JS_FreeValue(g_test_ctx, g_exec_fn);
         g_exec_fn_valid = 0;
     }
     c2_exec_unlock();
     return was;
+}
+
+/* ---------------------------------------------------------------------------
+ * §54 scored tier bridge — the same lock, function slot and budget as
+ * C2ExecCall, but the armed script maps a system id through the score table
+ * and returns a tier instead of matching a sentinel.
+ *
+ * The table is baked into JS source at arm time (no engine reads here); the
+ * script itself is the range gate, and g_scored_table_valid only lets the C
+ * side reject out-of-range ids before spending budget. A raw arm through
+ * C2ExecArmSrcForTest clears the flag, so a test script that throws (or
+ * returns junk) is observed through the JS path rather than a C range check.
+ * Counters are process-lifetime like §52's; arm resets them.
+ * ------------------------------------------------------------------------- */
+int C2ExecArmScores(const uint16_t *scores, uint32_t count, uint32_t token,
+                    uint32_t budget, uint32_t tier1_min, uint32_t tier2_min) {
+    uint32_t i;
+    size_t off;
+    int w, rc;
+
+    if (!scores || count == 0 || count > C2_EXEC_SCORES_MAX) return 4;
+    if (token == 0 || budget == 0) return 4;
+    if (tier1_min > tier2_min || tier2_min > 65535) return 4;
+    if (!g_test_ctx) return 1;
+
+    off = (size_t)snprintf(g_scored_src, sizeof(g_scored_src), "(function(){var S=[");
+    if (off >= sizeof(g_scored_src)) return 4;
+    for (i = 0; i < count; i++) {
+        if (off + 8 > sizeof(g_scored_src)) return 4;
+        w = snprintf(g_scored_src + off, sizeof(g_scored_src) - off,
+                     i == 0 ? "%u" : ",%u", (unsigned)scores[i]);
+        if (w < 0 || (size_t)w >= sizeof(g_scored_src) - off) return 4;
+        off += (size_t)w;
+    }
+    if (off + 128 > sizeof(g_scored_src)) return 4;
+    w = snprintf(g_scored_src + off, sizeof(g_scored_src) - off,
+                 "];return function(t,id){if(id<0||id>=%u)return -1;"
+                 "var s=S[id];return s>=%u?2:(s>=%u?1:0);};})()",
+                 (unsigned)count, (unsigned)tier2_min, (unsigned)tier1_min);
+    if (w < 0 || (size_t)w >= sizeof(g_scored_src) - off) return 4;
+    off += (size_t)w;
+
+    rc = C2ExecArmSrcForTest(g_scored_src, token, budget);
+    if (rc != 0) return rc;
+
+    memcpy(g_scored_scores, scores, (size_t)count * sizeof(uint16_t));
+    g_scored_count = count;
+    g_scored_tier1 = tier1_min;
+    g_scored_tier2 = tier2_min;
+    g_scored_calls = g_scored_skipped = g_scored_busy = 0;
+    g_scored_js_err = g_scored_invalid = 0;
+    g_scored_tier[0] = g_scored_tier[1] = g_scored_tier[2] = 0;
+    g_scored_last_id = 0;
+    g_scored_last_tier = -1;
+    g_scored_table_valid = 1;
+    return 0;
+}
+
+int C2ExecCallScored(uint32_t token, uint32_t system_id) {
+    JSValue argv[2];
+    JSValue r;
+    int32_t n = 0;
+    int conv;
+
+    if (!c2_exec_try_lock()) {
+        __sync_fetch_and_add(&g_scored_busy, 1);
+        __sync_fetch_and_add(&g_scored_skipped, 1);
+        return -1;
+    }
+    if (!g_exec_armed || token != g_exec_token || g_exec_budget_left == 0) {
+        __sync_fetch_and_add(&g_scored_skipped, 1);
+        c2_exec_unlock();
+        return -1;
+    }
+    if (g_scored_table_valid && system_id >= g_scored_count) {
+        __sync_fetch_and_add(&g_scored_invalid, 1);
+        c2_exec_unlock();
+        return -3;
+    }
+    g_exec_budget_left--;
+    __sync_fetch_and_add(&g_scored_calls, 1);
+    g_scored_last_id = system_id;
+
+    JS_UpdateStackTop(g_test_rt);
+    argv[0] = c2_exec_num((double)token);
+    argv[1] = c2_exec_num((double)system_id);
+    r = JS_Call(g_test_ctx, g_exec_fn, c2_exec_undefined(), 2, argv);
+    if (JS_VALUE_GET_TAG(r) == JS_TAG_EXCEPTION) {
+        JS_FreeValue(g_test_ctx, r);
+        c2_clear_pending_exception(g_test_ctx);
+        __sync_fetch_and_add(&g_scored_js_err, 1);
+        c2_exec_unlock();
+        return -2;
+    }
+    conv = JS_ToInt32(g_test_ctx, &n, r);
+    JS_FreeValue(g_test_ctx, r);
+    if (conv != 0 || n < 0 || n > 2) {
+        __sync_fetch_and_add(&g_scored_invalid, 1);
+        c2_exec_unlock();
+        return -3;
+    }
+    __sync_fetch_and_add(&g_scored_tier[n], 1);
+    g_scored_last_tier = n;
+    c2_exec_unlock();
+    return n;
+}
+
+int C2ExecScoredStats(char *out, int out_size) {
+    int n;
+    if (!out || out_size <= 0) return 0;
+    n = snprintf(out, (size_t)out_size,
+        "armed=%d token=%u budget_left=%u scored_calls=%llu skipped=%llu "
+        "busy=%llu js_err=%llu invalid=%llu tier0=%llu tier1=%llu tier2=%llu "
+        "last_id=%u last_tier=%d\n",
+        g_exec_armed, (unsigned)g_exec_token, (unsigned)g_exec_budget_left,
+        (unsigned long long)g_scored_calls, (unsigned long long)g_scored_skipped,
+        (unsigned long long)g_scored_busy, (unsigned long long)g_scored_js_err,
+        (unsigned long long)g_scored_invalid,
+        (unsigned long long)g_scored_tier[0], (unsigned long long)g_scored_tier[1],
+        (unsigned long long)g_scored_tier[2],
+        (unsigned)g_scored_last_id, g_scored_last_tier);
+    if (n < 0) { out[0] = '\0'; return 0; }
+    return n < out_size ? n : out_size - 1;
 }
 
 /* Test-only: hold (1) or release (0) the bridge lock so the busy path can be

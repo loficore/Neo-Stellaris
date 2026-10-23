@@ -8,6 +8,7 @@ const predicate_hook = @import("c2/predicate_hook.zig");
 const exec_hook = @import("scripted/exec_hook.zig");
 const live_probe = @import("c2/live_probe.zig");
 const scope_probe = @import("c2/scope_probe.zig");
+const chokepoint_table = @import("c2/chokepoint_table.zig");
 
 comptime {
     _ = scope_probe;
@@ -17,6 +18,11 @@ extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2ExecArmToken(token: u32, budget: u32) c_int;
 extern fn C2ExecStats(out: [*]u8, out_size: c_int) c_int;
 extern fn C2ExecDisarmState() c_int;
+extern fn C2ExecArmScores(scores: ?[*]const u16, count: u32, token: u32,
+    budget: u32, tier1_min: u32, tier2_min: u32) c_int;
+extern fn C2ExecCallScored(token: u32, system_id: u32) c_int;
+extern fn C2ExecScoredStats(out: [*]u8, out_size: c_int) c_int;
+extern fn C2ExecArmSrcForTest(src: [*:0]const u8, token: u32, budget: u32) c_int;
 
 var donor_calls: u32 = 0;
 
@@ -281,4 +287,84 @@ test "exec_hook exposes a never-installed verify state on non-Windows" {
     try std.testing.expectEqual(@as(i32, -2), exec_hook.verifyState());
     try std.testing.expectEqual(@as(?*anyopaque, null), exec_hook.original());
     try std.testing.expectEqual(@as(u32, 0), exec_hook.patchSize());
+}
+
+test "scored arm rejects bad tables, tokens and tier order" {
+    try liveCtx();
+    var t = [_]u16{0};
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmScores(null, 1, 77, 4, 100, 200));
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmScores(t[0..].ptr, 0, 77, 4, 100, 200));
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmScores(t[0..].ptr, 1, 0, 4, 100, 200));
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmScores(t[0..].ptr, 1, 77, 0, 100, 200));
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmScores(t[0..].ptr, 1, 77, 4, 201, 200));
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmScores(t[0..].ptr, 1, 77, 4, 100, 65536));
+    var too_many: [2049]u16 = [_]u16{0} ** 2049;
+    try std.testing.expectEqual(@as(c_int, 4), C2ExecArmScores(too_many[0..].ptr, 2049, 77, 4, 100, 200));
+}
+
+test "scored call maps the table to tiers and counts" {
+    try liveCtx();
+    var t = [_]u16{ 0, 99, 100, 199, 200, 286 };
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmScores(t[0..].ptr, @intCast(t.len), 77, 16, 100, 200));
+    const want = [_]c_int{ 0, 0, 1, 1, 2, 2 };
+    for (want, 0..) |tier, id| try std.testing.expectEqual(tier, C2ExecCallScored(77, @intCast(id)));
+    try std.testing.expectEqual(@as(c_int, -1), C2ExecCallScored(999, 0)); // 错 token,不耗预算
+    try std.testing.expectEqual(@as(c_int, -3), C2ExecCallScored(77, 6));  // 超范围,不耗预算
+    var buf: [1024]u8 = undefined;
+    const n = C2ExecScoredStats(&buf, @intCast(buf.len));
+    const s = buf[0..@intCast(n)];
+    for ([_][]const u8{
+        "armed", "token",    "budget_left", "scored_calls", "skipped",
+        "busy",  "js_err",   "invalid",     "tier0",        "tier1",
+        "tier2", "last_id",  "last_tier",
+    }) |key| try std.testing.expectEqual(@as(usize, 1), countExactKey(s, key));
+    for ([_][]const u8{
+        "armed=1",  "token=77",       "budget_left=10", "scored_calls=6", "skipped=1",
+        "busy=0",   "js_err=0",       "invalid=1",      "tier0=2",        "tier1=2",
+        "tier2=2",  "last_id=5",      "last_tier=2",
+    }) |kv| try std.testing.expect(std.mem.indexOf(u8, s, kv) != null);
+    _ = C2ExecDisarmState();
+}
+
+test "scored call reports budget exhaustion as a skip" {
+    try liveCtx();
+    var t = [_]u16{ 200, 200, 200 };
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmScores(t[0..].ptr, @intCast(t.len), 77, 2, 100, 200));
+    try std.testing.expectEqual(@as(c_int, 2), C2ExecCallScored(77, 0));
+    try std.testing.expectEqual(@as(c_int, 2), C2ExecCallScored(77, 1));
+    try std.testing.expectEqual(@as(c_int, -1), C2ExecCallScored(77, 2));
+    var buf: [1024]u8 = undefined;
+    const n = C2ExecScoredStats(&buf, @intCast(buf.len));
+    const s = buf[0..@intCast(n)];
+    try std.testing.expect(std.mem.indexOf(u8, s, "budget_left=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "skipped=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "tier2=2") != null);
+    _ = C2ExecDisarmState();
+}
+
+test "scored call reports a throwing script and re-arms" {
+    try liveCtx();
+    try std.testing.expectEqual(@as(c_int, 0),
+        C2ExecArmSrcForTest("(function(){return function(t,id){throw 1;};})()", 77, 4));
+    try std.testing.expectEqual(@as(c_int, -2), C2ExecCallScored(77, 0));
+    var buf: [1024]u8 = undefined;
+    const n = C2ExecScoredStats(&buf, @intCast(buf.len));
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "js_err=1") != null);
+    _ = C2ExecDisarmState();
+    var t = [_]u16{0};
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmScores(t[0..].ptr, 1, 77, 4, 100, 200));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecCallScored(77, 0));
+    _ = C2ExecDisarmState();
+}
+
+test "scored table drives the shipped 787 scores" {
+    try liveCtx();
+    try std.testing.expectEqual(@as(c_int, 0),
+        C2ExecArmScores(chokepoint_table.scores[0..].ptr, @intCast(chokepoint_table.SCORE_COUNT), 77, 787, 100, 200));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecCallScored(77, 0));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecCallScored(77, 1));
+    try std.testing.expectEqual(@as(c_int, 1), C2ExecCallScored(77, 7));
+    try std.testing.expectEqual(@as(c_int, 2), C2ExecCallScored(77, 239));
+    try std.testing.expectEqual(@as(c_int, 2), C2ExecCallScored(77, 578));
+    _ = C2ExecDisarmState();
 }
