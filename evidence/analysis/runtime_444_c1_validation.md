@@ -4330,3 +4330,90 @@ DLL 侧 `effectInstantiate(a1, a2, a3, a4)`(`src/dll/c2/vtable.zig:90`,先 `slot
 - **仍然没做的**:面板观测本身(上面那条校准)、以及任何一次射击。下一枪之前 `console_open` 的初值
   来自「新进程 = 面板关」这个约定,不是观测 —— 这一点不因部署而改变。
 
+### §54.10 面板观测通道的建立与实机校准(2026-10-23→24,只做像素 + 两次开关键:无注入、无 console 命令、不开枪)
+
+**为什么要这一节。** §54.9 结尾那句「仍未证」是这件事的全部动机:从头到尾**没有人观测过面板本身**,
+`console_open` 的初值来自约定,而那个约定错了就直接决定「按不按开关键」。这一节把它换成观测。
+用户批准的边界:`just game launch` 之后**只做**按一次开关键 → 读像素 → 再按一次 → 读像素。
+
+**跨界问题与桥。** 直接 ssh 跑的是非交互登录会话,`EnumWindows` / 屏幕 DC 看不见 `stellaris.exe`
+(`find_game()` → `no_game`),而 daemon 看得见(pid 21372 / hwnd 461430)。沿用仓库已有的跨界办法
+(`launch_stellaris.py` 的 BRIDGE:`schtasks /ru <machine>\<user> /rl highest` + `/run /I`),剥成
+「在交互会话里跑一条 python,stdout 写文件,只回短行」:
+`scripts/scratch/2026-10_panelcalib/run_ps.py`(桥)+ `panel_pixel_map.py`(探针,复用 `gs` 的
+`find_game` / `window_rect` / `grab_box` / `read_pause` / `console_tap_plan` / `_send_input_event`,
+不另写一套像素层)。两个都是一次性,留在 scratch。**注意:`stats` / `footprint` / `bbox` 只读已存帧,
+不需要桌面会话,直接 ssh 就能复算;只有 `tap` / `diag` / `png` 需要桥。**
+
+**先否掉帧差(数字全部可复算)。** 校准存下 10 张全分辨率亮度帧 `C:\temp\ns_panel_<tag>.png`
+(关:a, f, a2, i, k, m;开:b, g, j, l;窗口 2160×1440,阈值 30):
+
+- 两帧**同态** `bbox a f` ⇒ **N=54273/3110400**,变化框 x124–2130 y66–1397 —— 主菜单背景动画自己就在动;
+- 两帧同**开** `bbox b g` ⇒ N=1341、`bbox g j` ⇒ N=1508(`max=75`,是光标级微动,不是文字);
+- **跨态** `bbox a b` ⇒ **N=329259**、`bbox f g` ⇒ **N=336667**,变化框铺满整窗。
+
+同态 5.4 万 vs 跨态 33 万只有 6 倍,而同态差已经遍布全窗 ⇒ **差分的定位能力为零**。更早还有一条被淘汰的
+指标:32×18 平均亮度网格,一次按键带来的权重变化 **21** 小于两帧同态的抖动 **74**,即指标本身选错了。
+
+**换成单帧数「密集亮点」。** `footprint b vs i,k,m` ⇒ 72 格落在 `RECT x40-880 y80-880`(面板那一列),
+取最重的八格定出框 **A = (120,640)-(400,880)**,阈值 **180**。`stats` 逐帧实测(A 框 thr=140/180/220 三档):
+
+| 帧 | 状态 | A@140 | A@180 | A@220 |
+|---|---|---|---|---|
+| a | 关 | 0 | **0** | 0 |
+| f | 关 | 0 | **0** | 0 |
+| a2 / i / k / m | 关 | 2 / 2 / 2 / 2 | **0 / 0 / 0 / 0** | 0 |
+| b / g / j / l | 开 | 2409 | **2315** | 270 |
+
+四个开帧**逐字相同**(2315),六个关帧在 thr=180 全为 0 —— 同态之间零抖动,和帧差正相反。
+对照组说明为什么选 A 而不是别的框:B 框 开=5865 / 关=1007–1012(把别的 UI 文字也算进来了,裕度一个量级),
+C 框 开=592 / 关=2–18,而 W(整窗)开=20215 / 关=9950–14853 已经**区间重叠**,不能用。
+
+**实现(TDD,提交 `987b6f8`)。** `scripts/windows/game_supervisor.py` 加
+`CONSOLE_BOX_FRACTIONS`(按窗口比例存,换分辨率不吃亏)/ `CONSOLE_BRIGHT_MIN=180` /
+`CONSOLE_CLOSED_MAX=120` / `CONSOLE_OPEN_MIN=600` / `classify_console` / `_console_box` /
+`read_console` / `apply_console_observation`;serve 每 tick **在 `plan_step` 之前**观测,于是本轮动作
+用的就是刚读到的状态;status 增加 `console_px`、`console_forced`。120–600 之间的模糊带判 `None`,
+daemon 照 §54.9 的规矩**拒绝而不是猜**。`console_sync open|closed` 把信念钉住(观测让位于人),
+`console_sync auto` 松开。6 个新 host 测试先失败后通过:`just host-tests` **223 passed**(217+6),
+`just fence` 27 passed。
+
+**实机验证(2026-10-24 00:04–00:12,同一台机、同一个 pid 21372)。** `just deploy` → 旧 daemon 经命令
+通道 `quit` 正常退出(`STATUS=stopped note=quit`)→ `python C:/temp/game_supervisor.py start`
+起新 daemon(pythonw pid 23208,00:04:34)。每一步**探针独立读 + daemon 自己读**对表:
+
+| 动作 | 探针 diag(独立读) | daemon status |
+|---|---|---|
+| 起始 | — | `console_open=False console_px=0 forced=False` |
+| 按一次开关键 | `BOXA bright=2312` | `console_open=True console_px=2309` |
+| 再按一次 | `BOXA bright=0` | `console_open=False console_px=0` |
+| `console_sync open` | 面板没动 | `console_open=True console_px=0 forced=True` ← 钉住生效 |
+| `console_sync auto` | 面板没动 | 下一 tick `False / 0 / forced=False` ← 观测重新接管 |
+
+daemon 日志(`C:\temp\ns_game_log.jsonl`,只读拉取)记到的转换:
+`00:05:37 false/0 → 00:06:34 true/64118 → 00:06:46 false/0 → 00:06:52 true/1298 → 00:06:53 false/0`,
+`00:08:17 console_sync forced → 00:08:28 auto → 00:08:29 false/0`。
+
+**判读与代价(如实记下,不当结论带走)。** `64118` 和 `1298` 是面板**动画途中**的帧:动画里 A 区先整片
+亮起来(远超稳态 2315),而 `00:06:46` 那次读到 **0** 说明**开启动画中存在一帧 A 区全暗**。
+⇒ 「刚按完键的那一瞬间」不是稳态判据。现有多处消费点靠的是 tick 之间已经落定的画面;任何「按键后立刻
+自证」的新逻辑都不能只读一帧,要么读够时间,要么落到 `None` 走拒绝。反方向不出事:落在模糊带是拒绝,
+不是往开着的面板里打空格。
+
+**仍未证的两件事。** (1) A 框只在**主菜单**(上表 10 帧)和**一次载入局**(live 2312)上校过,没有覆盖
+全部界面;若某界面自己点亮 A 区,会被读成「开」→ daemon 拒绝动 console/space,这是可恢复的保守,不是
+错误输入。(2) 校准结束时游戏是 `state=paused`(开合控制台自身的副作用),`want=playing` 由 daemon 接回,
+本节没有为它做任何额外输入。
+
+**复现命令行**(Linux 侧,原样):
+
+    cd scripts/scratch/2026-10_panelcalib
+    scp panel_pixel_map.py Windows_Jiaolong:C:/temp/                        # 探针上传
+    python3 run_ps.py --wait 25 "chain diag;sleep,800;diag"          # 看窗口是谁、A 框现值(需桥)
+    python3 run_ps.py --wait 30 "chain tap;sleep,1500;diag"          # 批准范围内的一次开关键 + 读像素
+    ssh Windows_Jiaolong "python C:/temp/panel_pixel_map.py stats b" # 逐帧复算,不需要桥
+    ssh Windows_Jiaolong "python C:/temp/panel_pixel_map.py footprint b i k m"
+    ssh Windows_Jiaolong "python C:/temp/panel_pixel_map.py bbox a f"
+    just game status   # console_open / console_px / console_forced
+
+
