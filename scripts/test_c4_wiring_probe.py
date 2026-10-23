@@ -8,10 +8,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from c4_wiring_probe import (
-    EXPECTED_TIERS, RECORD_SIZE, SAVE_SHA, campaign_gate, classify_apply,
-    classify_capture, column_sequences, count_marker_lines, decode_records,
-    decode_scored_stats, decode_wire_stats, expected_tiers, find_scope_column,
-    pack_spec, supervisor_ready, unpack_spec,
+    CAPTURE_CONSOLE, EXPECTED_TIERS, PREFLIGHT_MARKERS, RECORD_SIZE, SAVE_SHA,
+    SCORE_COUNT, campaign_gate, classify_apply, classify_capture,
+    column_sequences, count_marker_lines, decode_records, decode_scored_stats,
+    decode_wire_stats, expected_tiers, find_scope_column, pack_spec,
+    preflight_console, preflight_gate, supervisor_ready, unpack_spec,
 )
 
 CTX_OFF, A3_OFF, TARGETS_OFF, WINDOWS_OFF = 56, 1000, 1256, 1320
@@ -188,11 +189,26 @@ def test_campaign_gate_matrix():
     assert campaign_gate("0" * 64, SAVE_SHA, True) == "drift_allowed"
     assert campaign_gate(None, SAVE_SHA, True) == "campaign_unverified"
 
-def test_count_marker_lines_ignores_console_echo():
-    text = ('[effect.cpp:123]: effect = { every_system = { neo_action = { '
-            'log = "NEO_CHOKE_EFFECT" } } }\n'
-            'NEO_CHOKE_EFFECT\n'
-            '  NEO_CHOKE_EFFECT  \n')
+def test_console_commands_use_keyword_shape_and_a_per_system_name_token():
+    assert CAPTURE_CONSOLE.startswith("effect every_system = {")
+    assert "effect = {" not in CAPTURE_CONSOLE
+    assert "[This.GetName]" in CAPTURE_CONSOLE
+    command = preflight_console(4242)
+    assert command.startswith("effect every_system = {")
+    assert "C4_PREFLIGHT_4242_[This.GetName]" in command
+
+def test_preflight_gate_uses_the_logsink_collapsed_count():
+    assert preflight_gate(0) == "console_unavailable"
+    assert preflight_gate(PREFLIGHT_MARKERS) == "ok"
+    assert preflight_gate(SCORE_COUNT) == "campaign_mismatch"
+
+def test_count_marker_lines_counts_only_log_effect_lines():
+    text = ('[effect.cpp:123]: effect every_system = { log = '
+            '"NEO_CHOKE_EFFECT_[This.GetName]" }\n'
+            '[17:00:00][effect_impl.cpp:21978]: [2243.10.29] Log effect, '
+            'file:  line: 1. NEO_CHOKE_EFFECT_维林努斯\n'
+            '[17:00:00][effect_impl.cpp:21978]: [2243.10.29] Log effect, '
+            'file:  line: 1. NEO_CHOKE_EFFECT_亚帕西诺尔\n')
     assert count_marker_lines(text, "NEO_CHOKE_EFFECT") == 2
 
 def test_supervisor_ready_rejects_stale_status_and_playing():
@@ -235,6 +251,12 @@ def test_c1_run_precedes_effect_id_read_and_c2_init():
     init_at = source.index('exports["C2Init"]')
     assert run_at < id_at < init_at
 
+def _log_lines(n):
+    return "".join(
+        "[17:00:00][effect_impl.cpp:21978]: [2243.10.29] Log effect, "
+        "file:  line: 1. m_%d\n" % i for i in range(n))
+
+
 def _fake_sleeps(monkeypatch, texts):
     import c4_wiring_probe as probe
     feed = iter(texts)
@@ -251,13 +273,14 @@ def _fake_sleeps(monkeypatch, texts):
 
 
 def test_wait_marker_keeps_polling_past_a_nonzero_plateau(monkeypatch):
-    probe = _fake_sleeps(monkeypatch, ["m\n" * 5, "m\n" * 10,
-                                       "m\n" * 10, "m\n" * 70])
+    probe = _fake_sleeps(monkeypatch, [_log_lines(5), _log_lines(10),
+                                       _log_lines(10), _log_lines(70)])
     assert probe._wait_marker("x", 0, "m", 70, timeout=30.0) == 70
 
 
 def test_wait_marker_returns_the_max_seen_when_the_deadline_passes(monkeypatch):
-    probe = _fake_sleeps(monkeypatch, ["m\n" * 5, "m\n" * 10, "m\n" * 3])
+    probe = _fake_sleeps(monkeypatch, [_log_lines(5), _log_lines(10),
+                                       _log_lines(3)])
     assert probe._wait_marker("x", 0, "m", 70, timeout=2.0) == 10
 
 def test_shot_sha_ignores_a_screenshot_the_supervisor_never_refreshed(tmp_path):

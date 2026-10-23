@@ -137,6 +137,23 @@ def plan_step(want: str | None, paused: str, window: str,
     return "none", {"reason": "paused_no_window"}
 
 
+def reread_after_grace(paused: str, want: str | None, grace_s: float, read, sleep):
+    """Re-read the pause icon once the grace window has elapsed.
+
+    The game can be killed while we wait (relaunch, crash); GetWindowRect then
+    fails with 1400.  That reading is ``unknown`` — the decide step never acts
+    on it — instead of an OSError that takes the whole daemon down with the
+    window.
+    """
+    if paused != "paused" or want == "paused" or not grace_s:
+        return paused
+    sleep(grace_s)
+    try:
+        return read()[0]
+    except OSError:
+        return "unknown"
+
+
 def parse_command(line: str):
     """Parse one command-file line; ``None`` means "nothing to do".
 
@@ -269,27 +286,40 @@ CONSOLE_SCAN = 0x29   # backquote
 CTRL_SCAN = 0x1D
 PASTE_SCAN = 0x2F     # V
 ENTER_SCAN = 0x1C
+BACKSPACE_SCAN = 0x0E
+BACKSPACE_CLEAR = 64  # clears the '~' the opening tap types into an open console
 GMEM_MOVEABLE = 0x0042
 CF_UNICODETEXT = 13
 REF_W, REF_H = 2160, 1440  # spike reference resolution
 
 
 def console_key_plan():
-    """Open console, paste with Ctrl+V, Enter, close console.
+    """Open the console, clear its input, paste with Ctrl+V, submit with Enter.
+
+    The console key does not close an open console in 4.4.4 (live 2026-10-23):
+    sent while the console is up it is typed into the input line as '~', so the
+    next paste arrived as ``~effect ...`` and was rejected as "Unknown
+    command".  There is therefore no closing tap — the console stays open and
+    every plan starts by backspacing away the character the opening tap leaves
+    when the console was already open.  Each event carries its own delay:
+    backspaces go out at 20 ms, everything else at 80 ms.
 
     Ctrl is held across V: its down/up wrap the paste events, so the plan
     cannot be expressed as ``_send_key_events`` pairs.
     """
     down = KEYEVENTF_SCANCODE
     up = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-    return [
-        (0, CONSOLE_SCAN, down), (0, CONSOLE_SCAN, up),
-        (0, CTRL_SCAN, down),
-        (0, PASTE_SCAN, down), (0, PASTE_SCAN, up),
-        (0, CTRL_SCAN, up),
-        (0, ENTER_SCAN, down), (0, ENTER_SCAN, up),
-        (0, CONSOLE_SCAN, down), (0, CONSOLE_SCAN, up),
+    plan = [(0, CONSOLE_SCAN, down, 0.08), (0, CONSOLE_SCAN, up, 0.08)]
+    for _ in range(BACKSPACE_CLEAR):
+        plan.append((0, BACKSPACE_SCAN, down, 0.02))
+        plan.append((0, BACKSPACE_SCAN, up, 0.02))
+    plan += [
+        (0, CTRL_SCAN, down, 0.08),
+        (0, PASTE_SCAN, down, 0.08), (0, PASTE_SCAN, up, 0.08),
+        (0, CTRL_SCAN, up, 0.08),
+        (0, ENTER_SCAN, down, 0.08), (0, ENTER_SCAN, up, 0.08),
     ]
+    return plan
 
 
 def _require_windows() -> None:
@@ -710,9 +740,9 @@ def _handle_command(cmd, hwnd, state):
         elif not _set_clipboard_text(cmd["text"]):
             _log({"event": "console_clipboard_failed", "chars": len(cmd["text"])})
         else:
-            for vk, scan, flags in console_key_plan():
+            for vk, scan, flags, delay in console_key_plan():
                 _send_input_event(vk, scan, flags)
-                time.sleep(0.08)
+                time.sleep(delay)
             time.sleep(0.3)
     elif verb == "dismiss" and hwnd and state.get("last_bbox") \
             and state.get("paused") == "paused":
@@ -770,10 +800,9 @@ def serve(args) -> int:
         stats = {"bright": 0.0, "gold": 0, "rows": [], "bbox": None}
         window = "none"
         if paused == "paused":
-            if state["want"] != "paused" and args.grace_s:
-                time.sleep(args.grace_s)
-                paused, red, green = read_pause(hwnd)
-                state["paused"] = paused
+            paused = reread_after_grace(paused, state["want"], args.grace_s,
+                                        lambda: read_pause(hwnd), time.sleep)
+            state["paused"] = paused
             if paused == "paused":
                 try:
                     stats = read_window(hwnd)

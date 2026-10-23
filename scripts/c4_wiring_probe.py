@@ -36,6 +36,11 @@ SCORE_COUNT = 787
 EXPECTED_TIERS = (717, 55, 15)
 EXPECTED_CHAIN = 70
 MARKER = "NEO_CHOKE_EFFECT"
+# The game's log sink drops a message it has already printed this session, so
+# markers carry [This.GetName]. On the pinned campaign every_system visits 787
+# systems but only 783 distinct rendered names reach game.log (a few low-score
+# systems share a rendered name); see §54.
+PREFLIGHT_MARKERS = 783
 SAVE_SHA = "6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e"
 
 DLL = r"C:\temp\sqjs_c4.dll"
@@ -68,8 +73,14 @@ REQUIRED_EXPORTS = (
     "C4WireDrainInto", "C4WireLayout", "C4WireDisarm", "C4ScoredStatsInto",
 )
 
-CAPTURE_CONSOLE = ('effect = { every_system = { neo_action = { '
-                   'log = "NEO_CHOKE_EFFECT" set_name = "NEO_CHOKE" } } }')
+CAPTURE_CONSOLE = ('effect every_system = { neo_action = { '
+                   'log = "NEO_CHOKE_EFFECT_[This.GetName]" '
+                   'set_name = "NEO_CHOKE" } }')
+
+
+def preflight_console(pid):
+    return ('effect every_system = { log = "C4_PREFLIGHT_%d_[This.GetName]" }'
+            % pid)
 
 
 # ---------------------------------------------------------------------------
@@ -321,8 +332,17 @@ def campaign_gate(save_sha, expected_sha, allow_drift):
     return "drift_allowed" if allow_drift else "campaign_mismatch"
 
 
+def preflight_gate(count):
+    if count == 0:
+        return "console_unavailable"
+    if count != PREFLIGHT_MARKERS:
+        return "campaign_mismatch"
+    return "ok"
+
+
 def count_marker_lines(text, marker):
-    return sum(1 for line in text.splitlines() if line.strip().endswith(marker))
+    return sum(1 for line in text.splitlines()
+               if "Log effect, file:" in line and marker in line)
 
 
 def supervisor_ready(rec, now, max_age_s=5.0):
@@ -600,18 +620,18 @@ def _flow(args, result, state):
     # Preflight: prove the console path and the campaign shape before capture.
     preflight = f"C4_PREFLIGHT_{pid}"
     offset = _file_size(log_path)
-    _send_console(args.supervisor_cmd,
-                  f'effect = {{ every_system = {{ log = "{preflight}" }} }}')
+    _send_console(args.supervisor_cmd, preflight_console(pid))
     preflight_count = _wait_marker(
-        log_path, offset, preflight, SCORE_COUNT, timeout=30.0)
+        log_path, offset, preflight, PREFLIGHT_MARKERS, timeout=30.0)
     if preflight_count is None:
         raise _Abort("log_unreadable", log_path)
     result["preflight_marker_count"] = preflight_count
-    if preflight_count == 0:
-        raise _Abort("console_unavailable", "preflight marker never appeared")
-    if preflight_count != SCORE_COUNT:
-        raise _Abort("campaign_mismatch",
-                     f"preflight markers {preflight_count} != {SCORE_COUNT}")
+    gate = preflight_gate(preflight_count)
+    if gate == "console_unavailable":
+        raise _Abort(gate, "preflight marker never appeared")
+    if gate == "campaign_mismatch":
+        raise _Abort(gate,
+                     f"preflight markers {preflight_count} != {PREFLIGHT_MARKERS}")
 
     # Capture: find the scope column.
     sbuf = harness.remote_alloc(pid, 80)

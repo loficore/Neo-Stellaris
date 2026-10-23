@@ -538,19 +538,29 @@ C4 接线驱动,一枪一进程:`capture` 跑一遍找出 `ctx`/`a3` 里承载 s
 的 `console` 动词**(剪贴板 + 按键),不直接对游戏发键:
 
 ```
-effect = { every_system = { log = "C4_PREFLIGHT_<pid>" } }            # 预检,应得 787 行
-effect = { every_system = { neo_action = { log = "NEO_CHOKE_EFFECT" set_name = "NEO_CHOKE" } } }
+effect every_system = { log = "C4_PREFLIGHT_<pid>_[This.GetName]" }            # 预检,应得 783 行
+effect every_system = { neo_action = { log = "NEO_CHOKE_EFFECT_[This.GetName]" set_name = "NEO_CHOKE" } }
 ```
 
+**命令形状**:keyword 要写在 `effect` 与 `=` 之间(`effect every_system = { … }`)。写成
+`effect = { every_system = { … } }` 时引擎往 error.log 打 `Invalid scripted effect: =`,盒子根本不跑 ——
+这个形状曾经让预检只数到 1 行。
+
+**marker 必须逐系统不同**:引擎的 log sink 会**丢弃本会话里已经打过的同样消息**(game.log、
+error.log 一致),所以固定文本的 marker 在 787 次执行后只剩 1 行,第二条同样的命令连一行都不加。
+marker 带 `[This.GetName]`(`log` 里会插值,`GetID` 渲染为空),每个系统渲染自己的名字。实测:787 个
+系统只渲染出 **783 个不同名字**(3 对低分系统重名,均不在 tier ≥1),apply 的 70 个 tier ≥1 系统名字
+全不同 ⇒ `PREFLIGHT_MARKERS = 783`、apply 仍按 70 行判。
+
 预检 marker 带 pid,但从**本次偏移**读到 EOF 再数,所以同一会话里重跑的旧行不会串进来;命令原文
-那行以 `} }` 结尾,`count_marker_lines` 用 `strip().endswith(marker)` 只数真正的日志行。预检 0 行
-= `console_unavailable`(焦点/键盘路径坏了),非 787 行 = `campaign_mismatch`(不是测试战役)。
-行数是**轮询到 ≥787 或 30 s 超时后的最大值** —— 日志分块 flush,中途停在某个非零值不算终值;
+的回显那行不含 `Log effect, file:`,所以 `count_marker_lines` 只数带这个片段的行,回显不会被当成输出。
+预检 0 行 = `console_unavailable`(焦点/键盘路径坏了),非 783 行 = `campaign_mismatch`(不是测试战役)。
+行数是**轮询到 ≥783 或 30 s 超时后的最大值** —— 日志分块 flush,中途停在某个非零值不算终值;
 apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 
 **save sha 门**:`stellaris_2226.sav` 的 sha256 必须等于钉住的 `6f271294…`。读不到文件 →
 `campaign_unverified`,`--allow-drift` 只把「读到了但不匹配」降级成 `drift_allowed`(诊断用),
-读不到仍然 `campaign_unverified`。预检的 787 行是战役形状的第二道门。
+读不到仍然 `campaign_unverified`。预检的 783 行是战役形状的第二道门。
 
 **drain 缓冲契约**:`C4WireDrainInto` 的调用方必须提供 `RING_CAP * RECORD_SIZE`
 = 2048 × 3368 = 6,897,664 B 的远程缓冲(驱动只分配一次);DLL 写 `n * RECORD_SIZE` 字节并清空
@@ -564,7 +574,7 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 | `supervisor_not_running` | 15 s 内状态文件缺失/过期/`no_game`/`stopped` | supervisor 没跑 —— 环境结论 |
 | `supervisor_not_paused` | 状态新鲜但 15 s 内没到 `paused` | 战役没暂停成功,不要注入 |
 | `campaign_unverified` | 存档 sha256 读不到 | 路径/权限问题 |
-| `campaign_mismatch` | sha256 不匹配(且未 `--allow-drift`),或预检行数 ≠ 787 | 不是那场 787 系统的测试战役 |
+| `campaign_mismatch` | sha256 不匹配(且未 `--allow-drift`),或预检行数 ≠ 783 | 不是那场 787 系统的测试战役 |
 | `dll_exports_missing` | 缺 8 个 `C4Wire*`/`C4ScoredStatsInto` 或 `C2Sanity`/`C2Init`/`C1Run`/`C1EffectId` | 产物不对 |
 | `game_not_running` | `resolve_pid("stellaris")` 失败 | 环境结论 |
 | `stale_module` | 注入前 base 已能解析(含 `ambiguous base`),或非 `is not loaded` 的解析失败 | 进程里已有 DLL 副本,**换新进程**,不重装 |
@@ -619,7 +629,9 @@ just game policy first       # first | last | random | <1-based n>
 just game choose 2           # 对当前事件一次性选第 2 项
 just game speed up | down
 just game click 1400 861     # 屏幕绝对坐标(窗口在 (0,0) 时等于窗口坐标)
-just game console effect = { every_system = { log = "X" } }   # 原样写进控制台(剪贴板粘贴)
+just game console effect every_system = { log = "X" }   # 原样写进控制台(剪贴板粘贴)
+                                             # 注意 keyword 在 effect 后、= 前;带括号的命令经
+                                             # just/ssh 转手会被远端 shell 改写,驱动直接写命令文件
 just game dismiss            # 只在 paused 且有窗口 bbox 时生效(需 serve --auto-dismiss)
 just game shot               # 存 C:\temp\ns_game_shot.png
 just game stop | quit
@@ -651,11 +663,14 @@ just game stop | quit
 6. **数字键不选选项**(实测),必须点行中心。同一组行签名连点 3 次后记 `choice_stuck` 并停手,
    防止在无响应窗口上打转。
 7. **`console <text>` 走剪贴板,不是逐字符打字**:`parse_command` 保留 `<text>` 的大小写、内部空白
-   与引号,`_set_clipboard_text` 以 UTF-16LE + 双 NUL 写进剪贴板,再发固定 10 个按键事件
-   (反引号开控制台 → Ctrl+V → Enter → 反引号关)。`focus(hwnd)` 3 s 内拿不到前台就写
-   `console_refused`(不按键);剪贴板失败写 `console_clipboard_failed`。`_send_key_events` 是
-   **成对** down/up,修饰键必须跨 V 的 down/up 按住,所以 Ctrl 只能用 `_send_input_event` 逐事件发。
-   `game.log` 的控制台回显会包含命令文本,数 marker 时用 `strip().endswith(...)`,不要用子串计数。
+   与引号,`_set_clipboard_text` 以 UTF-16LE + 双 NUL 写进剪贴板,再发固定序列:反引号开控制台 →
+   64 个退格 → Ctrl+V → Enter。**没有收尾的反引号**:4.4.4 里控制台开着时这个键不关面板,而是往
+   输入行打一个 `~`,于是下一条命令变成 `~effect ...` 被判成 `Unknown command`(2026-10-23 实机)。
+   控制台就留在开着;64 个退格清掉「开面板那一下」留在输入行的字符(面板本来就开着时才会留),
+   退格 20 ms/个、其余 80 ms/个。`focus(hwnd)` 3 s 内拿不到前台就写 `console_refused`(不按键);
+   剪贴板失败写 `console_clipboard_failed`。`_send_key_events` 是**成对** down/up,修饰键必须跨 V 的
+   down/up 按住,所以 Ctrl 只能用 `_send_input_event` 逐事件发。数效果 marker 用驱动里的
+   `count_marker_lines`(只数同时含 `Log effect, file:` 与 marker 的行,控制台回显匹配不上)。
 7. **`speed up/down` 实机已验证**:`up` 让标签从「常速」变「快速」,`down` 回落。命令会把 `speed_sha`
    的前后值写进状态,但绿色标签背景会脉冲,哈希自己也会变 —— 判结果要读截图里的两个字,不要只看哈希。
 8. **scp 上传可用,批量下载会把 SSH 连接重置**:取产物用分块 base64,单次输出 **≤700 字节**稳定

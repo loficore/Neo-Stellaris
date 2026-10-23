@@ -138,12 +138,48 @@ def test_console_verb_preserves_text():
     assert gs.parse_command("console   ") is None
 
 
-def test_console_key_plan_holds_ctrl_for_paste():
-    assert gs.console_key_plan() == [
-        (0, 0x29, 0x0008), (0, 0x29, 0x000A),
-        (0, 0x1D, 0x0008),
-        (0, 0x2F, 0x0008), (0, 0x2F, 0x000A),
-        (0, 0x1D, 0x000A),
-        (0, 0x1C, 0x0008), (0, 0x1C, 0x000A),
-        (0, 0x29, 0x0008), (0, 0x29, 0x000A),
+def test_grace_reread_survives_a_window_that_disappears():
+    # A game killed while the daemon waits out grace_s used to raise OSError
+    # 1400 (GetWindowRect) straight out of serve and kill the supervisor.
+    slept = []
+
+    def dead():
+        raise OSError(1400, "GetWindowRect failed")
+
+    assert gs.reread_after_grace("paused", "playing", 10.0, dead,
+                                 slept.append) == "unknown"
+    assert slept == [10.0]
+
+
+def test_grace_reread_returns_the_fresh_reading_only_when_it_applies():
+    def playing():
+        return "playing", 0, 204
+
+    def never(_):
+        raise AssertionError("slept without a grace window")
+
+    assert gs.reread_after_grace("paused", "playing", 2.0, playing,
+                                 lambda s: None) == "playing"
+    assert gs.reread_after_grace("paused", "paused", 2.0, playing, never) == "paused"
+    assert gs.reread_after_grace("playing", "playing", 2.0, playing, never) == "playing"
+
+
+def test_console_key_plan_clears_the_input_instead_of_closing_console():
+    # Live 2026-10-23: 4.4.4 does not close an open console on the console key.
+    # Sent while the console is up, the key is typed into the input line as
+    # '~', so the next paste arrived as "~effect ..." and died as "Unknown
+    # command".  The plan opens, clears the stray character with backspaces,
+    # pastes, submits — and never taps the console key again (the console is
+    # left open for the next command).
+    plan = gs.console_key_plan()
+    down, up = 0x0008, 0x000A
+    assert plan[:2] == [(0, 0x29, down, 0.08), (0, 0x29, up, 0.08)]
+    burst = [(0, 0x0E, down, 0.02), (0, 0x0E, up, 0.02)]
+    assert plan[2:2 + 2 * gs.BACKSPACE_CLEAR] == burst * gs.BACKSPACE_CLEAR
+    assert plan[2 + 2 * gs.BACKSPACE_CLEAR:] == [
+        (0, 0x1D, down, 0.08),
+        (0, 0x2F, down, 0.08), (0, 0x2F, up, 0.08),
+        (0, 0x1D, up, 0.08),
+        (0, 0x1C, down, 0.08), (0, 0x1C, up, 0.08),
     ]
+    assert (0, 0x29, down, 0.08) not in plan[2:]
