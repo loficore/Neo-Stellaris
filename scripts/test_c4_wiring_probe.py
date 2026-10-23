@@ -439,3 +439,52 @@ def test_cleanup_downgrades_ok_when_the_disarm_call_raises(monkeypatch):
     assert result["cleanup"]["disarm_rc"] is None
     assert result["cleanup"]["host_alive"] is True
     assert result["verdict"] == "cleanup_incomplete"
+
+
+def test_campaign_preflight_runs_before_the_dll_is_loaded():
+    source = (ROOT / "scripts" / "c4_wiring_probe.py").read_text()
+    at = source.index("\n    _campaign_preflight(args, result, log_path, pid)")
+    assert at < source.index("harness.inject_dll(")
+    assert at < source.index('exports["C1Run"]')
+    assert at < source.index('exports["C4WireInstall"]')
+
+
+def test_slot2_mode_also_runs_the_campaign_preflight():
+    source = (ROOT / "scripts" / "c4_wiring_probe.py").read_text()
+    at = source.index("\n    _campaign_preflight(args, result, log_path, pid)")
+    assert at < source.rindex("_slot2_phase(args,")
+
+
+def _preflight_probe(monkeypatch, count):
+    import c4_wiring_probe as probe
+    import types
+    sent = []
+    monkeypatch.setattr(probe, "_send_console_or_abort",
+                        lambda cmd, text: sent.append(text))
+    monkeypatch.setattr(probe, "_file_size", lambda p: 0)
+    monkeypatch.setattr(probe, "_wait_marker",
+                        lambda *a, **k: count)
+    return probe, types.SimpleNamespace(supervisor_cmd="just game"), sent
+
+
+def test_campaign_preflight_aborts_console_unavailable_without_any_harness_call(monkeypatch):
+    probe, args, sent = _preflight_probe(monkeypatch, 0)
+    result = {}
+    with pytest.raises(probe._Abort) as excinfo:
+        probe._campaign_preflight(args, result, "log", 4242)
+    assert excinfo.value.verdict == "console_unavailable"
+    assert "C4_PREFLIGHT_4242_" in sent[0]
+
+
+def test_campaign_preflight_aborts_campaign_mismatch_off_the_783_plateau(monkeypatch):
+    probe, args, _ = _preflight_probe(monkeypatch, 12)
+    with pytest.raises(probe._Abort) as excinfo:
+        probe._campaign_preflight(args, {}, "log", 4242)
+    assert excinfo.value.verdict == "campaign_mismatch"
+
+
+def test_campaign_preflight_reads_783_and_records_it(monkeypatch):
+    probe, args, _ = _preflight_probe(monkeypatch, 783)
+    result = {}
+    probe._campaign_preflight(args, result, "log", 4242)
+    assert result["preflight_marker_count"] == 783

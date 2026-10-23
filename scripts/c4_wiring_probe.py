@@ -684,6 +684,25 @@ def _poll_calls(pid, base, rva, buf, target_delta, before_calls, timeout):
     return stats, False
 
 
+def _campaign_preflight(args, result, log_path, pid) -> None:
+    """Prove the console path and the campaign shape before the DLL load:
+    a verdict raised here leaves the game process reusable."""
+    preflight = f"C4_PREFLIGHT_{pid}"
+    offset = _file_size(log_path)
+    _send_console_or_abort(args.supervisor_cmd, preflight_console(pid))
+    preflight_count = _wait_marker(
+        log_path, offset, preflight, PREFLIGHT_MARKERS, timeout=30.0)
+    if preflight_count is None:
+        raise _Abort("log_unreadable", log_path)
+    result["preflight_marker_count"] = preflight_count
+    gate = preflight_gate(preflight_count)
+    if gate == "console_unavailable":
+        raise _Abort(gate, "preflight marker never appeared")
+    if gate == "campaign_mismatch":
+        raise _Abort(gate,
+                     f"preflight markers {preflight_count} != {PREFLIGHT_MARKERS}")
+
+
 # ---------------------------------------------------------------------------
 # Windows flow
 # ---------------------------------------------------------------------------
@@ -712,6 +731,8 @@ def _flow(args, result, state):
     except RuntimeError as exc:
         raise _Abort("game_not_running", str(exc))
     state["pid"] = result["pid"] = pid
+
+    _campaign_preflight(args, result, log_path, pid)
 
     module = os.path.basename(args.dll)
     try:
@@ -763,22 +784,6 @@ def _flow(args, result, state):
     if args.mode == "slot2":
         _slot2_phase(args, result, exports, pid, base, log_path)
         return
-
-    # Preflight: prove the console path and the campaign shape before capture.
-    preflight = f"C4_PREFLIGHT_{pid}"
-    offset = _file_size(log_path)
-    _send_console_or_abort(args.supervisor_cmd, preflight_console(pid))
-    preflight_count = _wait_marker(
-        log_path, offset, preflight, PREFLIGHT_MARKERS, timeout=30.0)
-    if preflight_count is None:
-        raise _Abort("log_unreadable", log_path)
-    result["preflight_marker_count"] = preflight_count
-    gate = preflight_gate(preflight_count)
-    if gate == "console_unavailable":
-        raise _Abort(gate, "preflight marker never appeared")
-    if gate == "campaign_mismatch":
-        raise _Abort(gate,
-                     f"preflight markers {preflight_count} != {PREFLIGHT_MARKERS}")
 
     # Capture: find the scope column.
     sbuf = harness.remote_alloc(pid, 80)
