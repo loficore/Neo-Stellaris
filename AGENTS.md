@@ -107,7 +107,8 @@ All analysis artifacts go to `evidence/` at project root:
 也不能下沉一级目录。
 
 **这一节里可机械判定的部分现在是机器判据**,由 `python3 -m pytest scripts/test_scripts_layout.py -q` 执行;
-八条规则各是一个纯函数。`R-env` **`violates_env_var`** 只管**从磁盘读 `stellaris.exe`** 的脚本 —— 判据是行为
+九条规则各是一个纯函数。根目录的 `justfile` 只做**薄索引**(`just --list`),`just check` 一次跑构建 +
+两套测试 + 布局围栏;它不实现逻辑。`R-env` **`violates_env_var`** 只管**从磁盘读 `stellaris.exe`** 的脚本 —— 判据是行为
 (带 `CreateRemoteThread` 的实机脚本被排除),不看族名;缺的是 `NS_STELLARIS_EXE` 候选而非绝对路径本身,
 候选链旁边的 `D:\SteamLibrary\…` fallback(现 5 个)**是合规的,不是缺陷**。
 `R-pair` **`violates_pairing`** 只扫顶层,`scratch/` 里 `body.js` 那种历史孤儿由它自己的 README 解释。
@@ -117,6 +118,8 @@ All analysis artifacts go to `evidence/` at project root:
 `windows/` 是 launcher,都不在 `top_level_scripts` 范围内;顶层维护脚本里模块级 `RVAS = {…}` 字面量一个都不许留。
 `R-refs` **`dangling_script_refs`** 要求 living docs(`AGENTS.md`、`docs/**`,剔掉私有的
 `docs/superpowers/`)里写出的 `scripts/<path>` 解析得到,scratch 按 basename 兜底;`evidence/` 不可变,永不扫。
+`R-wire` **`violates_remote_script_refs`** 管根目录 `justfile` 里的 `C:/temp/<name>.py`:它必须是 `scripts/`
+下某个非 scratch 源文件的 basename —— 线上名与源文件脱节是这条规则要响的事。
 `R-roadmap` **`violates_roadmap_shape`** 管 `docs/roadmap.md` 这个尺寸与指针:≤140 行、不许写私有计划目录的路径、
 阶段状态表**按状态**必填出处(`blocked`/`in-progress` 要卷名 + §,`planned` 要计划文件名,`done` 两者之一)——
 这是「状态表不会再长回一份叙述性计划」的唯一机械防线。

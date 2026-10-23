@@ -825,6 +825,7 @@ def cmd_status(args) -> int:
 
 
 def cmd_send(args) -> int:
+    _require_windows()
     line = " ".join(args.words).strip()
     if not line:
         print("STATUS=empty_command")
@@ -836,6 +837,11 @@ def cmd_send(args) -> int:
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    verbs = {"serve", "start", "stop", "status", "cmd"}
+    if argv and argv[0] not in verbs and argv[0] not in ("-h", "--help"):
+        # `game pause`, `game choose 2`, ... are command-channel shorthand.
+        return cmd_send(argparse.Namespace(words=argv, wait_s=0.8))
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="verb", required=True)
     s = sub.add_parser("serve")

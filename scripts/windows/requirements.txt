@@ -1,2 +1,4 @@
 pywinauto>=0.6.8
 psutil>=5.9
+pillow>=10.0
+numpy>=1.26

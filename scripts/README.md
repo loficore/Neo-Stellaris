@@ -4,6 +4,11 @@
 `scratch/`（各目录自带 README，说明它属于哪次取证、结论落在哪个 §）。
 命名与归档规则见 `AGENTS.md` 的「scripts/ 命名与目录约定」。
 
+项目根目录的 `justfile` 是这些工具的**薄索引**：`just --list` 看全部，`just check` 跑构建 + 两套测试，
+`just fence` 跑布局围栏，`just game …` 走 Windows 侧游戏监督器（命令词表见 `docs/offline-tooling.md`）。
+它不实现逻辑，只拼命令行；写进它的 `C:/temp/<name>.py` 线上名由 `scripts/test_scripts_layout.py`
+的 `violates_remote_script_refs` 对着 `scripts/` 里的源文件检查。
+
 离线工具的**用法与判读陷阱**不在这里，在 `docs/offline-tooling.md`；这张表只回答"这是什么、产出什么"。
 
 ## 离线静态 RE 工具（读 `stellaris.exe` 拷贝；不需要进程、不需要 IDA license）
@@ -89,8 +94,16 @@
 | `fridadis.py` + `dis.js` | 从 live 进程线性反汇编；`docs/roadmap.md` 段3 的 **B3** 行还指着它（细计划 `2026-10-22-b3-fridadis-bringup.md`；文件本地已在 `scripts/dis.js`,缺的只是上传到 `C:\ns\dis.js`） |
 | `scan444.py` + `anchor444.js` | `evidence/xrefs/anchors_4_4_4.md` 的 "Reproduction scripts" —— 换游戏版本要重跑的重锚定 |
 
-`scripts/windows/` —— 独立的 SSH launcher 子包（自带 `requirements.txt` 与 `tests/`），用法见
-`evidence/analysis/runtime_444_c1_validation.md` §35 起的实机流程。
+## Windows 侧子包：`scripts/windows/`
+
+独立的 SSH / 实机子包（自带 `requirements.txt` 与 `tests/`，测试要在该目录下跑）。launcher 的用法见
+`evidence/analysis/runtime_444_c1_validation.md` §35 起的实机流程；监督器见 `docs/offline-tooling.md`
+的「实机调试：游戏监督器」。
+
+| 文件 | 干什么 |
+|---|---|
+| `launch_stellaris.py` | 从无人值守的 SSH 会话经 Steam 拉起游戏，点过 launcher 的对话框，可选 `--unpause` |
+| `game_supervisor.py` | 长驻监督器：读暂停图标与事件窗口，按 `want`/`policy` 维持运行态、选事件选项、改速度、截图；文件命令通道 + schtasks 生命周期 |
 
 ## 一次性探针：`scratch/`
 

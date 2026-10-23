@@ -120,7 +120,7 @@ _SCRIPT_REF_RE = re.compile(r"(?:^|[\s`(])scripts/([A-Za-z0-9_./-]+\.(?:py|js|sh
 # test_named_living_docs_exist read this constant, so retiring a named doc is a
 # one-line change *here* and the existence assertion follows — a test that pinned
 # the doc's path in its own body would block that deletion.
-LIVING_DOCS_NAMED = [REPO / "AGENTS.md"]
+LIVING_DOCS_NAMED = [REPO / "AGENTS.md", REPO / "justfile"]
 
 def dangling_script_refs(doc_paths):
     """R-refs: every ``scripts/<path>`` token written in a living doc must
@@ -138,6 +138,24 @@ def dangling_script_refs(doc_paths):
             if (REPO / ref).exists() or pathlib.PurePosixPath(ref).name in basenames:
                 continue
             out.append(f"{doc.name}: dangling reference scripts/{ref}")
+    return out
+
+_WIRE_SCRIPT_RE = re.compile(r"C:[\\/]temp[\\/]([A-Za-z0-9_.-]+\.py)")
+
+def violates_remote_script_refs(justfile_path):
+    """R-wire: every ``C:/temp/<name>.py`` token in the justfile must have a
+    source under ``scripts/``.  The wire contract is basename-based (P5), so a
+    rename that forgets the justfile would otherwise leave an ssh command that
+    runs yesterday's file — or nothing.  ``scratch/`` is excluded on purpose:
+    the justfile deploys maintained tools only.
+    """
+    name = justfile_path.name
+    out = []
+    for m in _WIRE_SCRIPT_RE.finditer(_read(justfile_path)):
+        wire = m.group(1)
+        hits = [p for p in SCRIPTS.rglob(wire) if "scratch" not in p.parts]
+        if not hits:
+            out.append(f"{name}: C:/temp/{wire} has no source under scripts/")
     return out
 
 ROADMAP_MAX_LINES = 140
@@ -376,6 +394,20 @@ def test_c2_test_sanity_does_not_reach_into_the_other_plan():
 def test_named_living_docs_exist():
     missing = [str(p) for p in LIVING_DOCS_NAMED if not p.exists()]
     assert missing == []
+
+def test_remote_script_rule_flags_a_wire_name_without_a_source(tmp_path):
+    jf = tmp_path / "justfile"
+    jf.write_text(
+        "deploy:\n"
+        "    scp scripts/windows/game_supervisor.py host:C:/temp/game_supervisor.py\n"
+        "game:\n"
+        '    ssh host "python C:/temp/gone.py status"\n',
+        encoding="utf-8")
+    assert violates_remote_script_refs(jf) == [
+        "justfile: C:/temp/gone.py has no source under scripts/"]
+
+def test_real_justfile_wire_names_resolve():
+    assert violates_remote_script_refs(REPO / "justfile") == []
 
 def test_roadmap_rule_flags_bloat_and_missing_pointers(tmp_path):
     bad = tmp_path / "roadmap.md"
