@@ -7,6 +7,11 @@ const vtable = @import("c2/vtable.zig");
 const predicate_hook = @import("c2/predicate_hook.zig");
 const exec_hook = @import("scripted/exec_hook.zig");
 const live_probe = @import("c2/live_probe.zig");
+const scope_probe = @import("c2/scope_probe.zig");
+
+comptime {
+    _ = scope_probe;
+}
 
 extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2ExecArmToken(token: u32, budget: u32) c_int;
