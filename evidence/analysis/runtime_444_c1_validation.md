@@ -3664,37 +3664,107 @@ JS 侧数据(system id / scope 指针)得到;④ 从 DLL 里以普通函数指�
   都没有 `call 0x3b01a0`(最近的调用是 `0x1ca3320` / `0x1ca35d0` / `0xa804b0`)。判 `unresolved`:
   首窗口无 effect 执行痕迹,按计划不扩窗。
 
-本节的 `selected` 只是**首选入口**;本次一个都没有 `selected`。最终以 §53.3 的实机链为输入在
-§53.4 复核。
+本节的 `selected` 只是**首选入口**;本次一个都没有 `selected`。最终要以 §53.3 的实机链为输入在
+§53.4 复核 —— 而 §53.3 的实机一枪是 `no_calls`(环境),没有取到链,故 §53.4 本次无法复核。
 
-### §53.3 实机采样(未执行)
+### §53.3 实机采样(2026-10-23,点名后执行)
 
-点名未给出,按 roadmap 授权表停在此处。采样器与驱动已就绪(Task 3–5),下一次点名后直接执行 Task 6。
-本次会话未 scp、未注入、未 dispatch,故无 transcript;`evidence/logs/scope_probe_4_4_4.log` 未生成。
+**授权。** 本会话用户点名 Task 6(「点名 Task 6,准备执行实机一枪」),满足 roadmap 段3 的 detour 授权级。
+
+**产物。** `zig-out/bin/stellaris_quickjs.dll` → `C:/temp/sqjs_scope.dll`,sha256
+`cb95b0f2dd07cc4d10acf0b2f24664350e376f76aaef578dfe962c4b5387b4ba`;`scripts/c2_scope_probe.py` →
+`C:/temp/c2_scope_probe.py`,sha256 `7cb62a25675a9877091ef05e1be4c5fdc34468e23e845adf67c4b57c5fbdb726`;
+`scripts/c2_harness.py` → `C:/temp/c2_harness.py`,sha256 `0c8bca42a70ab9a2cf28bba6036de1d039ff30ec01dba93550a9af5ded485713`。
+游戏 4.4.4,pid 6852,载入的是 `autosave_2229.01.01.sav` 的战役。
+
+**开火方式。** 与 §52 同因(OpenSSH 通道会杀掉子进程树):驱动由交互会话的一次性计划任务
+`c4-scope-run`(动作 `C:\temp\c4_scope_run.cmd`,上次运行 **11:15:18**)执行,输出重定向到
+`C:/temp/c4_scope_run.txt`(最后写入 **11:17:21**):
+
+```bat
+cd /d C:\temp
+python C:\temp\c2_scope_probe.py C:\temp\sqjs_scope.dll --census C:\temp\exec_frame_callers_4_4_4.tsv --id-names C:\temp\descriptor_oracle_4_4_4.tsv > C:\temp\c4_scope_run.txt 2>&1
+```
+
+**逐字 transcript**(`evidence/logs/scope_probe_4_4_4.log`,1590 B,CRLF,sha256 `8e5b22a3…`;第 4 行
+`game alive <A1 AA> dispatch authorized` 的两字节是 cp936 的 `—`(与 §52 日志同型)。下文按 LF 重排、
+把这处原始字节写作 `\xA1\xAA`;字节级以日志文件为准):
+
+```
+[scope] pid=6852  dll=C:\temp\sqjs_scope.dll
+[scope] sqjs_scope.dll base (64-bit): 0x7ff9f31f0000
+[scope] MZ header at base OK
+[scope] C2Sanity == 42, game alive \xA1\xAA dispatch authorized
+[scope] LAYOUT entry=104 stats=56 ring=256 mask=511 version=1
+[scope] C2ScopeProbeInstall rc=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+STATS: calls=0 samples=0 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=0 patch_size=16 installed=1 verified=-1
+CALLERS:
+CHAIN:
+[scope] entries=0 valid=0 lexer=0 chain_ok=0 distinct_vtables=0 ids=[]
+[scope] wrote 0 rows to C:/temp/c4_scope_probe.tsv
+VERDICT: no_calls
+the detour saw no base-Execute call within the poll window. That is an ENVIRONMENT result, not a code verdict: load a running campaign and unpause the game, then rerun with a fresh game process.
+[scope] C2ScopeProbeUninstall rc=0
+[scope] C2ScopeProbeVerify rc=0 (engine bytes intact)
+[scope] host alive
+EXIT:1
+```
+
+**读回。** `C2ScopeProbeInstall rc=0`(布局五字 `104/56/256/511/1` 与驱动校验一致);轮询 11 次
+全为 `calls=0 samples=0`;`CALLERS:` / `CHAIN:` 均空,`entries=0`;`wrote 0 rows`;
+`VERDICT: no_calls`。`C2ScopeProbeUninstall rc=0`;**`C2ScopeProbeVerify rc=0`(engine bytes
+intact)**;`host alive`(开火后约 17 分钟复查:pid 6852 仍活,CPU 2787.6 s,WS 240 MB,重度分页)。
+cmd 退出码 1 —— 驱动对非 `captured` 判 1。`C:/temp/c4_scope_probe.tsv` 只有表头,按字节拉回
+`evidence/logs/scope_probe_4_4_4.tsv`(25 B,CRLF,sha256 `0a6b5977…`)。
+
+**环境。** 采样窗口内游戏没有执行 effect。开火前 ~11:02:19 用一次 Space 解除暂停(前后帧里
+`暂停` 横幅消失,`pc_b.jpg` 11:02:21),但开火后 ~11:32:29 的原生分辨率(`ImageGrab`)截图显示
+右上角时间面板处于**暂停**(⏸ + `暂停`,日期 **2229.02.09**),右下有首次接触事件窗
+(`通讯已建立`,正文含「敌对行为已经暂时停止」);载入存档是 `autosave_2229.01.01.sav` ⇒
+战役只推进了 1 个月 8 天就停表 —— 也就是说采样窗口开始前游戏已经停表(推断,不是采样证据)。
+`calls=0` 与暂停一致,驱动据此判为环境结论。**不重试**:同一进程已有过 detour(`C2ScopeProbeInstall` 第二次返回 -2),
+重跑要**新游戏进程 + 新点名**。
+
+**未取得。** 没有样本 ⇒ 没有 `ctx_words` 分布、没有调用点 join、没有链 id 与 `descriptor_oracle`
+的名字 join、没有 `S+0x20` 读数。§53.4 六条仍全部 `unresolved`,缺的观测从「没有开枪」变成
+「窗口内没有可采样的调用」。
 
 ### §53.4 判定
 
-**下一步 = 点名后执行 Task 6**(`2026-10-23-c4-scope-forensics.md` 的实机只读一枪)。在那之前本卷没有
-任何关于 arg2 类型、链字段语义、应用入口的实机观测;以下六条按计划要求逐条回答,全部因同一个缺口停住。
+**Task 6 已执行(2026-10-23,点名后一枪),结果是 `no_calls`(环境)**(§53.3):host 存活、引擎字节
+完好,但采样窗口内游戏处于暂停,没有任何样本。本卷因此仍没有任何关于 arg2 类型、链字段语义、
+应用入口的实机观测;以下六条按计划要求逐条回答,全部因同一个缺口停住。
 
-1. **arg2 是栈帧、堆对象还是引擎全局?** `unresolved(点名未给出)`。缺的观测:§53.1 只说明 17 个
+1. **arg2 是栈帧、堆对象还是引擎全局?** `unresolved(no_calls,无样本)`。缺的观测:§53.1 只说明 17 个
    已判读站点里 12 个把调用方入口 `rdx` 原样转发、5 个是函数内重载(`other`),没有定位任何帧构造点;
    `ctx_ptr` 的跨样本稳定性与 8 个 qword 的分布只有 §53.3 能取。
-2. **`[arg2+0x08]` / `[+0x18]` / `[+0x30]` 各观测到了什么?`X` 在样本间是否恒定?** `unresolved(点名未给出)`。
+2. **`[arg2+0x08]` / `[+0x18]` / `[+0x30]` 各观测到了什么?`X` 在样本间是否恒定?** `unresolved(no_calls,无样本)`。
    缺的观测:采样器已按 `Entry.ctx_words` 记录这 8 个 qword,但没有任何一份实机记录可读。
 3. **`X→S→id` 的 id 在 `descriptor_oracle` 里 join 到了什么名字?它是不是 keyword 空间 id(§30.1)?**
-   `unresolved(点名未给出)`。缺的观测:链只在驱动侧跟(`follow_chain`),没有 ctx 就没有 id;
+   `unresolved(no_calls,无样本)`。缺的观测:链只在驱动侧跟(`follow_chain`),没有 ctx 就没有 id;
    「id 是 keyword token id、不是 system id」仍只是离线推论。
 4. **`S+0x20` 处的 qword 是什么?若像指针,再读一次它的首 qword;vptr 落在哪个已知 vtable 区间
-   (`ceffect_vtable_map`)?** `unresolved(点名未给出)`。缺的观测:同第 3 条;与 `ceffect_vtable_map`
+   (`ceffect_vtable_map`)?** `unresolved(no_calls,无样本)`。缺的观测:同第 3 条;与 `ceffect_vtable_map`
    的比对需要实机读到的 vptr。
-5. **应用入口:复核 Task 2 的 `selected`。** `unresolved(点名未给出)`。现状:A/B/C/D 四条全是
+5. **应用入口:复核 Task 2 的 `selected`。** `unresolved(no_calls,无样本)`。现状:A/B/C/D 四条全是
    `unresolved`,没有 `selected` 可维持或改判;§53.2 的结论原样保留,不因本计划执行而升级。
-6. **C4 接线计划可以假设什么、必须自己再测什么?** 「可以假设什么」= `unresolved(点名未给出)`。
+6. **C4 接线计划可以假设什么、必须自己再测什么?** 「可以假设什么」= `unresolved(no_calls,无样本)`。
    必须自己再测的两项与本计划是否开枪无关,照旧生效:① scope/system 指针怎么从 JS 侧拿到
    (§53.2 候选 A 缺的判据 ③);② effect 施加后引擎的提交时机(append 之后谁在何时调用 child slot[1];
    `0x3b0c2d` 窗口只到调用点,没有时序证据)。
 
 ### §53.5 边界
 
-本计划不证明任何「按 system 施加」的行为;它只给出帧与入口的现场 —— 本次因点名未给出,连现场也还没有。
+本计划不证明任何「按 system 施加」的行为;它只给出帧与入口的现场 —— 本次已点名开枪,但采样窗口内
+`calls=0`(环境),连现场也还没有。重开需要新游戏进程 + 新点名。

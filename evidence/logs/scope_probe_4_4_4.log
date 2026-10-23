@@ -1,0 +1,28 @@
+[scope] pid=6852  dll=C:\temp\sqjs_scope.dll
+[scope] sqjs_scope.dll base (64-bit): 0x7ff9f31f0000
+[scope] MZ header at base OK
+[scope] C2Sanity == 42, game alive ¡ª dispatch authorized
+[scope] LAYOUT entry=104 stats=56 ring=256 mask=511 version=1
+[scope] C2ScopeProbeInstall rc=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+STATS: calls=0 samples=0 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=0 patch_size=16 installed=1 verified=-1
+CALLERS:
+CHAIN:
+[scope] entries=0 valid=0 lexer=0 chain_ok=0 distinct_vtables=0 ids=[]
+[scope] wrote 0 rows to C:/temp/c4_scope_probe.tsv
+VERDICT: no_calls
+the detour saw no base-Execute call within the poll window. That is an ENVIRONMENT result, not a code verdict: load a running campaign and unpause the game, then rerun with a fresh game process.
+[scope] C2ScopeProbeUninstall rc=0
+[scope] C2ScopeProbeVerify rc=0 (engine bytes intact)
+[scope] host alive
+EXIT:1

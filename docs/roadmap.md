@@ -85,7 +85,7 @@ host 存活;**§50 压测**让另 7 条 `container_of` 路径在实机跑满(`C2
 - **B4 九个 Meyers 惰性访问器绑定的关键字名字**（`0x388130`…`0x389224`，buffer 在镜像里是零）：判据 = 首次使用时铸出的 id 与名字。
   前置 = 游戏在跑；授权级 = 点名(只读)；不能成计划 = 它不影响 Phase C 任何判据，默认不做（§19）。
 - **C4 试点一 `chokepoint_score`**：判据 = 按图连通度给星系打上我们自己的新 effect，日志与行为都可见。执行路径已实现并实机通过(c1_validation §52)。
-  仍不能成计划的只剩接线:分数(`evidence/xrefs/chokepoint_scores_4_4_4.tsv`,计划 `2026-10-22-c4-chokepoint-data.md`)→ JS → 按 system 下 effect;首选入口未定(§53.2 的 A/B/C/D 四条全部 `unresolved`,§53.4 未取得实机链);授权级 = 一枪 + 实机可见行为。
+  仍不能成计划的只剩接线:分数(`evidence/xrefs/chokepoint_scores_4_4_4.tsv`,计划 `2026-10-22-c4-chokepoint-data.md`)→ JS → 按 system 下 effect;首选入口未定(§53.2 的 A/B/C/D 四条全部 `unresolved`;§53.3 已开枪但 `no_calls` —— 环境结论,§53.4 仍未取得实机链);授权级 = 一枪 + 实机可见行为。
 - **C5 试点二 种族占比 → 资源产出 / 对母国的外交与战争态度**：判据 = 段1 那句的第二个例子真的改变了游戏行为。
   前置 = 与 C4 同一面（跨 scope 聚合），授权级同 C4；不能成计划 = 没有 spec，且要读的字段还没按 4.4.4 钉过。
 - **C6 验收**：判据 = 日志 + 可复现行为，且官方 scripted_effects 路径不受影响。
@@ -93,7 +93,7 @@ host 存活;**§50 压测**让另 7 条 `container_of` 路径在实机跑满(`C2
 - **launcher `LAUNCHER_CLICK` exit-23**(`EXIT_LAUNCHER_NO_ADVANCE`：三轮点击 + settle 后窗口不推进)：判据 = 缺陷定位到具体那一步。
   前置 = Windows 机时 + SSH 隧道（环境约束,非门）；授权级 = 一枪(定位缺陷要远程实跑 launcher 观测,每次跑都占该机时枪数)；不能成计划 = 连「点击没送达」还是「窗口判断错」都还不知道(`scripts/windows/launch_stellaris.py`)。
 - **真正的 `CEventScope` 是哪个对象**：判据 = 拿到一个真的 `arg2` 并逐字段读通。
-  前置 = 点名后执行 `2026-10-23-c4-scope-forensics.md` 的 Task 6(采样器与驱动已就绪,§53.3 未执行);授权级 = 点名;不能成计划 = 离线拿不到，§26.2 明写仍未定。
+  前置 = 新游戏进程 + 新点名后重跑 §53.3(首次已开枪,`no_calls` 环境结论,采样器与驱动已就绪);授权级 = 点名;不能成计划 = 离线拿不到，§26.2 明写仍未定。
 - **`0x24F9910` 的槽号归属**：判据 = 那个数组的偏移各对应哪个虚槽。
   前置/授权级 = 更深静态(**无**)或实机(点名)；不能成计划 = §28.4 已判定它不可当前提,没有可执行的判据依赖它。
 - **孤儿 `effects/handler.zig` + `triggers/handler.zig`**：判据 = C3 的 JS 路由层真的经过这两个文件。
