@@ -529,12 +529,15 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 C4 接线驱动,一枪一进程。`--mode capture`(默认):跑 `capture` 找 `ctx`/`a3` 里承载 system id 的列,
 `apply` 把该列喂给 QuickJS 的 787 分数表(tier 阈值 100/200),tier ≥ 1 的 70 个系统 chain donor
 Execute 应用 `log`/`set_name`。**capture 只读**(RPM 采样 + 环形记录),整条 apply 路径里唯一的引擎
-写入是引擎自己的 donor Execute。`--mode slot2`(§54.6 判别枪):install 后跑一次 armed 的
-`every_system` pass,读 slot[2] 只读计数器(`C4Slot2StatsInto`,`<QQ>` 16 B:计数 + 转发目标),
+写入是引擎自己的 donor Execute。`--mode slot2`(§54.6 判别枪):**预检 → install → 一次 armed 的
+`every_system` pass**,读 slot[2] 只读计数器(`C4Slot2StatsInto`,`<QQ>` 16 B:计数 + 转发目标),
 verdict ∈ {`slot2_counted`(787 ⇒ base Execute 经我们的副本 slot[2] 派发)、`slot2_zero`(0 ⇒ donor
 vptr 副本/克隆,不经我们的 vtable)、`slot2_body_not_executed`(body 没跑满 783,计数没有意义)、
 `slot2_sentinel_mismatch`(哨兵不等于 783)、`slot2_other`}。判据先钉哨兵 783 行与 body marker 783
-行(投递与执行都发生),再读计数增量 —— 否则 `0` 无法区分「不经 slot[2]」与「没跑」。路径默认
+行(投递与执行都发生),再读计数增量 —— 否则 `0` 无法区分「不经 slot[2]」与「没跑」。包装器的
+等价性有离线出处(`runtime_444_c1_validation.md` §54.8):派发点 `0x1D08520` 只设 `rcx`/`rdx`、不读
+`rax`,而 `0x3B01A0` 四个 GPR 槽全消费 —— 但同一节也记了 `r8`/`r9` 在派发点**不是参数**、
+`slot2_counted` 只证明入口不证明良构调用。路径默认
 `C:\temp\sqjs_c4.dll` / `C:\temp\stellaris_2226.sav` / `C:\temp\c4_wiring_result.json`,`--game-log` /
 `--supervisor-status` / `--supervisor-cmd` / `--shot` 也走参数,脚本不读环境变量。
 
@@ -575,6 +578,14 @@ marker 带 `[This.GetName]`(`log` 里会插值,`GetID` 渲染为空),每个系�
 行数是**轮询到 ≥783 或 30 s 超时后的最大值** —— 日志分块 flush,中途停在某个非零值不算终值;
 apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 
+**预检现在跑在 DLL 装载之前**(`_campaign_preflight`,在 `resolve_pid` 之后、`resolve_base_address`/
+`inject_dll` 之前),并且 `--mode capture` 与 `--mode slot2` **都跑**。因此
+`console_unavailable` / `campaign_mismatch` / `log_unreadable` 三种结论**不消耗游戏进程** —— 进程没被注入,
+修好通道后同一个 pid 可以复用;`install_failed` 之后的结论才要换进程。预检同时记
+`result["preflight_wait_s"]`(发命令到读到 783 行的墙钟秒数,保留 2 位小数;读不到日志时不写这个字段)
+—— 它量的是引擎日志 flush 到 783 行要多久,对着 30 s 门限读:接近 30 s 的值说明门限余量不够,别把
+`campaign_mismatch` 当成战役不对。
+
 **save sha 门**:`stellaris_2226.sav` 的 sha256 必须等于钉住的 `6f271294…`。读不到文件 →
 `campaign_unverified`,`--allow-drift` 只把「读到了但不匹配」降级成 `drift_allowed`(诊断用),
 读不到仍然 `campaign_unverified`。预检的 783 行是战役形状的第二道门。
@@ -584,14 +595,16 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 环形计数,驱动只读回这 `n` 条。`layout` 导出先钉 `[1, mode, 3368, 2048, 944, 256, 8, 256]`,
 任一字段漂了都是 `layout_drift`,后面的字节一个都不读。
 
-**verdict 表**(驱动按顺序判,先命中的胜出):
+**verdict 表**(驱动按顺序判,先命中的胜出):**装载前**的结论(`supervisor_*`、`campaign_*`、
+`dll_exports_missing`、`game_not_running`、预检三条)**不烧进程**,修好通道可以在同一个 pid 上再打;
+`install_failed` 之后的结论才需要换进程。
 
 | verdict | 条件 | 意思 |
 |---|---|---|
 | `supervisor_not_running` | 15 s 内状态文件缺失/过期/`no_game`/`stopped` | supervisor 没跑 —— 环境结论 |
 | `supervisor_not_paused` | 状态新鲜但 15 s 内没到 `paused` | 战役没暂停成功,不要注入 |
 | `campaign_unverified` | 存档 sha256 读不到 | 路径/权限问题 |
-| `campaign_mismatch` | sha256 不匹配(且未 `--allow-drift`),或预检行数 ≠ 783 | 不是那场 787 系统的测试战役 |
+| `campaign_mismatch` | sha256 不匹配(且未 `--allow-drift`),或预检(装载前)行数 ≠ 783 | 不是那场 787 系统的测试战役 |
 | `dll_exports_missing` | 缺 9 个 `C4Wire*`/`C4ScoredStatsInto`/`C4PredStatsInto` 或 `C2Sanity`/`C2Init`/`C1Run`/`C1EffectId` | 产物不对 |
 | `game_not_running` | `resolve_pid("stellaris")` 失败 | 环境结论 |
 | `stale_module` | 注入前 base 已能解析(含 `ambiguous base`),或非 `is not loaded` 的解析失败 | 进程里已有 DLL 副本,**换新进程**,不重装 |
@@ -600,7 +613,7 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 | `layout_drift` | layout 导出 ≠ 8 个字或字段不匹配 | 驱动与 DLL 解码契约断了 |
 | `install_failed` | `C4WireInstall != 0` | 谓词 detour/arm 失败,**不重试**,换进程 |
 | `console_send_failed` | 命令写入 3 s 内 supervisor 未消费（seen-key 不变） | 键盘/supervisor 通道坏了，游戏没收到命令 |
-| `console_unavailable` / `log_unreadable` | 预检 marker 0 行 / 日志读不了 | 键盘路径 / 路径问题 |
+| `console_unavailable` / `log_unreadable` | 预检(装载前)marker 0 行 / 日志读不了 —— `log_unreadable` 在装载后的 capture、slot2 窗口也会出 | 键盘路径 / 路径问题;只在预检那次不烧进程 |
 | `capture_not_delivered` / `capture_sentinel_mismatch` | capture 哨兵 0 行 / ≠ 783 行 | 命令没进游戏 / 战役形状不对 |
 | `apply_not_delivered` / `apply_sentinel_mismatch` | apply 哨兵 0 行 / ≠ 783 行 | 第二次命令没生效 / 战役形状不对 |
 | `no_calls` | capture `calls == 0` 且未提供谓词计数（纯函数默认） | 没有 `neo_action` 执行 —— 环境结论 |
@@ -627,7 +640,8 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 清理段固定:`SetMode(0)` → `C4WireDisarm`(`-1` 锁忙最多重试 6 次 × 0.5 s;6 次仍 `-1` 记为
 benign,`0`/`-1` 都算清理成功)→ `assert_game_alive`。**绝不 `FreeLibrary`** — patch 过的 effect
 对象持有 DLL 内的 vtable 副本。只有 verdict `ok` 且清理成功(host 存活、disarm 是 `0`/`-1`)退出码
-才是 0;disarm 抛异常时 verdict 降为 `cleanup_incomplete`。
+才是 0;disarm 抛异常时 verdict 降为 `cleanup_incomplete`。**装载前中止的枪没有清理段可跑**
+(进程里既没有 DLL,也没有 detour),退出码同样是 1,但进程保持可用 —— 别把这种 1 读成「烧了一枪」。
 
 判读纯函数(`decode_records` / `_wire_stats` / `_scored_stats`、`pack_spec`/`unpack_spec`、
 `column_sequences`/`find_scope_column`、`classify_capture`/`classify_apply` 等)由
