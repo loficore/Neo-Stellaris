@@ -101,6 +101,35 @@ def classify(probe, cstats):
     return "error"
 
 
+def poll_done(probe, cstats):
+    """True once the shot fired AND its JS leg reported.
+
+    The probe flips `fired` before instantiate() runs, so a stats read taken
+    right after the flip can still show js_calls==0; stopping there would
+    call a complete chain `fired_no_js`.
+    """
+    return probe.get("fired", 0) == 1 and cstats.get("js_calls", 0) >= 1
+
+
+def contract_errors(live, live_probe, effect_id):
+    """Every success-contract term the LIVE snapshot fails.
+
+    `live` / `live_probe` are the reads taken before cleanup. Cleanup disarms
+    the chain, and disarm zeroes the C bridge's `token`, so judging the
+    post-cleanup read rejects a shot that already proved the chain.
+    """
+    errors = []
+    if live.get("token", 0) != effect_id:
+        errors.append(f"c bridge token {live.get('token')} != effect_id {effect_id}")
+    if live.get("last_value", 0) != 1504:
+        errors.append(f"JS returned {live.get('last_value')}, expected the sentinel 1504")
+    if live_probe.get("chain", 1) != 0:
+        errors.append("the donor chain must stay off in the live shot")
+    if live_probe.get("pred_patched", 0) < 1:
+        errors.append("the predicate never patched the instance")
+    return errors
+
+
 def dispatch_once(pid, base, rva, name, arg=None):
     """Dispatch a remote export at most once per session; return its C int rc."""
     if name in _dispatched:
@@ -223,6 +252,10 @@ def run_live_case(pid, dll_path):
     cstats = {}
     probe_text = ""
     cstats_text = ""
+    live_probe = {}
+    live_cstats = {}
+    live_probe_text = ""
+    live_cstats_text = ""
     buf = None
     try:
         rc_install = dispatch_once(
@@ -248,7 +281,9 @@ def run_live_case(pid, dll_path):
                 cstats, cstats_text = read_stats(
                     pid, base, exports, buf, "C2ExecStatsInto", EXEC_STATS_SIZE
                 )
-                if probe.get("fired", 0) == 1:
+                live_probe, live_probe_text = probe, probe_text
+                live_cstats, live_cstats_text = cstats, cstats_text
+                if poll_done(probe, cstats):
                     break
                 if time.monotonic() - last_progress >= 10.0:
                     print(
@@ -272,8 +307,11 @@ def run_live_case(pid, dll_path):
         except Exception as exc:  # noqa: BLE001 - final stats are evidence, not a gate
             print(f"[c4] final stats read raised: {exc}")
 
-    print(f"[c4] probe stats: {probe_text.strip()}")
-    print(f"[c4] c bridge stats: {cstats_text.strip()}")
+    if live_cstats_text:
+        print(f"[c4] probe stats (live): {live_probe_text.strip()}")
+        print(f"[c4] c bridge stats (live): {live_cstats_text.strip()}")
+    print(f"[c4] probe stats (post-cleanup): {probe_text.strip()}")
+    print(f"[c4] c bridge stats (post-cleanup): {cstats_text.strip()}")
 
     if rc_install != 0:
         print(f"VERDICT: install_failed (C2ExecInstall rc={rc_install})")
@@ -282,20 +320,14 @@ def run_live_case(pid, dll_path):
         print(f"VERDICT: probe_install_failed (C2ExecProbeInstall rc={rc_probe_install})")
         return 1
 
-    verdict = classify(probe, cstats)
+    verdict = classify(live_probe, live_cstats)
     if verdict != "ok":
         print(f"VERDICT: {verdict}")
         print(VERDICT_DIAGNOSIS[verdict])
         return 1
 
-    assert cstats.get("token", 0) == effect_id, (
-        f"c bridge token {cstats.get('token')} != effect_id {effect_id}"
-    )
-    assert cstats.get("last_value", 0) == 1504, (
-        f"JS returned {cstats.get('last_value')}, expected the sentinel 1504"
-    )
-    assert probe.get("chain", 1) == 0, "the donor chain must stay off in the live shot"
-    assert probe.get("pred_patched", 0) >= 1, "the predicate never patched the instance"
+    errors = contract_errors(live_cstats, live_probe, effect_id)
+    assert not errors, "; ".join(errors)
     assert_game_alive(pid)
     print("VERDICT: ok")
     return 0
