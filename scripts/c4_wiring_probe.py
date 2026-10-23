@@ -689,11 +689,13 @@ def _campaign_preflight(args, result, log_path, pid) -> None:
     a verdict raised here leaves the game process reusable."""
     preflight = f"C4_PREFLIGHT_{pid}"
     offset = _file_size(log_path)
+    t0 = time.time()
     _send_console_or_abort(args.supervisor_cmd, preflight_console(pid))
     preflight_count = _wait_marker(
         log_path, offset, preflight, PREFLIGHT_MARKERS, timeout=30.0)
     if preflight_count is None:
         raise _Abort("log_unreadable", log_path)
+    result["preflight_wait_s"] = round(time.time() - t0, 2)
     result["preflight_marker_count"] = preflight_count
     gate = preflight_gate(preflight_count)
     if gate == "console_unavailable":

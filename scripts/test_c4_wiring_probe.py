@@ -488,3 +488,30 @@ def test_campaign_preflight_reads_783_and_records_it(monkeypatch):
     result = {}
     probe._campaign_preflight(args, result, "log", 4242)
     assert result["preflight_marker_count"] == 783
+
+
+def _preflight_lines(pid, n):
+    return "".join(
+        "[17:00:00][effect_impl.cpp:21978]: [2243.10.29] Log effect, "
+        "file:  line: 1. C4_PREFLIGHT_%d_sys%d\n" % (pid, i) for i in range(n))
+
+
+def test_campaign_preflight_records_wall_clock_wait(monkeypatch):
+    probe = _fake_sleeps(
+        monkeypatch, ["", _preflight_lines(4242, PREFLIGHT_MARKERS)])
+    import types
+    monkeypatch.setattr(probe, "_send_console_or_abort", lambda cmd, text: None)
+    monkeypatch.setattr(probe, "_file_size", lambda p: 0)
+    result = {}
+    probe._campaign_preflight(types.SimpleNamespace(supervisor_cmd="x"),
+                              result, "log", 4242)
+    assert result["preflight_wait_s"] == 1.0
+
+
+def test_campaign_preflight_logs_unreadable_before_any_wait_field(monkeypatch):
+    probe, args, _ = _preflight_probe(monkeypatch, None)
+    result = {}
+    with pytest.raises(probe._Abort) as excinfo:
+        probe._campaign_preflight(args, result, "log", 4242)
+    assert excinfo.value.verdict == "log_unreadable"
+    assert "preflight_wait_s" not in result
