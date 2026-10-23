@@ -65,3 +65,20 @@ def test_norm_geometry_maps_any_window_to_the_spike_reference():
     assert nrows == [{"y0": 860, "y1": 868, "x0": 1260, "x1": 1600}]
     assert nbbox == [400, 280, 1760, 1080]
     assert ngold == 16000
+
+
+def test_cli_parser_builds_every_subcommand_including_start():
+    parser = gs.build_parser()
+    assert parser.parse_args(["start"]).pythonw is None
+    assert parser.parse_args(["start", "--timeout-s", "5"]).timeout_s == 5
+    assert parser.parse_args(["serve", "--policy", "last"]).policy == "last"
+    assert parser.parse_args(["status"]).verb == "status"
+
+
+def test_start_heartbeat_must_postdate_the_previous_record():
+    now = 1000.0
+    assert not gs.is_new_heartbeat({"state": "stopped", "epoch": 995.0}, 995.0, now)
+    assert not gs.is_new_heartbeat({"state": "playing", "epoch": 995.0}, 995.0, now)
+    assert gs.is_new_heartbeat({"state": "no_game", "epoch": 997.0}, 995.0, now)
+    assert not gs.is_new_heartbeat({"state": "playing", "epoch": 900.0}, 895.0, now)
+    assert not gs.is_new_heartbeat(None, 0.0, now)

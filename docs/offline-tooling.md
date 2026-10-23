@@ -537,8 +537,9 @@ just game shot               # 存 C:\temp\ns_game_shot.png
 just game stop | quit
 ```
 
-`want=playing` 时,监督器发现「被事件或人暂停 + 有选项窗口」会先点一行再恢复运行;`want=paused` 时
-只保留它自己发起的暂停,人手动按的暂停不会去恢复。默认策略 `first`。
+`want=playing` 时,监督器发现「被事件或人暂停 + 有选项窗口」会先点一行再恢复运行;没有窗口的裸暂停
+按「可能是人按的」处理,只报 `paused_no_window`、不发 Space —— 要恢复就发一次 `unpause`(或 `want playing`),
+它带一个只生效一次的 `resume` 覆盖。`want=paused` 时反过来:只保留它自己发起的暂停。默认策略 `first`。
 
 产物:`C:\temp\ns_game_status.json`(状态心跳,含 `epoch`)、`ns_game_log.jsonl`、`ns_game_shot.png`、
 `ns_game_supervisor.out`(pythonw 的 stdout/stderr)。`state` 取值 `playing|paused|unknown|no_game|stopped`。
@@ -548,10 +549,12 @@ just game stop | quit
    用 `schtasks /ru <user> /rl highest` 跑 `pythonw ... serve`;返回条件是**状态文件心跳**,不是
    schtasks 的退出码。改了 `game_supervisor.py` 要重新 `deploy` 再 `stop` + `start`(进程不会热加载)。
 2. **命令文件只消费一次**,键是 `mtime_ns:size`;写入相同字节也算新命令。空行与不认识的动词只进日志,
-   不动作。缩写入口(`just game pause`)等价于 `cmd pause`,固定等 0.8 s 后打状态。
+   不动作。缩写入口(`just game pause`)等价于 `cmd pause`,固定等 0.8 s 后打状态 —— 这次状态可能是**动作
+   之前**的心跳(`unpause` 后第一次读仍常显示 `paused`),要确认结果就再读一次 `just game status`。
 3. **暂停图标按窗口相对几何采样**:右上角 `w-243..w-198, y5..50`(2160x1440 量得),红 956..965 / 绿 0
-   为 paused,绿 200..207 / 红 0 为 playing。换分辨率、UI scale 或窗口模式要重新量;`unknown` 是真实
-   第三态,监督器对 unknown **不动作**。
+   为 paused,绿 200..207 / 红 0 为 playing。同一个 4.4.4 会话里暂停图标还会以橙红色出现(掩码 209 像素),
+   所以 paused 的下限是 80 而不是峰值;顶栏棕色背景(`r<140`)落在掩码外。换分辨率、UI scale 或窗口模式
+   要重新量;`unknown` 是真实第三态,监督器对 unknown **不动作**。
 4. **事件窗口自己会暂停游戏,关窗口又可能自己恢复**。所以每次动作后都重新读图标,不复用上一 tick 的
    判读;`_restore` 发现链式窗口(刚关掉一个又弹一个)时推迟 Space,留给下一 tick 处理。
 5. **choice 的判据是金色行,不是 bbox**:行需 `x0>=1150 && x1>=1450`、至少 2 行、gold>=8000。

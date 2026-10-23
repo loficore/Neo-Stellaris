@@ -34,8 +34,10 @@ TASK_SHIM = r"C:\temp\ns_game_supervisor_task.cmd"
 # (left margin from window right, right margin, y0, y1) -> box 45 px wide.
 PAUSE_BOX_OFFSETS = (243, 198, 5, 50)
 
-# Paused: red 956..965, green 0.  Playing: red 0, green 200..207.
-PAUSED_RED_MIN = 300
+# Paused: red 956..965, green 0 (2026-10-23 spike, bright icon) and 209, 0
+# (same day, live 4.4.4 salmon icon).  Playing: red 0, green 200..207.
+# 80 keeps both pause looks while the top-bar browns (r<140) stay out.
+PAUSED_RED_MIN = 80
 PAUSED_GREEN_MAX = 50
 PLAYING_GREEN_MIN = 100
 PLAYING_RED_MAX = 50
@@ -95,11 +97,14 @@ def choose_row(policy: str, rows, rng: random.Random):
     return None
 
 
-def plan_step(want: str | None, paused: str, window: str):
+def plan_step(want: str | None, paused: str, window: str,
+              resume_commanded: bool = False):
     """Decide one tick's action from the commanded and observed states.
 
     ``want`` is ``playing``/``paused``/``None`` (observe-only).  The extra
     dict carries ``restore``: the state to enforce after a handled window.
+    ``resume_commanded`` is the one-shot override an explicit ``unpause``
+    sets; without it a bare pause is treated as a human pause and reported.
     """
     if paused not in PAUSE_STATES or window not in WINDOW_KINDS:
         return "none", {"reason": "bad_state"}
@@ -120,6 +125,8 @@ def plan_step(want: str | None, paused: str, window: str):
             return "handle_choice", {"restore": "playing"}
         if window == "dialog":
             return "handle_dialog", {"restore": "playing"}
+        if resume_commanded:
+            return "resume", {}
         return "report_paused_no_window", {}
     if paused == "playing":
         return "none", {}
@@ -582,13 +589,17 @@ def _handle_command(cmd, hwnd, state):
     one_shot = None
     if verb == "pause":
         state["want"] = "paused"
+        state["resume"] = False
     elif verb == "unpause":
         state["want"] = "playing"
+        state["resume"] = True
     elif verb == "want":
         state["want"] = cmd["want"]
+        state["resume"] = cmd["want"] == "playing"
     elif verb == "toggle":
         if hwnd and state["paused"] in ("playing", "paused"):
             state["want"] = ("playing" if state["paused"] == "paused" else "paused")
+            state["resume"] = state["want"] == "playing"
     elif verb == "policy":
         state["policy"] = cmd["policy"]
     elif verb == "choose":
@@ -622,7 +633,8 @@ def serve(args) -> int:
     _require_windows()
     rng = random.Random()
     state = {"want": "playing", "policy": args.policy, "paused": "unknown",
-             "last_bbox": None, "speed_sha": None, "shot": None}
+             "resume": False, "last_bbox": None, "speed_sha": None,
+             "shot": None}
     handled = 0
     last_cmd = None
     last_status = 0.0
@@ -684,7 +696,10 @@ def serve(args) -> int:
         if window != "choice":
             state["last_sig"] = None
             state["same_hits"] = 0
-        action, extra = plan_step(state["want"], paused, window)
+        if paused == "playing":
+            state["resume"] = False
+        action, extra = plan_step(state["want"], paused, window,
+                                  resume_commanded=state["resume"])
         note = "ok"
         acted = False
         if action == "pause":
@@ -693,6 +708,14 @@ def serve(args) -> int:
                 note = "commanded_pause"
             except OSError as e:
                 note = f"pause_failed: {e}"
+            time.sleep(0.3)
+        elif action == "resume":
+            try:
+                press_space(hwnd)
+                state["resume"] = False
+                note = "commanded_resume"
+            except OSError as e:
+                note = f"resume_failed: {e}"
             time.sleep(0.3)
         elif action == "handle_choice":
             rows = stats["rows"]
@@ -776,13 +799,27 @@ def _delete_task() -> None:
                            stdout=devnull, stderr=devnull)
 
 
+def is_new_heartbeat(rec, baseline_epoch: float, now: float,
+                     max_age: float = 5.0) -> bool:
+    """A status written after ``baseline_epoch`` and still fresh.
+
+    ``stop`` leaves a fresh ``stopped`` record behind; without the baseline a
+    ``start`` right after it would report that stale record as a success.
+    """
+    if not rec:
+        return False
+    epoch = rec.get("epoch", 0)
+    return epoch > baseline_epoch and now - epoch < max_age
+
+
 def cmd_start(args) -> int:
     _require_windows()
     rec = _read_status()
-    if rec and rec.get("state") != "stopped" \
-            and time.time() - rec.get("epoch", 0) < 5:
+    now = time.time()
+    if rec and rec.get("state") != "stopped" and now - rec.get("epoch", 0) < 5:
         print(_status_line(rec))
         return 0
+    baseline = rec.get("epoch", 0) if rec else 0
     pythonw = args.pythonw or sys.executable.replace("python.exe", "pythonw.exe")
     atomic_write_text(TASK_SHIM, task_shim_text(pythonw, os.path.abspath(__file__)))
     ru = f"{os.environ.get('COMPUTERNAME', '')}\\{os.environ.get('USERNAME', '')}"
@@ -795,7 +832,7 @@ def cmd_start(args) -> int:
     deadline = time.time() + args.timeout_s
     while time.time() < deadline:
         rec = _read_status()
-        if rec and time.time() - rec.get("epoch", 0) < 5:
+        if is_new_heartbeat(rec, baseline, time.time()):
             print(_status_line(rec))
             return 0
         time.sleep(0.5)
@@ -836,12 +873,7 @@ def cmd_send(args) -> int:
     return 0
 
 
-def main(argv=None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    verbs = {"serve", "start", "stop", "status", "cmd"}
-    if argv and argv[0] not in verbs and argv[0] not in ("-h", "--help"):
-        # `game pause`, `game choose 2`, ... are command-channel shorthand.
-        return cmd_send(argparse.Namespace(words=argv, wait_s=0.8))
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="verb", required=True)
     s = sub.add_parser("serve")
@@ -849,13 +881,24 @@ def main(argv=None) -> int:
     s.add_argument("--grace-s", type=float, default=1.2)
     s.add_argument("--policy", default="first")
     s.add_argument("--auto-dismiss", action="store_true")
-    sub.add_parser("start").add_argument("--timeout-s", type=int, default=30)
-    sub.add_parser("start").add_argument("--pythonw", default=None)
+    start = sub.add_parser("start")
+    start.add_argument("--timeout-s", type=int, default=30)
+    start.add_argument("--pythonw", default=None)
     sub.add_parser("stop").add_argument("--timeout-s", type=int, default=10)
     sub.add_parser("status")
     c = sub.add_parser("cmd")
     c.add_argument("words", nargs="+")
     c.add_argument("--wait-s", type=float, default=0.8)
+    return p
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    verbs = {"serve", "start", "stop", "status", "cmd"}
+    if argv and argv[0] not in verbs and argv[0] not in ("-h", "--help"):
+        # `game pause`, `game choose 2`, ... are command-channel shorthand.
+        return cmd_send(argparse.Namespace(words=argv, wait_s=0.8))
+    p = build_parser()
     a = p.parse_args(argv)
     if a.verb == "serve":
         return serve(a)

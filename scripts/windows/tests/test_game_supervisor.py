@@ -17,6 +17,10 @@ def test_pause_signature_from_spike():
     assert gs.classify_pause(0, 200) == "playing"
     assert gs.classify_pause(0, 0) == "unknown"
     assert gs.classify_pause(120, 120) == "unknown"
+    # 4.4.4 live icon is salmon, not pure red: measured 209 mask pixels
+    # 2026-10-23 while the date read "暂停".
+    assert gs.classify_pause(209, 0) == "paused"
+    assert gs.classify_pause(40, 0) == "unknown"
 
 
 def test_choice_window_requires_wide_box_and_rows_past_news_width():
@@ -69,6 +73,14 @@ def test_human_pause_without_window_is_not_resumed():
     assert action == "report_paused_no_window"
     action, _ = gs.plan_step(None, "paused", "none")
     assert action == "none"
+
+
+def test_commanded_unpause_resumes_a_bare_pause_once():
+    action, _ = gs.plan_step("playing", "paused", "none", resume_commanded=True)
+    assert action == "resume"
+    action, extra = gs.plan_step("playing", "paused", "choice",
+                                 resume_commanded=True)
+    assert action == "handle_choice" and extra["restore"] == "playing"
 
 
 def test_commanded_paused_is_enforced_and_preserved():
