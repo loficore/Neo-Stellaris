@@ -3989,3 +3989,108 @@ join 带出的唯一未判读函数 `0xe84100` 也补读完了:`lea rcx,[rsp+0x2
 本计划仍不证明任何「按 system 施加」的行为。第二枪抓到的是**帧的形状与构造点**,不是应用入口,也不是
 scope 指针。`X→S→id/obj` 这条链已证伪,不要再把它当前提;`descriptor_oracle` 与实机 id 的 join 仍然为零。
 C4 接线的下一枪必须自带新点名,并且要先把「人工帧能否被接受」和「scope 指针怎么来」两件事分开验证。
+
+---
+
+## §54 C4 试点一接线:分数 → JS → 按 system 下 effect(2026-10-23)
+
+### §54.1 授权与环境
+
+2026-10-23 点名原话:「那你开始吧,现在Windows机器在线且可使用」。执行的是
+`docs/superpowers/plans/2026-10-23-c4-chokepoint-wiring.md` 的 Task 7 —— 本计划唯一的实机动作。
+计划允许诚实失败:`capture` 找不到唯一 `0..786` 列就是有效结论,roadmap 保持 `blocked`,不伪造 `ok`。
+
+- 产物 `stellaris_quickjs.dll` sha `22a37aaa6e80146b3495b267b71ccbd5f3ff8cd3b068523c9394aa0c6c08a65b`,
+  部署为 `C:/temp/sqjs_c4.dll`(远端 hash 核对一致);同批部署的驱动 sha
+  `c4_wiring_probe.py` = `a43a46a9…`、注入器 `c2_harness.py` = `0c8bca42…`。
+- 存档:驱动门比对 `C:/temp/stellaris_2226.sav`,sha
+  `6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e`(与 Task 1 的 `--save-sha` 一致)。
+  **运行中的进程加载的不是这个文件**,而是同 campaign(`_1474567734`)的 `autosave_2243.07.01.sav`;
+  射击前先做拓扑校验(离线,`scripts/save_hypergraph.py`):787 system、id 恰为 `0..786`、逐 system 的
+  度数与 `evidence/xrefs/chokepoint_scores_4_4_4.tsv` 完全相等(0 多、0 缺、0 不符)⇒ id→score 映射不变。
+  这是 Task 7 的 ledger 裁定:它不是「文件相同」,是「映射相同」的替代证据。
+- supervisor 是带 `console_open` 跟踪的版本(commit `416be63`)。本枪的第一次尝试
+  (`capture_not_delivered`)就是该缺陷:4.4.4 的控制台键是**开关**,命令提交后控制台保持打开,下一条命令的
+  「开面板」那一下把它关掉,命令被丢在窗口外。修复后按一枪一进程重开,下面所有观测来自**新进程 pid 9552**;
+  `game_supervisor status` 射击时读作 `paused`(`paused_no_window`,无窗口、人未介入),console 命令照常
+  同步执行。
+
+### §54.2 产物与布局
+
+DLL 导出 8 个 wire 入口(`C4WireInstall` / `SetMode` / `SetSpec` / `StatsInto` / `DrainInto` / `Layout` /
+`Disarm` / `C4ScoredStatsInto`)加只读的 `C4PredStatsInto`。`C4WireLayout` 读回
+`[1, 0, 3368, 2048, 944, 256, 8, 256]`(版本、当时 mode、record 大小、ring 上限、ctx 944 B、a3 256 B、
+8 个指针槽、窗口 256 B),与 `wire.zig` 常量逐项一致。`C4WireInstall(effect_id)` rc=0;C1 注册与 §52 相同:
+trigger `68636`、effect `68637` 是 `C1Run` 现铸的 token,不是官方 keyword。armed token = `68637`。
+
+### §54.3 预检
+
+命令原文(经 supervisor 剪贴板通道;`console_sent` 20:31:53):
+
+    effect every_system = { log = "C4_PREFLIGHT_9552_[This.GetName]" }
+
+开始于 20:31:49,783 条 `Log effect, file:` marker 在 30 s 门限内出现。计划字面写「787 行」,Task 7 的
+ledger 裁定把门限改成 **783**:787 个 system 里有若干名字重名,引擎日志 sink 又会丢弃会话内重复的同一段
+文本,所以 787 次执行只渲染出 **783** 个不同名字。观测值 783 与该门限相等 ⇒ `campaign_gate: ok`,
+console 投递本身也被这一步独立证明。
+
+### §54.4 捕获
+
+命令原文(`console_sent` 20:31:59;game.log 里 783 条 marker 的时间戳都是 20:31:59):
+
+    effect every_system = { log = "C4_CAPSTART_9552_[This.GetName]" neo_action = { log = "NEO_CHOKE_EFFECT_[This.GetName]" set_name = "NEO_CHOKE" } }
+
+- 投递门:`C4_CAPSTART_9552_` 哨兵 **783**,`classify_delivery` = ok。
+- wire stats(`C4WireSetMode(0)` 之后读):`calls=1`、`records=1`、`dropped=0`、`armed_token=68637`。
+  驱动为 `calls >= 787` 轮询了 30 s,没到,停在 1。
+- 列判读:ring 里只有 1 条记录,`find_scope_column` 直接给 `count_mismatch`、`column=None`、`columns=[]`;
+  这条记录本身没有进入结果 JSON(驱动只保留 find 结果),所以不存在「候选列 / 顺序假设」可写。
+- 谓词 delta:`pred_calls` 206,692 → 413,387(Δ **206,695**),`pred_patched` 0 → **1**,
+  `last_token=10344`(`auto_move_to_planet`,环境里其他 effect 的末次读数,与本次命令无关)。
+- game.log 交叉检查:783 条 `C4_CAPSTART_9552_`、783 条 `NEO_CHOKE_EFFECT_`,**783 对全部相邻、
+  0 个孤儿、两个名字集合对称差 0**;即每个跑到外层 `log` 的 system 都跑到了 `neo_action` 的 body。
+
+判读:787 次 per-system 执行确实发生了(外层 `log` 与内层 `log` 都渲染了),但 `neo_action` 对象只在
+**实例化时**经过一次谓词与一次 slot[1](predicate 匹配 1 次;wire 的 `calls` 在 token 过滤之前自增,所以
+`calls=1` 就是全部入口数),per-system 的 783 次 body 执行**没有**进入 slot[1]。CAPSTART/NEO 全部成对
+且集合相同 ⇒ 那次 slot[1] 入口不是「某一次 per-system 执行被抑制」,而是实例化路径多出来的一次
+(与 §52 fact 1 的 `[child+0x20]` 写入 → 谓词 → `[child_vptr+0x08]` 顺序一致)。谓词 206,695 次里只有
+1 次 armed-token 匹配 ⇒ 块没有在每次迭代经 `0x3B01A0` 重新实例化(那条路径先写 `[child+0x20]` 再调谓词,
+若逐系统走,匹配数应为 787)。
+
+### §54.5 应用
+
+没有执行。`classify_capture` 在捕获阶段就给出 `count_mismatch`,`apply` 的 before/after/delta/scored/
+`log_hits`/sentinel 全为 `null`;没有 `C4WireSetSpec`、没有 mode=apply、没有链 donor 的机会,`chain=0`。
+截图 sha 为 `null`(supervisor 没有刷新截图文件)。QuickJS 侧(分数表、`C2ExecCallScored`、tier 直方图)
+与本枪的失败位置无关 —— 它根本没被调用。
+
+### §54.6 结论
+
+`VERDICT: count_mismatch`。失败位置 = 捕获阶段 slot[1] 的入口计数(1 vs 787)。
+
+排除了:
+
+1. **控制台投递**:783 哨兵(§54.3)与 783 条 CAPSTART(§54.4),两条命令落地。
+2. **campaign 形状**:预检 783 = 门限,id 映射另有拓扑校验。
+3. **token 身份 / 谓词**:armed token 恰好匹配 1 次,对象经引擎自己的 `0x3B01A0` 实例化。
+4. **逐系统重新实例化**:若每次迭代都走 `0x3B01A0`,谓词会在 787 次里各匹配一次;实际 1 次。
+5. **token 过滤吞掉入口**:`wire.captureWith` 先 `calls += 1` 再比 token,1 就是全部入口数。
+6. **某次 per-system 执行被我们抑制**:CAPSTART/NEO 783 对全相邻、集合相同,0 孤儿。
+
+未证 / 下一 datum:per-system 执行到底走哪个入口。两个候选 ——
+(a) 同一个对象经 base Execute `0x1D08520`(非虚入口)派发到 slot[2];
+(b) 每次迭代得到 donor vptr 的副本/克隆,谓词与我们的 vtable 都不经过。
+判别方法:在 DLL vtable 副本的 **slot[2]**(或 base Execute)上装只读计数器,同一 `every_system` 命令下
+看它是否得到 787:(a) ⇒ 787,(b) ⇒ 0。这是最小判别,不改控制流,也不需要新的写行为。
+
+对 §52 的意义:§52 证的「谓词 → DLL vtable → slot[1] → QuickJS」是**实例化路径**上的存在性证明(它的
+`calls=17` 来自 17 次合成 `0x3B01A0`);它从未证明 per-system 执行经 slot[1]。§52.5 的「one object,
+one call」与本枪不矛盾;本枪否证的是把它外推成 per-system 入口。§53.4 第 6 条留下的
+「append 之后谁在何时调 child slot[1]」在这个形状下有了答案:**不在 per-system 循环里**。
+
+### §54.7 清理
+
+`C4WireDisarm` rc=0,`host_alive=true`,没有 `FreeLibrary`(patch 过的对象仍指向 DLL `.data`);
+pid 9552 在射击后继续存活,状态 `paused`。证据日志 `evidence/logs/c4_wiring_live_4_4_4.log` 含两次尝试:
+第一次 `capture_not_delivered`(supervisor 控制台开关缺陷,修复前)、第二次 `count_mismatch`(本节)。

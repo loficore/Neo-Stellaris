@@ -1,0 +1,90 @@
+VERDICT: capture_not_delivered
+VERDICT: count_mismatch
+{
+  "verdict": "count_mismatch",
+  "detail": "capture stats={'mode': 0, 'records': 1, 'dropped': 0, 'calls': 1, 'resolved': 0, 'unresolved': 0, 'tier0': 0, 'tier1': 0, 'tier2': 0, 'js_err': 0, 'chain': 0, 'last_id': 0, 'last_tier': 4294967295, 'armed_token': 68637, 'spec_blob': 0, 'spec_deref': 0, 'spec_off_a': 0, 'spec_off_b': 0, 'reserved0': 0, 'reserved1': 0} find={'status': 'count_mismatch', 'column': None, 'spec': None, 'columns': []}",
+  "save_sha": "6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e",
+  "dll_sha": "22a37aaa6e80146b3495b267b71ccbd5f3ff8cd3b068523c9394aa0c6c08a65b",
+  "pid": 9552,
+  "base": 140711963328512,
+  "effect_id": 68637,
+  "layout": [
+    1,
+    0,
+    3368,
+    2048,
+    944,
+    256,
+    8,
+    256
+  ],
+  "install_rc": 0,
+  "preflight_marker_count": 783,
+  "capture": {
+    "stats": {
+      "mode": 0,
+      "records": 1,
+      "dropped": 0,
+      "calls": 1,
+      "resolved": 0,
+      "unresolved": 0,
+      "tier0": 0,
+      "tier1": 0,
+      "tier2": 0,
+      "js_err": 0,
+      "chain": 0,
+      "last_id": 0,
+      "last_tier": 4294967295,
+      "armed_token": 68637,
+      "spec_blob": 0,
+      "spec_deref": 0,
+      "spec_off_a": 0,
+      "spec_off_b": 0,
+      "reserved0": 0,
+      "reserved1": 0
+    },
+    "find": {
+      "status": "count_mismatch",
+      "column": null,
+      "spec": null,
+      "columns": []
+    },
+    "sentinel": 783,
+    "pred": {
+      "before": {
+        "pred_calls": 206692,
+        "pred_patched": 0,
+        "last_token": 10344,
+        "installed": 1
+      },
+      "after": {
+        "pred_calls": 413387,
+        "pred_patched": 1,
+        "last_token": 10344,
+        "installed": 1
+      },
+      "delta": {
+        "calls": 206695,
+        "patched": 1
+      }
+    }
+  },
+  "spec": null,
+  "apply": {
+    "before": null,
+    "after": null,
+    "delta": null,
+    "scored": null,
+    "log_hits": null,
+    "sentinel": null
+  },
+  "screenshot": {
+    "path": "C:\\temp\\ns_game_shot.png",
+    "sha256": null
+  },
+  "cleanup": {
+    "disarm_rc": 0,
+    "host_alive": true
+  },
+  "campaign_gate": "ok"
+}

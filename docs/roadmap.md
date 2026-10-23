@@ -47,7 +47,7 @@
 | C0 | done | pipeline §20/§21 | — | — |
 | C1 | done | c1_validation §24/§24.6 | — | — |
 | C2 | done | c1_validation §36–§50 | `2026-10-22-c2-live-death-localization.md`+`2026-10-22-c2-jsnewruntime2-boundary.md`(均已执行) | **§47 找到机制**:`libs/quickjs/cutils.h:43-44` 的 fallback `offsetof`(`&((type *)0)->field`)让 `container_of`(quickjs.c:1494)里带进一次**编译期空成员访问**,UBSan 对那个**字面 0** 在 `0xbd97` 无条件报告(`:1494:12`,记录 `0x5ab430`)→ Zig 的 type-mismatch 打 `member access within null pointer of type 'JSMallocBlockHeader'` 后 abort → 退出码 3;第一次 `js_rc` 调用就是 `JS_InitAtoms` 首个 `__JS_NewAtomInit` 的字符串分配(`js_alloc_string_rt:2361`)。**这次 trip 与运行时指针值无关**,所以 §46 的 13 条 `Mx`(size `5a0`/`808`/`ff0`、ptr 全 8 对齐且 `≡8 mod 16`、每次完整渲染恰 2 个 `st` 且第二个 = 运行时块 `+0x408` = `offsetof(malloc_ctx.malloc_state)`)仍是有效观测但不再判别候选、§45.5 的 (a)/(b)/(c) 都不是机制;§45 的「user pointer was 8」**撤回**,`str` 的值/来源仍未被观测,与 §46 的边界一致。**§48 已按授权实施修复 (a)**:`libs/quickjs/cutils.h` 引入 `<stddef.h>`,`offsetof` 改用 builtin;新产物(sha `79c8dc24…`)零游戏 `SURVIVED rc=0`、witness 出现 `rt=` 并跑到 `diag_rc=0`;UBSan 记录 141→133,8 条 fallback `container_of` 全移除(`:1494:12` + free/realloc/usable-size 的 7 条同源隐患)。**§49 实机一枪已通过**(2026-10-22,同一份字节):`C2Init rc=0`、`g_test_rt`/`g_test_ctx` 非空、`1+1` 经 DLL 自己的 `JS_Eval` 返回 int32 2(rc=11)、`--noinit` 守卫返回 0 不崩、host 全程存活,`C:/temp/c2_diag_9932.log` 首次在实机写出。**§50 实机压测**:固定脚本经 `C2EvalStressOne` 跑 8 轮字符串/数组增长 + `JSON.stringify`,打满 §48 移除仪表的另 7 条 `container_of`(free/realloc/usable-size)路径,`rc=63619`(n=15904)、两次模块副本一致、host 存活。修复循环仍是离线的(edit → `zig build` → scp 新文件名 → `c2_selfabort_repro.py`)。§44 那一枪(单发射,**已耗尽**)证明被杀后 2.1 s 的窗口是 teardown 不是执行:80 ms 起 `SuspendThread` 全 gle=5、`pr_user_us` 22 采样一动 0 µs、内存单调下降,两条对照分别判掉「仪器坏」与「线程已退出」 |
-| C4 执行路径 | done | c1_validation §52;§53 第二枪 `captured`(arg2 = 0x20 B 深度帧,`X→S→id` 链证伪) | `2026-10-22-c4-execute-wrapper.md` | 分数接进 wrapper(数据源 `evidence/xrefs/chokepoint_scores_4_4_4.tsv` 已就绪) |
+| C4 执行路径 + 试点一接线 | blocked | c1_validation §52;§53;§54(`count_mismatch`:per-system 执行不经 slot[1]) | `2026-10-23-c4-chokepoint-wiring.md` | 在 vtable 副本 slot[2](或 base Execute `0x1D08520`)上取得 787 次只读计数(§54.6) |
 
 为什么顺序是 C0→C1→C2:C0 在**离线**把「我们造的描述符到底像不像真的」证实到字节;C1 在**实机**把「别名式注册
 能不能活过 create + write + predicate 链」证实;C2 才轮到「让 keyword 执行 JS」—— QuickJS 不在注入环境里活下来,后面没有一步能开工。
@@ -84,8 +84,6 @@ host 存活;**§50 压测**让另 7 条 `container_of` 路径在实机跑满(`C2
   前置 = 热路径静默窗口；授权级 = 点名；不能成计划 = 选哪个场景要先有新观测（§13）。
 - **B4 九个 Meyers 惰性访问器绑定的关键字名字**（`0x388130`…`0x389224`，buffer 在镜像里是零）：判据 = 首次使用时铸出的 id 与名字。
   前置 = 游戏在跑；授权级 = 点名(只读)；不能成计划 = 它不影响 Phase C 任何判据，默认不做（§19）。
-- **C4 试点一 `chokepoint_score`**：判据 = 按图连通度给星系打上我们自己的新 effect，日志与行为都可见。执行路径已实现并实机通过(c1_validation §52)。
-  仍不能成计划的只剩接线:分数(`evidence/xrefs/chokepoint_scores_4_4_4.tsv`,计划 `2026-10-22-c4-chokepoint-data.md`)→ JS → 按 system 下 effect;首选入口未定(§53.3 第二枪 `captured`:arg2 是 0x20 B 深度帧、`X→S→id` 链证伪;§53.4 候选 C 改记 `located(构造形状已知,可用性未证)`,A/B/D 仍 `unresolved`);授权级 = 一枪 + 实机可见行为。
 - **C5 试点二 种族占比 → 资源产出 / 对母国的外交与战争态度**：判据 = 段1 那句的第二个例子真的改变了游戏行为。
   前置 = 与 C4 同一面（跨 scope 聚合），授权级同 C4；不能成计划 = 没有 spec，且要读的字段还没按 4.4.4 钉过。
 - **C6 验收**：判据 = 日志 + 可复现行为，且官方 scripted_effects 路径不受影响。
