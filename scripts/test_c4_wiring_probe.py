@@ -395,6 +395,33 @@ def test_shot_sha_ignores_a_screenshot_the_supervisor_never_refreshed(tmp_path):
         hashlib.sha256(b"stale-frame").hexdigest())
 
 
+def test_decode_slot2_stats_is_two_qwords():
+    blob = struct.pack("<QQ", 787, 0x1403B01A0)
+    assert mod.decode_slot2_stats(blob) == {
+        "slot2_calls": 787, "slot2_target": 0x1403B01A0}
+    with pytest.raises(ValueError):
+        mod.decode_slot2_stats(blob[:15])
+
+
+def test_classify_slot2_needs_delivery_and_body_before_the_delta_means_anything():
+    assert mod.classify_slot2(PREFLIGHT_MARKERS, PREFLIGHT_MARKERS,
+                              SCORE_COUNT) == "slot2_counted"
+    assert mod.classify_slot2(PREFLIGHT_MARKERS, PREFLIGHT_MARKERS,
+                              0) == "slot2_zero"
+    assert mod.classify_slot2(PREFLIGHT_MARKERS, PREFLIGHT_MARKERS,
+                              3) == "slot2_other"
+    assert mod.classify_slot2(0, PREFLIGHT_MARKERS,
+                              SCORE_COUNT) == "slot2_sentinel_mismatch"
+    assert mod.classify_slot2(PREFLIGHT_MARKERS, 12,
+                              SCORE_COUNT) == "slot2_body_not_executed"
+
+
+def test_slot2_console_uses_its_own_phase_sentinel():
+    text = mod._armed_console(4242, "SLOT2")
+    assert "C4_SLOT2START_4242_[This.GetName]" in text
+    assert "neo_action" in text and "NEO_CHOKE_EFFECT_" in text
+
+
 def test_cleanup_downgrades_ok_when_the_disarm_call_raises(monkeypatch):
     import c4_wiring_probe as probe
 

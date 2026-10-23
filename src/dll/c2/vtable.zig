@@ -8,9 +8,10 @@
 // that chain OFF (capture only); C4 apply now chains it for tier >= 1, and
 // only then (wire.zig onExecute). This module copies the donor vtable
 // `0x2606FE0` (25 slots, through +0xC0 — a safe lower bound that still
-// includes the predicate at +0x98) into DLL `.data` and replaces ONLY slot[1]
-// with the bridge below. The copy is never freed: patched objects point into
-// this module's data.
+// includes the predicate at +0x98) into DLL `.data`, replaces slot[1] with the
+// bridge below, and wraps slot[2] (the donor's `0x3B01A0`) in a counting
+// forwarder (§54.6). The copy is never freed: patched objects point into this
+// module's data.
 //
 // Effect ABI visible here:
 //   slot[1]  +0x08  Execute      (self, ctx, a3) -> void   [bridge]
@@ -29,6 +30,13 @@ var built = false;
 var donor_execute_addr: u64 = 0;
 var chain_enabled = false;
 
+// §54.6 discriminant: slot[2] is the donor's 0x3B01A0 ("build the next
+// sub-effect"), the one slot a per-system body execution can reach through
+// our copy without passing slot[1]. The thunk only counts and forwards.
+var slot2_donor_addr: u64 = 0;
+var slot2_calls: u64 = 0;
+pub const SLOT2_STATS_SIZE: usize = 16;
+
 extern fn C2ExecCall(token: u32, ctx_word: u64) c_int;
 
 // ---------------------------------------------------------------------------
@@ -42,6 +50,8 @@ pub fn buildFromSlots(donor: []const u64) !void {
     @memcpy(&slots, donor[0..SlotCount]);
     donor_execute_addr = donor_exec;
     slots[offsets.keyword_reg.EFFECT_VTBL_EXECUTE / 8] = @intFromPtr(&effectExecute);
+    slot2_donor_addr = donor[offsets.keyword_reg.EFFECT_VTBL_INSTANTIATE / 8];
+    slots[offsets.keyword_reg.EFFECT_VTBL_INSTANTIATE / 8] = @intFromPtr(&effectInstantiate);
     built = true;
 }
 
@@ -75,6 +85,16 @@ fn effectExecute(self: u64, ctx: u64, a3: u64) callconv(.c) u64 {
     return 0;
 }
 
+/// slot[2] of the copy: count the entry, then forward all four register
+/// arguments unchanged to the donor slot the engine would have called.
+fn effectInstantiate(a1: u64, a2: u64, a3: u64, a4: u64) callconv(.c) u64 {
+    _ = @atomicRmw(u64, &slot2_calls, .Add, 1, .monotonic);
+    const target = slot2_donor_addr;
+    if (!plausible(target)) return 0;
+    const donor: *const fn (u64, u64, u64, u64) callconv(.c) u64 = @ptrFromInt(target);
+    return donor(a1, a2, a3, a4);
+}
+
 // ---------------------------------------------------------------------------
 // State accessors
 // ---------------------------------------------------------------------------
@@ -85,6 +105,22 @@ pub fn getVtable() ?*const [SlotCount]u64 {
 
 pub fn donorExecute() u64 {
     return donor_execute_addr;
+}
+
+pub fn slot2Calls() u64 {
+    return @atomicLoad(u64, &slot2_calls, .monotonic);
+}
+
+pub fn slot2Target() u64 {
+    return slot2_donor_addr;
+}
+
+/// Read-only snapshot for the driver: <QQ> = slot[2] entries, forwarded target.
+pub fn slot2StatsInto(out: []u8) bool {
+    if (out.len < SLOT2_STATS_SIZE) return false;
+    std.mem.writeInt(u64, out[0..][0..8], slot2Calls(), .little);
+    std.mem.writeInt(u64, out[8..][0..8], slot2_donor_addr, .little);
+    return true;
 }
 
 pub fn setChainEnabled(on: bool) void {
@@ -104,6 +140,8 @@ pub fn resetForTest() void {
     built = false;
     donor_execute_addr = 0;
     chain_enabled = false;
+    slot2_donor_addr = 0;
+    slot2_calls = 0;
 }
 
 // ---------------------------------------------------------------------------

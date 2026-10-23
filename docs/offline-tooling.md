@@ -524,14 +524,19 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
 
-### `scripts/c4_wiring_probe.py [--dll PATH] [--save PATH] [--json PATH] [--allow-drift]`
+### `scripts/c4_wiring_probe.py [--mode capture|slot2] [--dll PATH] [--save PATH] [--json PATH] [--allow-drift]`
 
-C4 接线驱动,一枪一进程:`capture` 跑一遍找出 `ctx`/`a3` 里承载 system id 的列,`apply` 把该列
-喂给 QuickJS 的 787 分数表(tier 阈值 100/200),tier ≥ 1 的 70 个系统 chain donor Execute 应用
-`log`/`set_name`。**capture 只读**(RPM 采样 + 环形记录),整条 apply 路径里唯一的引擎写入是引擎
-自己的 donor Execute。路径默认 `C:\temp\sqjs_c4.dll` / `C:\temp\stellaris_2226.sav` /
-`C:\temp\c4_wiring_result.json`,`--game-log` / `--supervisor-status` / `--supervisor-cmd` / `--shot`
-也走参数,脚本不读环境变量。
+C4 接线驱动,一枪一进程。`--mode capture`(默认):跑 `capture` 找 `ctx`/`a3` 里承载 system id 的列,
+`apply` 把该列喂给 QuickJS 的 787 分数表(tier 阈值 100/200),tier ≥ 1 的 70 个系统 chain donor
+Execute 应用 `log`/`set_name`。**capture 只读**(RPM 采样 + 环形记录),整条 apply 路径里唯一的引擎
+写入是引擎自己的 donor Execute。`--mode slot2`(§54.6 判别枪):install 后跑一次 armed 的
+`every_system` pass,读 slot[2] 只读计数器(`C4Slot2StatsInto`,`<QQ>` 16 B:计数 + 转发目标),
+verdict ∈ {`slot2_counted`(787 ⇒ base Execute 经我们的副本 slot[2] 派发)、`slot2_zero`(0 ⇒ donor
+vptr 副本/克隆,不经我们的 vtable)、`slot2_body_not_executed`(body 没跑满 783,计数没有意义)、
+`slot2_sentinel_mismatch`(哨兵不等于 783)、`slot2_other`}。判据先钉哨兵 783 行与 body marker 783
+行(投递与执行都发生),再读计数增量 —— 否则 `0` 无法区分「不经 slot[2]」与「没跑」。路径默认
+`C:\temp\sqjs_c4.dll` / `C:\temp\stellaris_2226.sav` / `C:\temp\c4_wiring_result.json`,`--game-log` /
+`--supervisor-status` / `--supervisor-cmd` / `--shot` 也走参数,脚本不读环境变量。
 
 **前置**:supervisor 必须已在 Windows 机上跑着(见下一节)。驱动先写 `want paused` 并等到状态
 `paused`(状态文件超过 5 s 未更新按「没在跑」判),然后才注入。**三条 console 命令都经 supervisor
@@ -543,6 +548,7 @@ C4 接线驱动,一枪一进程:`capture` 跑一遍找出 `ctx`/`a3` 里承载 s
 effect every_system = { log = "C4_PREFLIGHT_<pid>_[This.GetName]" }             # 预检，应得 783 行
 effect every_system = { log = "C4_CAPSTART_<pid>_[This.GetName]" neo_action = { … } }   # capture 哨兵
 effect every_system = { log = "C4_APPSTART_<pid>_[This.GetName]" neo_action = { … } }   # apply 哨兵
+effect every_system = { log = "C4_SLOT2START_<pid>_[This.GetName]" neo_action = { … } } # slot2 判别枪哨兵
 ```
 
 > 哨兵与预检共用 `[This.GetName]` 的 783 行去重形状，但带 pid 与相位：capture/apply 的哨兵在

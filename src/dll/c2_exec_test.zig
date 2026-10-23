@@ -66,19 +66,67 @@ fn fakeDonorSlots() [vtable.SlotCount]u64 {
     return slots;
 }
 
-test "buildFromSlots copies every donor slot and overrides only slot[1]" {
+test "buildFromSlots copies every donor slot and overrides slot[1] and slot[2]" {
     vtable.resetForTest();
     const donor = fakeDonorSlots();
     try vtable.buildFromSlots(donor[0..]);
     const vt = vtable.getVtable() orelse return error.NoVtable;
     try std.testing.expectEqual(donor[0], vt[0]);
-    try std.testing.expectEqual(donor[2], vt[2]);
+    try std.testing.expect(donor[2] != vt[2]);
     try std.testing.expectEqual(donor[15], vt[15]);
     try std.testing.expectEqual(donor[19], vt[19]);
     try std.testing.expectEqual(donor[24], vt[24]);
     try std.testing.expect(vt[1] != donor[1]);
     try std.testing.expectEqual(@intFromPtr(&fakeDonor), vtable.donorExecute());
     try std.testing.expect(vtable.isBuilt());
+}
+
+var slot2_seen: [4]u64 = .{ 0, 0, 0, 0 };
+
+fn fakeSlot2(a1: u64, a2: u64, a3: u64, a4: u64) callconv(.c) u64 {
+    slot2_seen = .{ a1, a2, a3, a4 };
+    return 0x5A5A;
+}
+
+test "slot[2] thunk counts and forwards every register argument unchanged" {
+    vtable.resetForTest();
+    var donor = fakeDonorSlots();
+    donor[2] = @intFromPtr(&fakeSlot2);
+    try vtable.buildFromSlots(donor[0..]);
+    const vt = vtable.getVtable() orelse return error.NoVtable;
+    try std.testing.expect(vt[2] != donor[2]);
+    try std.testing.expectEqual(@intFromPtr(&fakeSlot2), vtable.slot2Target());
+    try std.testing.expectEqual(@as(u64, 0), vtable.slot2Calls());
+
+    const thunk: *const fn (u64, u64, u64, u64) callconv(.c) u64 = @ptrFromInt(vt[2]);
+    try std.testing.expectEqual(@as(u64, 0x5A5A), thunk(0x11, 0x22, 0x33, 0x44));
+    try std.testing.expectEqual([4]u64{ 0x11, 0x22, 0x33, 0x44 }, slot2_seen);
+    try std.testing.expectEqual(@as(u64, 1), vtable.slot2Calls());
+}
+
+test "slot[2] thunk counts but does not jump to an implausible target" {
+    vtable.resetForTest();
+    const donor = fakeDonorSlots(); // slot[2] = 0x1010, below the plausible range
+    try vtable.buildFromSlots(donor[0..]);
+    const vt = vtable.getVtable() orelse return error.NoVtable;
+    const thunk: *const fn (u64, u64, u64, u64) callconv(.c) u64 = @ptrFromInt(vt[2]);
+    try std.testing.expectEqual(@as(u64, 0), thunk(1, 2, 3, 4));
+    try std.testing.expectEqual(@as(u64, 1), vtable.slot2Calls());
+}
+
+test "slot2 stats blob is 16 bytes: calls then target" {
+    vtable.resetForTest();
+    var donor = fakeDonorSlots();
+    donor[2] = @intFromPtr(&fakeSlot2);
+    try vtable.buildFromSlots(donor[0..]);
+    const vt = vtable.getVtable() orelse return error.NoVtable;
+    const thunk: *const fn (u64, u64, u64, u64) callconv(.c) u64 = @ptrFromInt(vt[2]);
+    _ = thunk(0, 0, 0, 0);
+    var out: [vtable.SLOT2_STATS_SIZE]u8 = undefined;
+    try std.testing.expect(vtable.slot2StatsInto(out[0..]));
+    try std.testing.expectEqual(@as(u64, 1), std.mem.readInt(u64, out[0..8], .little));
+    try std.testing.expectEqual(
+        @intFromPtr(&fakeSlot2), std.mem.readInt(u64, out[8..16], .little));
 }
 
 test "buildFromSlots rejects a short donor and a bad Execute slot" {
@@ -128,7 +176,7 @@ test "chain is off by default and forwards only on a sentinel rc" {
     _ = C2ExecDisarmState();
 }
 
-test "resetForTest clears build state, donor and chain" {
+test "resetForTest clears build state, donor, chain and slot[2] counter" {
     vtable.resetForTest();
     const donor = fakeDonorSlots();
     try vtable.buildFromSlots(donor[0..]);
@@ -137,6 +185,8 @@ test "resetForTest clears build state, donor and chain" {
     try std.testing.expect(!vtable.isBuilt());
     try std.testing.expect(!vtable.chainEnabled());
     try std.testing.expectEqual(@as(u64, 0), vtable.donorExecute());
+    try std.testing.expectEqual(@as(u64, 0), vtable.slot2Calls());
+    try std.testing.expectEqual(@as(u64, 0), vtable.slot2Target());
     try std.testing.expectEqual(@as(?*const [vtable.SlotCount]u64, null), vtable.getVtable());
 }
 

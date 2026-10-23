@@ -1,9 +1,13 @@
 """C4 chokepoint wiring driver (Windows side).
 
-One process, one shot: inject the C4 DLL, install the predicate detour, run a
-`capture` pass to find which context offset carries the system id, then run an
-`apply` pass that maps that id through the 787-score table in QuickJS and
-chains the donor Execute for tier >= 1 (70 systems).
+Two modes. `--mode capture` (default): inject the C4 DLL, install the predicate
+detour, run a `capture` pass to find which context offset carries the system id,
+then run an `apply` pass that maps that id through the 787-score table in
+QuickJS and chains the donor Execute for tier >= 1 (70 systems).
+
+`--mode slot2`: §54.6 discriminant — one armed pass, then read the read-only
+slot[2] counter of the DLL vtable copy (787 ⇒ base Execute dispatches through
+slot[2]; 0 ⇒ donor vptr clone).
 
 The capture pass is read-only. The only engine writes in the whole run are the
 engine's own donor Execute effects (`log` / `set_name`). The driver never
@@ -148,6 +152,10 @@ def decode_wire_stats(data):
 PRED_SIZE = 24
 PRED_KEYS = ["pred_calls", "pred_patched", "last_token", "installed"]
 
+# §54.6 discriminant: slot[2] entries of the DLL vtable copy.
+SLOT2_SIZE = 16
+SLOT2_KEYS = ["slot2_calls", "slot2_target"]
+
 
 def decode_pred_stats(data):
     if len(data) != PRED_SIZE:
@@ -160,6 +168,29 @@ def decode_pred_stats(data):
 def predicate_delta(before, after):
     return {"calls": after["pred_calls"] - before["pred_calls"],
             "patched": after["pred_patched"] - before["pred_patched"]}
+
+
+def decode_slot2_stats(data):
+    if len(data) != SLOT2_SIZE:
+        raise ValueError(
+            f"slot2 stats must be exactly {SLOT2_SIZE} B, got {len(data)}")
+    calls, target = struct.unpack("<QQ", data)
+    return dict(zip(SLOT2_KEYS, (calls, target)))
+
+
+def classify_slot2(sentinel, body_hits, delta):
+    """The delta only means something once delivery and body execution are
+    both pinned: 787 => the engine dispatches through our copy's slot[2];
+    0 => it reaches neither our vtable nor its slot[2] (donor clone)."""
+    if sentinel != PREFLIGHT_MARKERS:
+        return "slot2_sentinel_mismatch"
+    if body_hits != PREFLIGHT_MARKERS:
+        return "slot2_body_not_executed"
+    if delta == 0:
+        return "slot2_zero"
+    if delta == SCORE_COUNT:
+        return "slot2_counted"
+    return "slot2_other"
 
 
 def decode_scored_stats(text):
@@ -589,6 +620,13 @@ def _read_pred_stats(pid, base, rva, buf):
     return decode_pred_stats(harness.read_memory(pid, buf, PRED_SIZE))
 
 
+def _read_slot2_stats(pid, base, rva, buf):
+    size = _signed32(harness.call_remote_with_arg(pid, base, rva, buf))
+    if size != SLOT2_SIZE:
+        raise _Abort("slot2_stats_drift", f"C4Slot2StatsInto returned {size}")
+    return decode_slot2_stats(harness.read_memory(pid, buf, SLOT2_SIZE))
+
+
 def _read_snapshots(pid, base, exports, sbuf, cbuf):
     wire = _read_wire_stats(pid, base, exports["C4WireStatsInto"], sbuf)
     size = _signed32(harness.call_remote_with_arg(
@@ -602,6 +640,37 @@ def _read_snapshots(pid, base, exports, sbuf, cbuf):
     except ValueError as exc:
         raise _Abort("scored_stats_unreadable", str(exc))
     return wire, scored
+
+
+def _slot2_phase(args, result, exports, pid, base, log_path):
+    """§54.6: one armed pass, then read the read-only slot[2] counter.
+
+    Capture mode stays on (C4WireInstall sets it); the run adds no writes
+    beyond the engine's own donor effects. ``slot2_zero`` is a datum, not a
+    failure, so it is written to the verdict rather than raised.
+    """
+    rva = exports.get("C4Slot2StatsInto")
+    if not rva:
+        raise _Abort("dll_exports_missing", "C4Slot2StatsInto")
+    sbuf = harness.remote_alloc(pid, SLOT2_SIZE)
+    before = _read_slot2_stats(pid, base, rva, sbuf)
+    offset = _file_size(log_path)
+    _send_console_or_abort(args.supervisor_cmd, _armed_console(pid, "SLOT2"))
+    sentinel = _wait_marker(log_path, offset, "C4_SLOT2START_%d" % pid,
+                            PREFLIGHT_MARKERS, timeout=30.0)
+    if sentinel is None:
+        raise _Abort("log_unreadable", log_path)
+    body = _wait_marker(log_path, offset, MARKER, PREFLIGHT_MARKERS,
+                        timeout=30.0)
+    if body is None:
+        raise _Abort("log_unreadable", log_path)
+    after = _read_slot2_stats(pid, base, rva, sbuf)
+    delta = after["slot2_calls"] - before["slot2_calls"]
+    result["slot2"] = {"before": before, "after": after, "delta": delta,
+                       "sentinel": sentinel, "body_hits": body}
+    result["verdict"] = classify_slot2(sentinel, body, delta)
+    result["detail"] = (f"slot2 delta={delta} body={body} sentinel={sentinel} "
+                        f"target=0x{after['slot2_target']:x}")
 
 
 def _poll_calls(pid, base, rva, buf, target_delta, before_calls, timeout):
@@ -690,6 +759,10 @@ def _flow(args, result, state):
     result["install_rc"] = install_rc
     if install_rc != 0:
         raise _Abort("install_failed", f"C4WireInstall={install_rc}")
+
+    if args.mode == "slot2":
+        _slot2_phase(args, result, exports, pid, base, log_path)
+        return
 
     # Preflight: prove the console path and the campaign shape before capture.
     preflight = f"C4_PREFLIGHT_{pid}"
@@ -885,6 +958,8 @@ def _empty_result(args):
         "install_rc": None,
         "preflight_marker_count": None,
         "capture": {"stats": None, "find": None, "sentinel": None},
+        "slot2": {"before": None, "after": None, "delta": None,
+                  "sentinel": None, "body_hits": None},
         "spec": None,
         "apply": {"before": None, "after": None, "delta": None,
                   "scored": None, "log_hits": None, "sentinel": None},
@@ -900,6 +975,10 @@ def _parse_args(argv=None):
     parser.add_argument("--dll", default=DLL)
     parser.add_argument("--save", default=SAVE)
     parser.add_argument("--json", default=JSON)
+    parser.add_argument("--mode", choices=("capture", "slot2"),
+                        default="capture",
+                        help="capture = column discovery + apply; "
+                             "slot2 = §54.6 read-only slot[2] counter")
     parser.add_argument("--allow-drift", action="store_true")
     parser.add_argument("--game-log", default=GAME_LOG)
     parser.add_argument("--supervisor-status", default=SUPERVISOR_STATUS)
