@@ -143,10 +143,16 @@ def parse_command(line: str):
     A recognized verb with bad arguments is ignored (``None``); an unknown
     verb comes back as an ``unknown`` record so the daemon can log it.
     """
-    parts = line.split()
-    if not parts:
+    stripped = line.strip()
+    head = stripped.split(None, 1)
+    if not head:
         return None
-    verb = parts[0].lower()
+    verb = head[0].lower()
+    if verb == "console":
+        if len(head) == 1 or not head[1].strip():
+            return None
+        return {"verb": "console", "text": head[1]}
+    parts = line.split()
     args = parts[1:]
     if verb in ("pause", "unpause", "toggle", "shot", "status", "quit", "dismiss"):
         return {"verb": verb}
@@ -259,7 +265,31 @@ INPUT_KEYBOARD = 1
 SW_RESTORE = 9
 SPACE_SCAN = 0x39
 SPEED_SCAN = {"up": 0x0D, "down": 0x0C}  # US layout '=' / '-' with KEYEVENTF_SCANCODE
+CONSOLE_SCAN = 0x29   # backquote
+CTRL_SCAN = 0x1D
+PASTE_SCAN = 0x2F     # V
+ENTER_SCAN = 0x1C
+GMEM_MOVEABLE = 0x0042
+CF_UNICODETEXT = 13
 REF_W, REF_H = 2160, 1440  # spike reference resolution
+
+
+def console_key_plan():
+    """Open console, paste with Ctrl+V, Enter, close console.
+
+    Ctrl is held across V: its down/up wrap the paste events, so the plan
+    cannot be expressed as ``_send_key_events`` pairs.
+    """
+    down = KEYEVENTF_SCANCODE
+    up = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
+    return [
+        (0, CONSOLE_SCAN, down), (0, CONSOLE_SCAN, up),
+        (0, CTRL_SCAN, down),
+        (0, PASTE_SCAN, down), (0, PASTE_SCAN, up),
+        (0, CTRL_SCAN, up),
+        (0, ENTER_SCAN, down), (0, ENTER_SCAN, up),
+        (0, CONSOLE_SCAN, down), (0, CONSOLE_SCAN, up),
+    ]
 
 
 def _require_windows() -> None:
@@ -339,7 +369,7 @@ def focus(hwnd: int) -> bool:
     return ok
 
 
-def _send_key_events(vk: int, scan: int, base_flags: int):
+def _send_input_event(vk: int, scan: int, flags: int) -> int:
     """SendInput with the 40-byte INPUT union; a keyboard-only union makes
     SendInput reject every event with ERROR_INVALID_PARAMETER on x64."""
     import ctypes
@@ -361,15 +391,71 @@ def _send_key_events(vk: int, scan: int, base_flags: int):
         _anonymous_ = ("u",)
         _fields_ = [("type", wt.DWORD), ("u", _U)]
 
-    user32 = _user32()
+    ev = INPUT(type=INPUT_KEYBOARD,
+               ki=KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags,
+                             time=0, dwExtraInfo=0))
+    return _user32().SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT))
+
+
+def _send_key_events(vk: int, scan: int, base_flags: int):
     sent = []
     for flags in (base_flags, base_flags | KEYEVENTF_KEYUP):
-        ev = INPUT(type=INPUT_KEYBOARD,
-                   ki=KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags,
-                                 time=0, dwExtraInfo=0))
-        sent.append(user32.SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT)))
+        sent.append(_send_input_event(vk, scan, flags))
         time.sleep(0.08)
     return sent
+
+
+def _set_clipboard_text(text: str) -> bool:
+    """Copy ``text`` to the clipboard; ``False`` on any failure.
+
+    Every handle-returning call declares ``c_void_p``: ctypes defaults to
+    ``c_int``, which truncates 64-bit HMEM/HANDLE values on x64.
+    """
+    import ctypes
+    import ctypes.wintypes as wt
+
+    user32 = _user32()
+    kernel32 = ctypes.windll.kernel32
+
+    user32.OpenClipboard.argtypes = [wt.HWND]
+    user32.OpenClipboard.restype = wt.BOOL
+    user32.EmptyClipboard.restype = wt.BOOL
+    user32.SetClipboardData.argtypes = [wt.UINT, wt.HANDLE]
+    user32.SetClipboardData.restype = wt.HANDLE
+    user32.CloseClipboard.restype = wt.BOOL
+
+    kernel32.GlobalAlloc.argtypes = [wt.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = wt.BOOL
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.restype = ctypes.c_void_p
+
+    if not user32.OpenClipboard(None):
+        return False
+    handle = None
+    try:
+        if not user32.EmptyClipboard():
+            return False
+        data = text.encode("utf-16-le") + b"\x00\x00"
+        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+        if not handle:
+            return False
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            return False
+        ctypes.memmove(ptr, data, len(data))
+        kernel32.GlobalUnlock(handle)
+        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+            return False
+        handle = None  # the clipboard owns the block now
+        return True
+    finally:
+        if handle:
+            kernel32.GlobalFree(handle)
+        user32.CloseClipboard()
 
 
 def press_space(hwnd: int) -> None:
@@ -618,6 +704,16 @@ def _handle_command(cmd, hwnd, state):
                 _launch()._click_at(cmd["x"], cmd["y"])
             else:
                 _log({"event": "click_refused", "x": cmd["x"], "y": cmd["y"]})
+    elif verb == "console" and hwnd:
+        if not focus(hwnd):
+            _log({"event": "console_refused", "hwnd": hwnd})
+        elif not _set_clipboard_text(cmd["text"]):
+            _log({"event": "console_clipboard_failed", "chars": len(cmd["text"])})
+        else:
+            for vk, scan, flags in console_key_plan():
+                _send_input_event(vk, scan, flags)
+                time.sleep(0.08)
+            time.sleep(0.3)
     elif verb == "dismiss" and hwnd and state.get("last_bbox") \
             and state.get("paused") == "paused":
         click_close(hwnd, state["last_bbox"])

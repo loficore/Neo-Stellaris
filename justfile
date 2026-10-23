@@ -36,7 +36,7 @@ launch *args:
     ssh {{WIN_HOST}} "python {{WIN_TEMP}}/launch_stellaris.py {{args}}"
 
 # start | stop | status | pause | unpause | want playing | policy first |
-# choose 2 | speed up | click 1400 861 | dismiss | shot | quit
+# choose 2 | speed up | click 1400 861 | console <text> | dismiss | shot | quit
 game verb *args:
     ssh {{WIN_HOST}} "python {{WIN_TEMP}}/game_supervisor.py {{verb}} {{args}}"
 

@@ -543,6 +543,7 @@ just game policy first       # first | last | random | <1-based n>
 just game choose 2           # 对当前事件一次性选第 2 项
 just game speed up | down
 just game click 1400 861     # 屏幕绝对坐标(窗口在 (0,0) 时等于窗口坐标)
+just game console effect = { every_system = { log = "X" } }   # 原样写进控制台(剪贴板粘贴)
 just game dismiss            # 只在 paused 且有窗口 bbox 时生效(需 serve --auto-dismiss)
 just game shot               # 存 C:\temp\ns_game_shot.png
 just game stop | quit
@@ -573,6 +574,12 @@ just game stop | quit
    `serve --auto-dismiss` 默认关,因为点 ✖ 的几何只在实测过的窗口类型上可信。
 6. **数字键不选选项**(实测),必须点行中心。同一组行签名连点 3 次后记 `choice_stuck` 并停手,
    防止在无响应窗口上打转。
+7. **`console <text>` 走剪贴板,不是逐字符打字**:`parse_command` 保留 `<text>` 的大小写、内部空白
+   与引号,`_set_clipboard_text` 以 UTF-16LE + 双 NUL 写进剪贴板,再发固定 10 个按键事件
+   (反引号开控制台 → Ctrl+V → Enter → 反引号关)。`focus(hwnd)` 3 s 内拿不到前台就写
+   `console_refused`(不按键);剪贴板失败写 `console_clipboard_failed`。`_send_key_events` 是
+   **成对** down/up,修饰键必须跨 V 的 down/up 按住,所以 Ctrl 只能用 `_send_input_event` 逐事件发。
+   `game.log` 的控制台回显会包含命令文本,数 marker 时用 `strip().endswith(...)`,不要用子串计数。
 7. **`speed up/down` 实机已验证**:`up` 让标签从「常速」变「快速」,`down` 回落。命令会把 `speed_sha`
    的前后值写进状态,但绿色标签背景会脉冲,哈希自己也会变 —— 判结果要读截图里的两个字,不要只看哈希。
 8. **scp 上传可用,批量下载会把 SSH 连接重置**:取产物用分块 base64,单次输出 **≤700 字节**稳定

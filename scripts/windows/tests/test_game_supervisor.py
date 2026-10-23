@@ -127,3 +127,23 @@ def test_command_vocabulary():
     assert gs.parse_command("quit") == {"verb": "quit"}
     assert gs.parse_command("dismiss") == {"verb": "dismiss"}
     assert gs.parse_command("frobnicate 3") == {"verb": "unknown", "raw": "frobnicate 3"}
+
+
+def test_console_verb_preserves_text():
+    cmd = gs.parse_command('console effect = { every_system = { log = "X Y" } }')
+    assert cmd == {"verb": "console",
+                   "text": 'effect = { every_system = { log = "X Y" } }'}
+    assert gs.parse_command("CONSOLE  abc  def")["text"] == "abc  def"
+    assert gs.parse_command("console") is None
+    assert gs.parse_command("console   ") is None
+
+
+def test_console_key_plan_holds_ctrl_for_paste():
+    assert gs.console_key_plan() == [
+        (0, 0x29, 0x0008), (0, 0x29, 0x000A),
+        (0, 0x1D, 0x0008),
+        (0, 0x2F, 0x0008), (0, 0x2F, 0x000A),
+        (0, 0x1D, 0x000A),
+        (0, 0x1C, 0x0008), (0, 0x1C, 0x000A),
+        (0, 0x29, 0x0008), (0, 0x29, 0x000A),
+    ]
