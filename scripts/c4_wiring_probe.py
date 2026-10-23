@@ -42,6 +42,10 @@ MARKER = "NEO_CHOKE_EFFECT"
 # systems share a rendered name); see §54.
 PREFLIGHT_MARKERS = 783
 SAVE_SHA = "6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e"
+# The supervisor's serve loop sleeps 0.8 s and does pixel captures before it
+# reads the command file; with delivery failure fatal, 1 s can abort a healthy
+# channel on timing alone.
+CONSOLE_SEEN_TIMEOUT_S = 3.0
 
 DLL = r"C:\temp\sqjs_c4.dll"
 SAVE = r"C:\temp\stellaris_2226.sav"
@@ -424,6 +428,15 @@ def classify_capture(wire, records, find, pred=None):
     }[find["status"]]
 
 
+def apply_result(before, after, scored, log_hits, sentinel):
+    return {
+        "before": before, "after": after,
+        "delta": after["calls"] - before["calls"],
+        "scored": scored, "log_hits": log_hits,
+        "sentinel": sentinel,
+    }
+
+
 def classify_apply(before, after, scored, log_hits):
     if after.get("calls", 0) - before.get("calls", 0) == 0:
         return "apply_no_calls"
@@ -506,11 +519,15 @@ def _write_command(path, line):
     _write_text_atomic(path, line + "\n")
 
 
+def _seen_path(cmd_path):
+    return os.path.splitext(cmd_path)[0] + ".seen"
+
+
 def _send_console(cmd_path, text):
-    seen = cmd_path + ".seen"
+    seen = _seen_path(cmd_path)
     before = _seen_key(seen)
     _write_command(cmd_path, "console " + text)
-    deadline = time.time() + 1.0
+    deadline = time.time() + CONSOLE_SEEN_TIMEOUT_S
     while time.time() < deadline:
         if _seen_key(seen) != before:
             return True
@@ -779,11 +796,8 @@ def _flow(args, result, state):
         log_path, apply_offset, MARKER, EXPECTED_CHAIN, timeout=15.0)
     if log_hits is None:
         raise _Abort("log_unreadable", log_path)
-    result["apply"] = {
-        "before": before_wire, "after": after_wire,
-        "delta": after_wire["calls"] - before_wire["calls"],
-        "scored": after_scored, "log_hits": log_hits,
-    }
+    result["apply"] = apply_result(
+        before_wire, after_wire, after_scored, log_hits, app_sentinel)
     verdict = classify_apply(before_wire, after_wire, after_scored, log_hits)
     if verdict != "ok":
         raise _Abort(verdict, f"apply={result['apply']}")
@@ -870,10 +884,10 @@ def _empty_result(args):
         "layout": None,
         "install_rc": None,
         "preflight_marker_count": None,
-        "capture": {"stats": None, "find": None},
+        "capture": {"stats": None, "find": None, "sentinel": None},
         "spec": None,
         "apply": {"before": None, "after": None, "delta": None,
-                  "scored": None, "log_hits": None},
+                  "scored": None, "log_hits": None, "sentinel": None},
         "screenshot": {"path": args.shot, "sha256": None},
         "cleanup": {"disarm_rc": None, "host_alive": None},
         "campaign_gate": None,

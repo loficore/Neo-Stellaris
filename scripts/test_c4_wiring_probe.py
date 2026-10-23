@@ -1,4 +1,5 @@
 import pathlib
+import re
 import struct
 import sys
 
@@ -10,7 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import c4_wiring_probe as mod
 from c4_wiring_probe import (
     EXPECTED_TIERS, PREFLIGHT_MARKERS, RECORD_SIZE, SAVE_SHA,
-    SCORE_COUNT, apply_console, campaign_gate, capture_console,
+    SCORE_COUNT, apply_console, apply_result, campaign_gate, capture_console,
     classify_apply, classify_capture, classify_delivery,
     column_sequences, count_marker_lines, decode_pred_stats, decode_records,
     decode_scored_stats, decode_wire_stats, expected_tiers, find_scope_column,
@@ -255,6 +256,47 @@ def test_send_console_failure_aborts_before_the_game_runs_the_command(monkeypatc
     with pytest.raises(mod._Abort) as exc:
         mod._send_console_or_abort("cmd.txt", "effect every_system = { }")
     assert exc.value.verdict == "console_send_failed"
+
+
+def test_send_console_watches_the_supervisor_seen_path(tmp_path, monkeypatch):
+    cmd = tmp_path / "ns_game_cmd.txt"
+    seen = tmp_path / "ns_game_cmd.seen"
+    monkeypatch.setattr(mod, "_write_command",
+                        lambda path, line: seen.write_text("new"))
+    assert mod._send_console(str(cmd), "effect every_system = { }")
+
+
+def test_send_console_waits_past_one_second_for_a_slow_supervisor(monkeypatch):
+    clock = {"t": 0.0}
+    monkeypatch.setattr(mod, "_seen_key",
+                        lambda path: "old" if clock["t"] < 1.6 else "new")
+    monkeypatch.setattr(mod, "_write_command", lambda path, line: None)
+    monkeypatch.setattr(mod.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(mod.time, "sleep",
+                        lambda s: clock.__setitem__("t", clock["t"] + s))
+    assert mod._send_console("cmd.txt", "effect every_system = { }")
+
+
+def test_seen_path_agrees_with_the_supervisor_constant():
+    source = (ROOT / "scripts" / "windows" / "game_supervisor.py").read_text()
+    match = re.search(r'^CMD_SEEN_PATH = r"([^"]+)"', source, re.MULTILINE)
+    assert match
+    assert mod._seen_path(mod.SUPERVISOR_CMD) == match.group(1)
+
+
+def test_apply_result_keeps_the_sentinel_count():
+    got = apply_result({"calls": 1}, {"calls": 4},
+                       {"js_err": 0, "invalid": 0}, 70, 783)
+    assert got == {
+        "before": {"calls": 1}, "after": {"calls": 4}, "delta": 3,
+        "scored": {"js_err": 0, "invalid": 0}, "log_hits": 70,
+        "sentinel": 783}
+
+
+def test_empty_result_declares_sentinel_for_both_phases():
+    result = mod._empty_result(mod._parse_args([]))
+    assert result["capture"]["sentinel"] is None
+    assert result["apply"]["sentinel"] is None
 
 def test_preflight_gate_uses_the_logsink_collapsed_count():
     assert preflight_gate(0) == "console_unavailable"

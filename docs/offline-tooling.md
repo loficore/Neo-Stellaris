@@ -544,8 +544,9 @@ effect every_system = { log = "C4_APPSTART_<pid>_[This.GetName]" neo_action = { 
 ```
 
 > 哨兵与预检共用 `[This.GetName]` 的 783 行去重形状，但带 pid 与相位：capture/apply 的哨兵在
-> 同一会话里互不冒充。1 s 内没有被 supervisor 消费 → `console_send_failed`；0 行 → `*_not_delivered`；
-> 非 783 行 → `*_sentinel_mismatch`。
+> 同一会话里互不冒充。3 s 内没有被 supervisor 消费 → `console_send_failed`；0 行 → `*_not_delivered`；
+> 非 783 行 → `*_sentinel_mismatch`。宽限取 3 s,是因为 supervisor 的 serve 循环是 0.8 s、读命令前
+> 还要做像素截图 —— 投递失败现在会中止整枪,1 s 会把健康通道误判成坏通道。
 
 **谓词计数器**：`C4PredStatsInto` 是 `<QQII>` 24 B（calls, patched, last_token, installed）；驱动取
 capture 前后的**增量**，不是绝对值 —— `pred_patched` 是进程累计值，预检的 effect 也会进 detour。
@@ -590,7 +591,7 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 | `sanity_failed` / `quickjs_init_failed` / `c1_failed` | `C2Sanity≠42` / `C2Init≠0` / `C1Run==0` 或 `C1EffectId==0` | C1/C2 前置门 |
 | `layout_drift` | layout 导出 ≠ 8 个字或字段不匹配 | 驱动与 DLL 解码契约断了 |
 | `install_failed` | `C4WireInstall != 0` | 谓词 detour/arm 失败,**不重试**,换进程 |
-| `console_send_failed` | 命令写入 1 s 内 supervisor 未消费（seen-key 不变） | 键盘/supervisor 通道坏了，游戏没收到命令 |
+| `console_send_failed` | 命令写入 3 s 内 supervisor 未消费（seen-key 不变） | 键盘/supervisor 通道坏了，游戏没收到命令 |
 | `console_unavailable` / `log_unreadable` | 预检 marker 0 行 / 日志读不了 | 键盘路径 / 路径问题 |
 | `capture_not_delivered` / `capture_sentinel_mismatch` | capture 哨兵 0 行 / ≠ 783 行 | 命令没进游戏 / 战役形状不对 |
 | `apply_not_delivered` / `apply_sentinel_mismatch` | apply 哨兵 0 行 / ≠ 783 行 | 第二次命令没生效 / 战役形状不对 |
