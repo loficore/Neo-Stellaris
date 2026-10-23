@@ -8,6 +8,8 @@ const predicate_hook = @import("c2/predicate_hook.zig");
 const exec_hook = @import("scripted/exec_hook.zig");
 const live_probe = @import("c2/live_probe.zig");
 const scope_probe = @import("c2/scope_probe.zig");
+const wire = @import("c2/wire.zig");
+const windows = @import("hooking/windows.zig");
 const chokepoint_table = @import("c2/chokepoint_table.zig");
 
 comptime {
@@ -18,8 +20,7 @@ extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
 extern fn C2ExecArmToken(token: u32, budget: u32) c_int;
 extern fn C2ExecStats(out: [*]u8, out_size: c_int) c_int;
 extern fn C2ExecDisarmState() c_int;
-extern fn C2ExecArmScores(scores: ?[*]const u16, count: u32, token: u32,
-    budget: u32, tier1_min: u32, tier2_min: u32) c_int;
+extern fn C2ExecArmScores(scores: ?[*]const u16, count: u32, token: u32, budget: u32, tier1_min: u32, tier2_min: u32) c_int;
 extern fn C2ExecCallScored(token: u32, system_id: u32) c_int;
 extern fn C2ExecScoredStats(out: [*]u8, out_size: c_int) c_int;
 extern fn C2ExecArmSrcForTest(src: [*:0]const u8, token: u32, budget: u32) c_int;
@@ -274,9 +275,9 @@ test "live probe stats render every driver key exactly once" {
     const n = live_probe.statsInto(&buf);
     const text = buf[0..n];
     for ([_][]const u8{
-        "armed",         "token",      "calls",         "fired",    "ctx_skip",
-        "invalid",       "instantiate_rc", "patch_size", "installed", "verified",
-        "vtable",        "chain",      "pred_installed", "pred_calls", "pred_patched",
+        "armed",   "token",          "calls",          "fired",      "ctx_skip",
+        "invalid", "instantiate_rc", "patch_size",     "installed",  "verified",
+        "vtable",  "chain",          "pred_installed", "pred_calls", "pred_patched",
     }) |key| {
         try std.testing.expectEqual(@as(usize, 1), countExactKey(text, key));
     }
@@ -309,19 +310,19 @@ test "scored call maps the table to tiers and counts" {
     const want = [_]c_int{ 0, 0, 1, 1, 2, 2 };
     for (want, 0..) |tier, id| try std.testing.expectEqual(tier, C2ExecCallScored(77, @intCast(id)));
     try std.testing.expectEqual(@as(c_int, -1), C2ExecCallScored(999, 0)); // 错 token,不耗预算
-    try std.testing.expectEqual(@as(c_int, -3), C2ExecCallScored(77, 6));  // 超范围,不耗预算
+    try std.testing.expectEqual(@as(c_int, -3), C2ExecCallScored(77, 6)); // 超范围,不耗预算
     var buf: [1024]u8 = undefined;
     const n = C2ExecScoredStats(&buf, @intCast(buf.len));
     const s = buf[0..@intCast(n)];
     for ([_][]const u8{
-        "armed", "token",    "budget_left", "scored_calls", "skipped",
-        "busy",  "js_err",   "invalid",     "tier0",        "tier1",
-        "tier2", "last_id",  "last_tier",
+        "armed", "token",   "budget_left", "scored_calls", "skipped",
+        "busy",  "js_err",  "invalid",     "tier0",        "tier1",
+        "tier2", "last_id", "last_tier",
     }) |key| try std.testing.expectEqual(@as(usize, 1), countExactKey(s, key));
     for ([_][]const u8{
-        "armed=1",  "token=77",       "budget_left=10", "scored_calls=6", "skipped=1",
-        "busy=0",   "js_err=0",       "invalid=1",      "tier0=2",        "tier1=2",
-        "tier2=2",  "last_id=5",      "last_tier=2",
+        "armed=1", "token=77",  "budget_left=10", "scored_calls=6", "skipped=1",
+        "busy=0",  "js_err=0",  "invalid=1",      "tier0=2",        "tier1=2",
+        "tier2=2", "last_id=5", "last_tier=2",
     }) |kv| try std.testing.expect(std.mem.indexOf(u8, s, kv) != null);
     _ = C2ExecDisarmState();
 }
@@ -344,8 +345,7 @@ test "scored call reports budget exhaustion as a skip" {
 
 test "scored call reports a throwing script and re-arms" {
     try liveCtx();
-    try std.testing.expectEqual(@as(c_int, 0),
-        C2ExecArmSrcForTest("(function(){return function(t,id){throw 1;};})()", 77, 4));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmSrcForTest("(function(){return function(t,id){throw 1;};})()", 77, 4));
     try std.testing.expectEqual(@as(c_int, -2), C2ExecCallScored(77, 0));
     var buf: [1024]u8 = undefined;
     const n = C2ExecScoredStats(&buf, @intCast(buf.len));
@@ -359,12 +359,195 @@ test "scored call reports a throwing script and re-arms" {
 
 test "scored table drives the shipped 787 scores" {
     try liveCtx();
-    try std.testing.expectEqual(@as(c_int, 0),
-        C2ExecArmScores(chokepoint_table.scores[0..].ptr, @intCast(chokepoint_table.SCORE_COUNT), 77, 787, 100, 200));
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmScores(chokepoint_table.scores[0..].ptr, @intCast(chokepoint_table.SCORE_COUNT), 77, 787, 100, 200));
     try std.testing.expectEqual(@as(c_int, 0), C2ExecCallScored(77, 0));
     try std.testing.expectEqual(@as(c_int, 0), C2ExecCallScored(77, 1));
     try std.testing.expectEqual(@as(c_int, 1), C2ExecCallScored(77, 7));
     try std.testing.expectEqual(@as(c_int, 2), C2ExecCallScored(77, 239));
     try std.testing.expectEqual(@as(c_int, 2), C2ExecCallScored(77, 578));
     _ = C2ExecDisarmState();
+}
+
+const FakeMem = struct {
+    ctx: [wire.CTX_LEN]u8 align(8) = [_]u8{0} ** wire.CTX_LEN,
+    a3: [wire.A3_LEN]u8 align(8) = [_]u8{0} ** wire.A3_LEN,
+    target: [wire.PTR_LEN]u8 align(8) = [_]u8{0} ** wire.PTR_LEN,
+    fail_ctx: bool = false,
+    fail_a3: bool = false,
+    fail_target: bool = false,
+
+    const CTX_ADDR: usize = 0x100000;
+    const A3_ADDR: usize = 0x110000;
+    const TARGET_ADDR: usize = 0x200000;
+
+    fn read(self: *FakeMem, addr: usize, out: []u8) bool {
+        var src: []const u8 = undefined;
+        if (addr == CTX_ADDR) {
+            if (self.fail_ctx) return false;
+            src = &self.ctx;
+        } else if (addr == A3_ADDR) {
+            if (self.fail_a3) return false;
+            src = &self.a3;
+        } else if (addr == TARGET_ADDR) {
+            if (self.fail_target) return false;
+            src = &self.target;
+        } else return false;
+        if (out.len > src.len) return false;
+        @memcpy(out, src[0..out.len]);
+        return true;
+    }
+};
+
+var fake_mem: FakeMem = .{};
+
+fn fakeRead(addr: usize, out: []u8) bool {
+    return fake_mem.read(addr, out);
+}
+
+fn readU32At(bytes: []const u8, off: usize) u32 {
+    return std.mem.readInt(u32, bytes[off..][0..4], .little);
+}
+
+test "wire record layout pins every driver offset" {
+    try std.testing.expectEqual(@as(usize, 3368), @sizeOf(wire.Record));
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(wire.Record, "valid"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(wire.Record, "ctx_ptr"));
+    try std.testing.expectEqual(@as(usize, 56), @offsetOf(wire.Record, "ctx"));
+    try std.testing.expectEqual(@as(usize, 1000), @offsetOf(wire.Record, "a3"));
+    try std.testing.expectEqual(@as(usize, 1256), @offsetOf(wire.Record, "ptr_targets"));
+    try std.testing.expectEqual(@as(usize, 1320), @offsetOf(wire.Record, "ptr_windows"));
+    try std.testing.expectEqual(@as(usize, 80), wire.STATS_SIZE);
+}
+
+test "wire spec packs and rejects reserved or out-of-bounds bits" {
+    wire.resetForTest();
+    const p: u64 = (1 << 8) | (0x38 << 16) | (0x20 << 32);
+    try std.testing.expect(wire.setSpecPacked(p));
+    try std.testing.expectEqual(p, wire.specPacked());
+    try std.testing.expect(!wire.setSpecPacked(1 << 63)); // reserved
+    try std.testing.expect(!wire.setSpecPacked(2)); // blob=2
+    try std.testing.expect(!wire.setSpecPacked(2 << 8)); // deref=2
+    try std.testing.expect(!wire.setSpecPacked((4 << 16) | (1 << 32))); // 直读 off_b != 0
+    try std.testing.expect(!wire.setSpecPacked(942 << 16)); // 未对齐
+}
+
+test "wire capture skips a record when ctx is unreadable" {
+    wire.resetForTest();
+    fake_mem = .{ .fail_ctx = true };
+    wire.setReaderForTest(&fakeRead);
+    wire.beginSession(4242);
+    try std.testing.expect(!wire.captureWith(&fakeRead, 0, 4242, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    var stats: [wire.STATS_SIZE]u8 = undefined;
+    try std.testing.expect(wire.statsInto(&stats));
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 12)); // calls
+    try std.testing.expectEqual(@as(u32, 0), readU32At(&stats, 4)); // records
+    var out: [wire.RECORD_SIZE]u8 = undefined;
+    try std.testing.expectEqual(@as(u32, 0), wire.drainInto(&out));
+}
+
+test "wire capture records a3 failure with a3_len zero" {
+    wire.resetForTest();
+    fake_mem = .{ .fail_a3 = true };
+    wire.setReaderForTest(&fakeRead);
+    wire.beginSession(4242);
+    try std.testing.expect(wire.captureWith(&fakeRead, 0, 4242, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    var out: [wire.RECORD_SIZE]u8 = undefined;
+    try std.testing.expectEqual(@as(u32, 1), wire.drainInto(&out));
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&out, 0)); // valid
+    try std.testing.expectEqual(@as(u32, 0), readU32At(&out, 40)); // a3_len
+    try std.testing.expectEqual(@as(u32, 944), readU32At(&out, 48)); // ctx_len
+}
+
+test "wire capture stores one level of pointer windows and drops on ring full" {
+    wire.resetForTest();
+    fake_mem = .{};
+    std.mem.writeInt(u64, fake_mem.ctx[0x10..0x18], FakeMem.TARGET_ADDR, .little);
+    fake_mem.target[0] = 0xAB;
+    wire.setReaderForTest(&fakeRead);
+    wire.setRingCapForTest(1);
+    wire.beginSession(4242);
+    try std.testing.expect(wire.captureWith(&fakeRead, 0, 4242, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    try std.testing.expect(wire.captureWith(&fakeRead, 0, 4242, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    var stats: [wire.STATS_SIZE]u8 = undefined;
+    try std.testing.expect(wire.statsInto(&stats));
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 4)); // records
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 8)); // dropped
+    var out: [wire.RECORD_SIZE]u8 = undefined;
+    try std.testing.expectEqual(@as(u32, 1), wire.drainInto(&out));
+    try std.testing.expectEqual(@as(u32, 0), readU32At(&out, 8)); // serial
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&out, 44)); // ptr_count
+    try std.testing.expectEqual(FakeMem.TARGET_ADDR, std.mem.readInt(u64, out[1256..1264], .little));
+    try std.testing.expectEqual(@as(u8, 0xAB), out[1320]); // 窗首字节
+}
+
+test "wire drain requires a full buffer and clears the ring" {
+    wire.resetForTest();
+    fake_mem = .{};
+    wire.setReaderForTest(&fakeRead);
+    wire.beginSession(4242);
+    try std.testing.expect(wire.captureWith(&fakeRead, 0, 4242, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    try std.testing.expect(wire.captureWith(&fakeRead, 0, 4242, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    var one: [wire.RECORD_SIZE]u8 = undefined;
+    try std.testing.expectEqual(@as(u32, 0), wire.drainInto(&one));
+    var two: [2 * wire.RECORD_SIZE]u8 = undefined;
+    try std.testing.expectEqual(@as(u32, 2), wire.drainInto(&two));
+    try std.testing.expectEqual(@as(u32, 0), readU32At(&two, 8)); // 第一条 serial
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&two, 8 + 3368)); // 第二条 serial
+    try std.testing.expectEqual(@as(u32, 0), wire.drainInto(&two));
+}
+
+test "wire resolveWith reads direct and one-level specs" {
+    wire.resetForTest();
+    fake_mem = .{};
+    std.mem.writeInt(u32, fake_mem.ctx[0x38..0x3c], 200, .little);
+    std.mem.writeInt(u64, fake_mem.ctx[0x10..0x18], FakeMem.TARGET_ADDR, .little);
+    std.mem.writeInt(u32, fake_mem.target[0x20..0x24], 578, .little);
+    const direct = wire.Spec{ .blob = 0, .deref = 0, .off_a = 0x38, .off_b = 0 };
+    const deref = wire.Spec{ .blob = 0, .deref = 1, .off_a = 0x10, .off_b = 0x20 };
+    try std.testing.expectEqual(@as(?u32, 200), wire.resolveWith(&fakeRead, direct, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    try std.testing.expectEqual(@as(?u32, 578), wire.resolveWith(&fakeRead, deref, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    fake_mem.fail_target = true;
+    try std.testing.expectEqual(@as(?u32, null), wire.resolveWith(&fakeRead, deref, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    fake_mem.fail_target = false;
+    std.mem.writeInt(u32, fake_mem.ctx[0x38..0x3c], 787, .little);
+    try std.testing.expectEqual(@as(?u32, null), wire.resolveWith(&fakeRead, direct, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+}
+
+test "wire capture never calls JS and never chains" {
+    wire.resetForTest();
+    fake_mem = .{};
+    wire.setReaderForTest(&fakeRead);
+    wire.beginSession(4242);
+    try std.testing.expect(wire.setMode(1));
+    try liveCtx();
+    try std.testing.expectEqual(@as(c_int, 0), C2ExecArmScores(chokepoint_table.scores[0..].ptr, @intCast(chokepoint_table.SCORE_COUNT), 4242, 16, 100, 200));
+    try std.testing.expect(!wire.onExecuteWith(&fakeRead, 4242, 0, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    var buf: [1024]u8 = undefined;
+    const n = C2ExecScoredStats(&buf, @intCast(buf.len));
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "scored_calls=0") != null);
+    _ = C2ExecDisarmState();
+}
+
+test "wire stats and layout carry every field" {
+    wire.resetForTest();
+    fake_mem = .{};
+    wire.setReaderForTest(&fakeRead);
+    wire.beginSession(77);
+    try std.testing.expect(wire.setMode(1));
+    try std.testing.expect(wire.captureWith(&fakeRead, 0, 77, FakeMem.CTX_ADDR, FakeMem.A3_ADDR));
+    var stats: [wire.STATS_SIZE]u8 = undefined;
+    try std.testing.expect(wire.statsInto(&stats));
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 0)); // mode=capture
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 4)); // records
+    try std.testing.expectEqual(@as(u32, 1), readU32At(&stats, 12)); // calls
+    try std.testing.expectEqual(@as(u32, 77), readU32At(&stats, 52)); // armed_token
+    var layout: [8]u32 = undefined;
+    try std.testing.expectEqual(@as(u32, 8), wire.layoutInto(&layout));
+    try std.testing.expectEqualSlices(u32, &[_]u32{ 1, 1, 3368, 2048, 944, 256, 8, 256 }, &layout);
+}
+
+test "readProcessMemory is inert off Windows" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var b = [_]u8{0} ** 4;
+    try std.testing.expect(!windows.readProcessMemory(@intFromPtr(&b), &b));
 }

@@ -5,6 +5,7 @@
 // memory allocation, and instruction-length analysis for x86_64.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 // ---------------------------------------------------------------------------
 // Windows API declarations (x86_64 ABI, no libc)
@@ -28,6 +29,18 @@ extern "kernel32" fn VirtualFree(lpAddress: LPVOID, dwSize: SIZE_T, dwFreeType: 
 extern "kernel32" fn FlushInstructionCache(hProcess: ?*anyopaque, lpBaseAddress: LPVOID, dwSize: SIZE_T) BOOL;
 extern "kernel32" fn GetCurrentProcess() ?*anyopaque;
 extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callconv(.c) ?*anyopaque;
+extern "kernel32" fn ReadProcessMemory(hProcess: ?*anyopaque, lpBaseAddress: ?*const anyopaque, lpBuffer: LPVOID, nSize: SIZE_T, lpNumberOfBytesRead: ?*SIZE_T) BOOL;
+
+/// Read `out.len` bytes of this process into `out`. The comptime branch keeps
+/// kernel32 out of native (non-Windows) test binaries entirely; on Windows a
+/// partial read is a failure, not a short buffer.
+pub fn readProcessMemory(addr: usize, out: []u8) bool {
+    if (comptime builtin.os.tag != .windows) return false;
+    if (addr == 0 or out.len == 0) return false;
+    var got: SIZE_T = 0;
+    const ok = ReadProcessMemory(GetCurrentProcess(), @ptrFromInt(addr), out.ptr, out.len, &got);
+    return ok != 0 and got == out.len;
+}
 
 /// Resolve an RVA inside stellaris.exe to its live absolute address.
 /// The HMODULE returned by GetModuleHandleW *is* the image base.
