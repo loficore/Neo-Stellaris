@@ -5,6 +5,8 @@ plan's Spec section); they are the contract the Windows edge feeds in.
 No Windows API, no PIL, no numpy.
 """
 
+import inspect
+import json
 import random
 
 import game_supervisor as gs
@@ -221,3 +223,100 @@ def test_console_sync_lets_an_operator_declare_the_console_state(monkeypatch,
     assert gs.parse_command("console_sync closed") == {"verb": "console_sync",
                                                        "open": False}
     assert gs.parse_command("console_sync sideways") is None
+
+
+def _input_stub(monkeypatch, tmp_path):
+    """Shared scaffolding: a supervisor whose keystrokes and clicks are recorded."""
+    monkeypatch.setattr(gs, "LOG_PATH", str(tmp_path / "supervisor.jsonl"))
+    monkeypatch.setattr(gs, "STATUS_PATH", str(tmp_path / "status.json"))
+    sent = []
+    monkeypatch.setattr(gs, "focus", lambda hwnd: True)
+    monkeypatch.setattr(gs, "_set_clipboard_text", lambda text: True)
+    monkeypatch.setattr(gs, "_send_input_event",
+                        lambda vk, scan, flags: sent.append((vk, scan)))
+    monkeypatch.setattr(gs, "press_space", lambda hwnd: sent.append(("space",)))
+    monkeypatch.setattr(gs, "speed_label_sha", lambda hwnd: "0" * 16)
+    monkeypatch.setattr(gs, "window_rect", lambda hwnd: (0, 0, 2000, 1000))
+    class _Launcher:
+        def _click_at(self, x, y):
+            sent.append(("click", x, y))
+
+    monkeypatch.setattr(gs, "_launch", lambda: _Launcher())
+    monkeypatch.setattr(gs.time, "sleep", lambda s: None)
+    return sent
+
+
+def _logged_events(tmp_path):
+    with open(tmp_path / "supervisor.jsonl", encoding="utf-8") as f:
+        return [json.loads(line)["event"] for line in f]
+
+
+def test_console_command_refuses_instead_of_guessing_when_state_is_unknown(
+        monkeypatch, tmp_path):
+    # Live 2026-10-23: the C4 capture command was sent with opened=False on a
+    # console the daemon only *believed* was open.  The keystrokes went to the
+    # game, 0 of 783 sentinels ran, and the log could not tell the two cases
+    # apart.  An unknown state must be a loud refusal, never a guess.
+    sent = _input_stub(monkeypatch, tmp_path)
+    state = {"want": "paused", "console_open": None}
+    gs._handle_command({"verb": "console", "text": "log = 1"}, 7, state)
+    assert sent == []
+    assert state["console_open"] is None
+    assert "console_refused" in _logged_events(tmp_path)
+
+
+def test_game_input_verbs_invalidate_the_console_belief(monkeypatch, tmp_path):
+    # A click in the game area or a speed key can close or defocus the panel;
+    # after any input aimed at the game the panel state is no longer known.
+    for verb, cmd in (("speed", {"verb": "speed", "direction": "up"}),
+                      ("click", {"verb": "click", "x": 10, "y": 20}),
+                      ("dismiss", {"verb": "dismiss"})):
+        sent = _input_stub(monkeypatch, tmp_path)
+        state = {"want": "paused", "console_open": True,
+                 "last_bbox": (100, 100, 200, 200), "paused": "paused"}
+        gs._handle_command(cmd, 7, state)
+        assert state["console_open"] is None, verb
+
+
+def test_pause_key_is_not_typed_into_an_open_console(monkeypatch, tmp_path):
+    # Space is the console's text field while the panel is open: it neither
+    # pauses the game nor closes the panel, and pixel detection then reports
+    # "playing" forever.  The daemon must not send it there.
+    sent = _input_stub(monkeypatch, tmp_path)
+    assert gs.send_pause_key({"console_open": True}, 7) == "blocked_console"
+    assert sent == []
+    assert gs.send_pause_key({"console_open": False}, 7) == "sent"
+    assert gs.send_pause_key({"console_open": None}, 7) == "sent"
+    assert sent == [("space",), ("space",)]
+
+
+def test_console_close_taps_once_only_when_the_panel_is_believed_open(
+        monkeypatch, tmp_path):
+    # Without this verb a daemon that left the console open can never pause the
+    # game again, because the pause key is blocked while the panel is believed
+    # open.  Toggling is only safe when the parity is known.
+    assert gs.parse_command("console_close") == {"verb": "console_close"}
+    sent = _input_stub(monkeypatch, tmp_path)
+    state = {"want": "paused", "console_open": True}
+    gs._handle_command({"verb": "console_close"}, 7, state)
+    assert sent == [(0, 0x29), (0, 0x29)]
+    assert state["console_open"] is False
+
+    sent = _input_stub(monkeypatch, tmp_path)
+    state = {"want": "paused", "console_open": None}
+    gs._handle_command({"verb": "console_close"}, 7, state)
+    assert sent == []
+    assert "console_refused" in _logged_events(tmp_path)
+
+
+def test_serve_loop_invalidates_the_belief_after_every_auto_click():
+    # The auto window handlers click in the game area, which can close the
+    # console panel.  The serve loop itself is not reachable from a host test,
+    # so this fence pins the invalidation right next to each click it makes.
+    src = inspect.getsource(gs.serve).splitlines()
+    clicks = [i for i, line in enumerate(src)
+              if "click_row(hwnd" in line or "click_close(hwnd" in line]
+    assert clicks, "the serve loop no longer clicks; update this fence"
+    for i in clicks:
+        assert any('state["console_open"] = None' in line
+                   for line in src[i:i + 4]), src[i]

@@ -4226,3 +4226,88 @@ DLL 侧 `effectInstantiate(a1, a2, a3, a4)`(`src/dll/c2/vtable.zig:90`,先 `slot
    下一枪若要区分「引擎真的经 base Execute 派发」与「别的调用者借道我们的副本」,需要的不是更多计数,
    而是第 1 条里那两个槽的取值。
 
+### §54.9 控制台 desync 的根因(2026-10-23,只读取证:无注入、无按键、不开枪,只读 Windows 上的 supervisor 日志)
+
+**为什么要这一节。** §54.4 的捕获命令只跑到 1 次 slot[1],投递门却判 `ok`(783 条哨兵都在);
+下一次 slot2 枪要靠同一条 console 通道连发三条命令。而 §54 之后补投的三次全部 **0 行**——
+不先弄清这条通道什么时候会静默失灵,slot2 那一枪的 `count_mismatch` 就永远分不清「引擎没派发」和
+「命令根本没进去」。Task 7 的 ledger 把这条列为 Blocker 2,当时的候选有 dedupe、Enter 空按、人工点击、
+引擎自己关面板。**这一节的取证把 dedupe 从根因里剔除,并把缺陷钉在 supervisor 自己身上。**
+
+**取证方式(可复现)。** `C:\temp\ns_game_log.jsonl`(12,113 B,LastWriteTime 21:54:14)只用
+`ConvertFrom-Json` 读,不碰游戏窗口。远端控制台是 cp936、嵌套引号会被 cmd→PowerShell 层拆坏,且
+**ssh stdout 超过约 1 KB 会被重置**(1,000 B 过、1,200 B 重置;`scp` 下载同样被重置),所以过滤在
+服务端做、payload 本地编码:
+
+    python3 -c "import base64; open('/tmp/enc3.txt','w').write(base64.b64encode(PS.encode('utf-16-le')).decode())"
+    ssh -o ConnectTimeout=15 Windows_Jiaolong "powershell -NoProfile -EncodedCommand $(cat /tmp/enc3.txt)" \
+      | tr -d '\000' | grep -v '^#<\|^<Objs'
+
+`PS` 逐行 `ConvertFrom-Json`,按 `$o.t` 落在窗口内才输出 `HH:MM:SS event 详情`(详情截 46 字符)。
+同类命令的三次输出:
+
+- 全天事件计数:`2 close_posted, 96 command, 1 console_refused, 10 console_sent, 1 console_sync,
+  10 serve_start, 7 serve_stop`。
+- §54 那一枪与之后的时间线:`20:29:36 serve_start → 20:31:53 console_sent opened=True →
+  20:31:59 opened=False`(两条都出哨兵),之后 `21:40:00 console_sent opened=True`(出 783 行)→
+  `21:42:20 opened=False` → `21:42:50 opened=False` → `21:48:54 opened=False` →
+  `21:51:42 opened=False`,**21:40–21:51 之间没有 `serve_start`**(daemon 没重启过,「重启把标记清成
+  False」这条假说当场死)。
+- 两次失败窗口的邻域(21:39:30–21:44:59 全事件,不过滤类型):
+
+      21:39:56 command console effect every_system = { log = "NS_PREP
+      21:40:00 console_sent chars=62 opened=True
+      21:42:16 command console effect every_system = { log = "NS_PREP
+      21:42:20 console_sent opened=False
+      21:42:46 command console effect every_system = { log = "NS_PREP
+      21:42:50 console_sent opened=False
+      21:44:33 command shot
+
+  另一段(21:48:00–21:52:59):`21:48:37 command click 1090 934` → `21:48:42 shot` →
+  `21:48:51 console …` → `21:48:54 console_sent` → `21:50:16 shot` → `21:51:38 console …` →
+  `21:51:42 console_sent`。
+
+**判读。** `opened` 是 `not state["console_open"]` 的返回值,所以四条 `opened=False` 意思是:
+**发命令那一刻,daemon 认为面板开着**,于是不按开关键、直接清行+粘贴+回车。§54.1 已实机证明
+「提交后面板保持打开」,所以 21:40:00 之后那一刻的信念本应是对的;它错了,只有两种可能——
+面板被别的东西关了,或者面板从来没开。日志里 21:40:00→21:42:16 **一个事件都没有**,这正是关键证据:
+`game_supervisor.py` 的自动路径**不写日志**。serve 循环每个 tick(0.8 s)会按 `plan_step` 自己发输入:
+`press_space`(自动暂停/恢复)、`click_row`(点选项)、`click_close`(关弹窗)——三者都只把结果写进
+`note`,而 `note` 落在 `ns_game_status.json`,那个文件每 tick **原子覆盖**,历史不可回读。
+`_handle_command` 里的 `speed` / `click` / `dismiss` 会写 `command` 事件(所以 21:48:37 那次点击看得见),
+自动路径看不见。于是:
+
+- **21:48:54 的失败有直接相邻证据**:前一条事件是 21:48:37 在游戏区的一次鼠标点击(与 `click_close`
+  同类的 `_click_at`),它足以让面板失焦/关闭,而 `console_open` 仍然是 `True`。
+- **21:42:20 / 21:42:50 的失败是同一机制的推断**:唯一能在日志里完全不留痕迹地改变面板状态的东西,
+  就是那三条不写日志的自动输入。其中空格还有第二重自锁:面板开着时空格进的是**输入行**,游戏
+  **不会暂停**,像素判读于是一直报 `playing`,`want=paused` 的循环就**每个 tick 再按一次空格**——
+  既解释面板为什么不关,也解释游戏为什么停不下来。
+- **dedupe 不需要参与解释**:21:51:42 那条用的是全新唯一前缀 `NS_FLUSH55_<epoch>_`,0 行;
+  三次失败全部 `opened=False`,不需要「重复文本被 sink 丢掉」就已经解释得完。dedupe 只在
+  §54.3/§54.4 解释 **787 执行 vs 783 渲染名** 时仍然是正确判据,那一处不改写。
+
+**根因一句话:`console_open` 记的是「我以为」,从来不是「我看到」;而这个标记有两个消费者,
+只有 console 动词在维护它——pause/speed/click/dismiss 全都往游戏发输入,没有一个字碰它。**
+
+**改了什么(离线,TDD)。** `scripts/windows/game_supervisor.py` 把标记变成**三值信念**
+`True|False|None`,并落三条不变量,每条一个先失败后通过的 host 测试
+(`scripts/windows/tests/test_game_supervisor.py`,217 passed = 212 旧 + 5 新;`just fence` 27):
+
+1. `console_send_plan(state)`:信念为 `None` 时**拒绝**——不猜奇偶、不按键、不碰剪贴板,写
+   `console_refused reason=console_state_unknown`。只有 `console_sync` 或换游戏进程能抬回已知值。
+2. 任何**发给游戏的输入**之后立刻作废:`speed`、`click`、`dismiss`,以及 serve 循环的
+   `click_row` / `click_close`。自动路径没有测试接缝,由一条源码围栏钉住
+   (`test_serve_loop_invalidates_the_belief_after_every_auto_click`)。`shot` 只截像素,不作废。
+3. `send_pause_key(state, hwnd)`:信念为 `True` 时返回 `blocked_console` 且**不按键**,
+   状态 note 变 `pause_blocked_console` / `resume_blocked_console`,打断上面那个空格自锁。
+   代价是面板开着时自动暂停会卡住并写明理由;退出办法是新动词 `console_close`
+   (仅当信念为 `True` 时按一下开关键、写回 `False`;`None` 时同样拒绝)。
+
+**仍未证的事(不要当结论带走)。** 我们**始终没有观测过面板本身**:21:42 那两次归给不写日志的自动输入,
+是「代码里只有这条路能静默改输入状态」+「21:48 那次有可见点击紧邻」的联合推断,不是直接观测。
+能把它坐实的一枪-free 校准(需要人在机器前,本次没做):开面板 → `just game shot` → 关面板 → `shot`,
+把两张截图的判读几何固化成一个面板检测器;在那之前,supervisor 的诚实行为就是
+**未知即拒绝**,而不是继续猜。部署也未做:改动只在本仓库,`C:/temp/game_supervisor.py` 仍是
+`416be63` 那一份(改完要 `just deploy` + `stop` + `start`,进程不热加载)。
+

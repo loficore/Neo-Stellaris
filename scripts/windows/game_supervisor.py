@@ -176,7 +176,7 @@ def parse_command(line: str):
     parts = line.split()
     args = parts[1:]
     if verb in ("pause", "unpause", "toggle", "shot", "status", "quit",
-                "dismiss", "close"):
+                "dismiss", "close", "console_close"):
         return {"verb": verb}
     if verb == "want":
         if len(args) == 1 and args[0].lower() in ("playing", "paused"):
@@ -298,6 +298,18 @@ CF_UNICODETEXT = 13
 REF_W, REF_H = 2160, 1440  # spike reference resolution
 
 
+def console_tap_plan():
+    """The two events that flip the console panel over, with their delays.
+
+    Backquote is a toggle in 4.4.4, so this is the whole of both an open and a
+    close — which one it performs depends entirely on the parity the caller
+    believes.
+    """
+    down = KEYEVENTF_SCANCODE
+    return [(0, CONSOLE_SCAN, down, 0.08),
+            (0, CONSOLE_SCAN, down | KEYEVENTF_KEYUP, 0.08)]
+
+
 def console_key_plan(open_console: bool = True):
     """Clear the console input, paste with Ctrl+V, submit with Enter.
 
@@ -317,7 +329,7 @@ def console_key_plan(open_console: bool = True):
     up = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
     plan = []
     if open_console:
-        plan += [(0, CONSOLE_SCAN, down, 0.08), (0, CONSOLE_SCAN, up, 0.08)]
+        plan += console_tap_plan()
     for _ in range(BACKSPACE_CLEAR):
         plan.append((0, BACKSPACE_SCAN, down, 0.02))
         plan.append((0, BACKSPACE_SCAN, up, 0.02))
@@ -328,6 +340,35 @@ def console_key_plan(open_console: bool = True):
         (0, ENTER_SCAN, down, 0.08), (0, ENTER_SCAN, up, 0.08),
     ]
     return plan
+
+
+def console_send_plan(state: dict):
+    """``("send", open_console)`` or ``("refuse", reason)`` for a console verb.
+
+    ``state["console_open"]`` is a three-valued belief: ``True`` the panel is
+    open, ``False`` it is closed, ``None`` unknown.  The console key is a
+    toggle, so a send needs to know the parity — guessing it is what turned the
+    C4 capture command into 0 executed sentinels with nothing in the log to say
+    so.  Only ``console_sync`` or a fresh process can lift ``None``.
+    """
+    current = state.get("console_open", False)
+    if current is None:
+        return ("refuse", "console_state_unknown")
+    return ("send", not current)
+
+
+def send_pause_key(state: dict, hwnd: int) -> str:
+    """Press Space to toggle pause unless the console would eat the keystroke.
+
+    While the panel is believed open, Space lands in its input line: the game
+    does not pause, the pixel classifier keeps reporting ``playing``, and the
+    loop presses again every tick.  ``blocked_console`` makes that visible in
+    the status note instead of repeating forever.
+    """
+    if state.get("console_open") is True:
+        return "blocked_console"
+    press_space(hwnd)
+    return "sent"
 
 
 def _require_windows() -> None:
@@ -733,6 +774,7 @@ def _handle_command(cmd, hwnd, state):
     elif verb == "speed" and hwnd:
         before = speed_label_sha(hwnd)
         press_speed(hwnd, cmd["direction"])
+        state["console_open"] = None
         time.sleep(0.6)
         state["speed_sha"] = [before, speed_label_sha(hwnd)]
     elif verb == "click" and hwnd:
@@ -740,22 +782,39 @@ def _handle_command(cmd, hwnd, state):
         if _inside(rect, cmd["x"], cmd["y"]):
             if focus(hwnd):
                 _launch()._click_at(cmd["x"], cmd["y"])
+                state["console_open"] = None
             else:
                 _log({"event": "click_refused", "x": cmd["x"], "y": cmd["y"]})
     elif verb == "console" and hwnd:
-        if not focus(hwnd):
-            _log({"event": "console_refused", "hwnd": hwnd})
+        kind, arg = console_send_plan(state)
+        if kind == "refuse":
+            _log({"event": "console_refused", "hwnd": hwnd, "reason": arg})
+        elif not focus(hwnd):
+            _log({"event": "console_refused", "hwnd": hwnd, "reason": "focus"})
         elif not _set_clipboard_text(cmd["text"]):
             _log({"event": "console_clipboard_failed", "chars": len(cmd["text"])})
         else:
-            opened = not state.get("console_open", False)
-            for vk, scan, flags, delay in console_key_plan(open_console=opened):
+            for vk, scan, flags, delay in console_key_plan(open_console=arg):
                 _send_input_event(vk, scan, flags)
                 time.sleep(delay)
             time.sleep(0.3)
             state["console_open"] = True
             _log({"event": "console_sent", "chars": len(cmd["text"]),
-                  "opened": opened})
+                  "opened": arg})
+    elif verb == "console_close" and hwnd:
+        # The pause key cannot reach the game while the panel is open, so a
+        # console the daemon left open needs a way back to a known-closed state.
+        if state.get("console_open") is not True:
+            _log({"event": "console_refused", "hwnd": hwnd,
+                  "reason": "console_state_unknown"})
+        elif not focus(hwnd):
+            _log({"event": "console_refused", "hwnd": hwnd, "reason": "focus"})
+        else:
+            for vk, scan, flags, delay in console_tap_plan():
+                _send_input_event(vk, scan, flags)
+                time.sleep(delay)
+            state["console_open"] = False
+            _log({"event": "console_closed"})
     elif verb == "console_sync":
         state["console_open"] = cmd["open"]
         _log({"event": "console_sync", "console_open": cmd["open"]})
@@ -769,6 +828,7 @@ def _handle_command(cmd, hwnd, state):
     elif verb == "dismiss" and hwnd and state.get("last_bbox") \
             and state.get("paused") == "paused":
         click_close(hwnd, state["last_bbox"])
+        state["console_open"] = None
     elif verb == "shot" and hwnd:
         save_shot(hwnd)
         state["shot"] = SHOT_PATH
@@ -857,16 +917,20 @@ def serve(args) -> int:
         acted = False
         if action == "pause":
             try:
-                press_space(hwnd)
-                note = "commanded_pause"
+                if send_pause_key(state, hwnd) == "sent":
+                    note = "commanded_pause"
+                else:
+                    note = "pause_blocked_console"
             except OSError as e:
                 note = f"pause_failed: {e}"
             time.sleep(0.3)
         elif action == "resume":
             try:
-                press_space(hwnd)
-                state["resume"] = False
-                note = "commanded_resume"
+                if send_pause_key(state, hwnd) == "sent":
+                    state["resume"] = False
+                    note = "commanded_resume"
+                else:
+                    note = "resume_blocked_console"
             except OSError as e:
                 note = f"resume_failed: {e}"
             time.sleep(0.3)
@@ -887,6 +951,7 @@ def serve(args) -> int:
             else:
                 try:
                     click_row(hwnd, rows[index])
+                    state["console_open"] = None
                     handled += 1
                     acted = True
                     note = f"choice_{index + 1}_of_{len(rows)}"
@@ -898,6 +963,7 @@ def serve(args) -> int:
             if args.auto_dismiss and stats["bbox"]:
                 try:
                     click_close(hwnd, stats["bbox"])
+                    state["console_open"] = None
                     acted = True
                     note = "dialog_dismissed"
                     time.sleep(0.4)

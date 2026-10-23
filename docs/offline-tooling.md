@@ -670,6 +670,7 @@ just game console effect every_system = { log = "X" }   # 原样写进控制台(
                                              # 注意 keyword 在 effect 后、= 前;带括号的命令经
                                              # just/ssh 转手会被远端 shell 改写,驱动直接写命令文件
 just game console_sync open | closed         # 人工声明控制台当前是否开着(校正 supervisor 的标记)
+just game console_close                      # 只在标记为「开」时按一下开关键,把状态收回「关」
 just game dismiss            # 只在 paused 且有窗口 bbox 时生效(需 serve --auto-dismiss)
 just game close              # WM_CLOSE 优雅关窗口(游戏会话内 PostMessage;不是 kill)
 just game shot               # 存 C:\temp\ns_game_shot.png
@@ -714,6 +715,25 @@ just game stop | quit
    **成对** down/up,修饰键必须跨 V 的 down/up 按住,所以 Ctrl 只能用 `_send_input_event` 逐事件发。
    数效果 marker 用驱动里的 `count_marker_lines`(只数同时含 `Log effect, file:` 与 marker 的行,
    控制台回显匹配不上)。
+
+   **`console_open` 是三值信念,不是布尔**(`True` 开 / `False` 关 / `None` 未知)。第二枪暴露的
+   不是「键序不对」,是**按键之前无人观测面板真的开着**:21:40:00 那条 `opened=true` 出 783 行,
+   之后三条 `opened=false` 全 0 行,而这段时间 supervisor 日志里**一个事件都没有**(见 §54.9)——
+   被按下的一次是 serve 循环自动补的 pause 空格,它把空格**打进开着的面板**,游戏因此永不暂停、
+   像素判读一直报 `playing`,于是每个 tick 再按一次,而这条路**只写状态 note、不写日志**。
+   现在的三条不变量:
+   - **未知就拒绝**:`console_send_plan` 遇到 `None` 不猜奇偶,写 `console_refused` +
+     `reason=console_state_unknown`,一个键都不按、剪贴板都不碰;只有 `console_sync` 或新进程能
+     把 `None` 抬成已知值。宁可在日志里响一声,也不要一发静默的 0 行枪。
+   - **碰过游戏就作废**:任何发给游戏的输入 —— `speed`、`click`、`dismiss`、自动点选项
+     (`click_row`)、自动关窗 (`click_close`) —— 之后立刻 `console_open = None`。点在游戏区可能
+     关掉或夺走面板焦点,而 daemon 看不见。`shot` 只截图像素,不作废。
+   - **面板开着时不发空格**:`send_pause_key(state, hwnd)` 在信念为 `True` 时返回
+     `blocked_console` 并按下不按键,状态 note 变 `pause_blocked_console` / `resume_blocked_console`;
+     信念为 `False`/`None` 才真按(按下不改变面板状态,所以不作废)。
+   代价:面板被我们打开后,自动暂停会**卡住并写明理由**。退出办法是新动词
+   **`just game console_close`**(2026-10-23 加):仅在信念为 `True` 时按一下开关键并把信念写 `False`,
+   信念为 `None` 时同样拒绝(奇偶未知,按一下可能反而打开)。解析在 `parse_command` 的无参动词表里。
 7. **`speed up/down` 实机已验证**:`up` 让标签从「常速」变「快速」,`down` 回落。命令会把 `speed_sha`
    的前后值写进状态,但绿色标签背景会脉冲,哈希自己也会变 —— 判结果要读截图里的两个字,不要只看哈希。
 8. **scp 上传可用,批量下载会把 SSH 连接重置**:取产物用分块 base64,单次输出 **≤700 字节**稳定
