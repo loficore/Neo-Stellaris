@@ -1,0 +1,198 @@
+import pathlib
+import struct
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from c4_wiring_probe import (
+    EXPECTED_TIERS, RECORD_SIZE, SAVE_SHA, campaign_gate, classify_apply,
+    classify_capture, column_sequences, count_marker_lines, decode_records,
+    decode_scored_stats, decode_wire_stats, expected_tiers, find_scope_column,
+    pack_spec, supervisor_ready, unpack_spec,
+)
+
+CTX_OFF, A3_OFF, TARGETS_OFF, WINDOWS_OFF = 56, 1000, 1256, 1320
+WIRE_KEYS = ["mode", "records", "dropped", "calls", "resolved", "unresolved",
+             "tier0", "tier1", "tier2", "js_err", "chain", "last_id", "last_tier",
+             "armed_token", "spec_blob", "spec_deref", "spec_off_a", "spec_off_b",
+             "reserved0", "reserved1"]
+SCORED_LINE = ("armed=1 token=4242 budget_left=4084 scored_calls=787 skipped=0 busy=0 "
+               "js_err=0 invalid=0 tier0=717 tier1=55 tier2=15 last_id=786 last_tier=2")
+
+def _put32(blob, off, value):
+    struct.pack_into("<I", blob, off, value)
+
+def _put64(blob, off, value):
+    struct.pack_into("<Q", blob, off, value)
+
+def _make_record(serial, ctx=None, a3=None, targets=(), windows=()):
+    ctx = bytearray(944) if ctx is None else bytearray(ctx)
+    a3 = bytearray(256) if a3 is None else bytearray(a3)
+    rec = bytearray(RECORD_SIZE)
+    struct.pack_into("<IIII", rec, 0, 1, 4242, serial, 0)
+    struct.pack_into("<QQQ", rec, 16, 0x100000, 0x110000, 0x200000)
+    struct.pack_into("<IIII", rec, 40, len(a3), len(targets), len(ctx), 0)
+    rec[CTX_OFF:CTX_OFF + len(ctx)] = ctx
+    rec[A3_OFF:A3_OFF + len(a3)] = a3
+    for i, target in enumerate(targets):
+        _put64(rec, TARGETS_OFF + 8 * i, target)
+    for i, window in enumerate(windows):
+        start = WINDOWS_OFF + 256 * i
+        rec[start:start + len(window)] = bytes(window)
+    return bytes(rec)
+
+def _linear_records(count, value_off=0x38):
+    out = []
+    for i in range(count):
+        ctx = bytearray(944)
+        _put32(ctx, value_off, i)
+        out.append(_make_record(i, ctx))
+    return decode_records(b"".join(out))
+
+def test_pack_spec_round_trips_direct_and_deref():
+    assert pack_spec(0, 0, 0x38, 0) == 0x38 << 16
+    assert unpack_spec(pack_spec(0, 0, 0x38, 0)) == {
+        "blob": 0, "deref": 0, "off_a": 0x38, "off_b": 0}
+    p = pack_spec(1, 1, 0x10, 0x20)
+    assert p == 1 | (1 << 8) | (0x10 << 16) | (0x20 << 32)
+    assert unpack_spec(p) == {"blob": 1, "deref": 1, "off_a": 0x10, "off_b": 0x20}
+    for args in [(2, 0, 0x38, 0), (0, 2, 0x38, 0), (0, 0, 0x39, 0),
+                 (0, 0, 0x400, 0), (0, 0, 0x38, 0x10), (0, 1, 0x10, 0x400),
+                 (1, 1, 0x400, 0x20), (0, 0, -4, 0)]:
+        with pytest.raises(ValueError):
+            pack_spec(*args)
+    with pytest.raises(ValueError):
+        unpack_spec(1 << 63)
+
+def test_decode_records_rejects_trailing_bytes():
+    ctx = bytearray(944); _put32(ctx, 0x38, 5)
+    a3 = bytearray(256); _put32(a3, 0x10, 9)
+    window = bytearray(256); _put32(window, 0x20, 7)
+    raw = _make_record(3, ctx, a3, (0x200000,), (window,))
+    [rec] = decode_records(raw)
+    assert (rec["valid"], rec["token"], rec["serial"]) == (1, 4242, 3)
+    assert (rec["a3_len"], rec["ptr_count"], rec["ctx_len"]) == (256, 1, 944)
+    assert struct.unpack_from("<I", rec["ctx"], 0x38)[0] == 5
+    assert struct.unpack_from("<I", rec["a3"], 0x10)[0] == 9
+    assert rec["ptr_targets"] == [0x200000]
+    assert struct.unpack_from("<I", rec["ptr_windows"][0], 0x20)[0] == 7
+    with pytest.raises(ValueError):
+        decode_records(raw + b"\0")
+
+def test_decode_wire_stats_reads_every_field():
+    raw = struct.pack("<20I", *range(20))
+    assert decode_wire_stats(raw) == dict(zip(WIRE_KEYS, range(20)))
+    with pytest.raises(ValueError):
+        decode_wire_stats(raw[:76])
+    with pytest.raises(ValueError):
+        decode_wire_stats(raw + b"\0\0\0\0")
+
+def test_decode_scored_stats_requires_every_key_once():
+    got = decode_scored_stats(SCORED_LINE)
+    assert len(got) == 13
+    assert (got["tier0"], got["tier1"], got["tier2"]) == (717, 55, 15)
+    assert (got["last_id"], got["last_tier"]) == (786, 2)
+    with pytest.raises(ValueError):
+        decode_scored_stats(SCORED_LINE.replace("tier2=15 ", ""))
+    with pytest.raises(ValueError):
+        decode_scored_stats(SCORED_LINE + " js_err=1")
+    with pytest.raises(ValueError):
+        decode_scored_stats(SCORED_LINE + " extra=1")
+    idle = ("armed=0 token=0 budget_left=0 scored_calls=0 skipped=0 busy=0 "
+            "js_err=0 invalid=0 tier0=0 tier1=0 tier2=0 last_id=0 last_tier=-1")
+    assert decode_scored_stats(idle)["last_tier"] == -1
+
+def test_column_sequences_maps_pointer_windows_to_source_offsets():
+    ctx0, ctx1 = bytearray(944), bytearray(944)
+    for ctx, value in ((ctx0, 0), (ctx1, 1)):
+        _put32(ctx, 0x38, value)
+        _put64(ctx, 0x10, 0x200000)
+    w0, w1 = bytearray(256), bytearray(256)
+    _put32(w0, 0x20, 7); _put32(w1, 0x20, 8)
+    records = decode_records(b"".join([
+        _make_record(0, ctx0, targets=(0x200000,), windows=(w0,)),
+        _make_record(1, ctx1, targets=(0x200000,), windows=(w1,)),
+    ]))
+    cols = dict(column_sequences(records))
+    assert cols["ctx+0x38"] == [0, 1]
+    assert cols["ctx->[+0x10]+0x20"] == [7, 8]
+
+def test_find_scope_column_accepts_the_unique_exact_column():
+    found = find_scope_column(_linear_records(787))
+    assert found["status"] == "ok"
+    assert found["column"] == "ctx+0x38"
+    assert found["spec"] == {"blob": 0, "deref": 0, "off_a": 0x38, "off_b": 0}
+
+def test_find_scope_column_rejects_permutation_and_ambiguity():
+    reversed_records = []
+    for i, value in enumerate(reversed(range(787))):
+        ctx = bytearray(944); _put32(ctx, 0x38, value)
+        reversed_records.append(_make_record(i, ctx))
+    assert find_scope_column(decode_records(b"".join(reversed_records)))["status"] == "permutation"
+    two = []
+    for i in range(787):
+        ctx = bytearray(944); _put32(ctx, 0x38, i); _put32(ctx, 0x40, i)
+        two.append(_make_record(i, ctx))
+    assert find_scope_column(decode_records(b"".join(two)))["status"] == "ambiguous_column"
+    assert find_scope_column(_linear_records(786))["status"] == "count_mismatch"
+    none_records = []
+    for i in range(787):
+        ctx = bytearray(944); _put32(ctx, 0x39, i & 0xFF)  # 非 4 对齐,且不构成 plausible qword
+        none_records.append(_make_record(i, ctx))
+    assert find_scope_column(decode_records(b"".join(none_records)))["status"] == "none"
+
+def test_expected_tiers_match_the_shipped_table():
+    text = (ROOT / "evidence/xrefs/chokepoint_scores_4_4_4.tsv").read_text(encoding="utf-8")
+    scores = [int(row.split("\t")[4]) for row in text.splitlines()[1:] if row.strip()]
+    assert len(scores) == 787
+    assert expected_tiers(scores) == EXPECTED_TIERS == (717, 55, 15)
+
+def test_campaign_gate_matrix():
+    assert campaign_gate(SAVE_SHA, SAVE_SHA, False) == "ok"
+    assert campaign_gate("0" * 64, SAVE_SHA, False) == "campaign_mismatch"
+    assert campaign_gate(None, SAVE_SHA, False) == "campaign_unverified"
+    assert campaign_gate("0" * 64, SAVE_SHA, True) == "drift_allowed"
+    assert campaign_gate(None, SAVE_SHA, True) == "campaign_unverified"
+
+def test_count_marker_lines_ignores_console_echo():
+    text = ('[effect.cpp:123]: effect = { every_system = { neo_action = { '
+            'log = "NEO_CHOKE_EFFECT" } } }\n'
+            'NEO_CHOKE_EFFECT\n'
+            '  NEO_CHOKE_EFFECT  \n')
+    assert count_marker_lines(text, "NEO_CHOKE_EFFECT") == 2
+
+def test_supervisor_ready_rejects_stale_status_and_playing():
+    assert supervisor_ready(None, now=100.0) == "supervisor_not_running"
+    assert supervisor_ready({"state": "paused", "epoch": 99.0}, now=100.0) == "ok"
+    assert supervisor_ready({"state": "paused", "epoch": 90.0}, now=100.0) == "supervisor_not_running"
+    assert supervisor_ready({"state": "playing", "epoch": 99.0}, now=100.0) == "supervisor_not_paused"
+    assert supervisor_ready({"state": "no_game", "epoch": 99.0}, now=100.0) == "supervisor_not_running"
+    assert supervisor_ready({"state": "stopped", "epoch": 99.0}, now=100.0) == "supervisor_not_running"
+
+def test_classify_capture_and_apply():
+    cap = {"calls": 787, "records": 787, "dropped": 0}
+    ok_find = {"status": "ok", "column": "ctx+0x38",
+               "spec": {"blob": 0, "deref": 0, "off_a": 0x38, "off_b": 0},
+               "columns": ["ctx+0x38"]}
+    assert classify_capture({"calls": 0, "records": 0, "dropped": 0}, [], {"status": "none"}) == "no_calls"
+    assert classify_capture(cap, [], {"status": "none"}) == "no_readable_ctx"
+    assert classify_capture(cap, [None] * 786, {"status": "count_mismatch"}) == "count_mismatch"
+    assert classify_capture(cap, [None] * 787, {"status": "none"}) == "no_scope_column"
+    assert classify_capture(cap, [None] * 787, {"status": "permutation"}) == "scope_order_unverified"
+    assert classify_capture(cap, [None] * 787, {"status": "ambiguous_column"}) == "ambiguous_column"
+    assert classify_capture(cap, [None] * 787, ok_find) == "ok"
+    zero = {"calls": 0, "resolved": 0, "unresolved": 0, "tier0": 0,
+            "tier1": 0, "tier2": 0, "chain": 0}
+    full = {"calls": 787, "resolved": 787, "unresolved": 0, "tier0": 717,
+            "tier1": 55, "tier2": 15, "chain": 70}
+    clean = {"js_err": 0, "invalid": 0}
+    assert classify_apply(zero, zero, clean, 0) == "apply_no_calls"
+    assert classify_apply(zero, full, {"js_err": 1, "invalid": 0}, 70) == "scored_js_error"
+    assert classify_apply(zero, dict(full, unresolved=1), clean, 70) == "apply_count_mismatch"
+    assert classify_apply(zero, dict(full, tier2=14), clean, 70) == "tier_mismatch"
+    assert classify_apply(zero, dict(full, chain=69), clean, 70) == "chain_mismatch"
+    assert classify_apply(zero, full, clean, 69) == "log_mismatch"
+    assert classify_apply(zero, full, clean, 70) == "ok"

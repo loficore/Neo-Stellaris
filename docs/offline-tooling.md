@@ -524,6 +524,78 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
 
+### `scripts/c4_wiring_probe.py [--dll PATH] [--save PATH] [--json PATH] [--allow-drift]`
+
+C4 接线驱动,一枪一进程:`capture` 跑一遍找出 `ctx`/`a3` 里承载 system id 的列,`apply` 把该列
+喂给 QuickJS 的 787 分数表(tier 阈值 100/200),tier ≥ 1 的 70 个系统 chain donor Execute 应用
+`log`/`set_name`。**capture 只读**(RPM 采样 + 环形记录),整条 apply 路径里唯一的引擎写入是引擎
+自己的 donor Execute。路径默认 `C:\temp\sqjs_c4.dll` / `C:\temp\stellaris_2226.sav` /
+`C:\temp\c4_wiring_result.json`,`--game-log` / `--supervisor-status` / `--supervisor-cmd` / `--shot`
+也走参数,脚本不读环境变量。
+
+**前置**:supervisor 必须已在 Windows 机上跑着(见下一节)。驱动先写 `want paused` 并等到状态
+`paused`(状态文件超过 5 s 未更新按「没在跑」判),然后才注入。**两次 console 命令都经 supervisor
+的 `console` 动词**(剪贴板 + 按键),不直接对游戏发键:
+
+```
+effect = { every_system = { log = "C4_PREFLIGHT_<pid>" } }            # 预检,应得 787 行
+effect = { every_system = { neo_action = { log = "NEO_CHOKE_EFFECT" set_name = "NEO_CHOKE" } } }
+```
+
+预检 marker 带 pid,但从**本次偏移**读到 EOF 再数,所以同一会话里重跑的旧行不会串进来;命令原文
+那行以 `} }` 结尾,`count_marker_lines` 用 `strip().endswith(marker)` 只数真正的日志行。预检 0 行
+= `console_unavailable`(焦点/键盘路径坏了),非 787 行 = `campaign_mismatch`(不是测试战役)。
+
+**save sha 门**:`stellaris_2226.sav` 的 sha256 必须等于钉住的 `6f271294…`。读不到文件 →
+`campaign_unverified`,`--allow-drift` 只把「读到了但不匹配」降级成 `drift_allowed`(诊断用),
+读不到仍然 `campaign_unverified`。预检的 787 行是战役形状的第二道门。
+
+**drain 缓冲契约**:`C4WireDrainInto` 的调用方必须提供 `RING_CAP * RECORD_SIZE`
+= 2048 × 3368 = 6,898,432 B 的远程缓冲(驱动只分配一次);DLL 写 `n * RECORD_SIZE` 字节并清空
+环形计数,驱动只读回这 `n` 条。`layout` 导出先钉 `[1, mode, 3368, 2048, 944, 256, 8, 256]`,
+任一字段漂了都是 `layout_drift`,后面的字节一个都不读。
+
+**verdict 表**(驱动按顺序判,先命中的胜出):
+
+| verdict | 条件 | 意思 |
+|---|---|---|
+| `supervisor_not_running` | 15 s 内状态文件缺失/过期/`no_game`/`stopped` | supervisor 没跑 —— 环境结论 |
+| `supervisor_not_paused` | 状态新鲜但 15 s 内没到 `paused` | 战役没暂停成功,不要注入 |
+| `campaign_unverified` | 存档 sha256 读不到 | 路径/权限问题 |
+| `campaign_mismatch` | sha256 不匹配(且未 `--allow-drift`),或预检行数 ≠ 787 | 不是那场 787 系统的测试战役 |
+| `dll_exports_missing` | 缺 8 个 `C4Wire*`/`C4ScoredStatsInto` 或 `C2Sanity`/`C2Init`/`C1Run`/`C1EffectId` | 产物不对 |
+| `game_not_running` | `resolve_pid("stellaris")` 失败 | 环境结论 |
+| `stale_module` | 注入前 base 已能解析(含 `ambiguous base`),或非 `is not loaded` 的解析失败 | 进程里已有 DLL 副本,**换新进程**,不重装 |
+| `inject_failed` | `inject_dll` 或注入后的 base 解析失败 | 注入通道问题 |
+| `sanity_failed` / `quickjs_init_failed` / `c1_failed` | `C2Sanity≠42` / `C2Init≠0` / `C1Run==0` 或 `C1EffectId==0` | C1/C2 前置门 |
+| `layout_drift` | layout 导出 ≠ 8 个字或字段不匹配 | 驱动与 DLL 解码契约断了 |
+| `install_failed` | `C4WireInstall != 0` | 谓词 detour/arm 失败,**不重试**,换进程 |
+| `console_unavailable` / `log_unreadable` | 预检 marker 0 行 / 日志读不了 | 键盘路径 / 路径问题 |
+| `no_calls` | capture `calls == 0` | 没有 `neo_action` 执行 —— 环境结论 |
+| `no_readable_ctx` | capture 记录 0 条 | ctx 读不出来 |
+| `count_mismatch` | capture calls/records ≠ 787、有 dropped、或 drain 条数不符 | 调用数/记录数不对 |
+| `no_scope_column` | 没有一列严格等于 `0..786` | 这次 capture 里没有可用的 scope 列 |
+| `scope_order_unverified` | 只有排序后相等的列 | 列是 `0..786` 的乱序,driver 不猜 |
+| `ambiguous_column` | 多于一条严格匹配列 | 需要人工看 capture 记录 |
+| `apply_no_calls` | apply 窗口内 calls 没有增量 | 第二次 console 没生效 |
+| `scored_js_error` | scored `js_err`/`invalid` 非 0 | QuickJS 分数脚本出错 |
+| `apply_count_mismatch` | `resolved≠787` 或 `unresolved≠0` | 解析没覆盖全部系统 |
+| `tier_mismatch` | tier 直方图 ≠ `(717,55,15)` | 分数表或阈值漂了 |
+| `chain_mismatch` | `chain≠70` | tier≥1 没全部 chain |
+| `log_mismatch` | `NEO_CHOKE_EFFECT` 行数 ≠ 70 | effect 没真正应用 |
+| `record_drift` / `scan_drift` | 记录长度或指针重扫与 DLL 目标不一致 | 驱动与 DLL 的扫描规则漂了 |
+| `stats_drift` / `scored_stats_unreadable` / `mode_failed` / `apply_setup_failed` | 读回长度/解码/set-mode/set-spec 失败 | 驱动自检 |
+| `host_dead` | `assert_game_alive` 失败 | **先跑 §45 的两个离线工具** |
+| `restore_incomplete` | `C4WireDisarm` 返回 `-6` | 引擎字节没还原,打印 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`,放弃该进程 |
+
+清理段固定:`SetMode(0)` → `C4WireDisarm`(`-1` 锁忙最多重试 6 次 × 0.5 s;6 次仍 `-1` 记为
+benign)→ `assert_game_alive`。**绝不 `FreeLibrary`** — patch 过的 effect 对象持有 DLL 内的 vtable
+副本。只有 verdict `ok` 且清理成功(host 存活、disarm 不是 `-6`)退出码才是 0。
+
+判读纯函数(`decode_records` / `_wire_stats` / `_scored_stats`、`pack_spec`/`unpack_spec`、
+`column_sequences`/`find_scope_column`、`classify_capture`/`classify_apply` 等)由
+`python3 -m pytest scripts/test_c4_wiring_probe.py -q` 覆盖,无游戏、无 Windows API。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
