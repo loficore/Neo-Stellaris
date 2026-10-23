@@ -3606,8 +3606,8 @@ python3 scripts/fastcalls.py 0x1d08520 --top 40
 ```
 
 本次没有在窗口里看到 `lea rdx,[rbp±X]` / `lea rdx,[rsp+X]` / `mov rdx,rsp` 形态的帧构造;
-能定的只有「这些直接调用把**自己的入口 arg2** 交给 base Execute」。本普查**不**说明 arg2 的类型与
-字段语义;那要 §53.3 的实机链。
+能定的只有「17 个已判读站点里 12 个把**自己的入口 arg2** 原样交给 base Execute,5 个是函数内
+重载(`other`),没有一个站点构造新帧」。本普查**不**说明 arg2 的类型与字段语义;那要 §53.3 的实机链。
 
 ### §53.2 effect 应用入口候选
 
@@ -3657,9 +3657,9 @@ JS 侧数据(system id / scope 指针)得到;④ 从 DLL 里以普通函数指�
   ③ **缺**:parent 容器与 ctx 目前只能由调用方给,JS 侧还没有「system id → scope 指针」的映射。
   判 `unresolved`(缺 ③)。
 - **B(`0x1d08520` slot[1] 直接 Execute)** — ④ 满足,但 ①/③ 缺:需要一个真实 frame,而 Task 1
-  没有定位任何 frame 构造点(17 个已判读站点全部转发入口 `rdx`)。判 `unresolved`。
-- **C(帧构造点)** — 未定位:13 个窗口、17 个站点的直接调用全部把调用方自己的 `rdx` 原样转发;
-  两个代表性 thunk 的 `fastcalls` 都是 0 个直接站点。判 `unresolved: frame factory not located`。
+  没有定位任何 frame 构造点(17 个已判读站点里 12 个转发入口 `rdx`、5 个是函数内重载)。判 `unresolved`。
+- **C(帧构造点)** — 未定位:13 个窗口、17 个已判读站点里 12 个把调用方入口 `rdx` 原样转发、5 个是
+  函数内重载(`other`);两个代表性 thunk 的 `fastcalls` 都是 0 个直接站点。判 `unresolved: frame factory not located`。
 - **D(`0x9f5750` family,event command path)** — 三个 handler 各只开一个 0x100 窗口;首窗口内
   都没有 `call 0x3b01a0`(最近的调用是 `0x1ca3320` / `0x1ca35d0` / `0xa804b0`)。判 `unresolved`:
   首窗口无 effect 执行痕迹,按计划不扩窗。
@@ -3678,8 +3678,8 @@ JS 侧数据(system id / scope 指针)得到;④ 从 DLL 里以普通函数指�
 任何关于 arg2 类型、链字段语义、应用入口的实机观测;以下六条按计划要求逐条回答,全部因同一个缺口停住。
 
 1. **arg2 是栈帧、堆对象还是引擎全局?** `unresolved(点名未给出)`。缺的观测:§53.1 只说明 17 个
-   已判读的直接调用点把调用方入口 `rdx` 原样转发,没有定位任何帧构造点;`ctx_ptr` 的跨样本稳定性与
-   8 个 qword 的分布只有 §53.3 能取。
+   已判读站点里 12 个把调用方入口 `rdx` 原样转发、5 个是函数内重载(`other`),没有定位任何帧构造点;
+   `ctx_ptr` 的跨样本稳定性与 8 个 qword 的分布只有 §53.3 能取。
 2. **`[arg2+0x08]` / `[+0x18]` / `[+0x30]` 各观测到了什么?`X` 在样本间是否恒定?** `unresolved(点名未给出)`。
    缺的观测:采样器已按 `Entry.ctx_words` 记录这 8 个 qword,但没有任何一份实机记录可读。
 3. **`X→S→id` 的 id 在 `descriptor_oracle` 里 join 到了什么名字?它是不是 keyword 空间 id(§30.1)?**

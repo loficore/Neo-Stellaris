@@ -10,7 +10,7 @@ import pytest
 
 from c2_scope_probe import (
     caller_site, classify, decode_entry, decode_layout, decode_stats,
-    follow_chain, load_call_census, summarize,
+    follow_chain, load_call_census, poll_done, summarize,
 )
 
 
@@ -195,3 +195,11 @@ def test_classify_captured():
     assert classify(
         {"calls": 10, "samples": 3, "valid": 3, "lexer": 1, "chain_ok": 2}
     ) == "captured"
+
+
+def test_poll_runs_to_the_deadline_after_a_sample_arrives():
+    # The 1/512 gate fires within ~1 s of install; stopping there would drain
+    # ~10 entries instead of a distribution across the whole window (plan
+    # Task 5 item 3: poll to --poll-s).
+    assert not poll_done(now=2.0, deadline=120.0)
+    assert poll_done(now=120.0, deadline=120.0)

@@ -476,11 +476,20 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
         [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...]
 ```
 
+轮询一直采样到 `--poll-s` 截止(不是拿到第一个样本就停),环形记录保留最后 256 条;
+`--poll-s` 太短只会让样本变稀,不会让判读变快。
+
 **一枪一进程**:`C2ScopeProbeInstall` 每个进程只派发一次,`exec_hook` 已被占用时返回 `-2`(单 detour
 约束),**不重试** —— 看到 `-2` 换一个新游戏进程,不要在同进程里绕。其余安装码:`-3` 模块未找到、
-`-4` 该地址已被别的 detour 占据、`-5` 序言不匹配、`-6` patch 太宽。清理段(`finally`)顺序固定:
+`-4` 该地址已被别的 detour 占据、`-5` 序言不匹配、`-6` patch 太宽、`-1` 其他安装失败。清理段(`finally`)顺序固定:
 `C2ScopeProbeUninstall` → `C2ScopeProbeVerify`(0 = 引擎字节已还原)→ 等 `--settle-s` → 断言 host 存活。
-`Verify` 非 0 时打 `RESTORE_INCOMPLETE DO_NOT_FREELIBRARY`,**放弃该进程**,绝不 `FreeLibrary`。
+`Verify` 非 0 时打 `RESTORE_INCOMPLETE DO_NOT_FREELIBRARY`,**放弃该进程**,绝不 `FreeLibrary`
+(只有本次 install 真的返回过 0 才这样判;本次根本没装上时,verify 读到 `-1`/`-3` 属正常,
+驱动打 `verify=<n> (not installed this run)`)。
+卸载走的是仓库共用的 detour 原语(`detour.zig` 的 `removeHook`):`VirtualProtect` 把 16 字节 patch
+逐字节写回,**不暂停线程、也不检查有没有线程正处在那段字节里**。这是 §52 那一枪同样继承的残余竞态,
+驱动侧造不出「静默窗口」(跑着的战役每秒数千次调用);host 恰在清理瞬间死掉时,先归因于 detour
+卸载而不是采样器,并按 §45 排除我们自己的产物。
 
 **点名门**:这是实机工具,按 `docs/roadmap.md` 的授权表,派发前必须有**本次会话内的点名**;
 通用历史授权(「仅限于游戏调试相关」)不算。没有点名时只跑纯函数测试。

@@ -149,6 +149,11 @@ def decode_stats(text):
     return out
 
 
+def poll_done(now, deadline):
+    """The shot samples for the whole window; one early sample is not the end."""
+    return now >= deadline
+
+
 def caller_site(return_rva):
     """The static call site: the engine's ``call rel32`` is 5 bytes."""
     if return_rva < 5:
@@ -558,7 +563,7 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names):
                 last_progress = time.monotonic()
                 while True:
                     stats, stats_text = read_stats(pid, base, exports, stats_buf)
-                    if stats.get("samples", 0) > 0 or time.monotonic() >= deadline:
+                    if poll_done(time.monotonic(), deadline):
                         break
                     if time.monotonic() - last_progress >= 10.0:
                         print(
