@@ -1,0 +1,48 @@
+# kind	key	value	detail
+caller	0xde0539	40	func=- origin=-
+caller	0x298a43	39	func=- origin=-
+caller	0x33ca60	21	func=- origin=-
+caller	0x33d4c7	16	func=- origin=-
+caller	0xddcf24	14	func=- origin=-
+caller	0xe9b5ed	8	func=- origin=-
+caller	0x1d08575	8	func=- origin=-
+caller	0xde41ae	7	func=- origin=-
+caller	0xe58db1	6	func=- origin=-
+caller	0x1c43699	6	func=- origin=-
+caller	0x29a913	5	func=- origin=-
+caller	0xcc9634	5	func=- origin=-
+caller	0xcc9cae	5	func=- origin=-
+caller	0xde41ea	5	func=- origin=-
+caller	0xe845a7	5	func=0xe84100 origin=not_examined
+caller	0xe9b5b7	5	func=- origin=-
+caller	0xe9b5d2	5	func=- origin=-
+caller	0x1bcd18d	5	func=0x1bcd120 origin=incoming_arg
+caller	0x30c033	4	func=- origin=-
+caller	0xcc9d61	4	func=- origin=-
+caller	0xe9b608	4	func=- origin=-
+caller	0x84e85c	3	func=- origin=-
+caller	0xcc8c5a	3	func=- origin=-
+caller	0xcca278	3	func=- origin=-
+caller	0xde418d	3	func=- origin=-
+caller	0xde41cf	3	func=- origin=-
+caller	0xe84146	3	func=- origin=-
+caller	0xe96ebb	3	func=- origin=-
+caller	0xe9b71f	3	func=- origin=-
+caller	0xe9b7b1	2	func=- origin=-
+caller	0x28b46f	1	func=- origin=-
+caller	0x28c8cf	1	func=- origin=-
+caller	0x29100f	1	func=- origin=-
+caller	0x29b34f	1	func=- origin=-
+caller	0x29fabf	1	func=- origin=-
+caller	0x396574	1	func=- origin=-
+caller	0x3965e4	1	func=- origin=-
+caller	0x92f999	1	func=- origin=-
+caller	0x959057	1	func=- origin=-
+caller	0x96e64b	1	func=- origin=-
+caller	0xcc9400	1	func=- origin=-
+caller	0xcca08f	1	func=- origin=-
+caller	0xdd6286	1	func=- origin=-
+id	0	1	name=-
+id	683967304	1	name=-
+chain	0x7fe768	1	x=0x7fe760 s=0x7ff7d7c35872 vptr=0x18408b4818488d48 id=683967304 name=- object=0xea14e80860ff4828
+chain	0x7fed78	1	x=0x7ff7d82dc6d7 s=0x8890ffcb8b48038b vptr=0x0 id=0 name=- object=0x0

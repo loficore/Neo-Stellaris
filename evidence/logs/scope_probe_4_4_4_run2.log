@@ -1,0 +1,72 @@
+[scope] pid=2460  dll=C:\temp\sqjs_scope.dll
+[scope] sqjs_scope.dll base (64-bit): 0x7ffa14eb0000
+[scope] MZ header at base OK
+[scope] C2Sanity == 42, game alive ¡ª dispatch authorized
+[scope] LAYOUT entry=104 stats=56 ring=256 mask=511 version=1
+[scope] C2ScopeProbeInstall rc=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=596 samples=1 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=1108 samples=2 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=1108 samples=2 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=1108 samples=2 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=1108 samples=2 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=333873 samples=652 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=334925 samples=654 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=335953 samples=656 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=337001 samples=658 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=338032 samples=660 invalid_self=0 invalid_ctx=0
+STATS: calls=339118 samples=662 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=13 patch_size=16 installed=1 verified=-1
+CALLERS:
+  site=0xde0539 count=40 func=- origin=-
+  site=0x298a43 count=39 func=- origin=-
+  site=0x33ca60 count=21 func=- origin=-
+  site=0x33d4c7 count=16 func=- origin=-
+  site=0xddcf24 count=14 func=- origin=-
+  site=0xe9b5ed count=8 func=- origin=-
+  site=0x1d08575 count=8 func=- origin=-
+  site=0xde41ae count=7 func=- origin=-
+  site=0xe58db1 count=6 func=- origin=-
+  site=0x1c43699 count=6 func=- origin=-
+  site=0x29a913 count=5 func=- origin=-
+  site=0xcc9634 count=5 func=- origin=-
+  site=0xcc9cae count=5 func=- origin=-
+  site=0xde41ea count=5 func=- origin=-
+  site=0xe845a7 count=5 func=0xe84100 origin=not_examined
+  site=0xe9b5b7 count=5 func=- origin=-
+  site=0xe9b5d2 count=5 func=- origin=-
+  site=0x1bcd18d count=5 func=0x1bcd120 origin=incoming_arg
+  site=0x30c033 count=4 func=- origin=-
+  site=0xcc9d61 count=4 func=- origin=-
+  site=0xe9b608 count=4 func=- origin=-
+  site=0x84e85c count=3 func=- origin=-
+  site=0xcc8c5a count=3 func=- origin=-
+  site=0xcca278 count=3 func=- origin=-
+  site=0xde418d count=3 func=- origin=-
+  site=0xde41cf count=3 func=- origin=-
+  site=0xe84146 count=3 func=- origin=-
+  site=0xe96ebb count=3 func=- origin=-
+  site=0xe9b71f count=3 func=- origin=-
+  site=0xe9b7b1 count=2 func=- origin=-
+  site=0x28b46f count=1 func=- origin=-
+  site=0x28c8cf count=1 func=- origin=-
+  site=0x29100f count=1 func=- origin=-
+  site=0x29b34f count=1 func=- origin=-
+  site=0x29fabf count=1 func=- origin=-
+  site=0x396574 count=1 func=- origin=-
+  site=0x3965e4 count=1 func=- origin=-
+  site=0x92f999 count=1 func=- origin=-
+  site=0x959057 count=1 func=- origin=-
+  site=0x96e64b count=1 func=- origin=-
+  site=0xcc9400 count=1 func=- origin=-
+  site=0xcca08f count=1 func=- origin=-
+  site=0xdd6286 count=1 func=- origin=-
+CHAIN:
+  ctx=0x7fe768 ok=1 x=0x7fe760 s=0x7ff7d7c35872 vptr=0x18408b4818488d48 id=683967304 name=- object=0xea14e80860ff4828
+  ctx=0x7fed78 ok=1 x=0x7ff7d82dc6d7 s=0x8890ffcb8b48038b vptr=0x0 id=0 name=- object=0x0
+[scope] entries=256 valid=256 lexer=0 chain_ok=2 distinct_vtables=38 ids=[(0, '-', 1), (683967304, '-', 1)]
+[scope] wrote 47 rows to C:/temp/c4_scope_probe.tsv
+VERDICT: captured
+[scope] C2ScopeProbeUninstall rc=0
+[scope] C2ScopeProbeVerify rc=0 (engine bytes intact)
+[scope] host alive
+EXIT:0

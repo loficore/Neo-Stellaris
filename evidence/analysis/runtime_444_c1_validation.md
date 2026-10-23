@@ -3658,24 +3658,33 @@ JS 侧数据(system id / scope 指针)得到;④ 从 DLL 里以普通函数指�
   判 `unresolved`(缺 ③)。
 - **B(`0x1d08520` slot[1] 直接 Execute)** — ④ 满足,但 ①/③ 缺:需要一个真实 frame,而 Task 1
   没有定位任何 frame 构造点(17 个已判读站点里 12 个转发入口 `rdx`、5 个是函数内重载)。判 `unresolved`。
-- **C(帧构造点)** — 未定位:13 个窗口、17 个已判读站点里 12 个把调用方入口 `rdx` 原样转发、5 个是
-  函数内重载(`other`);两个代表性 thunk 的 `fastcalls` 都是 0 个直接站点。判 `unresolved: frame factory not located`。
+- **C(帧构造点)** — 开枪前判 `unresolved: frame factory not located`:13 个窗口、17 个已判读站点里
+  12 个把调用方入口 `rdx` 原样转发、5 个是函数内重载(`other`);两个代表性 thunk 的 `fastcalls`
+  都是 0 个直接站点。**§53.3 第二枪后更正为 `located`**:实测帧 vptr `0x26e4fa8` 让离线扫描在 33 个
+  函数里找到内联构造,其中 `0x1C750D0` / `0x1C3CED0` / `0x9EC290` 构造 0x20 字节帧后紧接着
+  `call [self_vtable+8]`;构造是内联的,没有独立 factory(见 §53.4 Q5)。
 - **D(`0x9f5750` family,event command path)** — 三个 handler 各只开一个 0x100 窗口;首窗口内
   都没有 `call 0x3b01a0`(最近的调用是 `0x1ca3320` / `0x1ca35d0` / `0xa804b0`)。判 `unresolved`:
   首窗口无 effect 执行痕迹,按计划不扩窗。
 
-本节的 `selected` 只是**首选入口**;本次一个都没有 `selected`。最终要以 §53.3 的实机链为输入在
-§53.4 复核 —— 而 §53.3 的实机一枪是 `no_calls`(环境),没有取到链,故 §53.4 本次无法复核。
+本节的 `selected` 只是**首选入口**;本次一个都没有 `selected`。§53.4 已用 §53.3 第二枪的实测输入
+复核:计划预设的 `X→S→id` 链被证伪(`X` 是 .rdata 的 vtable、`S` 是代码),候选 A/B/D 维持
+`unresolved`,C 因实测 vptr 找到内联构造点、改记 `located(构造形状已知,可用性未证)`。
 
-### §53.3 实机采样(2026-10-23,点名后执行)
+### §53.3 实机采样(2026-10-23,两次点名,两枪)
 
-**授权。** 本会话用户点名 Task 6(「点名 Task 6,准备执行实机一枪」),满足 roadmap 段3 的 detour 授权级。
+**授权。** 本会话有两次点名,各对应一次安装:第一枪由「点名 Task 6,准备执行实机一枪」授权;
+第一枪 `no_calls`(环境)后,用户选「重开一枪」并写明「我已经退出了,执行当前任务」,第二枪在
+**新游戏进程** pid 2460 上执行。两次安装都发生在前一次已经 `Uninstall` 之后,没有在同一进程里
+重复 install(第二次 install 会返回 -2,本计划也禁止)。
 
-**产物。** `zig-out/bin/stellaris_quickjs.dll` → `C:/temp/sqjs_scope.dll`,sha256
+**产物(两枪同一份字节)。** `zig-out/bin/stellaris_quickjs.dll` → `C:/temp/sqjs_scope.dll`,sha256
 `cb95b0f2dd07cc4d10acf0b2f24664350e376f76aaef578dfe962c4b5387b4ba`;`scripts/c2_scope_probe.py` →
 `C:/temp/c2_scope_probe.py`,sha256 `7cb62a25675a9877091ef05e1be4c5fdc34468e23e845adf67c4b57c5fbdb726`;
 `scripts/c2_harness.py` → `C:/temp/c2_harness.py`,sha256 `0c8bca42a70ab9a2cf28bba6036de1d039ff30ec01dba93550a9af5ded485713`。
-游戏 4.4.4,pid 6852,载入的是 `autosave_2229.01.01.sav` 的战役。
+游戏 4.4.4;第一枪 pid 6852(载入 `autosave_2229.01.01.sav` 的战役),第二枪 pid 2460。
+
+#### 第一枪(pid 6852):no_calls
 
 **开火方式。** 与 §52 同因(OpenSSH 通道会杀掉子进程树):驱动由交互会话的一次性计划任务
 `c4-scope-run`(动作 `C:\temp\c4_scope_run.cmd`,上次运行 **11:15:18**)执行,输出重定向到
@@ -3733,38 +3742,250 @@ cmd 退出码 1 —— 驱动对非 `captured` 判 1。`C:/temp/c4_scope_probe.t
 右上角时间面板处于**暂停**(⏸ + `暂停`,日期 **2229.02.09**),右下有首次接触事件窗
 (`通讯已建立`,正文含「敌对行为已经暂时停止」);载入存档是 `autosave_2229.01.01.sav` ⇒
 战役只推进了 1 个月 8 天就停表 —— 也就是说采样窗口开始前游戏已经停表(推断,不是采样证据)。
-`calls=0` 与暂停一致,驱动据此判为环境结论。**不重试**:同一进程已有过 detour(`C2ScopeProbeInstall` 第二次返回 -2),
-重跑要**新游戏进程 + 新点名**。
+`calls=0` 与暂停一致,驱动据此判为环境结论。
 
-**未取得。** 没有样本 ⇒ 没有 `ctx_words` 分布、没有调用点 join、没有链 id 与 `descriptor_oracle`
-的名字 join、没有 `S+0x20` 读数。§53.4 六条仍全部 `unresolved`,缺的观测从「没有开枪」变成
-「窗口内没有可采样的调用」。
+**结论。** 没有样本 ⇒ 没有 `ctx_words` 分布、没有调用点 join、没有链 id。不重试同一进程;
+重开要求**新游戏进程 + 新点名** —— 该项已在第二枪执行。
+
+#### 第二枪(pid 2460,新游戏进程):captured
+
+**开火方式(无控制台)。** SSH 会话会杀掉子进程树,`cmd` 包装又会抢焦点,所以探针由一个无控制台
+启动器拉起:一次性计划任务 `c4-shot2` 的动作是 `pythonw.exe C:\temp\c4_shot_launcher.py`,启动器
+用 `subprocess.CREATE_NO_WINDOW`(0x08000000)运行
+
+```
+python -u C:\temp\c2_scope_probe.py C:\temp\sqjs_scope.dll --census C:\temp\exec_frame_callers_4_4_4.tsv --id-names C:\temp\descriptor_oracle_4_4_4.tsv
+```
+
+并把 stdout/stderr 重定向到 `C:/temp/c4_scope_run.txt`。任务上次运行 **11:54:54**,退出码 0。
+开火前和窗口内各发过一次 Space(计划任务 `c4-unpause`,11:54:32 与 11:55:21,pid 2460,两次 rc=0)。
+轮询窗口 120 s,每 10 s 打印一行进度;本地拉回 `/tmp/c4_scope_run.txt` 的时间是 11:57:22。
+
+**逐字 transcript**(`evidence/logs/scope_probe_4_4_4_run2.log`,3507 B,CRLF,sha256 `01697d66…`;
+第 4 行 `game alive \xA1\xAA dispatch authorized` 的两字节是 cp936 的 `—`。下文按 LF 重排、
+把这处原始字节写作 `\xA1\xAA`;字节级以日志文件为准):
+
+```
+[scope] pid=2460  dll=C:\temp\sqjs_scope.dll
+[scope] sqjs_scope.dll base (64-bit): 0x7ffa14eb0000
+[scope] MZ header at base OK
+[scope] C2Sanity == 42, game alive \xA1\xAA dispatch authorized
+[scope] LAYOUT entry=104 stats=56 ring=256 mask=511 version=1
+[scope] C2ScopeProbeInstall rc=0
+[scope] waiting: calls=0 samples=0 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=596 samples=1 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=1108 samples=2 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=1108 samples=2 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=1108 samples=2 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=1108 samples=2 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=333873 samples=652 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=334925 samples=654 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=335953 samples=656 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=337001 samples=658 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=338032 samples=660 invalid_self=0 invalid_ctx=0
+STATS: calls=339118 samples=662 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=13 patch_size=16 installed=1 verified=-1
+CALLERS:
+  site=0xde0539 count=40 func=- origin=-
+  site=0x298a43 count=39 func=- origin=-
+  site=0x33ca60 count=21 func=- origin=-
+  site=0x33d4c7 count=16 func=- origin=-
+  site=0xddcf24 count=14 func=- origin=-
+  site=0xe9b5ed count=8 func=- origin=-
+  site=0x1d08575 count=8 func=- origin=-
+  site=0xde41ae count=7 func=- origin=-
+  site=0xe58db1 count=6 func=- origin=-
+  site=0x1c43699 count=6 func=- origin=-
+  site=0x29a913 count=5 func=- origin=-
+  site=0xcc9634 count=5 func=- origin=-
+  site=0xcc9cae count=5 func=- origin=-
+  site=0xde41ea count=5 func=- origin=-
+  site=0xe845a7 count=5 func=0xe84100 origin=not_examined
+  site=0xe9b5b7 count=5 func=- origin=-
+  site=0xe9b5d2 count=5 func=- origin=-
+  site=0x1bcd18d count=5 func=0x1bcd120 origin=incoming_arg
+  site=0x30c033 count=4 func=- origin=-
+  site=0xcc9d61 count=4 func=- origin=-
+  site=0xe9b608 count=4 func=- origin=-
+  site=0x84e85c count=3 func=- origin=-
+  site=0xcc8c5a count=3 func=- origin=-
+  site=0xcca278 count=3 func=- origin=-
+  site=0xde418d count=3 func=- origin=-
+  site=0xde41cf count=3 func=- origin=-
+  site=0xe84146 count=3 func=- origin=-
+  site=0xe96ebb count=3 func=- origin=-
+  site=0xe9b71f count=3 func=- origin=-
+  site=0xe9b7b1 count=2 func=- origin=-
+  site=0x28b46f count=1 func=- origin=-
+  site=0x28c8cf count=1 func=- origin=-
+  site=0x29100f count=1 func=- origin=-
+  site=0x29b34f count=1 func=- origin=-
+  site=0x29fabf count=1 func=- origin=-
+  site=0x396574 count=1 func=- origin=-
+  site=0x3965e4 count=1 func=- origin=-
+  site=0x92f999 count=1 func=- origin=-
+  site=0x959057 count=1 func=- origin=-
+  site=0x96e64b count=1 func=- origin=-
+  site=0xcc9400 count=1 func=- origin=-
+  site=0xcca08f count=1 func=- origin=-
+  site=0xdd6286 count=1 func=- origin=-
+CHAIN:
+  ctx=0x7fe768 ok=1 x=0x7fe760 s=0x7ff7d7c35872 vptr=0x18408b4818488d48 id=683967304 name=- object=0xea14e80860ff4828
+  ctx=0x7fed78 ok=1 x=0x7ff7d82dc6d7 s=0x8890ffcb8b48038b vptr=0x0 id=0 name=- object=0x0
+[scope] entries=256 valid=256 lexer=0 chain_ok=2 distinct_vtables=38 ids=[(0, '-', 1), (683967304, '-', 1)]
+[scope] wrote 47 rows to C:/temp/c4_scope_probe.tsv
+VERDICT: captured
+[scope] C2ScopeProbeUninstall rc=0
+[scope] C2ScopeProbeVerify rc=0 (engine bytes intact)
+[scope] host alive
+EXIT:0
+```
+
+**读回。** 布局五字 `104/56/256/511/1`;`C2ScopeProbeInstall rc=0`;`STATS` 为
+`calls=339118 samples=662 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=13 patch_size=16 installed=1 verified=-1`
+—— 662 = ⌊339118/512⌋,与 1/512 采样门一致;`verified=-1` 是安装期间的正常值(指纹必然不匹配)。
+`entries=256 valid=256`、`distinct_vtables=38`、`chain_ok=2`、`wrote 47 rows`(=43 caller + 2 id + 2 chain)。
+`C2ScopeProbeUninstall rc=0`;**`C2ScopeProbeVerify rc=0`(engine bytes intact)**;`host alive`;`EXIT:0`。
+复查 pid 2460 仍活(WS ~332 MB)。TSV 按字节拉回 `evidence/logs/scope_probe_4_4_4_run2.tsv`
+(1817 B,CRLF,sha256 `419edaf7…`,11:57:27 写)。
+
+**环境。** `calls>0` 且 339,118 次基执行本身就证明窗口内游戏在跑 effect,不需要截图证据。窗口内
+`calls` 有一次平台期(连续四次轮询停在 1108),之后恢复;第二次 Space 恰好落在平台期附近,但窗口内
+没有截图,故不把平台期写成「暂停」的证据 —— 它不影响 `captured` 的有效性。
+
+**只读补抽。** 驱动的 transcript 只有 `CHAIN` 聚合,没有 `ctx_words`。为了不再装一次 detour,在同一
+进程上用只读导出补抽:`C2ScopeProbeStatsInto` + `C2ScopeProbeDrainInto`(drain 不清 ring),再用
+`ReadProcessMemory` 跟随指针。两个一次性探针在 `scripts/scratch/2026-10_c4_live/`
+(`c4_ring_dump.py` / `c4_ctx_probe.py`,不进 git;本卷按 basename 记录出处),产物按字节拉回:
+`evidence/logs/scope_probe_4_4_4_run2_ring.txt`(1656 B,sha256 `db8a3459…`,12:00:12 写)与
+`evidence/logs/scope_probe_4_4_4_run2_ctx.txt`(1350 B,sha256 `78c1aeea…`,12:01:49 写)。
+这一步没有 install、没有 reset、没有新增 detour 次数。
+
+**8 个 qword 的分布(256 条 ring,全部 valid)。**
+
+| `ctx+` | 零 / 非零 | 取值 |
+|---|---|---|
+| `+0x00` | 0 / 256 | 全部 `0x7ff7d9f84fa8`,即 RVA `0x26e4fa8` |
+| `+0x08` | 5 / 251 | 高 32 位以 `0x7ffa0000` 为主;低 32 位 `3`:55、`5`:52、`1`:52、`4`:34 |
+| `+0x10` | 0 / 256 | 长命 ctx `0x1c4d3c410`:245;两个瞬态 `0x7fe960`:7、`0x7fef70`:4 |
+| `+0x18` | 245 / 11 | `0x199b50001`:7、`0x1ed110001`:4 |
+| `+0x20` | 245 / 11 | `0x100000385`:4、`0x3293`:2、`0x328f`:2 |
+| `+0x28` | 0 / 256 | `0x4d`:245;`0x1`:7;`0x1ed119de0`:4 |
+| `+0x30` | 245 / 11 | 全部 `0x7ff7d9d1b098`(RVA `0x247b098`) |
+| `+0x38` | 0 / 256 | `0x7ff7d9a23ea5`:245;另 3 个各 1 |
+
+`distinct_ctx=3`:0xee7fd00 ×245、0x7fe768 ×7、0x7fed78 ×4。每个 ctx 首条样本的 8 个字:
+
+```
+0xee7fd00 x=0 words=0x7ff7d9f84fa8 0x7ffa00000003 0x1c4d3c410 0x0 0x0 0x4d 0x0 0x7ff7d9a23ea5
+0x7fe768  x=1 words=0x7ff7d9f84fa8 0x0 0x7fe960 0x199b50001 0x3293 0x1 0x7ff7d9d1b098 0xd37b41b0
+0x7fed78  x=1 words=0x7ff7d9f84fa8 0x100000001 0x7fef70 0x1ed110001 0x100000385 0x1ed119de0 0x7ff7d9d1b098 0x19547ab0
+```
+
+`SELF_TOKEN_ID`(self+8 的 u32)前四:0×104、0xd9da97f8×39、1×11、0xd9d53690×10;`self_vtable` 38 个
+不同,前四 0x250e4b0×40、0x25097c0×39、0x24b3690×31、0x24b3050×31。
+
+**链证伪(两重证据)。** 驱动把 `X=[ctx+0x30]` 当对象指针、`S=[X+8]` 当对象、`[S+8]` 当 id、`[S+0x20]`
+当 object。第二枪证明这条链不成立:
+
+1. **内容**:X = 0x7ff7d9d1b098,即 RVA `0x247b098`(.rdata)。离线读该处 8 个 qword:
+   `0x140170690 / 0x1401706f0 / 0x140156540 / 0x140156570 / 0x1401601e0 / 0x141d08520 / 0x14032db40 / 0x140535070`。
+   `X+0x00` 是一个类的内联构造/删除函数(它把 `[rcx]` 写成 `0x247b098`,删除时 `operator delete(rcx, 0x18)`),
+   `X+0x08` 是普通函数 `0x1706f0`(首字节正是 `push rsi; sub rsp,0x20; mov eax,[rcx+0x14]`),
+   `X+0x28` 是 base Execute 自己、`X+0x38` 是 §28.5 那个属性 getter `0x5350D0` ⇒ **X 是 vtable,不是对象**。
+   于是 S=0x1706f0 是**代码地址**:`S[0]=0x418b20ec83485640`、`S+8=0x7410413bf18b4814`、
+   `S+0x20=0x20c4834810468908` 全是指令字节;驱动报的「id=683967304(0x28c48348)」是 `add rsp,0x28`,
+   「object=0x20c4834810468908」是 `mov [rsi+0x10],ecx; add rsp,0x20`。`descriptor_oracle` 对这两个 id
+   都返回 `-`,因为它们本来就不是 id。
+2. **范围**:arg2 的类大小是 **0x20 字节**(删除析构器 `0x1D10EA0` 以 `(rcx, 0x20)` 调 sized delete,
+   同时把 `[rcx]` 写回 `0x26e4fa8`)。字段止于 `+0x19`;`+0x20..+0x38` 是**对象之外**的相邻内存。
+   所以 `X=[ctx+0x30]` 按构造就不可能是 arg2 的字段 —— 两个瞬态 ctx 的 `+0x30` 恰好落在栈上另一个
+   0x18 字节对象的 vptr 上(见下节),长命 ctx 的 `+0x30` 落在相邻堆内存 0。**这条链在模型层就死了,
+   不是「值不好看」。**
+
+**transcript 里的 CHAIN 行是过期读数。** 驱动的 `follow_chain` 在 120 s 轮询**之后**才重读
+`[ctx+0x30]`(而不是用 ring 快照),此时两个瞬态栈帧已被回收:transcript 记的是 `x=0x7fe760` 与
+`x=0x7ff7d82dc6d7`(后者还没对齐),而 ring 快照两个 ctx 都是 `0x7ff7d9d1b098`。补抽以 ring 快照为准;
+这条驱动缺陷记进 ledger,本计划是纯取证,不改驱动。
+
+**调用点 join。** 43 个不同站点。`site = return_rva - 5` 的口径对 5 字节 `call rel32` 恰好是调用起点,
+对 3 字节 `call [rax+8]` 会落在**调用起点前 2 字节**。前四:0xde0539(40)、0x298a43(39)、0x33ca60(21)、
+0x33d4c7(16);四个都已核过是 `mov rax,[self]; ...; call [rax+8]` 的 slot1 派发。只有两个站点 join 上
+§53.1 的 62 站点普查:`0xe845a7`(func 0xe84100,`not_examined`)与 `0x1bcd18d`(func 0x1bcd120,
+`incoming_arg`,§53.1 已读过的 devirtualization guard)。另有 8 条样本的站点是 `0x1d08575` = base Execute
+内部 `call [rax+0x10]`(`0x1d08577`,3 字节)前 2 字节 ⇒ **递归派发本身被采到了**。其余 41 个站点不在
+直接调用普查里 ⇒ 这一场景的基执行绝大多数经 vtable slot1 间接到达,§53.1 的 62 个直接站点只是少数路径。
+
+join 带出的唯一未判读函数 `0xe84100` 也补读完了:`lea rcx,[rsp+0x20]; mov rdx,rdi; call 0x1d08520`,
+循环体 `add rbx,0x110`,循环后 `dec dword [rdi+8]` —— 调用方和 base Execute 动的是同一个 `+8` 深度字段,
+而且 rcx 是一个**栈上对象**。这正是下节帧构造点的一类。
+
+**离线跟进:帧类与构造点。** 从 vptr `0x26E4FA8` 出发扫 `.pdata` 函数(离线,只用 `riprefs.py` /
+`pdata.py` / `disrva.py`):
+
+- 该 vtable 只有 1 槽(slot0 = `0x1D10EA0` 删除析构器,对象大小 0x20),槽后紧接着 .rdata 的字符串。
+- 33 个函数含 `lea`→该 vtable 的引用;30 个把 vptr 写进栈上的局部对象;至少 8 个在构造后用
+  `rdx=&frame` 调 `call [self_vtable+8]`(7 个落在 60 条指令窗口内,`0x1C3CED0` 更远、手工读通)。
+  构造是**内联**的,没有独立工厂函数。
+- 三个完整读通的样板:
+  - `0x1C750D0`:helper 就地构造在 `rsp+0x50`,帧在 `rsp+0x30`(`[+8]=0`、`[+0x10]=helper`、
+    `[+0x18]=sete`、`[+0x19]=0`),`lea rdx,[rsp+0x30]; mov rcx,rbx; call [rax+8]` 在 `0x1C75138`。
+  - `0x1C3CED0`:helper 先 `new(0xa0)` 再用 `0x1CA5880` 构造;帧在 `rsp+0x38`(`[+0x19]=1`),
+    slot1 调用在 `0x1C3D5B5`。同一函数的 `rsp+0x90` 还就地构造了一个 **0x18 字节、vptr 0x247b098**
+    的对象作为 helper 构造参数 —— 这正是 ring 里 `X` 的来源形态。
+  - `0x9EC290`:vtable 引用是 0x18 字节辅助对象的构造;0xa0 helper 被改写 vptr 为 `0x25243A8`,
+    帧的 `[+8]` 先写 0 再改写为 **`0xffffffff`**,然后对 `[0x3260BB0]` 的全局实例调 slot1。
+    base Execute 的 `test eax,eax; js` 正好跳过负深度的 trace 前奏 —— `+8` 是**trace 深度**得到交叉印证。
+- 三个构造器都只写 `[+8]` 的低 32 位;`+0x0c`、`+0x18` 的高 7 字节、`+0x1a..+0x1f` 都是未初始化残留。
+  这解释了 ring 里的怪 qword:`+8` 的 qword = int32 深度 + 未初始化高 32 位(`0x7ffa0000` 在 193/251 条
+  里重复出现,是栈/堆残留);`+0x18` 的 qword 里只有低两字节是构造器写的标志
+  (`[+0x18] = helper+0x14 == 0`、`[+0x19] = 拥有标志`),其余是残留。
+- 1 槽 vtable 意味着 arg2 **不是** CEffect 家族对象(没有虚 Execute);base Execute 只读写 `+8`,并把帧
+  交给 `0x16FDC0` / `0x1D116A0` 两个 trace helper,它们只读 `[+0x18]` 与 `[+8]`(窗口内未见写
+  `+0x0c`/`+0x10`)。这与「arg2 = 执行深度帧」一致,与「arg2 = CEventScope」不一致。
 
 ### §53.4 判定
 
-**Task 6 已执行(2026-10-23,点名后一枪),结果是 `no_calls`(环境)**(§53.3):host 存活、引擎字节
-完好,但采样窗口内游戏处于暂停,没有任何样本。本卷因此仍没有任何关于 arg2 类型、链字段语义、
-应用入口的实机观测;以下六条按计划要求逐条回答,全部因同一个缺口停住。
+**Task 6 已执行完毕**:两枪,第二枪 `captured`(§53.3)。以下六条按计划要求逐条回答;标注「实测」的是
+第二枪直接观测,「实测→离线」是由实测值带出的离线新判读。
 
-1. **arg2 是栈帧、堆对象还是引擎全局?** `unresolved(no_calls,无样本)`。缺的观测:§53.1 只说明 17 个
-   已判读站点里 12 个把调用方入口 `rdx` 原样转发、5 个是函数内重载(`other`),没有定位任何帧构造点;
-   `ctx_ptr` 的跨样本稳定性与 8 个 qword 的分布只有 §53.3 能取。
-2. **`[arg2+0x08]` / `[+0x18]` / `[+0x30]` 各观测到了什么?`X` 在样本间是否恒定?** `unresolved(no_calls,无样本)`。
-   缺的观测:采样器已按 `Entry.ctx_words` 记录这 8 个 qword,但没有任何一份实机记录可读。
-3. **`X→S→id` 的 id 在 `descriptor_oracle` 里 join 到了什么名字?它是不是 keyword 空间 id(§30.1)?**
-   `unresolved(no_calls,无样本)`。缺的观测:链只在驱动侧跟(`follow_chain`),没有 ctx 就没有 id;
-   「id 是 keyword token id、不是 system id」仍只是离线推论。
-4. **`S+0x20` 处的 qword 是什么?若像指针,再读一次它的首 qword;vptr 落在哪个已知 vtable 区间
-   (`ceffect_vtable_map`)?** `unresolved(no_calls,无样本)`。缺的观测:同第 3 条;与 `ceffect_vtable_map`
-   的比对需要实机读到的 vptr。
-5. **应用入口:复核 Task 2 的 `selected`。** `unresolved(no_calls,无样本)`。现状:A/B/C/D 四条全是
-   `unresolved`,没有 `selected` 可维持或改判;§53.2 的结论原样保留,不因本计划执行而升级。
-6. **C4 接线计划可以假设什么、必须自己再测什么?** 「可以假设什么」= `unresolved(no_calls,无样本)`。
-   必须自己再测的两项与本计划是否开枪无关,照旧生效:① scope/system 指针怎么从 JS 侧拿到
-   (§53.2 候选 A 缺的判据 ③);② effect 施加后引擎的提交时机(append 之后谁在何时调用 child slot[1];
-   `0x3b0c2d` 窗口只到调用点,没有时序证据)。
+1. **arg2 是栈帧、堆对象还是引擎全局?** **实测→离线:调用方构造的执行帧,不是引擎全局。**
+   256/256 条样本的 `[arg2+0]` 都是 `0x26e4fa8`;该 vtable 单槽(slot0 = `0x1D10EA0` 删除析构器),
+   析构器以 `(rcx, 0x20)` 调 sized delete ⇒ 类大小 0x20。样本里 3 个实例:0xee7fd00 ×245
+   (`+0x10` 指向 `0x1c4d3c410`,像堆对象)、0x7fe768 ×7 与 0x7fed78 ×4(都在栈上,`+0x10` 指向邻近的
+   栈 helper)。离线在 `0x1C750D0` / `0x1C3CED0` / `0x9EC290` 读到内联构造:栈上放 0x20 字节帧、写 vptr、
+   写 `+8` 深度、`+0x10`=helper、`+0x18/+0x19`=标志,然后 `rdx=&frame` 调 `call [self+8]`。⇒「栈帧」在
+   C++ 局部对象意义上成立,但同一个类也有长命实例;它**不是** `CEventScope`,也不是全局单例。
+2. **`[+8]` / `[+0x18]` / `[+0x30]` 各观测到了什么?`X` 在样本间是否恒定?** **实测。**
+   `+8` = 执行(trace)深度:base Execute 对它 `inc`/`dec`;样本低 32 位以 1..5 为主,5/256 为 0
+   (顶层调用);高 32 位未初始化,`0x7ffa0000` 残留占多数。`+0x18` = 两个标志字节
+   (`[+0x18]=helper+0x14==0`、`[+0x19]=拥有标志`)+ 未初始化残留;256 条里 245 条为 0(长命 ctx),
+   11 条为 `0x199b50001`/`0x1ed110001`(低两字节 `01 00`)。`+0x30` **不属于 arg2**(类大小 0x20,
+   `+0x20..+0x38` 是相邻内存);`X` **不恒定** —— 245 条为 0,11 条为 `0x7ff7d9d1b098`(栈上相邻的另一个
+   0x18 字节对象的 vptr);全窗口 `x_nonzero=13/662`。
+3. **`X→S→id` 的 id 在 `descriptor_oracle` 里 join 到了什么名字?是不是 keyword 空间 id?**
+   **实测:没有 id,链已证伪。** X=0x247b098 是 .rdata 的 vtable,S=0x1706f0 是代码;所谓 id/object
+   都是指令字节(`0x28c48348` = `add rsp,0x28`;`0x20c4834810468908` = `mov [rsi+0x10],ecx; add rsp,0x20`);
+   `descriptor_oracle` 两次都回 `-`。`self+8` 的 u32(0×104 / 0xd9da97f8×39 / 1×11 / 0xd9d53690×10)
+   也不像 token id,更像指针低 32 位,未 join。⇒ 第二枪没有给出任何 keyword id。
+4. **`S+0x20` 处的 qword 是什么?若像指针,再读一次它的首 qword;vptr 落在哪个已知 vtable 区间?**
+   **实测:不是指针,问题作废。** `S+0x20=0x20c4834810468908` 是 `0x1706f0` 这段代码里的指令字节;
+   S 没有 vptr,无法与 `ceffect_vtable_map` 比对。真正的 vptr 观测是 `[arg2+0]=0x26e4fa8`;
+   `self_vtable` 的 38 个不同值才是 CEffect 实例那边的数据。
+5. **应用入口:复核 Task 2 的 `selected`。** **候选 C 从 `unresolved` 变为「构造点已定位」;A/B/D 不变,
+   仍无 `selected`。** `0x1C750D0` / `0x1C3CED0` / `0x9EC290` 证明帧由调用方内联构造并紧接着
+   `call [self_vtable+8]`,给出了「引擎自己的正确用法」样板;但它**不是 C4 可直接调用的入口**:构造是
+   内联的,helper(0xa0 对象)和 self 实例都来自引擎内部,JS 侧仍没有 scope/system 指针。因此 A
+   (`0x3B01A0`)、B(slot1 直调)、D(`0x9F5750` family)维持 `unresolved`;C 改记为
+   `located(构造形状已知,可用性未证)`。
+6. **C4 接线计划可以假设什么、必须自己再测什么?** **可以假设(实测+离线)**:arg2 是 0x20 字节帧,
+   vptr `0x26e4fa8`,`+8` 是深度(base Execute 只动它),`+0x10` 是 helper 指针,`+0x18/+0x19` 是标志;
+   帧的构造序列如 `0x1C750D0`。**必须自己再测**:① 从 JS 侧拿 scope/system 指针(§53.2 候选 A 缺的
+   判据 ③,未变);② effect 施加后的提交时机(append 之后谁在何时调 child slot1,未变);
+   ③ **新增**:一个 `+0x10=NULL`、`+0x19=0` 的人工帧能否被真实 `ExecuteActual` 接受 —— base Execute
+   只读写 `+8`,但 override 可能读 `+0x10`;不许把「知道形状」当成「可以合成帧」的授权。
 
 ### §53.5 边界
 
-本计划不证明任何「按 system 施加」的行为;它只给出帧与入口的现场 —— 本次已点名开枪,但采样窗口内
-`calls=0`(环境),连现场也还没有。重开需要新游戏进程 + 新点名。
+本计划仍不证明任何「按 system 施加」的行为。第二枪抓到的是**帧的形状与构造点**,不是应用入口,也不是
+scope 指针。`X→S→id/obj` 这条链已证伪,不要再把它当前提;`descriptor_oracle` 与实机 id 的 join 仍然为零。
+C4 接线的下一枪必须自带新点名,并且要先把「人工帧能否被接受」和「scope 指针怎么来」两件事分开验证。
