@@ -3521,3 +3521,90 @@ DLL-owned probe code on synthetic input, removed by the pre-size fix. Both were
 diagnosed from Windows `exception.txt`/minidump data, not the project's
 zero-game repro tooling. 1 new evidence log
 (`evidence/logs/c2_exec_probe_4_4_4.log`).
+
+---
+
+## §53 — C4 取证:base Execute 的 arg2 与 effect 应用入口(2026-10-23)
+
+### §53.1 base-Execute 直接调用点普查(离线)
+
+重生成命令(未使用 `NS_STELLARIS_EXE` 覆盖,走脚本默认游戏路径):
+
+```bash
+python3 scripts/fastcalls.py 0x1d08520 --top 40
+# 62 direct code sites to 0x1d08520 in .text
+# in 28 functions
+# wrote evidence/xrefs/callers_0x1d08520_buckets.tsv
+```
+
+该 TSV 为 header + 28 行,`sites` 列合计 62 个直接调用点。逐站点结果落在
+`evidence/xrefs/exec_frame_callers_4_4_4.tsv`(header + 62 行):列
+`func_start / func_end / caller_count / src_files / site / rdx_origin / evidence`,
+`rdx_origin` 的取值域为 `stack|incoming_arg|global|other|unresolved|not_examined`。
+
+| `func_start..func_end` | sites |
+|---|---|
+| `0x24ab30..0x24d4c5` | 16 |
+| `0x720350..0x723674` | 8 |
+| `0x69e100..0x69e70c` | 4 |
+| `0xdcdca0..0xdce3a0` | 3 |
+| `0xdef440..0xdf06a8` | 3 |
+| `0x6c32e0..0x6c38e7` | 2 |
+| `0x7ebe60..0x7ec22a` | 2 |
+| `0x7f67f0..0x7f6c0f` | 2 |
+| `0x7ff6c0..0x7ffb09` | 2 |
+| `0xb34360..0xb345c0` | 2 |
+| `0x31cb70..0x31d738` | 1 |
+| `0x665810..0x665b8b` | 1 |
+| `0x6965c0..0x696ddc` | 1 |
+| `0x6be150..0x6be23c` | 1 |
+| `0x7d57c0..0x7d649f` | 1 |
+| `0x7f3200..0x7f3305` | 1 |
+| `0x813ea0..0x814f68` | 1 |
+| `0x87e9c0..0x87ebbd` | 1 |
+| `0x92f6e0..0x92fb0c` | 1 |
+| `0x9473f0..0x94827c` | 1 |
+| `0x9aad50..0x9aae1d` | 1 |
+| `0xbdb880..0xbdd151` | 1 |
+| `0xcc8bd0..0xcca75f` | 1 |
+| `0xd05820..0xd068bd` | 1 |
+| `0xe84100..0xe845ff` | 1 |
+| `0xe8a800..0xe8a8ef` | 1 |
+| `0xe8aa90..0xe8ace5` | 1 |
+| `0x1bcd120..0x1bcd227` | 1 |
+| **total** | **62** |
+
+本次共打开 13 个窗口(10 个 ≥2 站点桶的首站点 + `0x1bcd120` / `0x813ea0` / `0x9473f0`),
+实际判读 **17 个站点**:`incoming_arg` 12、`other` 5、`stack` 0、`global` 0、`unresolved` 0;
+其余 45 个站点保持 `not_examined`。判读口径:取调用前最后一次写 `rdx` 的指令;源寄存器若在
+函数入口由 `rdx` 赋值后、到该站点之前没有再次被写,记 `incoming_arg`;否则记 `other`
+(5 例都是「`rdi` / `r13` / `r14` 在函数内被复用过」,不是没看到写点)。
+
+逐字窗口摘录(均来自 `scripts/disrva.py <site-0x40> 0x100`;第二个参数必须 >0xFF 才是字节长度):
+
+```asm
+; 0x69e1dd..0x69e1e9 — rbx 自入口 rdx 赋值后未再改写
+  0069e1dd  mov     rdx, rbx
+  0069e1e0  lea     rcx, [rbp - 0x20]
+  0069e1e4  cmp     r8, r14
+  0069e1e7  jne     0x14069e1f0
+  0069e1e9  call    0x141d08520  ; -> 0x1d08520
+
+; 0xdcde9f..0xdcdea7 — 同形转发
+  00dcde9f  mov     rdx, rbx
+  00dcdea2  lea     rcx, [rsp + 0x20]
+  00dcdea7  call    0x141d08520  ; -> 0x1d08520
+
+; 0x1bcd17a..0x1bcd18d — 经 r8 与 0x1d08520 比较后的直接/间接双路派发
+  01bcd17a  mov     rdx, rbx
+  01bcd17d  mov     r8, qword ptr [rax + 8]
+  01bcd181  lea     rax, [rip + 0x13b398]  ; -> 0x1d08520
+  01bcd188  cmp     r8, rax
+  01bcd18b  jne     0x141bcd194
+  01bcd18d  call    0x141d08520  ; -> 0x1d08520
+  01bcd192  jmp     0x141bcd197  ; -> 0x1bcd197
+```
+
+本次没有在窗口里看到 `lea rdx,[rbp±X]` / `lea rdx,[rsp+X]` / `mov rdx,rsp` 形态的帧构造;
+能定的只有「这些直接调用把**自己的入口 arg2** 交给 base Execute」。本普查**不**说明 arg2 的类型与
+字段语义;那要 §53.3 的实机链。
