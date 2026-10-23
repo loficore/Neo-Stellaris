@@ -3266,3 +3266,243 @@ stellaris` after both: pid 9932, `Responding=True`.
 run); 6 dispatches (2 × [`C2Sanity`, `C2Init`, `C2EvalStressOne`]); 2 identical
 deterministic results (`rc=63619`); 0 debugger attaches, 0 hooks, 0 byte edits, 0
 game-file changes; 1 new evidence log (`evidence/logs/c2_live_stress_4_4_4.log`).
+
+---
+
+## §52 — the C4 execution path: predicate patch → DLL vtable → QuickJS, live
+
+> 注意：§51 从未写出。commit `329f99e` 的消息把当时的工作记作 §51，但三卷分析里没有这一节；本节编号取 §52，不补写 §51。
+
+### 52.1 Design basis (all [VERIFIED 4.4.4 STATIC])
+
+C4 lets a C1-registered effect token leave the engine's own dispatch and execute
+through a vtable the DLL owns. The plan was written from eight disassembly facts;
+they are restated here so this volume no longer depends on the plan file (which
+moved to the private plan archive).
+
+1. **effect instantiate `0x3B01A0`.** The prologue reads `[ctx+0x38]`; `0xb`
+   means the lexer path, which the probe must skip. The normal path `0x3B0322`
+   looks the token up in the effect BST, `0x3B039D` calls `class_info.create`,
+   and a non-NULL return jumps straight to `0x3B0984` — bypassing the
+   `[ctx+0x278]==3` check, which only guards the create==NULL fallback at
+   `0x3B08E2`. `0x3B0984` writes `[child+0x20]=token` and `[child+0x28]=name`,
+   calls the predicate `[child_vptr+0x98](child, r9)`, and on true appends the
+   child to the container at `[arg1+8]` and calls `[child_vptr+0x08](child, ctx,
+   r9)`. The legal probe shape is therefore `0x3B01A0(parent, ctx, token, 0)`:
+   `r9=0` makes the predicate return true at its first branch without
+   dereferencing the parent.
+   **Live correction:** the real event scope is not a valid parse context.
+   `[ctx+0x30]` is read by the name builder `0x1D0C9F0`, and a live scope leads
+   into its `[B+0x70] != 0` branch, which threw `std::length_error` (52.4 b).
+   The probe passes a synthetic context and keeps the real self/ctx only as an
+   environment gate.
+2. **donor effect vtable `0x2606FE0`.** slot[0] `+0x00` = `0x1B4B30` (scalar
+   deleting destructor); slot[1] `+0x08` = `0x3AFD30` (donor Execute override);
+   slot[2] `+0x10` = `0x3B01A0` (instantiate helper, not Execute); slot[15]
+   `+0x78` = `0x1596B0` (read again by the predicate); slot[19] `+0x98` =
+   `0x3B1420` (predicate). Slots through `+0xC0` are valid function pointers,
+   so copying **25 slots** (200 bytes) is a safe lower bound. 25 slots is not
+   "through `+0x98`"; `0x98/8 + 1 = 20`.
+3. **effect predicate `0x3B1420(child, parent)`.** `if (parent == 0) return true;
+   x = child->[vptr+0x78](); if (x == 0) return true; return parent != x;` — it
+   dereferences the parent only when it is non-zero. After the detour repoints
+   `[child]`, that same call's `[+0x78]` goes through slot[15] of our copy, so
+   the copy must include slot[15].
+4. **predicate prologue.** 21 bytes:
+   `48 89 5C 24 08 / 57 / 48 83 EC 20 / 48 8B FA / 48 8B D9 / 48 85 D2 / 74 25`
+   (mov [rsp+8],rbx; push rdi; sub rsp,0x20; mov rdi,rdx; mov rbx,rcx;
+   test rdx,rdx; je +0x25). The detour's 14-byte JMP takes the first 16 bytes
+   (5+1+4+3+3), so the trampoline copies only position-independent instructions
+   and the `je` at offset 19 stays in place; the fingerprint still pins all 21
+   bytes and rejects any other build.
+5. **recursive parse `0x3B0DB2`** calls `[child_vptr+0x08]` with `(child, ctx,
+   [rbp+0x548])` — independent evidence that slot[1] is the virtual Execute
+   entry. Base Execute `0x1D08520` is merely the default body for classes that do
+   not override slot[1]; its internal `call [rax+0x10]` is a different slot.
+6. **donor Execute `0x3AFD30(self, ctx, a3)` loops the ctx lexer.** Chaining it
+   in the middle of an effect list would re-parse the outer list, so the live
+   chain stays OFF; the chain path is proven only natively with a fake donor.
+7. **trigger path differs.** `0x349AE0` reaches `[vptr+0x28]`, not `+0x08`. C4
+   does not touch triggers.
+8. **base Execute runs ~5,300 times/s** in a running campaign (§10). The probe
+   polls a bounded window; `fired=0` there is an environment verdict (NO_FIRE),
+   not a bridge failure.
+
+### 52.2 Implementation
+
+    src/dll/quickjs/quickjs_wrapper.c   C2ExecArmToken/C2ExecCall/C2ExecStats/
+                                        C2ExecDisarmState — the C bridge. Fixed
+                                        script `(function(v,p){return
+                                        (v===<token>)?1504:-1;})`; the
+                                        `typeof p === 'number'` guard was dropped
+                                        (ruling P5: the typeof peephole's
+                                        `OP_strict_eq << 24` trips UBSan in this
+                                        Debug build). C2ExecCall reads
+                                        `[self+0x20]`, compares it with the armed
+                                        token, takes a non-blocking try-lock, calls
+                                        JS, and records stats; budget 64.
+    src/dll/c2/vtable.zig              25-slot copy of donor 0x2606FE0 into DLL
+                                        `.data`; slot[1] = effectExecute, which
+                                        forwards `C2ExecCall(token, ctx)` and
+                                        chains to 0x3AFD30 only on rc==1 with
+                                        chain explicitly enabled (default OFF).
+    src/dll/c2/predicate_hook.zig      detour on 0x3B1420; 21-byte fingerprint;
+                                        when `[child+0x20]` equals the armed
+                                        token it repoints `[child]` at the DLL
+                                        copy before calling the original
+                                        predicate. Every other object keeps its
+                                        donor vtable.
+    src/dll/c2/live_probe.zig          detour on base Execute 0x1D08520 (through
+                                        exec_hook): run the engine's own call
+                                        first, then one synthetic
+                                        0x3B01A0(parent, ctx, token, 0) via
+                                        cmpxchg; afterwards inert. Synthetic ctx
+                                        (0x300 bytes; +0x30 -> A, A+8 -> B with B
+                                        zeroed, +0x38=0) and a fake parent whose
+                                        container at parent+8 is pre-sized
+                                        (begin -> 16 qwords, capacity 16, size 0)
+                                        so 0x22C4A0 stays on its fast path
+                                        0x22C58B.
+    src/dll/exports.zig                the eight C2Exec* exports; install order
+                                        vtable -> predicate -> probe -> arm;
+                                        cleanup ProbeUninstall -> ProbeVerify ->
+                                        settle -> Disarm. Never FreeLibrary.
+    scripts/c2_exec_probe.py           one-shot driver: module gate (C2Sanity==42),
+                                        C1Run/C1EffectId, C2Init, install, bounded
+                                        poll, cleanup, verdict on the live
+                                        pre-disarm snapshot.
+
+The C1 registration is the same one §24–§30 establish: trigger 68636 and effect
+68637 are freshly minted tokens (`C1Run`), not official keywords.
+
+### 52.3 The live shot
+
+Artifact `stellaris_quickjs.dll` sha256 `da1e6bd5da38c25983015c2c5ecec0b3f52c60a4c42f0b6115dbf4ee260f290d`
+(7,163,904 bytes), deployed as `C:\temp\sqjs_c4.dll`; the remote hash matched.
+Game pid 15928, campaign loaded and unpaused, one module copy, one shot:
+
+    [c4] C1 trigger_id=68636 effect_id=68637, game alive
+    [c4] C2Init rc == 0, game alive
+    [c4] C2ExecInstall(effect_id=68637) rc=0
+    [c4] C2ExecProbeInstall rc=0
+    [c4] C2ExecProbeUninstall rc=0
+    [c4] C2ExecProbeVerify rc=0 (0 = base Execute bytes intact)
+    [c4] C2ExecDisarm rc=0
+    [c4] probe stats (live): armed=1 token=68637 calls=17 fired=1 ctx_skip=0
+         invalid=0 instantiate_rc=0 patch_size=16 installed=1 verified=-1
+         vtable=1 chain=0 pred_installed=1 pred_calls=1 pred_patched=1
+    [c4] c bridge stats (live): armed=1 token=68637 budget_left=63 calls=1
+         skip=0 busy=0 js_calls=1 js_ok=1 js_err=0 mismatch=0 last_rc=1
+         last_token=68637 last_value=1504
+    VERDICT: ok
+    EXIT=0
+
+(The lines are wrapped here; the verbatim transcript, byte for byte apart from
+the cp936 em dash, is in `evidence/logs/c2_exec_probe_4_4_4.log`.) The host was
+alive after the run: `Get-Process stellaris` -> Id 15928, `Responding=True`,
+started 2026-10-23 08:51:57.
+
+What ran, in order: the engine's own instantiate of some live effect called our
+base-Execute detour; our probe let the engine finish, then synthesized one
+instantiate of 68637; `0x3B01A0` hit the effect BST, donor `create` returned the
+hidden_effect child, the predicate detour saw `[child+0x20]==68637`, repointed
+`[child]` at the DLL's 25-slot copy, and the original predicate returned true;
+`0x3B0984` appended the child and called slot[1]; `effectExecute` read the token,
+the C bridge matched it and called the armed JS function; JS returned 1504 on the
+first and only call. `budget_left=63` shows the single call consumed one of 64.
+`C2ExecProbeVerify rc=0` shows the base-Execute bytes were restored;
+`C2ExecDisarm rc=0` shows both hooks came down, and its zeroing of the bridge
+token is why the post-cleanup read shows `armed=0 token=0`.
+
+### 52.4 Failed attempts and crash analysis
+
+(a) **Environment, twice** (pids 12764 and 9484). The probe installed cleanly but
+`calls=0`: base Execute never ran because the session sat in the main menu or
+was paused. The driver reported `no_fire` and the shot was retried in a fresh
+game process per the one-shot rule. This is the fact behind design basis 8.
+
+(b) **A real event scope is not a parse context** (pid 15576, 2026-10-23
+07:10:52). The first version passed the live `ctx` straight to `0x3B01A0`. The
+host died with `std::length_error`: the dump's `ThrowInfo` resolves to
+`.?AVlength_error@std@@`, and its frames pin `0x3B0995` (inside `0x3B01A0`,
+after the name lookup returned) and `0x1D0CCF3` (inside `0x1D0C9F0`'s
+`[B+0x70] != 0` branch, after the call to `0x15F420`). The subsequent
+`CreateRemoteThread` failures (`gle=5`) are the §44/§45 dead-thread signature,
+not a second fault. Full-function review of `0x3B01A0..0x3B0DC7` shows the hit
+path reads only `[ctx+0x38]` (prologue) and `[ctx+0x30]` (name builder); the
+other ctx reads (`[ctx+0x278]`, `[ctx+0x48]`) belong to the create==NULL
+fallback and the predicate-false error path. Fix: the synthetic context, with a
+zeroed B so the builder takes its safe branch. Cost of the ruling: evidence is
+"official dispatch path under a synthetic parse ctx", not "the game's real parse
+ctx"; an unaudited ctx read on the hit path would have cost one more process,
+which the full disassembly review ruled out and the shot confirmed.
+
+(c) **The container is not a bare vector** (crash at 2026-10-23 07:47:32,
+`stellaris_20261023_074732` minidump, 63,461,304 bytes). With the synthetic
+ctx in place the host faulted at `stellaris.exe+0x22C55F`, the instruction
+`call qword ptr [rax+0x18]` in `0x22C4A0`'s grow branch, with `rax=0`. The fake
+parent's container (`parent+8`) had size == capacity == 0, so the append took the
+grow branch and called a zero vptr. `0x22C4A0`'s layout is `+0x00 vptr`,
+`+0x08 begin`, `+0x10 capacity (u32)`, `+0x14 size (u32)`; when
+`size != capacity` it takes the fast path `0x22C58B`, which reads only those
+fields. Fix: pre-size the container (begin -> a 16-qword buffer, capacity 16,
+size 0). A native test pins size==0, capacity > size, capacity >= 2, and that
+the first write lands at begin. No engine memory is touched; the container is
+probe-private and the engine never owns it.
+
+(d) **The chain worked, the driver judged the wrong snapshot** (pid 11648). The
+first complete chain returned `js_ok=1`/`last_value=1504`/`pred_patched=1`, but
+the driver's `finally` re-read the bridge stats after `_cleanup()` and
+`C2ExecDisarm` zeroes the bridge `token`, so the assertion
+`c bridge token 0 != effect_id 68637` aborted a successful shot. A second race:
+the probe flips `fired` before `instantiate()` returns, so a poll read can stop
+with `js_calls==0`. Fixes (`72a855d`): `contract_errors` judges the live
+pre-disarm snapshot, and `poll_done` waits for `fired==1 && js_calls>=1`. Both
+fixes were written test-first (RED -> GREEN, 14 host tests).
+
+### 52.5 What this settles and what it does not
+
+Settled live:
+
+- A token minted by our C1 registration travels the engine's own `0x3B01A0`
+  instantiate path — BST lookup, donor `create`, token/name write — not a
+  hand-rolled call into `create`.
+- The predicate detour patches exactly the armed object (`pred_patched=1`) and
+  the original predicate still returns the engine's answer.
+- Execution lands on the DLL's 25-slot donor copy, slot[1] reaches the C bridge,
+  and QuickJS returns the sentinel (`js_ok=1`, `js_err=0`, `mismatch=0`).
+- The base-Execute bytes are restored (`C2ExecProbeVerify rc=0`), both hooks come
+  down (`C2ExecDisarm rc=0`), and the host survives.
+
+Not claimed:
+
+- **No visible gameplay effect.** The JS function returns 1504; nothing in the
+  game state changes.
+- **The donor chain did not run live.** `chain=0` by design (design basis 6);
+  the forwarding behavior is covered only by the native fake-donor test.
+- **One object, one call.** `pred_calls=1`, `calls=1`; this is a one-shot
+  existence proof, not a throughput or idempotence claim.
+- **Patched objects are permanent.** `[obj+0]` points into the DLL's `.data`
+  for the rest of the process, so the module must never be unloaded; no evidence
+  here says anything about reloading the DLL.
+
+### 52.6 Remaining boundary
+
+仍待做 = 把 chokepoint 分数接进 wrapper. The data source is ready
+(`evidence/xrefs/chokepoint_scores_4_4_4.tsv`); what remains is the wiring that
+reads a score in JS and turns it into a per-system effect (for example an
+`add_modifier`-shaped change) instead of the sentinel. C4's stated goal — a
+visible effect — stops exactly at that boundary: the execution path is proven,
+the payload is not written.
+
+### 52.7 Counts for §52
+
+6 game processes (two `no_fire`, two host deaths, one driver abort, one `ok`),
+6 module copies of the artifact above, 1 successful shot; the successful run
+made 9 named dispatches (`C2Sanity`, `C1Run`, `C1EffectId`, `C2Init`,
+`C2ExecInstall`, `C2ExecProbeInstall`, `C2ExecProbeUninstall`,
+`C2ExecProbeVerify`, `C2ExecDisarm`) plus the stats read-backs; 0 debugger
+attaches, 0 game-file edits, 0 changes to game data; 2 host deaths, both caused
+by the probe's own inputs (an invalid parse ctx, then an un-sized container),
+neither by a fault in the artifact's memory accesses; 1 new evidence log
+(`evidence/logs/c2_exec_probe_4_4_4.log`).

@@ -1,0 +1,243 @@
+# C4 execution path (§52) — live one-shot evidence
+
+# Purpose: prove, in one live game process, that a C1-registered effect token
+# travels the engine's own instantiate path (0x3B01A0), gets its [child] vtable
+# repointed by our predicate detour (0x3B1420), and executes through the DLL's
+# 25-slot donor copy -> C bridge -> QuickJS, returning the sentinel 1504.
+# The base-Execute (0x1D08520) probe synthesizes exactly one instantiate call
+# inside a real effect execution; the donor chain (0x3AFD30) stays OFF.
+# Authorization: the human partner's standing "如果需要访问Windows机器来实际调试,
+# 不必问我,你可以自由使用,但是仅限于游戏调试相关,其他的不要动". Windows-side
+# actions: scp to C:/temp, schtasks, python, Get-Process/Get-FileHash — no
+# debugger, no external hook, no game-file change.
+# exe identity: stellaris.exe 4.4.4 sha256
+#   9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56
+#   (same build as §49/§50; the successful shot ran in pid 15928, launched
+#   2026-10-23 08:51:57 local, campaign loaded and unpaused).
+# Artifact of record: stellaris_quickjs.dll sha256
+#   da1e6bd5da38c25983015c2c5ecec0b3f52c60a4c42f0b6115dbf4ee260f290d
+#   (7,163,904 bytes), deployed as C:\temp\sqjs_c4.dll; remote Get-FileHash
+#   matched DA1E6BD5DA38C25983015C2C5ECEC0B3F52C60A4C42F0B6115DBF4EE260F290D
+#   (re-checked after the shot).
+# Driver: scripts/c2_exec_probe.py sha256
+#   9a61ccc3b81c505f78e9bbf21a827d7f527822ff9fb06f77818d6f1021e1c8ef
+#   deployed as C:\temp\c2_exec_probe.py; remote hash matched
+#   9A61CCC3B81C505F78E9BBF21A827D7F527822FF9FB06F77818D6F1021E1C8EF.
+# Delay between fixes: the two source fixes committed at 08:50:59/08:51:03
+#   (9c5ba08, 72a855d) are inside this artifact; the failed attempts below ran
+#   the same artifact bytes except where noted (the two crash attempts predate
+#   the container pre-size fix and the driver fix).
+# Command: python C:/temp/c2_exec_probe.py C:/temp/sqjs_c4.dll
+#   launched by scheduled task C4Probe -> C:\temp\c4_probe.bat (a Windows OpenSSH
+#   channel kills its child process tree on close, so launcher and probe run
+#   under schtasks /ru 13229 /rl highest). Output: C:\temp\c4_run.txt.
+# Launcher chain for the successful process: C:\temp\c4_launch.bat ->
+#   launch_stellaris.py --verbose --launcher-timeout-s 120 --observe-s 60
+#   --unpause --unpause-delay-s 150 --bridge-timeout-s 480
+#   --marker C:\temp\ls_c4.txt
+# Encoding note: the console renders U+2014 as cp936 bytes 0xA1 0xAA, which are
+#   not valid UTF-8; they appear below as <A1 AA>. All other bytes are unchanged.
+# Host check after the shot: Get-Process stellaris -> Id 15928,
+#   Responding=True, StartTime=2026/10/23 8:51:57. The driver's own post-run
+#   assert_game_alive(15928) also passed (VERDICT: ok / EXIT=0 below).
+
+## (1) Attempt history
+
+Each attempt used its own game process; the probes (C1Run/C2Init/C2ExecInstall)
+are single-shot by design and were never retried in the same process.
+
+| local time | pid   | result | one-line note |
+|------------|-------|--------|----------------|
+| 06:50      | 12764 | no_fire | main menu / paused: base Execute never ran; environment, not a bridge verdict |
+| 07:07      | 9484  | no_fire | same; full transcript in (2.1) |
+| 07:10:52   | 15576 | host died (std::length_error) | real event scope passed as the parse ctx; transcript + exception.txt in (2.2) |
+| 07:47:32   | —     | host died (0x22C55F) | fake parent container had size==capacity, took 0x22C4A0's grow branch with a zero vptr; minidump in (2.3) |
+| 08:49      | 11648 | chain complete, driver aborted (EXIT=1) | the driver asserted on the post-disarm snapshot (token zeroed by C2ExecDisarm); captured tail in (2.4) |
+| 08:56      | 15928 | VERDICT: ok / EXIT=0 | the shot; verbatim transcript in (3) |
+
+## (2) Failed attempts (verbatim)
+
+### 2.1 no_fire (pid 9484) — environment
+
+    [c4] pid=9484  dll=C:\temp\sqjs_c4.dll
+    [c4] sqjs_c4.dll base (64-bit): 0x7ffa65dc0000
+    [c4] MZ header at base OK
+    [c4] C2Sanity == 42, game alive <A1 AA> dispatch authorized
+    [c4] C1 trigger_id=68636 effect_id=68637, game alive
+    [c4] C2Init rc == 0, game alive
+    [c4] C2ExecInstall(effect_id=68637) rc=0
+    [c4] C2ExecProbeInstall rc=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] waiting: calls=0 fired=0 ctx_skip=0 js_calls=0
+    [c4] C2ExecProbeUninstall rc=0
+    [c4] C2ExecProbeVerify rc=0 (0 = base Execute bytes intact)
+    [c4] C2ExecDisarm rc=0
+    [c4] probe stats: armed=1 token=68637 calls=0 fired=0 ctx_skip=0 invalid=0 instantiate_rc=0 patch_size=16 installed=0 verified=0 vtable=1 chain=0 pred_installed=0 pred_calls=0 pred_patched=0
+    [c4] c bridge stats: armed=0 token=0 budget_left=0 calls=0 skip=0 busy=0 js_calls=0 js_ok=0 js_err=0 mismatch=0 last_rc=0 last_token=0 last_value=0
+    VERDICT: no_fire
+    the base-Execute detour never saw a usable call within the poll window. That is an ENVIRONMENT result, not a code verdict: load a running campaign and unpause the game, then rerun with a fresh game process.
+
+(pid 12764, 06:50, produced the same lines and the same VERDICT; the session was
+on the main menu / paused.)
+
+### 2.2 std::length_error inside 0x3B01A0 (pid 15576)
+
+    [c4] pid=15576  dll=C:\temp\sqjs_c4.dll
+    [c4] sqjs_c4.dll base (64-bit): 0x7ffa65dc0000
+    [c4] MZ header at base OK
+    [c4] C2Sanity == 42, game alive <A1 AA> dispatch authorized
+    [c4] C1 trigger_id=68636 effect_id=68637, game alive
+    [c4] C2Init rc == 0, game alive
+    [c4] C2ExecInstall(effect_id=68637) rc=0
+    [c4] C2ExecProbeInstall rc=0
+    [c4] C2ExecProbeUninstall rc=0
+    [c4] C2ExecProbeVerify rc=0 (0 = base Execute bytes intact)
+    [c4] C2ExecDisarm raised (attempt 0): CreateRemoteThread @0x7ffa66209fa0 failed: gle=5
+    [c4] C2ExecDisarm rc=None
+    [c4] final stats read raised: CreateRemoteThread(arg) @0x7ffa66206e00 failed: gle=5
+    [c4] probe stats: armed=1 token=68637 calls=2 fired=1 ctx_skip=0 invalid=0 instantiate_rc=0 patch_size=16 installed=1 verified=-1 vtable=1 chain=0 pred_installed=1 pred_calls=0 pred_patched=0
+    [c4] c bridge stats: armed=1 token=68637 budget_left=64 calls=0 skip=0 busy=0 js_calls=0 js_ok=0 js_err=0 mismatch=0 last_rc=0 last_token=0 last_value=0
+    VERDICT: fired_no_js
+    instantiate fired but C2ExecCall never ran (js_calls==0): the object did not travel the patched predicate -> vtable -> slot[1] chain, or the C bridge was already disarmed.
+
+The `gle=5` on two later dispatches is the §44/§45 signature of a dead thread:
+the host was already terminating when the driver tried to clean up. Game
+`exception.txt` for this crash, verbatim:
+
+    Application: Stellaris
+    Version: 4.4.4
+    Date/Time: 2026-10-23 07:10:52
+
+    Unhandled Exception E06D7363 (UNKNOWN EXCEPTION) at address 0x00007FFAB0EB055C
+
+    Stack Trace:
+      1                             RaiseException (+ 108)
+      2                             PHYSFS_writeUBE64 (+ 4823512)
+      3                             PHYSFS_writeUBE64 (+ 4799178)
+      4                             PHYSFS_swapSLE64 (+ 6672)
+      5                             PHYSFS_swapSLE64 (+ 28490510)
+      6                             PHYSFS_swapSLE64 (+ 5939)
+      7                             PHYSFS_writeUBE64 (+ 126035)
+      8                             PHYSFS_swapSLE64 (+ 2436165)
+      9                             C2ExecProbeInstall (+ 1081)
+      10                            PHYSFS_swapSLE64 (+ 27718722)
+      11                            PHYSFS_writeUBE64 (+ 107738)
+      12                            C2ExecProbeInstall (+ 468)
+      13                            PHYSFS_swapSLE64 (+ 28203342)
+      14                            PHYSFS_swapSLE64 (+ 27567616)
+      15                            PHYSFS_swapSLE64 (+ 5140904)
+      16                            PHYSFS_swapSLE64 (+ 8579642)
+      17                            PHYSFS_swapSLE64 (+ 8533740)
+      18                            PHYSFS_swapSLE64 (+ 1936064)
+      19                            PHYSFS_swapSLE64 (+ 27506289)
+      20                            PHYSFS_swapSLE64 (+ 27507512)
+      21                            (function-name not available) (+ 0)
+      22                            (function-name not available) (+ 0)
+      23                            PHYSFS_writeUBE64 (+ 5095650)
+      24                            PHYSFS_writeUBE64 (+ 4812926)
+      25                            BaseThreadInitThunk (+ 29)
+      26                            RtlUserThreadStart (+ 40)
+      27                            RtlUserThreadStart (+ 40)
+
+Offline the throw was identified as `std::length_error`
+(`ThrowInfo .rdata` -> `CTA` -> `.?AVlength_error@std@@`), raised in
+`0x3B01A0` after the name lookup (`0x3B0995`) via `0x1D0C9F0`'s
+`[B+0x70] != 0` branch calling `0x15F420` (`0x1D0CCF3`). The "real" event scope
+is not a valid parse context: `[ctx+0x30]` leads to a non-zero B, and the name
+builder takes the length-taking branch. This is the failure that motivated the
+synthetic parse context (§52, 2.2 of the analysis).
+
+### 2.3 container grow branch with a zero vptr (crash at 07:47:32)
+
+The same process family, after the synthetic ctx change but before the parent
+container was pre-sized. Game banner:
+
+    crashes 07:47:32
+
+`minidump.dmp` 63,461,304 bytes, `exception.txt` 1,614 bytes under
+`C:\Users\13229\Documents\Paradox Interactive\Stellaris\crashes\stellaris_20261023_074732\`.
+The dump's faulting context (module base 0x7ff7d78a0000):
+
+    crash rva 0x22c55f
+    rip 0x7ff7d7acc55f
+      rax=0x0  rcx=0x7ffa6affb0a8  rdx=0x0  rbx=0x1
+      rsi=0x1ddcc9d20  rdi=0x0  r8=0x0  r9=0x7ff7d9a27aee
+      r13=0x7ffa6affada0  r14=0x7ffa6affb0a8
+
+and the disassembly around the fault:
+
+    0x22c4aa: movsxd rbx, dword ptr [rcx + 0x14]   ; size
+    0x22c4b1: mov    eax, dword ptr [rcx + 0x10]   ; capacity
+    0x22c4b7: cmp    ebx, eax
+    0x22c4b9: jne    0x22c58b                       ; fast path
+    ...
+    0x22c552: mov    rax, qword ptr [r14]           ; container vptr
+    0x22c55f: call   qword ptr [rax + 0x18]         ; <== CRASH (rax = 0)
+
+The fake parent handed `0x3B01A0` a container whose `+0x00` vptr was zero and
+whose size == capacity == 0, so `0x22C4A0` took the grow branch and called the
+null vptr. Fix: the synthetic parent now pre-sizes the container (begin -> a
+16-slot buffer, capacity 16, size 0), which keeps `0x22C4A0` on its fast path
+`0x22C58B`. A native test pins size==0, capacity > size, capacity >= 2 and that
+the first write at `begin + size*8` lands at `begin`.
+
+### 2.4 the chain worked, the driver judged the wrong snapshot (pid 11648)
+
+The remote file was overwritten by the next run before the full text was read
+back; the captured tail is verbatim:
+
+    [c4] C2ExecDisarm rc=0
+    [c4] probe stats: armed=1 token=68637 calls=4 fired=1 ctx_skip=0 invalid=0 instantiate_rc=0 patch_size=16 installed=0 verified=0 vtable=1 chain=0 pred_installed=0 pred_calls=1 pred_patched=1
+    [c4] c bridge stats: armed=0 token=0 budget_left=0 calls=1 skip=0 busy=0 js_calls=1 js_ok=1 js_err=0 mismatch=0 last_rc=1 last_token=68637 last_value=1504
+    Traceback (most recent call last):
+      File "C:\temp\c2_exec_probe.py", line 318, in <module>
+        sys.exit(main())
+                 ~~~~^^
+      File "C:\temp\c2_exec_probe.py", line 314, in main
+        return run_live_case(pid, dll_path)
+      File "C:\temp\c2_exec_probe.py", line 291, in run_live_case
+        assert cstats.get("token", 0) == effect_id, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    AssertionError: c bridge token 0 != effect_id 68637
+    EXIT=1
+
+`js_ok=1`, `last_value=1504`, `pred_patched=1`, `fired=1`, `chain=0`: the chain
+itself completed in pid 11648. The assertion failed only because the `finally`
+block re-read the bridge stats after `_cleanup()`, and `C2ExecDisarm` zeroes the
+bridge's `token` (`armed=0 token=0`). The fix (`72a855d`) judges the live
+pre-disarm snapshot (`contract_errors`) and waits for `fired==1 && js_calls>=1`
+(`poll_done`), because the probe flips `fired` before `instantiate()` returns.
+
+## (3) The shot (pid 15928) — verbatim
+
+    [c4] pid=15928  dll=C:\temp\sqjs_c4.dll
+    [c4] sqjs_c4.dll base (64-bit): 0x7ffa5dfb0000
+    [c4] MZ header at base OK
+    [c4] C2Sanity == 42, game alive <A1 AA> dispatch authorized
+    [c4] C1 trigger_id=68636 effect_id=68637, game alive
+    [c4] C2Init rc == 0, game alive
+    [c4] C2ExecInstall(effect_id=68637) rc=0
+    [c4] C2ExecProbeInstall rc=0
+    [c4] C2ExecProbeUninstall rc=0
+    [c4] C2ExecProbeVerify rc=0 (0 = base Execute bytes intact)
+    [c4] C2ExecDisarm rc=0
+    [c4] probe stats (live): armed=1 token=68637 calls=17 fired=1 ctx_skip=0 invalid=0 instantiate_rc=0 patch_size=16 installed=1 verified=-1 vtable=1 chain=0 pred_installed=1 pred_calls=1 pred_patched=1
+    [c4] c bridge stats (live): armed=1 token=68637 budget_left=63 calls=1 skip=0 busy=0 js_calls=1 js_ok=1 js_err=0 mismatch=0 last_rc=1 last_token=68637 last_value=1504
+    [c4] probe stats (post-cleanup): armed=1 token=68637 calls=17 fired=1 ctx_skip=0 invalid=0 instantiate_rc=0 patch_size=16 installed=0 verified=0 vtable=1 chain=0 pred_installed=0 pred_calls=1 pred_patched=1
+    [c4] c bridge stats (post-cleanup): armed=0 token=0 budget_left=0 calls=1 skip=0 busy=0 js_calls=1 js_ok=1 js_err=0 mismatch=0 last_rc=1 last_token=68637 last_value=1504
+    VERDICT: ok
+    EXIT=0
+
+Contract terms from this transcript: token=68637 == C1's effect_id; js_ok=1;
+js_err=0; mismatch=0; last_value=1504; fired=1; pred_patched>=1; chain=0;
+C2ExecProbeVerify rc=0; C2ExecDisarm rc=0; host alive after the run (EXIT=0 and
+the post-shot Get-Process check above).
