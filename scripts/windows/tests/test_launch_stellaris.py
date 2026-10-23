@@ -698,13 +698,46 @@ def test_default_bridge_timeout_reflects_every_phase_budget():
         launch_stellaris._INNER_BUDGET_LAUNCHER_WAIT_S,
         launch_stellaris._INNER_BUDGET_LAUNCHER_CLICK_S,
         launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S,
-        launch_stellaris._INNER_BUDGET_UNPAUSE_S,
     ]
     assert sum(components) == launch_stellaris._INNER_CHAIN_BUDGET_S
     assert launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S == (
         launch_stellaris._INNER_CHAIN_BUDGET_S
         + launch_stellaris._BRIDGE_TIMEOUT_MARGIN_S
     )
+
+
+def test_default_bridge_timeout_excludes_the_unpause_budget():
+    """--unpause adds ~95 s of inner work most callers never do. The derived
+    default must stay at the no-unpause sum: widening it for everyone turns an
+    inner that hangs into a failure reported 95 s later than it used to be.
+    """
+    mandatory = [
+        launch_stellaris._INNER_BUDGET_PREKILL_SPAWN_S,
+        launch_stellaris._INNER_BUDGET_STEAM_READY_S,
+        launch_stellaris._INNER_BUDGET_LAUNCHER_WAIT_S,
+        launch_stellaris._INNER_BUDGET_LAUNCHER_CLICK_S,
+        launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S,
+    ]
+    assert launch_stellaris._INNER_CHAIN_BUDGET_S == sum(mandatory)
+    assert launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S == (
+        launch_stellaris._INNER_CHAIN_BUDGET_S
+        + launch_stellaris._BRIDGE_TIMEOUT_MARGIN_S)
+    args = build_arg_parser().parse_args([])
+    assert args.bridge_timeout_s == launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S
+
+
+def test_unpause_widens_the_bridge_default_by_exactly_the_unpause_budget():
+    args = build_arg_parser().parse_args(["--unpause"])
+    assert args.bridge_timeout_s == (
+        launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S
+        + launch_stellaris._INNER_BUDGET_UNPAUSE_S)
+
+
+def test_explicit_bridge_timeout_wins_over_the_unpause_widening():
+    for argv in (["--unpause", "--bridge-timeout-s", "999"],
+                 ["--bridge-timeout-s", "999", "--unpause"]):
+        args = build_arg_parser().parse_args(argv)
+        assert args.bridge_timeout_s == 999, argv
 
 
 def test_inner_budget_table_tracks_the_argparse_defaults():

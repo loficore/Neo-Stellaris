@@ -76,10 +76,12 @@ _INNER_CHAIN_BUDGET_S = (
     + _INNER_BUDGET_LAUNCHER_WAIT_S
     + _INNER_BUDGET_LAUNCHER_CLICK_S
     + _INNER_BUDGET_GAME_OBSERVE_S
-    + _INNER_BUDGET_UNPAUSE_S
-)  # 237s with all defaults
+)  # 142s with all defaults; --unpause adds _INNER_BUDGET_UNPAUSE_S on top
 _BRIDGE_TIMEOUT_MARGIN_S = 33          # slack for monitor jitter + log I/O
-DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 270s
+DEFAULT_BRIDGE_TIMEOUT_S = _INNER_CHAIN_BUDGET_S + _BRIDGE_TIMEOUT_MARGIN_S  # 175s
+UNPAUSE_BRIDGE_TIMEOUT_S = (
+    _INNER_CHAIN_BUDGET_S + _INNER_BUDGET_UNPAUSE_S + _BRIDGE_TIMEOUT_MARGIN_S
+)  # 270s
 
 # Process images this chain looks for. Compared case-insensitively: Windows
 # file names are case-insensitive and psutil reports whatever the image has.
@@ -235,8 +237,21 @@ class _Timeline:
 _active_timeline: _Timeline | None = None
 
 
+class _ArgParser(argparse.ArgumentParser):
+    """Resolves --bridge-timeout-s after parsing: its default depends on
+    --unpause, which argparse cannot express as another flag's default."""
+
+    def parse_args(self, args=None, namespace=None):
+        parsed = super().parse_args(args, namespace)
+        if parsed.bridge_timeout_s is None:
+            parsed.bridge_timeout_s = (
+                UNPAUSE_BRIDGE_TIMEOUT_S if parsed.unpause
+                else DEFAULT_BRIDGE_TIMEOUT_S)
+        return parsed
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="launch_stellaris")
+    p = _ArgParser(prog="launch_stellaris")
     p.add_argument("--app-id", type=int, default=281990)
     p.add_argument("--launcher-timeout-s", type=int, default=30,
                    help="Steam-ready and launcher-window budget (default 30). "
@@ -267,9 +282,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "keypress into the loading screen is lost. Raising it "
                         "above the default may require raising "
                         "--bridge-timeout-s too.")
-    p.add_argument("--bridge-timeout-s", type=int, default=DEFAULT_BRIDGE_TIMEOUT_S,
+    p.add_argument("--bridge-timeout-s", type=int, default=None,
                    help="How long the outer waits for the inner's completion "
-                        f"marker (default {DEFAULT_BRIDGE_TIMEOUT_S}, derived "
+                        f"marker (default {DEFAULT_BRIDGE_TIMEOUT_S}, or "
+                        f"{UNPAUSE_BRIDGE_TIMEOUT_S} with --unpause; derived "
                         "from the phase budgets above it). Raise this whenever "
                         "--launcher-timeout-s, --game-timeout-s, --observe-s "
                         "or --unpause-delay-s is raised past its default, or "

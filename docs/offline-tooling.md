@@ -436,8 +436,8 @@ python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码
 base-Execute 探针合成**一次** instantiate,slot[1] 经 `C2ExecCall` 进固定 JS 脚本,脚本返回哨兵
 `1504`。读的是两组统计:`C2ExecStatsInto`(C 桥:`armed/token/js_calls/js_ok/js_err/mismatch/
 last_rc/last_value`)与 `C2ExecProbeStatsInto`(探针与谓词:`calls/fired/ctx_skip/invalid/
-pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔、120 s 上限),判读只看
-清理后的最终快照,不看轮询中间值。
+pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔、120 s 上限),判读取 `C2ExecDisarm` **之前**的 live 快照
+(`Disarm` 会把 C 桥的 `token` 清零,清理后的快照不可判),轮询中间值仍不看。
 
 **一枪一进程**:`C1Run`/`C2Init`/`C2ExecInstall`/`C2ExecProbeInstall` 每个都只派发一次,重跑必须
 重开游戏。清理段(`finally`)顺序固定:先 `C2ExecProbeUninstall` 让探针 inert,再

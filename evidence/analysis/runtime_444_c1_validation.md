@@ -3485,6 +3485,13 @@ Not claimed:
 - **Patched objects are permanent.** `[obj+0]` points into the DLL's `.data`
   for the rest of the process, so the module must never be unloaded; no evidence
   here says anything about reloading the DLL.
+- **Disarm is a byte restore, not a quiescence window.** `C2ExecDisarm` restores
+  the 21-byte prologue and `detour.removeHook` frees the trampoline; a thread
+  already inside the detour just before the restore can return into freed
+  trampoline memory. `SETTLE_S=2` narrows that window but does not close it.
+  The driver's one-shot contract is what makes this acceptable: the next shot
+  starts from a fresh game process. Do not treat arm/disarm as reusable in a
+  live campaign without suspending the effect threads first.
 
 ### 52.6 Remaining boundary
 
@@ -3497,12 +3504,20 @@ the payload is not written.
 
 ### 52.7 Counts for §52
 
-6 game processes (two `no_fire`, two host deaths, one driver abort, one `ok`),
-6 module copies of the artifact above, 1 successful shot; the successful run
-made 9 named dispatches (`C2Sanity`, `C1Run`, `C1EffectId`, `C2Init`,
-`C2ExecInstall`, `C2ExecProbeInstall`, `C2ExecProbeUninstall`,
-`C2ExecProbeVerify`, `C2ExecDisarm`) plus the stats read-backs; 0 debugger
-attaches, 0 game-file edits, 0 changes to game data; 2 host deaths, both caused
-by the probe's own inputs (an invalid parse ctx, then an un-sized container),
-neither by a fault in the artifact's memory accesses; 1 new evidence log
+6 game processes (two `no_fire`, two host deaths, one driver abort, one `ok`).
+The artifact of record above is the hash-pinned DLL of the successful shot
+(remote `Get-FileHash` before and after); the driver-abort run (pid 11648) used
+the same DLL bytes with the pre-`72a855d` driver, and the two crash attempts
+predate the fixes inside the artifact, so they did not run these bytes. 1
+successful shot; the successful run made 9 named dispatches (`C2Sanity`,
+`C1Run`, `C1EffectId`, `C2Init`, `C2ExecInstall`, `C2ExecProbeInstall`,
+`C2ExecProbeUninstall`, `C2ExecProbeVerify`, `C2ExecDisarm`) plus the stats
+read-backs; 0 debugger attaches, 0 game-file edits, 0 changes to game data;
+2 host deaths, both triggered by the probe's own inputs: (i) a real event
+scope used as the parse ctx raised `std::length_error` inside `0x3B01A0`;
+(ii) a fake parent container with size==capacity sent artifact code down
+`0x22C4A0`'s grow branch, which called a null vptr at `0x22C55F` — a fault in
+DLL-owned probe code on synthetic input, removed by the pre-size fix. Both were
+diagnosed from Windows `exception.txt`/minidump data, not the project's
+zero-game repro tooling. 1 new evidence log
 (`evidence/logs/c2_exec_probe_4_4_4.log`).
