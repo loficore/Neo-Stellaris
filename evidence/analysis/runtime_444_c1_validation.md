@@ -4311,3 +4311,22 @@ DLL 侧 `effectInstantiate(a1, a2, a3, a4)`(`src/dll/c2/vtable.zig:90`,先 `slot
 **未知即拒绝**,而不是继续猜。部署也未做:改动只在本仓库,`C:/temp/game_supervisor.py` 仍是
 `416be63` 那一份(改完要 `just deploy` + `stop` + `start`,进程不热加载)。
 
+**§54.9 部署记录(2026-10-23 23:22–23:25,同一台机,仍然零游戏)。** 上面那句「部署也未做」到此为止,
+不改写正文,按约定追加:
+
+- `just deploy`(scp 上传两条脚本)后**远端哈希与本地逐项相等**:`game_supervisor.py`
+  `ea8c93c3eee5400375b594184397ce5b7d788d09658305e2454e7727fa591663`、
+  `launch_stellaris.py` `3bba05666e59e29ec78c552d4a333dd264c539c869b21ca985cbd6948a9af522`,
+  远端 `LastWriteTime 23:22:36`。判取哈希用 `Get-FileHash`,只读。
+- 旧 daemon **pid 11616(20:29:36 起,就是跑过 21:40–21:51 那三条命令的那一份)经命令通道 `quit`
+  正常退出**,状态读到 `STATUS=stopped note=quit`,不是 kill,也没碰 `schtasks` 之外的任何东西。
+- 新 daemon **pid 18472,CreationDate 23:23:41**(晚于上传时刻,加载的必然是新文件),
+  `status` 报 `no_game`(靶进程早就不在了),`handled=0`、`want=playing` —— 全新信念,`console_open`
+  按新代码在**换进程**这条路上复位为「关」。
+- 部署后的**行为验伪**(不接触 daemon、不写命令通道、不按键):在 `C:\temp` 里
+  `python -c "import game_supervisor as g; print(g.parse_command('console_close'), …)"` 返回
+  `{'verb': 'console_close'} True True True`,即新动词解析得到、`console_send_plan` /
+  `send_pause_key` / `console_tap_plan` 三个新入口都在。
+- **仍然没做的**:面板观测本身(上面那条校准)、以及任何一次射击。下一枪之前 `console_open` 的初值
+  来自「新进程 = 面板关」这个约定,不是观测 —— 这一点不因部署而改变。
+
