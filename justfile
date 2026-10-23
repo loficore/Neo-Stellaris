@@ -37,7 +37,7 @@ launch *args:
 
 # start | stop | status | pause | unpause | want playing | policy first |
 # choose 2 | speed up | click 1400 861 | console <text> |
-# console_sync open|closed | console_close | dismiss | close | shot | quit
+# console_sync open|closed|auto | console_close | dismiss | close | shot | quit
 game verb *args:
     ssh {{WIN_HOST}} "python {{WIN_TEMP}}/game_supervisor.py {{verb}} {{args}}"
 

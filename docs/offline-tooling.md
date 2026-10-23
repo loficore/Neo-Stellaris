@@ -669,7 +669,7 @@ just game click 1400 861     # 屏幕绝对坐标(窗口在 (0,0) 时等于窗�
 just game console effect every_system = { log = "X" }   # 原样写进控制台(剪贴板粘贴)
                                              # 注意 keyword 在 effect 后、= 前;带括号的命令经
                                              # just/ssh 转手会被远端 shell 改写,驱动直接写命令文件
-just game console_sync open | closed         # 人工声明控制台当前是否开着(校正 supervisor 的标记)
+just game console_sync open | closed | auto   # 人工声明面板当前是否开着(auto 交还给像素观测)
 just game console_close                      # 只在标记为「开」时按一下开关键,把状态收回「关」
 just game dismiss            # 只在 paused 且有窗口 bbox 时生效(需 serve --auto-dismiss)
 just game close              # WM_CLOSE 优雅关窗口(游戏会话内 PostMessage;不是 kill)
@@ -734,6 +734,17 @@ just game stop | quit
    代价:面板被我们打开后,自动暂停会**卡住并写明理由**。退出办法是新动词
    **`just game console_close`**(2026-10-23 加):仅在信念为 `True` 时按一下开关键并把信念写 `False`,
    信念为 `None` 时同样拒绝(奇偶未知,按一下可能反而打开)。解析在 `parse_command` 的无参动词表里。
+
+   **`console_open` 现在是观测,不再是纯信念**(2026-10-24 实机校准,§54.10)。serve 每个 tick 在
+   `plan_step` **之前**读一次面板文本框 —— 窗口比例的 `(120,640)-(400,880)` @2160×1440,数亮度 >180 的
+   像素:实测**关 = 0**(6 帧全 0)、**开 = 2315**(4 帧逐字相同),所以阈值定在
+   `CONSOLE_CLOSED_MAX=120` / `CONSOLE_OPEN_MIN=600`,**中间带判 `None` ⇒ 拒绝**(上面第一条不变量)。
+   判据是**单帧密集亮字数**,不是帧差:两帧同态都能差 5.4 万像素、变化框铺满全窗(主菜单背景在动),
+   差分没有定位能力。状态文件多两个字段:`console_px`(当帧像素数)与 `console_forced`(是否被人工钉住)。
+   `console_sync open|closed` 会**钉住**信念、盖过观测,`console_sync auto` 松开让观测接管 —— 钉住存在的
+   理由是这个框只在主菜单与一次载入局上校过,别的界面若自己点亮该区域会被读成「开」(后果是拒绝动手,
+   不是错误按键)。**读帧的时机有坑**:日志记到开启动画途中的帧是 `64118` 和 `1298`,中间还有一帧读回
+   `0`,即「刚按完键那一瞬」不是稳态判据;要自证就读够时间,否则落到 `None` 走拒绝。
 7. **`speed up/down` 实机已验证**:`up` 让标签从「常速」变「快速」,`down` 回落。命令会把 `speed_sha`
    的前后值写进状态,但绿色标签背景会脉冲,哈希自己也会变 —— 判结果要读截图里的两个字,不要只看哈希。
 8. **scp 上传可用,批量下载会把 SSH 连接重置**:取产物用分块 base64,单次输出 **≤700 字节**稳定
