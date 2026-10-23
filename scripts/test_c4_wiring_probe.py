@@ -120,6 +120,37 @@ def test_column_sequences_maps_pointer_windows_to_source_offsets():
     assert cols["ctx+0x38"] == [0, 1]
     assert cols["ctx->[+0x10]+0x20"] == [7, 8]
 
+def test_column_sequences_tolerates_plausible_pointer_the_dll_skipped():
+    ctx = bytearray(944)
+    _put32(ctx, 0x38, 3)
+    _put64(ctx, 0x10, 0x200000)
+    _put64(ctx, 0x18, 0x300000)  # plausible, but its window read failed in the DLL
+    window = bytearray(256)
+    _put32(window, 0x20, 9)
+    [rec] = decode_records(
+        _make_record(0, ctx, targets=(0x200000,), windows=(window,)))
+    cols = dict(column_sequences([rec]))
+    assert cols["ctx+0x38"] == [3]
+    assert cols["ctx->[+0x10]+0x20"] == [9]
+    assert "ctx->[+0x18]+0x20" not in cols
+
+def test_column_sequences_only_maps_the_eight_recorded_targets():
+    ctx = bytearray(944)
+    targets = tuple(0x200000 + 0x100000 * i for i in range(8))
+    windows = []
+    for i in range(8):
+        window = bytearray(256)
+        _put32(window, 0x20, i)
+        windows.append(window)
+        _put64(ctx, 0x10 + 8 * i, targets[i])
+    _put64(ctx, 0x10 + 8 * 8, 0x9000000)  # ninth plausible qword, beyond PTR_SLOTS
+    [rec] = decode_records(
+        _make_record(0, ctx, targets=targets, windows=tuple(windows)))
+    cols = dict(column_sequences([rec]))
+    assert cols["ctx->[+0x10]+0x20"] == [0]
+    assert cols["ctx->[+0x48]+0x20"] == [7]
+    assert "ctx->[+0x50]+0x20" not in cols
+
 def test_find_scope_column_accepts_the_unique_exact_column():
     found = find_scope_column(_linear_records(787))
     assert found["status"] == "ok"
@@ -196,3 +227,64 @@ def test_classify_capture_and_apply():
     assert classify_apply(zero, dict(full, chain=69), clean, 70) == "chain_mismatch"
     assert classify_apply(zero, full, clean, 69) == "log_mismatch"
     assert classify_apply(zero, full, clean, 70) == "ok"
+
+def test_c1_run_precedes_effect_id_read_and_c2_init():
+    source = (ROOT / "scripts" / "c4_wiring_probe.py").read_text()
+    run_at = source.index('exports["C1Run"]')
+    id_at = source.index('exports["C1EffectId"]')
+    init_at = source.index('exports["C2Init"]')
+    assert run_at < id_at < init_at
+
+def _fake_sleeps(monkeypatch, texts):
+    import c4_wiring_probe as probe
+    feed = iter(texts)
+    clock = {"t": 0.0}
+
+    def fake_read(path, offset):
+        clock["t"] += 0.5
+        return next(feed, texts[-1])
+
+    monkeypatch.setattr(probe, "_read_text_from", fake_read)
+    monkeypatch.setattr(probe.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(probe.time, "sleep", lambda s: None)
+    return probe
+
+
+def test_wait_marker_keeps_polling_past_a_nonzero_plateau(monkeypatch):
+    probe = _fake_sleeps(monkeypatch, ["m\n" * 5, "m\n" * 10,
+                                       "m\n" * 10, "m\n" * 70])
+    assert probe._wait_marker("x", 0, "m", 70, timeout=30.0) == 70
+
+
+def test_wait_marker_returns_the_max_seen_when_the_deadline_passes(monkeypatch):
+    probe = _fake_sleeps(monkeypatch, ["m\n" * 5, "m\n" * 10, "m\n" * 3])
+    assert probe._wait_marker("x", 0, "m", 70, timeout=2.0) == 10
+
+def test_shot_sha_ignores_a_screenshot_the_supervisor_never_refreshed(tmp_path):
+    import hashlib
+    import c4_wiring_probe as probe
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"stale-frame")
+    mtime = probe._file_mtime(str(shot))
+    assert probe._shot_sha(str(shot), mtime) is None
+    assert probe._shot_sha(str(shot), mtime - 1) == (
+        hashlib.sha256(b"stale-frame").hexdigest())
+
+
+def test_cleanup_downgrades_ok_when_the_disarm_call_raises(monkeypatch):
+    import c4_wiring_probe as probe
+
+    def boom(*a, **k):
+        raise RuntimeError("host gone")
+
+    monkeypatch.setattr(probe.harness, "call_remote_with_arg", boom)
+    monkeypatch.setattr(probe.harness, "call_remote", boom)
+    monkeypatch.setattr(probe.harness, "assert_game_alive", lambda pid: None)
+    state = {"pid": 4321, "base": 0x100000,
+             "exports": {"C4WireSetMode": 1, "C4WireDisarm": 2}}
+    result = {"verdict": "ok", "detail": "",
+              "cleanup": {"disarm_rc": None, "host_alive": None}}
+    probe._cleanup(state, result)
+    assert result["cleanup"]["disarm_rc"] is None
+    assert result["cleanup"]["host_alive"] is True
+    assert result["verdict"] == "cleanup_incomplete"

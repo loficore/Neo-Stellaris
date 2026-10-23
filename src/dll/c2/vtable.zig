@@ -4,8 +4,9 @@
 // writes the token at [child+0x20], then calls `[child_vptr+0x98]` (predicate)
 // and finally `[child_vptr+0x08]` — slot[1], the virtual Execute entry. Base
 // `0x1D08520` is merely that slot's default body; hidden_effect overrides it
-// with `0x3AFD30`, whose live behavior would re-parse the script text (the
-// plan keeps that chain OFF, §52). This module copies the donor vtable
+// with `0x3AFD30`, whose live behavior re-parses the script text. §52 shipped
+// that chain OFF (capture only); C4 apply now chains it for tier >= 1, and
+// only then (wire.zig onExecute). This module copies the donor vtable
 // `0x2606FE0` (25 slots, through +0xC0 — a safe lower bound that still
 // includes the predicate at +0x98) into DLL `.data` and replaces ONLY slot[1]
 // with the bridge below. The copy is never freed: patched objects point into
@@ -54,7 +55,8 @@ pub fn buildFromGame(game_base: usize) !void {
 
 /// slot[1] of the copy. The engine calls this with (self, ctx, a3); we read the
 /// token the instantiate path wrote, hand it to the C bridge, and only chain to
-/// the donor's own Execute on a proven sentinel. Chain is OFF for the live shot.
+/// the donor's own Execute when the bridge says so: wire apply mode for tier
+/// >= 1, or the legacy `chain_enabled` flag for the off-mode sentinel path.
 fn effectExecute(self: u64, ctx: u64, a3: u64) callconv(.c) u64 {
     const token = readU32(self, offsets.keyword_reg.EFFECT_OBJECT_TOKEN_ID);
     if (token == 0) return 0;

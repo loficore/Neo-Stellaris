@@ -195,13 +195,37 @@ def _scan_record(rec):
     return out
 
 
+def _locate_targets(rec):
+    """Map each recorded pointer target back to the qword that produced it.
+
+    ``ptr_targets`` is authoritative: the DLL caps the list at PTR_SLOTS
+    distinct values and drops any whose 256-byte window read failed, so a
+    re-scan of the blob can legitimately hold more plausible qwords than
+    were recorded. What must hold is that the recorded values appear, in
+    order, among the scanned first occurrences (ctx before a3).
+    """
+    scan = _scan_record(rec)
+    located = []
+    cursor = 0
+    for ptr in rec["ptr_targets"]:
+        while cursor < len(scan) and scan[cursor][2] != ptr:
+            cursor += 1
+        if cursor == len(scan):
+            raise ValueError(
+                "pointer targets drifted from the captured bytes "
+                f"(serial {rec['serial']})")
+        located.append(scan[cursor])
+        cursor += 1
+    return located
+
+
 def _columns_with_spec(records):
     scans = []
     for rec in records:
-        scan = _scan_record(rec)
-        if [ptr for _, _, ptr in scan] != list(rec["ptr_targets"]):
+        scan = _locate_targets(rec)
+        if len(scan) != len(rec["ptr_windows"]):
             raise ValueError(
-                "pointer scan drifted from the recorded targets "
+                "pointer windows do not line up with the recorded targets "
                 f"(serial {rec['serial']})")
         scans.append(scan)
 
@@ -429,26 +453,26 @@ def _send_console(cmd_path, text):
     return False
 
 
-def _wait_marker(path, offset, marker, timeout):
-    """Return the stable marker count, or None when the log is unreadable."""
+def _wait_marker(path, offset, marker, expected, timeout):
+    """Poll until ``expected`` marker lines appear, else keep the max seen.
+
+    The game log is flushed in chunks, so an intermediate count that stops
+    moving for one poll is not the final count; returning early undercounts
+    and turns a healthy campaign into ``campaign_mismatch``. None means the
+    log itself could not be read.
+    """
     deadline = time.time() + timeout
-    last = None
-    stable = 0
+    best = 0
     while time.time() < deadline:
         try:
             text = _read_text_from(path, offset)
         except OSError:
             return None
-        count = count_marker_lines(text, marker)
-        if count == last:
-            stable += 1
-            if count > 0 and stable >= 1:
-                return count
-        else:
-            stable = 0
-            last = count
+        best = max(best, count_marker_lines(text, marker))
+        if best >= expected:
+            return best
         time.sleep(0.5)
-    return last if last is not None else 0
+    return best
 
 
 def _wait_paused(status_path, cmd_path, timeout=15.0):
@@ -544,14 +568,16 @@ def _flow(args, result, state):
     sanity = _signed32(harness.call_remote(pid, base, exports["C2Sanity"]))
     if sanity != 42:
         raise _Abort("sanity_failed", f"C2Sanity={sanity}")
+    run_rc = harness.call_remote(pid, base, exports["C1Run"])
+    if run_rc == 0:
+        raise _Abort("c1_failed", f"C1Run={run_rc}")
+    effect_id = harness.call_remote(pid, base, exports["C1EffectId"])
+    if effect_id == 0:
+        raise _Abort("c1_failed", f"C1EffectId={effect_id}")
+    result["effect_id"] = effect_id
     init = _signed32(harness.call_remote(pid, base, exports["C2Init"]))
     if init != 0:
         raise _Abort("quickjs_init_failed", f"C2Init={init}")
-    effect_id = harness.call_remote(pid, base, exports["C1EffectId"])
-    run_rc = harness.call_remote(pid, base, exports["C1Run"])
-    if run_rc == 0 or effect_id == 0:
-        raise _Abort("c1_failed", f"C1Run={run_rc} C1EffectId={effect_id}")
-    result["effect_id"] = effect_id
 
     lbuf = harness.remote_alloc(pid, 32)
     layout_rc = _signed32(harness.call_remote_with_arg(
@@ -576,7 +602,8 @@ def _flow(args, result, state):
     offset = _file_size(log_path)
     _send_console(args.supervisor_cmd,
                   f'effect = {{ every_system = {{ log = "{preflight}" }} }}')
-    preflight_count = _wait_marker(log_path, offset, preflight, timeout=30.0)
+    preflight_count = _wait_marker(
+        log_path, offset, preflight, SCORE_COUNT, timeout=30.0)
     if preflight_count is None:
         raise _Abort("log_unreadable", log_path)
     result["preflight_marker_count"] = preflight_count
@@ -644,11 +671,10 @@ def _flow(args, result, state):
         raise _Abort("mode_failed", f"C4WireSetMode(0)={mode_rc}")
     after_wire, after_scored = _read_snapshots(
         pid, base, exports, sbuf, cbuf)
-    try:
-        log_text = _read_text_from(log_path, apply_offset)
-    except OSError:
+    log_hits = _wait_marker(
+        log_path, apply_offset, MARKER, EXPECTED_CHAIN, timeout=15.0)
+    if log_hits is None:
         raise _Abort("log_unreadable", log_path)
-    log_hits = count_marker_lines(log_text, MARKER)
     result["apply"] = {
         "before": before_wire, "after": after_wire,
         "delta": after_wire["calls"] - before_wire["calls"],
@@ -663,7 +689,7 @@ def _flow(args, result, state):
     before_mtime = _file_mtime(args.shot)
     while time.time() < deadline and _file_mtime(args.shot) == before_mtime:
         time.sleep(0.25)
-    result["screenshot"]["sha256"] = _sha256_file(args.shot)
+    result["screenshot"]["sha256"] = _shot_sha(args.shot, before_mtime)
     result["verdict"] = "ok"
 
 
@@ -672,6 +698,13 @@ def _file_mtime(path):
         return os.stat(path).st_mtime_ns
     except OSError:
         return None
+
+
+def _shot_sha(path, before_mtime):
+    """Hash the screenshot only if the supervisor actually rewrote it."""
+    if _file_mtime(path) == before_mtime:
+        return None
+    return _sha256_file(path)
 
 
 def _cleanup(state, result):
@@ -712,6 +745,9 @@ def _cleanup(state, result):
         result["detail"] = (result["detail"] + "; " + hint) if result["detail"] else hint
     elif result["cleanup"]["disarm_rc"] == -6:
         result["verdict"] = "restore_incomplete"
+    elif (result["verdict"] == "ok"
+          and result["cleanup"]["disarm_rc"] not in (0, -1)):
+        result["verdict"] = "cleanup_incomplete"
 
 
 # ---------------------------------------------------------------------------

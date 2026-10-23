@@ -545,13 +545,15 @@ effect = { every_system = { neo_action = { log = "NEO_CHOKE_EFFECT" set_name = "
 预检 marker 带 pid,但从**本次偏移**读到 EOF 再数,所以同一会话里重跑的旧行不会串进来;命令原文
 那行以 `} }` 结尾,`count_marker_lines` 用 `strip().endswith(marker)` 只数真正的日志行。预检 0 行
 = `console_unavailable`(焦点/键盘路径坏了),非 787 行 = `campaign_mismatch`(不是测试战役)。
+行数是**轮询到 ≥787 或 30 s 超时后的最大值** —— 日志分块 flush,中途停在某个非零值不算终值;
+apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 
 **save sha 门**:`stellaris_2226.sav` 的 sha256 必须等于钉住的 `6f271294…`。读不到文件 →
 `campaign_unverified`,`--allow-drift` 只把「读到了但不匹配」降级成 `drift_allowed`(诊断用),
 读不到仍然 `campaign_unverified`。预检的 787 行是战役形状的第二道门。
 
 **drain 缓冲契约**:`C4WireDrainInto` 的调用方必须提供 `RING_CAP * RECORD_SIZE`
-= 2048 × 3368 = 6,898,432 B 的远程缓冲(驱动只分配一次);DLL 写 `n * RECORD_SIZE` 字节并清空
+= 2048 × 3368 = 6,897,664 B 的远程缓冲(驱动只分配一次);DLL 写 `n * RECORD_SIZE` 字节并清空
 环形计数,驱动只读回这 `n` 条。`layout` 导出先钉 `[1, mode, 3368, 2048, 944, 256, 8, 256]`,
 任一字段漂了都是 `layout_drift`,后面的字节一个都不读。
 
@@ -583,14 +585,16 @@ effect = { every_system = { neo_action = { log = "NEO_CHOKE_EFFECT" set_name = "
 | `tier_mismatch` | tier 直方图 ≠ `(717,55,15)` | 分数表或阈值漂了 |
 | `chain_mismatch` | `chain≠70` | tier≥1 没全部 chain |
 | `log_mismatch` | `NEO_CHOKE_EFFECT` 行数 ≠ 70 | effect 没真正应用 |
-| `record_drift` / `scan_drift` | 记录长度或指针重扫与 DLL 目标不一致 | 驱动与 DLL 的扫描规则漂了 |
+| `record_drift` / `scan_drift` | 记录长度不对,或 DLL 记录的指针目标不在 blob 的扫描序列里 | 驱动与 DLL 的扫描规则漂了;DLL 只记 ≤8 个且跳过窗口读失败的指针,所以「扫描多出目标」本身合法 |
 | `stats_drift` / `scored_stats_unreadable` / `mode_failed` / `apply_setup_failed` | 读回长度/解码/set-mode/set-spec 失败 | 驱动自检 |
 | `host_dead` | `assert_game_alive` 失败 | **先跑 §45 的两个离线工具** |
 | `restore_incomplete` | `C4WireDisarm` 返回 `-6` | 引擎字节没还原,打印 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`,放弃该进程 |
+| `cleanup_incomplete` | 流程本可 `ok`,但 `C4WireDisarm` 抛异常(读不到 rc) | 清理状态未知,不算成功;不要在该进程上重试 |
 
 清理段固定:`SetMode(0)` → `C4WireDisarm`(`-1` 锁忙最多重试 6 次 × 0.5 s;6 次仍 `-1` 记为
-benign)→ `assert_game_alive`。**绝不 `FreeLibrary`** — patch 过的 effect 对象持有 DLL 内的 vtable
-副本。只有 verdict `ok` 且清理成功(host 存活、disarm 不是 `-6`)退出码才是 0。
+benign,`0`/`-1` 都算清理成功)→ `assert_game_alive`。**绝不 `FreeLibrary`** — patch 过的 effect
+对象持有 DLL 内的 vtable 副本。只有 verdict `ok` 且清理成功(host 存活、disarm 是 `0`/`-1`)退出码
+才是 0;disarm 抛异常时 verdict 降为 `cleanup_incomplete`。
 
 判读纯函数(`decode_records` / `_wire_stats` / `_scored_stats`、`pack_spec`/`unpack_spec`、
 `column_sequences`/`find_scope_column`、`classify_capture`/`classify_apply` 等)由
