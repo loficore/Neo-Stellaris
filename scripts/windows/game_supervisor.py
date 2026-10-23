@@ -53,6 +53,31 @@ CHOICE_GOLD_MIN = 8000
 PAUSE_STATES = ("playing", "paused", "unknown")
 WINDOW_KINDS = ("choice", "dialog", "none")
 
+# The debug-console panel, calibrated live 2026-10-23 on a 2160x1440 window
+# (evidence §54.10).  Bright pixels inside this box, read once per state:
+#   panel closed: 0, 2, 0, 2      panel open: 2315, 2315, 2315
+# The open number repeats exactly because the panel's own text is static, while
+# the animated menu background churns by hundreds of thousands of pixels — so
+# this is a single-frame count of dense bright text, never a frame difference.
+# Fractions of the window, so a different size keeps the same part of the panel.
+CONSOLE_BOX_FRACTIONS = (120 / 2160, 640 / 1440, 400 / 2160, 880 / 1440)
+CONSOLE_BRIGHT_MIN = 180
+CONSOLE_CLOSED_MAX = 120
+CONSOLE_OPEN_MIN = 600
+
+
+def classify_console(bright_px: int):
+    """``True`` open, ``False`` closed, ``None`` undecided.
+
+    The undecided band is not a hedge: an ambiguous frame must stop the daemon
+    from tapping a toggle key it cannot see the result of.
+    """
+    if bright_px >= CONSOLE_OPEN_MIN:
+        return True
+    if bright_px <= CONSOLE_CLOSED_MAX:
+        return False
+    return None
+
 
 def classify_pause(red_px: int, green_px: int) -> str:
     """Map the pulse-icon colour counts to ``playing|paused|unknown``."""
@@ -170,6 +195,8 @@ def parse_command(line: str):
             return None
         return {"verb": "console", "text": head[1]}
     if verb == "console_sync":
+        if len(head) == 2 and head[1].strip().lower() == "auto":
+            return {"verb": "console_sync", "mode": "auto"}
         if len(head) == 2 and head[1].strip().lower() in ("open", "closed"):
             return {"verb": "console_sync", "open": head[1].strip().lower() == "open"}
         return None
@@ -573,6 +600,41 @@ def read_pause(hwnd: int):
     return classify_pause(red, green), red, green
 
 
+def _console_box(rect):
+    left, top, right, bottom = rect
+    fx0, fy0, fx1, fy1 = CONSOLE_BOX_FRACTIONS
+    w, h = right - left, bottom - top
+    return (left + int(w * fx0), top + int(h * fy0),
+            left + int(w * fx1), top + int(h * fy1))
+
+
+def read_console(hwnd: int):
+    """``(open|closed|undecided, bright_px)`` from the panel's text box."""
+    import numpy as np
+    im = grab_box(_console_box(window_rect(hwnd)))
+    a = np.asarray(im, dtype=np.int16)
+    luma = a.mean(axis=2) if a.ndim == 3 else a
+    px = int((luma > CONSOLE_BRIGHT_MIN).sum())
+    return classify_console(px), px
+
+
+def apply_console_observation(state, seen, bright_px: int):
+    """Adopt a decisive panel observation; an undecided frame leaves the daemon
+    refusing rather than guessing (§54.9 was a belief nothing could correct).
+
+    ``console_sync open|closed`` pins the belief until ``console_sync auto``,
+    because this box is calibrated on the main menu and another screen can
+    light it for reasons the detector cannot tell apart from the panel.
+    """
+    if state.get("console_forced"):
+        return state.get("console_open")
+    state["console_px"] = bright_px
+    if state.get("console_open") != seen:
+        _log({"event": "console_observed", "open": seen, "px": bright_px})
+    state["console_open"] = seen
+    return seen
+
+
 def _gold_rows(mask, ox: int, oy: int):
     import numpy as np
     rowcnt = mask.sum(axis=1)
@@ -816,8 +878,14 @@ def _handle_command(cmd, hwnd, state):
             state["console_open"] = False
             _log({"event": "console_closed"})
     elif verb == "console_sync":
-        state["console_open"] = cmd["open"]
-        _log({"event": "console_sync", "console_open": cmd["open"]})
+        if cmd.get("mode") == "auto":
+            state["console_forced"] = False
+            _log({"event": "console_sync", "mode": "auto"})
+        else:
+            state["console_open"] = cmd["open"]
+            state["console_forced"] = True
+            _log({"event": "console_sync", "console_open": cmd["open"],
+                  "forced": True})
     elif verb == "close" and hwnd:
         # WM_CLOSE is the window's own close path (what clicking X does), not
         # TerminateProcess; the plan forbids killing stellaris.exe.
@@ -842,7 +910,8 @@ def serve(args) -> int:
     rng = random.Random()
     state = {"want": "playing", "policy": args.policy, "paused": "unknown",
              "resume": False, "last_bbox": None, "speed_sha": None,
-             "shot": None, "console_open": False}
+             "shot": None, "console_open": False, "console_forced": False,
+             "console_px": None}
     handled = 0
     last_cmd = None
     last_status = 0.0
@@ -885,6 +954,11 @@ def serve(args) -> int:
             time.sleep(args.interval)
             continue
         state["paused"] = paused
+        try:
+            seen, console_px = read_console(hwnd)
+        except OSError:
+            seen, console_px = None, -1
+        apply_console_observation(state, seen, console_px)
         stats = {"bright": 0.0, "gold": 0, "rows": [], "bbox": None}
         window = "none"
         if paused == "paused":
@@ -989,6 +1063,8 @@ def serve(args) -> int:
                            "bbox": stats["bbox"]},
                 "speed_sha": state["speed_sha"], "shot": state["shot"],
                 "console_open": state.get("console_open", False),
+                "console_px": state.get("console_px"),
+                "console_forced": state.get("console_forced", False),
                 "last_cmd": last_cmd,
             })
         if acted:

@@ -320,3 +320,62 @@ def test_serve_loop_invalidates_the_belief_after_every_auto_click():
     for i in clicks:
         assert any('state["console_open"] = None' in line
                    for line in src[i:i + 4]), src[i]
+
+
+# --- console panel OBSERVATION (calibrated live 2026-10-23, evidence §54.10) ---
+# Two more states were captured by tapping the console key and re-reading
+# pixels only.  Bright(>180) pixels inside the panel's text box:
+#   closed: 0, 2, 0, 2      open: 2315, 2315, 2315
+# The band in between must report "undecided"; §54.9's failure was a belief no
+# observation could correct, so an ambiguous frame buys no keystroke.
+
+def test_console_box_is_the_calibrated_text_area_of_the_panel():
+    assert gs._console_box((0, 0, 2160, 1440)) == (120, 640, 400, 880)
+
+
+def test_classify_console_reports_the_three_measured_outcomes():
+    assert gs.classify_console(0) is False
+    assert gs.classify_console(2) is False
+    assert gs.classify_console(2315) is True
+    assert gs.classify_console(300) is None
+
+
+def test_a_decisive_observation_replaces_the_belief(monkeypatch, tmp_path):
+    monkeypatch.setattr(gs, "LOG_PATH", str(tmp_path / "supervisor.jsonl"))
+    state = {"console_open": False, "console_forced": False}
+    assert gs.apply_console_observation(state, True, 2315) is True
+    assert state["console_open"] is True
+    assert state["console_px"] == 2315
+    assert "console_observed" in _logged_events(tmp_path)
+
+
+def test_an_undecided_frame_leaves_the_daemon_refusing(monkeypatch, tmp_path):
+    monkeypatch.setattr(gs, "LOG_PATH", str(tmp_path / "supervisor.jsonl"))
+    state = {"console_open": True, "console_forced": False}
+    assert gs.apply_console_observation(state, None, 300) is None
+    assert state["console_open"] is None
+
+
+def test_console_sync_pins_the_belief_against_the_observation(monkeypatch, tmp_path):
+    # The escape hatch has to survive the tick loop, or an observation that is
+    # wrong for the current screen (calibrated on the main menu) is unfixable.
+    monkeypatch.setattr(gs, "LOG_PATH", str(tmp_path / "supervisor.jsonl"))
+    monkeypatch.setattr(gs, "STATUS_PATH", str(tmp_path / "status.json"))
+    assert gs.parse_command("console_sync auto") == {"verb": "console_sync",
+                                                    "mode": "auto"}
+    _input_stub(monkeypatch, tmp_path)
+    state = {"want": "paused", "console_open": None}
+    gs._handle_command({"verb": "console_sync", "open": False}, 7, state)
+    assert state["console_forced"] is True
+    gs.apply_console_observation(state, True, 2315)
+    assert state["console_open"] is False
+    gs._handle_command({"verb": "console_sync", "mode": "auto"}, 7, state)
+    assert state["console_forced"] is False
+    gs.apply_console_observation(state, True, 2315)
+    assert state["console_open"] is True
+
+
+def test_serve_loop_observes_the_panel_before_it_plans_an_action():
+    src = inspect.getsource(gs.serve)
+    assert "apply_console_observation(" in src
+    assert src.index("apply_console_observation(") < src.index("plan_step(")
