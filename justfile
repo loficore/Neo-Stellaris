@@ -27,6 +27,10 @@ check: build test fence host-tests
 deploy:
     scp scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py {{WIN_HOST}}:{{WIN_TEMP}}/
 
+# Launch Stellaris through Steam (launcher clicks included; stays paused).
+launch *args:
+    ssh {{WIN_HOST}} "python {{WIN_TEMP}}/launch_stellaris.py {{args}}"
+
 # start | stop | status | pause | unpause | want playing | policy first |
 # choose 2 | speed up | click 1400 861 | dismiss | shot | quit
 game verb *args:

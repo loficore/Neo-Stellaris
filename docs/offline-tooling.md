@@ -524,6 +524,7 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 
 ```
 just deploy                  # scp game_supervisor.py + launch_stellaris.py 到 C:/temp/
+just launch                  # 经 Steam 拉起游戏(launcher 点击 + 30 s 观察窗,启动后仍是暂停)
 just game start              # schtasks 拉起守护进程,见到状态心跳才返回
 just game status             # 一行摘要:state/note/pid/hwnd/age/want/policy/handled/cmd/speed
 just game pause | unpause | toggle
