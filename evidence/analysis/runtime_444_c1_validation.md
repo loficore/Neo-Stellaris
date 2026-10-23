@@ -4094,3 +4094,135 @@ one call」与本枪不矛盾;本枪否证的是把它外推成 per-system 入�
 `C4WireDisarm` rc=0,`host_alive=true`,没有 `FreeLibrary`(patch 过的对象仍指向 DLL `.data`);
 pid 9552 在射击后继续存活,状态 `paused`。证据日志 `evidence/logs/c4_wiring_live_4_4_4.log` 含两次尝试:
 第一次 `capture_not_delivered`(supervisor 控制台开关缺陷,修复前)、第二次 `count_mismatch`(本节)。
+
+### §54.8 slot[2] 开枪前的离线判据(2026-10-23,离线:无游戏、无注入、无点名)
+
+上一份计划 Task 8 的实机尝试记了一条 Ruling:「DLL 的 slot[2] 包装器把四个寄存器参数原样转发给 donor,
+所以它与未包装的 vtable 拷贝逐字等价」。本节把这句话换成证据 —— 量派发点递了什么、`0x3B01A0` 消费了什么,
+以及对照之下等价性覆盖到哪、不覆盖到哪。命令(全部离线读 `NS_STELLARIS_EXE` 指向的 exe 拷贝):
+
+```
+python3 scripts/vtable.py 2606FE0 --slots 25
+python3 scripts/pdata.py 1d08520
+python3 scripts/disrva.py 1d08520 1d08650
+python3 scripts/pdata.py 3b01a0
+python3 scripts/disrva.py 3b01a0 3b0220
+```
+
+#### §54.8.1 槽位重钉
+
+`0x2606FE0` 的 25 槽里 `+0x08 -> 3afd30`(§52 的 donor Execute 覆写)、`+0x10 -> 3b01a0`、
+`+0x98 -> 3b1420`(谓词)三行都在输出里 —— 与 §52、AGENTS 的 RVA 表一致,判别枪的靶子仍在原位。
+
+#### §54.8.2 派发点:base Execute 只递两个寄存器
+
+`.pdata`:`0x1d08520` 是函数 `0x1d08520..0x1d085b0`(0x90 B),unwind `0x271dd44`;派发指令在 `0x1d08577`。
+序言到该调用为止,逐字:
+
+```
+01d08520  mov     qword ptr [rsp + 8], rbx
+01d08525  push    rdi
+01d08526  sub     rsp, 0x20
+01d0852a  mov     eax, dword ptr [rdx + 8]     ; arg2+8 = 深度
+01d0852d  mov     rbx, rdx                     ; arg2 = 执行帧
+01d08530  mov     rdi, rcx                     ; arg1 = effect 对象
+01d08533  test    eax, eax
+01d08535  js      0x141d08569                  ; 深度为负 ⇒ 直接到调用点
+01d08537  mov     edx, 0x10
+01d0853c  mov     rcx, rbx
+01d0853f  call    0x14016fdc0                  ; trace 钩子
+01d08544  mov     rcx, rbx
+01d08547  call    0x141d116a0
+01d0854c  mov     edx, 3
+01d08551  mov     rcx, rbx
+01d08554  call    0x14016fdc0
+01d08559  mov     edx, 0x10
+01d0855e  mov     rcx, rbx
+01d08561  call    0x14016fdc0
+01d08566  mov     eax, dword ptr [rbx + 8]
+01d08569  inc     eax                          ; §26 的深度 +1
+01d0856b  mov     rdx, rbx
+01d0856e  mov     dword ptr [rbx + 8], eax
+01d08571  mov     rcx, rdi
+01d08574  mov     rax, qword ptr [rdi]         ; vptr
+01d08577  call    qword ptr [rax + 0x10]       ; slot[2]
+01d0857a  dec     dword ptr [rbx + 8]          ; §26 的深度 -1
+01d0857d  mov     rcx, rbx
+01d08580  call    0x141d116a0
+```
+
+三条定论:
+
+1. 从序言到 `ret`(`0x1d085af`)这个函数**不写 `r8`/`r9`,也不碰任何 `xmm`**。⇒ 派发点递给 slot[2] 的
+   有意义实参只有两个:`rcx` = effect 对象、`rdx` = 执行帧(`+8` 已 `inc`);`r8`/`r9` 是**上一次调用留下的
+   scratch**(`0x1d08561` 那次 `0x16fdc0` 就在紧邻前面),不是 Execute 语义下的参数。
+2. `rax` 在调用之后**没人读**:下一条就是 `dec [rbx+8]`,随后是 trace 钩子与 `ret`。⇒ 这一站不要求包装器
+   保真返回值(保了无害)。
+3. 深度走**内存**(`[rdx+8]` 的 `inc`/`dec`),不经寄存器 ⇒ 没有隐式寄存器入参被漏掉。
+
+#### §54.8.3 donor `0x3B01A0` 消费的槽
+
+`.pdata`:`0x3b01a0..0x3b0f7e`(0xdde B),unwind `0x27545b4`。序言窗口(`0x3b01a0..0x3b0220`)逐字:
+
+```
+003b01a0  mov     qword ptr [rsp + 0x18], rbx
+003b01a5  mov     qword ptr [rsp + 0x20], r9      ; arg4 溢出
+003b01aa  mov     qword ptr [rsp + 8], rcx        ; arg1 溢出
+003b01af  push    rbp
+003b01b0  push    rsi
+003b01b1  push    rdi
+003b01b2  push    r12
+003b01b4  push    r13
+003b01b6  push    r14
+003b01b8  push    r15
+003b01ba  lea     rbp, [rsp - 0x4f0]
+003b01c2  sub     rsp, 0x5f0
+003b01c9  mov     r12d, r8d                       ; arg3 的 32 位副本
+003b01cc  mov     r13, rdx                        ; arg2
+003b01cf  mov     r14, rcx                        ; arg1
+003b01d2  mov     dword ptr [rbp + 0x538], 0
+003b01dc  cmp     dword ptr [rdx + 0x38], 0xb     ; 入口门:arg2+0x38 必须 = 11
+003b01e0  jne     0x1403b0322                     ; 否则走第二条路
+003b01e6  lea     rdx, [rcx + 0x58]
+003b01ea  xor     r8d, r8d
+003b01ed  mov     rcx, r13
+003b01f0  call    0x141d0ba00
+003b01f5  mov     rdi, qword ptr [rip + 0x2fc44ec]  ; -> 0x33746e8 (ScriptedEffectDB)
+003b0222  lea     rbx, [r14 + 0x68]
+003b0236  call    0x1403af060                     ; db 查找
+```
+
+「后续在哪消费」出自同一脚本的整函数窗口(`disrva.py 3b01a0 3b0f7e`),按槽判读:
+
+| 槽 | 读成什么宽度 | 消费点 |
+|---|---|---|
+| `rcx` | 指针 | `mov r14, rcx`;`[rcx+0x58]`(`0x3b01e6`)、`[r14+0x68]`(`0x3b0222`) |
+| `rdx` | 指针 | `mov r13, rdx`;入口门 `[rdx+0x38]`(`0x3b01dc`);之后 `[r13+0x278]`(`0x3b03c5`)、`[r13+0x38]`(`0x3b03d3`/`0x3b07d7`)、`[r13+0x48]`(`0x3b08f4`/`0x3b0bbc`)、`[r13+0x30]`(`0x3b0ce5`/`0x3b0d12`) |
+| `r8` | **32 位**(`r8d`) | `mov r12d, r8d`;与节点 token 比(`0x3b0366`/`0x3b038b`)、写回 `[rsi+0x20]`(`0x3b0984`)、两个特判常量 `0x474b`/`0x28df`(`0x3b0c2d`/`0x3b0c36`) |
+| `r9` | 指针 | 溢出到 `[rsp+0x20]`(`0x3b01a5`);`jne` 那条路上 `mov r14, r9`(`0x3b0322`)、`[rsp+0x70]`(`0x3b0325`) |
+
+`xmm` 在整个函数里只以 `xorps xmm0, xmm0` + `movdqu [rsp+0x48], xmm0` 出现(`0x3b08fd`/`0x3b09f5`),
+是**清零本地内存**,不是传参。⇒ 四个 GPR 槽全被消费,`r8` 按 32 位取用(与 §53.2 的 `r8d = token` 一致),
+`r9` 在门的另一条路上当指针用。
+
+#### §54.8.4 对照结论:等价覆盖什么、不覆盖什么
+
+**覆盖到的**:派发点只设 `rcx`/`rdx`、不读 `rax`;`0x3B01A0` 消费 `rcx/rdx/r8/r9` 四个槽。
+DLL 侧 `effectInstantiate(a1, a2, a3, a4)`(`src/dll/c2/vtable.zig:90`,先 `slot2_calls += 1` 再按 `.c`
+约定转发四参并返回 donor `rax`)在这一形状下与未包装的拷贝**逐字等价** —— 包括「`r8`/`r9` 是未定义 scratch」
+这一项:两条路递给 slot[2] 的是同一份未定义值,包装器既不把它变得更像参数,也不变得更糟。计数副作用
+(`lock xadd` 到 DLL `.data` 的一个 u64)不触碰任何引擎寄存器或内存。
+
+**不覆盖到的两条,判读时必须记住**:
+
+1. **`r8`/`r9` 不是 Execute 的参数**。`0x3B01A0` 把 `r8d` 当 token、把 `r9` 当指针用,而 Execute 从不设置它们
+   ⇒ 经 Execute 派发进来的调用,这两个槽取的是上一个调用者的 scratch。所以 `slot2_counted` 只证明
+   「有人经我们副本的 slot[2] 进来了」,**不证明**它是一次良构调用。要分开这两件事,得把 `a3`/`a4` 也记进
+   只读统计(现在 `slot2` blob 只有 `calls` 与 `target`,`src/dll/c2/vtable.zig:119`)。
+2. **入口门 `[rdx+0x38]` 与 §53 的「arg2 类大小 0x20」直接冲突**(`0x38 > 0x20`)。离线判不掉:要么 §53 量到的
+   那个 0x20 对象不是 Execute 转发给 slot[2] 的 `rdx`,要么这一读落在帧之外的栈内存上、门几乎必然走 `jne`。
+   **本节不改写 §53 的正文**,这是一条新增的未证张力。它对判据表的影响:`slot2_zero` 的读法不变(仍指向
+   §54.6 的 (b) —— donor vptr 副本/克隆);`slot2_counted` 多一层读法 —— 计数命中 + 参数形状未经 Execute 建立,
+   下一枪若要区分「引擎真的经 base Execute 派发」与「别的调用者借道我们的副本」,需要的不是更多计数,
+   而是第 1 条里那两个槽的取值。
+
