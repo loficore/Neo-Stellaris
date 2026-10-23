@@ -457,6 +457,54 @@ pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔�
 `no_fire` 报出来时先查环境(战役是否在跑、是否暂停),不要去改探针。**宿主死了先跑 §45 的两个
 离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)排除我们自己的产物再谈别的。
 
+### `scripts/c2_scope_probe.py [dll]` — C4 执行帧只读取样
+
+`src/dll/c2/scope_probe.zig` 在 base Execute `0x1D08520` 上挂**只读** detour:每 512 次调用采样一次
+(`calls & 511 == 0`),记录真实 `arg2`(执行帧)的 8 个 qword、`[self+0]` 的 vtable RVA、`[self+8]` 的
+token id 与 `@returnAddress()` 反推的静态调用点(`caller_rva - 5`)。**函数体一律转发原函数**,不改
+寄存器、不改内存、不改控制流。到 `X=[ctx+0x30] → S=[X+8] → id=[S+8] / obj=[S+0x20]` 这条链**不在进程内跟**
+——它只在驱动侧用 `ReadProcessMemory` 走,采样器本身不解引用任何二级指针。
+
+读的是 7 个导出 + `C2Sanity`:`C2ScopeProbeLayout`(5 个 u32:entry `104` / stats `56` / ring `256` /
+mask `511` / version `1`)、`C2ScopeProbeReset`(装之前先清统计)、`C2ScopeProbeInstall`、
+`C2ScopeProbeStatsInto`、`C2ScopeProbeDrainInto`(环形记录,最老在前)、`C2ScopeProbeUninstall`、
+`C2ScopeProbeVerify`。**layout 任一字段漂了就打 `LAYOUT_DRIFT` 且不装** —— 驱动与 DLL 的解码契约断了,
+后面的字节都不能读。
+
+```
+python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
+        [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...]
+```
+
+**一枪一进程**:`C2ScopeProbeInstall` 每个进程只派发一次,`exec_hook` 已被占用时返回 `-2`(单 detour
+约束),**不重试** —— 看到 `-2` 换一个新游戏进程,不要在同进程里绕。其余安装码:`-3` 模块未找到、
+`-4` 该地址已被别的 detour 占据、`-5` 序言不匹配、`-6` patch 太宽。清理段(`finally`)顺序固定:
+`C2ScopeProbeUninstall` → `C2ScopeProbeVerify`(0 = 引擎字节已还原)→ 等 `--settle-s` → 断言 host 存活。
+`Verify` 非 0 时打 `RESTORE_INCOMPLETE DO_NOT_FREELIBRARY`,**放弃该进程**,绝不 `FreeLibrary`。
+
+**点名门**:这是实机工具,按 `docs/roadmap.md` 的授权表,派发前必须有**本次会话内的点名**;
+通用历史授权(「仅限于游戏调试相关」)不算。没有点名时只跑纯函数测试。
+
+**verdict 判读表**(`classify`,固定顺序):
+
+| verdict | 条件 | 意思 |
+|---|---|---|
+| `no_calls` | `calls == 0` | 轮询窗口内没有 base-Execute 调用 —— **环境结论,不是代码结论**:加载一个跑着的战役并取消暂停,重开进程再跑 |
+| `no_samples` | `samples == 0` | 有调用但 1/512 门没触发;唯一手段是更长的 `--poll-s`,本次什么都没采到 |
+| `all_invalid` | `valid == 0` | 每个样本的 `self`/`ctx` 都不可信,一帧没记;环境/调用形状结论,换新进程再试 |
+| `lexer_only` | `lexer > 0` 且 `lexer == valid` | 全部有效样本都带 lexer 哨兵 `[ctx+0x38]==0xb`(§52 那条路径),**不能**回答「真实执行帧是哪个对象」 |
+| `chain_unreadable` | `chain_ok == 0` | 样本有效但 `[ctx+0x30]`/`[X+8]`/`[S]`/`[S+8]`/`[S+0x20]` 没有一次全部读到;条目照留,读不到本身就是观测 |
+| `captured` | 其余 | 至少一条链完整;这是唯一可当证据的结论 |
+
+`captured` 之外一律退出码 1。链里的 `id` 是 **keyword token id**,永远不是 system id;名字只在
+`--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,查不到就留 `-`,不猜。
+`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
+`evidence/xrefs/exec_frame_callers_4_4_4.tsv`);Windows 侧没有这两份表时两列退化为 `-`,离线再 join。
+完整结果写到 `--out`(长表 `kind/key/value/detail`,caller / id / chain 三类行)。
+
+**宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
+排除我们自己的产物,再谈引擎。
+
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 
 `scripts/disrva.py` 与 `scripts/cap.py` 反汇编的是**游戏**:它们只收 RVA,自己去找 `stellaris.exe`
