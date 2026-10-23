@@ -3608,3 +3608,61 @@ python3 scripts/fastcalls.py 0x1d08520 --top 40
 本次没有在窗口里看到 `lea rdx,[rbp±X]` / `lea rdx,[rsp+X]` / `mov rdx,rsp` 形态的帧构造;
 能定的只有「这些直接调用把**自己的入口 arg2** 交给 base Execute」。本普查**不**说明 arg2 的类型与
 字段语义;那要 §53.3 的实机链。
+
+### §53.2 effect 应用入口候选
+
+先复核 `0x3B01A0` 命中路径(逐指令窗口 `0x3b0960` / `0x3b0c2d` / `0x3b0db2` / `0x3b0300`):
+
+```asm
+; 0x3b0984..0x3b09da — 写 token/name，然后调谓词 slot[19]
+  003b0984  mov     dword ptr [rsi + 0x20], r12d
+  003b09ad  lea     rcx, [rsi + 0x28]
+  003b09b4  call    0x14015f770  ; -> 0x15f770
+  003b09d1  mov     rax, qword ptr [rsi]
+  003b09d4  mov     rdx, r14
+  003b09d7  mov     rcx, rsi
+  003b09da  call    qword ptr [rax + 0x98]
+
+; 0x3b0c2d..0x3b0c5d — 谓词为真：把 child 追加到 [arg1+8] 指向的容器，再走 slot[1]
+  003b0c3f  mov     rcx, qword ptr [rbp + 0x530]
+  003b0c46  add     rcx, 8
+  003b0c4a  lea     rdx, [rbp + 0x538]
+  003b0c51  call    0x14022c4a0  ; -> 0x22c4a0
+  003b0c56  mov     rsi, qword ptr [rbp + 0x538]
+  003b0c5d  jmp     0x1403b0db2  ; -> 0x3b0db2
+
+; 0x3b0db2..0x3b0dc2 — ctx 自入口 r13 原样传给 child 的 slot[1]
+  003b0db2  mov     rax, qword ptr [rsi]
+  003b0db5  mov     r8, qword ptr [rbp + 0x548]
+  003b0dbc  mov     rdx, r13
+  003b0dbf  mov     rcx, rsi
+  003b0dc2  call    qword ptr [rax + 8]
+```
+
+`0x3b0300` 窗口另证 effect BST 查找(`[[0x33746e8]+0x18]`)命中后 `call [rax+8]` @`0x3b039d`
+是 **class_info.create** 的 slot[1],不是本节的 Execute 入口;非空返回跳到 `0x3b0984`。
+
+`0x3B01A0` 的 10 个直接调用点(全部由 `pdata.py` 从函数起点开窗核过)形状一致:
+入口先把 `rcx` 存 `rdi`、`rdx`(或 `rax`/`r10`)存下,用 `r8d` 做 token 比较,未命中时
+fall-through 到 `call 0x3b01a0` — 即 `rcx = parent 对象`、`rdx = 调用方入口 ctx`、`r8d = token`。
+例如 `0x17fed70` 的 `mov rax,rdx; mov rdi,rcx; cmp r8d,0x3f9e; je …; call 0x3b01a0`。
+这 10 个函数本身是脚本 effect 的逐 token thunk(`0x17fed70` / `0x17ffa30` 的直接调用点普查为
+**0** —— 只能经 vtable/函数指针到达),所以往上一层拿不到「frame 是怎么造的」。
+
+四个候选的判定(判据 ① 能把 token 施加到某个 scope/frame;② 不重跑脚本文本;③ 参数可从
+JS 侧数据(system id / scope 指针)得到;④ 从 DLL 里以普通函数指针可调,或其 vtable 派发可复现):
+
+- **A(`0x3b01a0`,instantiate+append)** — ① 满足:token + 调用方 parent/ctx 即可让引擎自己
+  instantiate、追加并调 child slot[1];② 满足:该函数不解析脚本文本;④ 满足:普通函数指针;
+  ③ **缺**:parent 容器与 ctx 目前只能由调用方给,JS 侧还没有「system id → scope 指针」的映射。
+  判 `unresolved`(缺 ③)。
+- **B(`0x1d08520` slot[1] 直接 Execute)** — ④ 满足,但 ①/③ 缺:需要一个真实 frame,而 Task 1
+  没有定位任何 frame 构造点(17 个已判读站点全部转发入口 `rdx`)。判 `unresolved`。
+- **C(帧构造点)** — 未定位:13 个窗口、17 个站点的直接调用全部把调用方自己的 `rdx` 原样转发;
+  两个代表性 thunk 的 `fastcalls` 都是 0 个直接站点。判 `unresolved: frame factory not located`。
+- **D(`0x9f5750` family,event command path)** — 三个 handler 各只开一个 0x100 窗口;首窗口内
+  都没有 `call 0x3b01a0`(最近的调用是 `0x1ca3320` / `0x1ca35d0` / `0xa804b0`)。判 `unresolved`:
+  首窗口无 effect 执行痕迹,按计划不扩窗。
+
+本节的 `selected` 只是**首选入口**;本次一个都没有 `selected`。最终以 §53.3 的实机链为输入在
+§53.4 复核。
