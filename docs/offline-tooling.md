@@ -81,6 +81,31 @@ rip-relative operand with the RVA it resolves to; this is what pinned the descri
 `src/dll/scripted/keyword_registry_golden.zig` (56 vectors the Zig builder is tested against).
 This is how §18's "byte-for-byte identical" claim became a measurement: **9,863/9,863 agree, 0 divergences**.
 
+## 离线重问实机 artifact(读已入库产物,不读 exe、不起进程、不要枪)
+
+### `scripts/scope_reclassify.py [--tsv PATH] [--floor PATH] [--all PATH] [--json PATH]`
+
+**把同一批 scope 候选问两张 vtable 集**:§56 那发只读采样枪留下的
+`evidence/logs/scope_probe_v2_4_4_4.tsv` 的 99 条 `object` 行,同时对着 1,805 条下限集
+(`ceffect_vtable_map_4_4_4.txt`,**import `c2_scope_probe.load_vtable_map` 复用**,不重写解析)和
+172,296 条形状集(`vtable_candidates_all_4_4_4.txt`,`rttibatch.py --all-vtables`)分四桶:
+`floor_hits` / `new_only_hits`(只有新集看得见)/ `still_no` / `undecidable_no_rva`。
+四桶互斥且和为 `total`,由 `scripts/test_scope_reclassify.py` 钉住。产物:stdout 五行计数 +
+`--json` 全量(含 `new_rows` 每行的 `slot1` 与 run-length)。结论落在 §56.9。
+
+**它不读 exe**,所以不受 `R-env` 约束、不需要 `NS_STELLARIS_EXE`;需要分节普查(判一个 RVA 落在
+`.text`/`.rdata`/`.data`)时那是另一件事 —— 本次用的是
+`scripts/scratch/2026-10_scope_shot/ns_scope_ptr_shape.py`(一次性探针,不是维护接口)。
+
+**判读陷阱 1(本节实测)**:`still_no` 多**不等于**候选不是对象。99 条里 83 条能解出 RVA,而它们的
+`vptr_rva` 分节普查是 `.text` 64 / `.rdata` 14 / `.data` 3 / 镜像外 2 —— 代码 RVA 永远不可能在任何
+vtable 集合里(两张集都只扫 `.rdata`),所以「新集一条都没加」在这个层是**恒真**,不是结论。
+往下筛之前先问:取的是哪一格?`vptr_rva` 是 `[[root+off]]`(多读一层),候选自己那一格是 `ptr`。
+
+**判读陷阱 2**:「不过滤」只指**不按 `slot[1]` 过滤**,新集仍然只扫 `.rdata`,而且它按形状产出
+**每一个** run 起点(下限集必须是它的子集,这是构造要求),所以一张已知表的**内部偏移**也会命中。
+`.data` 里的 vtable、以及中途偏移,都是「无法判定」而不是「新集看到的类」。
+
 ## 调用关系与引用扫描
 
 ### `scripts/fastcalls.py <rva> [--top N]`
