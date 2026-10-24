@@ -94,6 +94,17 @@ def test_task_shim_starts_the_serve_verb_and_is_ascii():
     assert text.rstrip().endswith("2>&1")        # 与 game_supervisor 的 shim 同形:stdout/err 归 OUT_PATH
 
 
+def test_start_plan_skips_the_launch_only_for_a_beat_that_is_current():
+    # 心跳新鲜不等于守护活着:它可能写完这条就死了。所以「不重复拉起」的分支仍把
+    # 这条的 epoch 交回去当 baseline —— start 的成功判据是**更新**的心跳,不是这条。
+    live = {"state": "serving", "epoch": 1000.0}
+    assert ka.start_plan(live, 1003.0) == (False, 1000.0)
+    assert ka.start_plan({"state": "stopped", "epoch": 1000.0}, 1003.0) == (True, 1000.0)
+    assert ka.start_plan(live, 1016.0) == (True, 1000.0)   # 僵尸心跳:重新拉起
+    assert ka.start_plan(None, 1000.0) == (True, 0.0)
+    assert ka.start_plan({"state": "serving"}, 1000.0) == (True, 0.0)
+
+
 def test_windows_edge_primitives_refuse_to_run_off_windows(monkeypatch):
     monkeypatch.setattr(ka.sys, "platform", "linux")
     for fn in (ka.desktop_snapshot, ka.assert_execution):

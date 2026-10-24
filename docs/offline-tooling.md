@@ -801,7 +801,7 @@ just game stop | quit
 命令行(经根目录 `justfile`,`just deploy` 之后 `C:/temp/keep_awake.py` 与本地逐字节相同):
 
 ```
-just awake start            # schtasks /ru <user> /rl highest 拉起任务 NeoStellarisKeepAwake,等心跳
+just awake start            # 只在「没有东西在跳」时拉起任务;成功判据是**比它看到的那条更新**的心跳
 just awake status           # 一行摘要,读不到也返回 0(它只报现状,不判决)
 just awake check            # 判决:0 unlocked / 1 锁或读不到或过期 / 2 状态文件 absent
 just awake stop             # 写 quit + 登记去重键 + 删任务;daemon 自己写 state="stopped"
@@ -825,8 +825,11 @@ just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
    两个名字分开就是为了不让人去查一个不存在的锁。
 3. **断言随进程消失**。`stop`、被杀、机器重启 ⇒ 顶不住空闲,这是刻意的安全性质(不改电源计划);
    唯一的发现途径是 `check` 的非 0 退出码,而「屏幕还亮着」不能当证据 —— 顶住它的进程可能已经走了,
-   状态文件里 `state` 仍是 `serving` 的僵尸心跳靠 `STATUS_MAX_AGE_S` 兜住。`powercfg /requests` 是它的
-   证人:断言期间该命令里必须有本进程的 `DISPLAY`/`SYSTEM` 请求条目,`stop` 之后必须消失。
+   状态文件里 `state` 仍是 `serving` 的僵尸心跳靠 `STATUS_MAX_AGE_S` 兜住。同一条也管 `start`:
+   心跳新鲜只让它**不重复拉起**第二个守护,不当成「已经在使用」的成功 —— 成功必须是一条**严格更新**的
+   心跳。写完最后一条就死的守护会让 `start` 报 `STATUS=timeout` 返回 1,而不是静默地把没顶住的机器
+   交回给你。`powercfg /requests` 是它的证人:断言期间该命令里必须有本进程的 `DISPLAY`/`SYSTEM`
+   请求条目,`stop` 之后必须消失。
 4. **无人值守请插电**:电池下 3 分钟就睡,而断电是任何软件都救不了的。
 
 **与开枪的关系:**`c4_wiring_probe._flow` 的**第一道门**读 `ns_awake_status.json`,

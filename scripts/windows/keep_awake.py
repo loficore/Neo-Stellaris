@@ -22,7 +22,8 @@ import subprocess
 import sys
 import time
 
-from game_supervisor import atomic_write_json, atomic_write_text, read_command, rotate_log
+from game_supervisor import (atomic_write_json, atomic_write_text, is_new_heartbeat,
+                             read_command, rotate_log)
 
 # --------------------------------------------------------------------------
 # pure core — importable and testable on any OS
@@ -101,6 +102,28 @@ def is_fresh(rec, now: float, max_age_s: float = STATUS_MAX_AGE_S) -> bool:
 def should_reassert(asserted_at: float, now: float,
                     interval_s: float = DEFAULT_ASSERT_EVERY_S) -> bool:
     return now - asserted_at >= interval_s
+
+
+def start_plan(rec, now: float, max_age_s: float = STATUS_MAX_AGE_S):
+    """`(launch_needed, baseline_epoch)` — the two things `start` needs to know.
+
+    A fresh non-stopped record means a daemon is still ticking, so launching a second
+    one would put two writers on the same status/command files.  It is *not* proof the
+    daemon is alive: it can have died a second after writing.  That is why the record's
+    epoch is handed back as a baseline instead of as a verdict — `start` only succeeds
+    on a heartbeat strictly newer than it, so a zombie turns into an honest timeout
+    rather than "already running" (§54.9's lesson again: a belief has to be re-checked
+    against something that changed, not against something that merely looks right).
+    """
+    baseline = 0.0
+    if isinstance(rec, dict):
+        try:
+            baseline = float(rec.get("epoch", 0.0))
+        except (TypeError, ValueError):
+            baseline = 0.0
+        if rec.get("state") != "stopped" and is_fresh(rec, now, max_age_s):
+            return False, baseline
+    return True, baseline
 
 
 def plan_tick(now: float, asserted_at: float, last_state, state: str,
@@ -343,24 +366,21 @@ def cmd_status(args) -> int:
 
 def cmd_start(args) -> int:
     _require_windows()
-    rec = read_status()
-    now = time.time()
-    if rec and rec.get("state") != "stopped" and is_fresh(rec, now):
-        print(status_line(rec, now))
-        return 0
-    pythonw = args.pythonw or sys.executable.replace("python.exe", "pythonw.exe")
-    atomic_write_text(TASK_SHIM, task_shim_text(pythonw, os.path.abspath(__file__)))
-    ru = f"{os.environ.get('COMPUTERNAME', '')}\\{os.environ.get('USERNAME', '')}"
-    st = time.strftime("%H:%M", time.localtime(time.time() + 120))
-    subprocess.run(["schtasks", "/create", "/tn", TASK_NAME, "/tr", TASK_SHIM,
-                    "/sc", "once", "/st", st, "/ru", ru, "/rl", "highest",
-                    "/f"], check=True, capture_output=True, text=True)
-    subprocess.run(["schtasks", "/run", "/tn", TASK_NAME, "/I"],
-                   check=True, capture_output=True, text=True)
+    need_launch, baseline = start_plan(read_status(), time.time())
+    if need_launch:
+        pythonw = args.pythonw or sys.executable.replace("python.exe", "pythonw.exe")
+        atomic_write_text(TASK_SHIM, task_shim_text(pythonw, os.path.abspath(__file__)))
+        ru = f"{os.environ.get('COMPUTERNAME', '')}\\{os.environ.get('USERNAME', '')}"
+        st = time.strftime("%H:%M", time.localtime(time.time() + 120))
+        subprocess.run(["schtasks", "/create", "/tn", TASK_NAME, "/tr", TASK_SHIM,
+                        "/sc", "once", "/st", st, "/ru", ru, "/rl", "highest",
+                        "/f"], check=True, capture_output=True, text=True)
+        subprocess.run(["schtasks", "/run", "/tn", TASK_NAME, "/I"],
+                       check=True, capture_output=True, text=True)
     deadline = time.time() + args.timeout_s
     while time.time() < deadline:
         rec = read_status()
-        if is_fresh(rec, time.time()):
+        if is_new_heartbeat(rec, baseline, time.time(), STATUS_MAX_AGE_S):
             print(status_line(rec, time.time()))
             return 0
         time.sleep(0.5)

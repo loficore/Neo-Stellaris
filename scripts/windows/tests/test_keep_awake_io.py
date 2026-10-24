@@ -81,6 +81,62 @@ def test_check_exit_code_table(monkeypatch, tmp_path, capsys):
     assert "STATE=stopped" in capsys.readouterr().out
 
 
+def _start_env(monkeypatch, tmp_path, argv):
+    """`start` 的 Windows 侧桩:平台、schtasks、shim 路径。"""
+    _redirect(monkeypatch, tmp_path)
+    monkeypatch.setattr(ka, "TASK_SHIM", str(tmp_path / "task.cmd"))
+    monkeypatch.setattr(ka, "_require_windows", lambda: None)
+    monkeypatch.setattr(ka.subprocess, "run",
+                        lambda cmd, **kw: argv.append(cmd))
+    return tmp_path
+
+
+def test_start_fails_honestly_when_only_a_zombie_heartbeat_is_fresh(monkeypatch, tmp_path):
+    argv = []
+    _start_env(monkeypatch, tmp_path, argv)
+    _clock(monkeypatch, 1000.0, 1.0)
+    ka.atomic_write_json(ka.STATUS_PATH, {"state": "serving", "epoch": 999.0,
+                                          "desktop": "unlocked", "pid": 4711})
+    monkeypatch.setattr(ka.sys, "executable", r"C:\py\python.exe")
+    assert ka.cmd_start(types.SimpleNamespace(timeout_s=3.0, interval=5.0,
+                                              assert_every=25.0,
+                                              pythonw=r"C:\py\pythonw.exe")) == 1
+    assert argv == []            # 有「在跳」的记录 ⇒ 不重复拉起第二个守护
+    assert not (tmp_path / "task.cmd").exists()
+
+
+def test_start_returns_zero_only_on_a_heartbeat_newer_than_the_one_it_saw(monkeypatch, tmp_path):
+    argv = []
+    _start_env(monkeypatch, tmp_path, argv)
+    _clock(monkeypatch, 1000.0, 1.0)
+    ka.atomic_write_json(ka.STATUS_PATH, {"state": "serving", "epoch": 999.0,
+                                          "desktop": "unlocked", "pid": 4711})
+    beats = iter([{"state": "serving", "epoch": 999.0, "desktop": "unlocked",
+                   "pid": 4711},
+                  {"state": "serving", "epoch": 1001.0, "desktop": "unlocked",
+                   "pid": 4711}])
+    monkeypatch.setattr(ka, "read_status", lambda path=None: next(beats))
+    monkeypatch.setattr(ka.sys, "executable", r"C:\py\python.exe")
+    assert ka.cmd_start(types.SimpleNamespace(timeout_s=10.0, interval=5.0,
+                                              assert_every=25.0,
+                                              pythonw=r"C:\py\pythonw.exe")) == 0
+    assert argv == []            # 同一个进程还在跳,不需要第二个
+
+
+def test_start_launches_the_task_when_nothing_is_ticking(monkeypatch, tmp_path):
+    argv = []
+    _start_env(monkeypatch, tmp_path, argv)
+    _clock(monkeypatch, 1000.0, 1.0)
+    monkeypatch.setattr(ka.sys, "executable", r"C:\py\python.exe")
+    beats = iter([None, {"state": "serving", "epoch": 1001.0, "desktop": "unlocked",
+                         "pid": 4711}])
+    monkeypatch.setattr(ka, "read_status", lambda path=None: next(beats))
+    assert ka.cmd_start(types.SimpleNamespace(timeout_s=10.0, interval=5.0,
+                                              assert_every=25.0, pythonw="")) == 0
+    assert [c[1] for c in argv] == ["/create", "/run"]
+    assert "serve" in open(ka.TASK_SHIM, encoding="utf-8").read()
+
+
 def test_stop_writes_quit_and_deletes_the_task(monkeypatch, tmp_path):
     _redirect(monkeypatch, tmp_path)
     deleted = []
