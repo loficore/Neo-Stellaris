@@ -6,7 +6,9 @@ way (constraint 5 forbids FreeLibrary), so the only way to learn whether the
 detour is still on the hot path is to ask the module itself.  This prints the
 stats block twice, two seconds apart: ``installed`` is the flag, and a frozen
 ``calls`` between the two reads is the independent confirmation that no engine
-call is reaching our code any more.
+call is reaching our code any more.  Both reads go through ``gate_module``, so
+this dispatches only against a copy whose ``C2Sanity`` returned 42 — the same
+authorization the shot itself required before touching the probe exports.
 
     python ns_scope_aftermath.py [dll-path]
 """
@@ -27,7 +29,12 @@ def main():
     if base == 0:
         print("NOT_LOADED — the module is not mapped in this process")
         return 1
-    exports = s.list_exports(dll)
+    # Read the address above first, never gate on it: gate_module re-LoadLibraries
+    # the file it is handed, so calling it before this check would turn a module
+    # that was never mapped into one that is, and "NOT_LOADED" could never print.
+    base, exports = s.gate_module(
+        pid, dll, ("C2Sanity", "C2ScopeProbeStatsInto")
+    )
     buf = s.remote_alloc(pid, s.STATS_SIZE)
     for attempt in (1, 2):
         stats, text = s.read_stats(pid, base, exports, buf)
