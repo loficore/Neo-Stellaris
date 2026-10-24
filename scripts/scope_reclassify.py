@@ -86,6 +86,10 @@ def load_candidate_map(path):
     slot2 0x<C>` — slot names and values are separate columns, which is how Task 3's CLI
     writes them. Rows missing a column are skipped rather than guessed at: a shape set we
     cannot parse exactly is not a judgement we can make.
+
+    An empty result raises. A shape set of zero is indistinguishable, downstream, from
+    "nothing hit" — and that is the exact near-miss this tool recorded (§56.9: a grammar
+    shift skipped all 172,296 rows and `new_only_hits=0` nearly became the finding).
     """
     out = {}
     with open(path, 'r', encoding='utf-8') as f:
@@ -102,6 +106,9 @@ def load_candidate_map(path):
             except (ValueError, IndexError):
                 continue
             out[vtable_rva] = (run, *slots)
+    if not out:
+        raise ValueError(f'{path}: 0 candidate rows parsed — refusing to re-ask against an '
+                         f'empty shape set')
     return out
 
 
@@ -143,9 +150,12 @@ def main(argv=None):
 
     with open(args.tsv, 'r', encoding='utf-8') as f:
         rows = parse_object_rows(f.read())
-    result = reclassify(rows, load_vtable_map(args.floor), load_candidate_map(args.allv))
+    floor, allv = load_vtable_map(args.floor), load_candidate_map(args.allv)
+    result = reclassify(rows, floor, allv)
 
     print(f'tsv             {args.tsv}')
+    print(f'floor set       {len(floor)}')
+    print(f'shape set       {len(allv)}')
     print(f'object rows     {result["total"]}')
     print(f'floor_hits      {result["floor_hits"]}')
     print(f'new_only_hits   {result["new_only_hits"]}')
@@ -155,8 +165,10 @@ def main(argv=None):
         print(f'  new  root={row["root"]:#x} source={row["source"]} off={row["off"]:#x} '
               f'vptr_rva={row["vptr_rva"]:#x} slot1={row["slot1"]:#x} run={row["run"]}')
     if args.json_path:
+        payload = dict(result)
+        payload['input_sets'] = {'floor': len(floor), 'shape': len(allv)}
         with open(args.json_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=1, sort_keys=True)
+            json.dump(payload, f, indent=1, sort_keys=True)
     return 0
 
 

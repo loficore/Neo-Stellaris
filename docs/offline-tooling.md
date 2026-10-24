@@ -107,8 +107,12 @@ This is how §18's "byte-for-byte identical" claim became a measurement: **9,863
 (`ceffect_vtable_map_4_4_4.txt`,**import `c2_scope_probe.load_vtable_map` 复用**,不重写解析)和
 172,296 条形状集(`vtable_candidates_all_4_4_4.txt`,`rttibatch.py --all-vtables`)分四桶:
 `floor_hits` / `new_only_hits`(只有新集看得见)/ `still_no` / `undecidable_no_rva`。
-四桶互斥且和为 `total`,由 `scripts/test_scope_reclassify.py` 钉住。产物:stdout 五行计数 +
-`--json` 全量(含 `new_rows` 每行的 `slot1` 与 run-length)。结论落在 §56.9。
+四桶互斥且和为 `total`,由 `scripts/test_scope_reclassify.py` 钉住。产物:stdout 七行计数
+(含 **`floor set` / `shape set` 两个输入集大小**)+ `--json` 全量(含 `new_rows` 每行的 `slot1` 与
+run-length,以及 `input_sets`)。**形状集解析出 0 行就抛错**(`load_candidate_map` 拒绝返回空集):
+`new_only_hits=0` 与「这份文件我读不懂」在计数里长得一模一样,而 §56.9 那一版差点把前者当结论 ——
+行语法(`slot0 0x…`,两列)一旦错一格,172,296 行会被全部静默跳过。两个集的大小打在读数旁边,
+就是为了让「0」永远带着它的分母。
 
 **它不读 exe**,所以不受 `R-env` 约束、不需要 `NS_STELLARIS_EXE`;需要分节普查(判一个 RVA 落在
 `.text`/`.rdata`/`.data`)时那是另一件事 —— 本次用的是

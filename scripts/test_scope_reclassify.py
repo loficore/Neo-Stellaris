@@ -6,7 +6,11 @@ scope_probe_v2_4_4_4.tsv (§56.3): the pre-fix driver never wrote an absolute
 not a missing row.
 """
 
-from scope_reclassify import load_candidate_map, parse_object_rows, reclassify
+import json
+
+import pytest
+
+from scope_reclassify import load_candidate_map, main, parse_object_rows, reclassify
 
 
 LEGACY = (
@@ -57,3 +61,47 @@ def test_load_candidate_map_reads_the_row_grammar_task_3_writes(tmp_path):
         "vtable 0x026dc2d8  run=8  slot0 0x01ca5ae0  slot1 0x01ca5c90\n",
         encoding="utf-8")
     assert load_candidate_map(str(path)) == {0x26dc2d0: (8, 0x9ec250, 0x1ca5ae0, 0x1ca5c90)}
+
+
+GOOD_ROWS = ("# 1 vtable-shaped run in .rdata\n"
+             "vtable 0x026dc2d0  run=8  slot0 0x009ec250  slot1 0x01ca5ae0  slot2 0x01ca5c90\n")
+
+
+def test_load_candidate_map_refuses_the_grammar_shift_that_blanked_the_shape_set(tmp_path):
+    # Task 4 现场:把 `slot0 0x…` 写成 `slot0=0x…` → 172,296 行全被跳过 → 空集 →
+    # `new_only_hits=0` 与「文件读不懂」在输出里长得一模一样。空集必须拒绝,不是放行。
+    path = tmp_path / "cands.txt"
+    path.write_text("# header\n"
+                    "vtable 0x026dc2d0  run=8  slot0=0x009ec250  slot1=0x01ca5ae0"
+                    "  slot2=0x01ca5c90\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="0 candidate"):
+        load_candidate_map(str(path))
+
+
+def test_load_candidate_map_refuses_a_file_that_carries_no_candidate_rows(tmp_path):
+    path = tmp_path / "cands.txt"
+    path.write_text("# 0 vtable-shaped runs\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="0 candidate"):
+        load_candidate_map(str(path))
+
+
+def _count_line(text, label):
+    [line] = [row for row in text.splitlines() if row.startswith(label)]
+    return int(line.split()[-1])
+
+
+def test_main_prints_the_size_of_each_input_set_it_used(capsys, tmp_path):
+    tsv, floor = tmp_path / "rows.tsv", tmp_path / "floor.txt"
+    tsv.write_text(LEGACY, encoding="utf-8")
+    floor.write_text("vtable 0x0033c8d0  slot0 0x00000010  slot2 0x00000020\n",
+                     encoding="utf-8")
+    allv, out_json = tmp_path / "cands.txt", tmp_path / "out.json"
+    allv.write_text(GOOD_ROWS, encoding="utf-8")
+
+    assert main(["--tsv", str(tsv), "--floor", str(floor), "--all", str(allv),
+                 "--json", str(out_json)]) == 0
+    printed = capsys.readouterr().out
+    assert _count_line(printed, "floor set") == 1
+    assert _count_line(printed, "shape set") == 1
+    assert json.loads(out_json.read_text(encoding="utf-8"))["input_sets"] == {
+        "floor": 1, "shape": 1}
