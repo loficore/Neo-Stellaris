@@ -4593,3 +4593,166 @@ pid 13364 在枪后仍存活。事后状态(`ssh Windows_Jiaolong "powershell -N
 重跑 `just fence` / probe 56 / host-tests 223、并重新满足 §55.1 的观测前提。
 
 
+
+---
+
+## §56 scope 载体取型枪:四根跟读 + 已知 vtable 集合命中(2026-10-24)
+
+### §56.0 授权
+
+人对这一枪的原话:**「退掉 13364 + launch 新进程 + 开枪」**;载入战役的方式选
+**「我盲驱动,自己截图自己点」**。即:授权退掉 §55 的现场进程、起新进程、打这一发只读采样枪,
+并接受由我拉屏幕缩略图自己找按钮、自己点。
+
+### §56.1 开枪前必须先修的一件事:daemon 自己的控制台窗占住了前台
+
+16:35 的第一次战役预检回报 `MARKERS 0 EXPECTED 783`,这一度被读成「这个进程没有战役」。
+真因不在战役,在 `ns_game_log.jsonl`:
+
+```
+{"event": "console_refused", "hwnd": 198618, "reason": "focus", "t": "2026-10-24T16:35:29"}
+STATUS=paused note=resume_failed: focus refused before Space
+```
+
+根因(离线可核,`Get-CimInstance Win32_Process`):
+
+```
+ProcessId 9608  pythonw.exe   "C:\temp\game_supervisor.py" serve      ParentProcessId 3348
+ProcessId 3348  cmd.exe       /c ""C:\temp\ns_game_supervisor_task.cmd"  StartTime 16:31:09
+```
+
+`16:31:09` 与 `serve_start` 同一秒 ⇒ 那个 cmd 窗是 daemon 自己的父壳。任务用
+`/ru <machine>\<user> /rl highest` + `/run /I` 起,cmd 于是在交互桌面上开了一个**可见**控制台窗。
+这一轮 daemon 是在游戏(16:30:23)**之后**起的,所以窗口压在画面上并持有前台;`focus()` 的判据是
+3 s 内 `GetForegroundWindow()==hwnd`,而 SetForegroundWindow 被 Windows 的前台锁拒掉 ⇒
+一切要先 focus 的动作(console 投递、click、Space)全拒。处置是 `taskkill /F /PID 3348` 只杀父壳,
+pythonw 9608 存活(`status age=0.2s`);窗口一消失 focus 立刻通。
+
+**判读陷阱(新)**:「`MARKERS 0` ⇒ 没战役」是错的读法;`game.log` 只有 177 B 也不是判据 ——
+Stellaris 的 `game.log` 只收 `log=` 与少量消息,启动叙述在 `debug.log`/`setup.log`,
+day-1 存档留 177 B 完全正常(本卷 §55 的 783 条刻度也是从这一个文件数的)。
+真判据是同目录的 `ns_game_log.jsonl` 里那条 `console_refused`。
+
+**判读陷阱(新)**:daemon 的控制台窗会改变它自己要读的那张画面。§54.10 的像素门和
+`classify_window` 都读同一张截图,窗口一挡分类就漂 —— 实测同一画面在挡与不挡之间从
+`note=paused_no_window` 变成 `note=dialog_unknown`(挡的时候那个真事件窗根本不在采样区里)。
+
+### §56.2 现场、字节、开枪前提
+
+- 游戏:pid **12796**(StartTime 16:30:23),hwnd 198618,`Responding=True`。
+- 注入体:`C:/temp/sqjs_c4_scope_v2.dll` sha256 `373ab26ba87310f0acaffe941b9007bf0807b2a83872a5d27e2740c5d3e30471`,
+  与本地 `zig-out/bin/stellaris_quickjs.dll`(15:45 构建)**逐字节同值**;装载基址 `0x7ffc3aad0000`。
+- 判据集合:`C:/temp/ceffect_vtable_map_4_4_4.txt` sha256 `3e21961af61c6c6b…` = 本地同名文件,解析出 **1,805** 条 vtable。
+- `keep_awake.py status` → `STATE=serving DESKTOP=unlocked`。
+- 战役预检:`MARKERS 783 EXPECTED 783` —— 与 §55 同一份战役、同一条 783 刻度。
+- 解除暂停前必须先清两个开局事件窗(「通讯已建立」的确认按钮、
+  「信号传输接入 · 第一次接触」四选项里的**第一条**),都用 `just game click` 点掉;
+  点完日期从 2249.01.01 走到 2249.01.04、底部「暂停」消失,再跑预检才拿到 783。
+
+### §56.3 传输层:这一枪的 stdout 没活着回来
+
+ssh 长连接在驱动跑完之前被重置,驱动自己那几十行(Install rc、STATS、OBJECTS、`VERDICT:`、
+Uninstall/Verify/host alive)全部丢失。落盘的只有 TSV:10,580 B / 143 行,mtime 17:23:50。
+**本节所有统计与判词都是从这份 TSV 加一次独立事后读回复算的,不是驱动的原始输出**,下文按此口径。
+
+事后读回用 `scripts/scratch/2026-10_scope_shot/ns_scope_aftermath.py`(复用驱动自己的 helper,
+读同一次 `C2ScopeProbeStatsInto`,间隔 2 s 读两遍):
+
+```
+READ 1: calls=414450 samples=809 invalid_self=1 invalid_ctx=0 lexer=0 x_nonzero=24 patch_size=16 installed=0 verified=0
+READ 2: 同上,一字未动
+```
+
+`installed` 是 DLL 的实时 bool、`verified` 是 `verify()` 的实时返回值(`exec_hook.verifyState()`,
+0 = 引擎字节完好),两者都**不是闩锁** ⇒ 这一对读数独立证明 Uninstall 真跑过、热路径已还原,
+不需要驱动那行 `C2ScopeProbeVerify rc=0`。`calls` 两秒不涨是第三条佐证。
+
+### §56.4 判词与它的字面答案
+
+`classify()` 的固定阶梯按复算输入走:`calls=414450>0`、`samples=809>0`、
+`valid>0`(256 条留存记录里 31 个不同 self 根、99 个 pointer-shaped 候选,直接可看出)、
+`lexer=0` ⇒ 落到最后一档看 `known_vtable_hits`,它是 **14** ⇒ **`VERDICT: scope_candidate`**(exit 0)。
+
+14 条命中的形状**全部 `source=self`**,即被采到的 base Execute 的 `this` 自己:
+
+| 命中数 | self 内偏移 | 命中的 vtable RVA | 该类 slot[2] ExecuteActual |
+|---|---|---|---|
+| 5 | `+0x38` | `0x24b3050` | `0x33d410` |
+| 5 | `+0x8`、`+0x30` | `0x2545e40` | `0xcc8bd0` |
+| 2 | `+0x20` | `0x24c69e8` | `0x33c940` |
+| 2 | `+0x10` | `0x254fa18` | `0xde40c0` |
+
+四根各自的产出:
+
+- `self`:31 个不同地址被跟读,99 个候选,14 个落在已知集合里。
+- `helper`(= `[ctx+0x10]`):只有 **1** 个不同地址 `0x1900ede0`(栈地址),2 个候选,`known=0`;
+  它 `+0x0` 那个 qword 解出 `0x7ff6a694c2d0` → **代码** RVA `0x9ec250`,不是 vtable。
+  这正是 §53.4.1 记的「短命帧的邻位栈助手」,不是一个对象。
+- `arg3` / `arg4`(r8/r9):**0 个地址过 `plausible_user_ptr` 门**,TSV 里一条 `source=arg*` 行都没有。
+
+调用点直方图:256 条留存记录分布在 **41** 个不同站点上,头部是
+`0x298a43`(40)、`0xde0539`(39)、`0x33ca60`(22)、`0x33d4c7`(19)、`0xddcf24`(12)、`0x1d08575`(8)。
+其中只有 **2** 个能和 §53.1 那张 62 站点普查表对上
+(`0x1bcd18d`→`incoming_arg`、`0xe845a7`→`not_examined`),其余 39 个 `func=- origin=-` ——
+**包括全部六个头部站点**。
+
+chain 两行 `ok=0 x=0x0`,与 §53.5 的证伪一致,判词中性,本节不取用它。
+
+### §56.5 这一枪没有答的那个问题(负结论,且是有内容的负结论)
+
+`scope_candidate` 这一档自己的判词就写着「CEventScope 的身份仍未由本判词确立」;数据把它说得更死:
+
+1. **14 条全挂在 `self` 上**。一个对象的成员指向另一些 CEffect 家族对象,是复合 effect(子向量)的
+   预期形状;这一枪重复确认的是「base Execute 的 `this` 是 CEffect 家族、且带 CEffect 家族成员」,
+   不是「哪个对象是 scope 载体」。
+2. **非 self 的三根一条命中都没有**。唯一带信息的 `helper` 解出的是代码,`arg3/arg4` 连门都过不去。
+3. 集合是**下限**(§17 的过滤器要求 `slot[1]==base Execute`,任何覆写 Execute 的类都不在里面)
+   ⇒ `known=0` 只能说「已知集合没匹配上」,不能说「不是对象」。
+4. `arg3/arg4` 按 §54.8.4 不是参数(派发点只设 rcx/rdx),它们的值即使可读也不能按调用约定去读。
+5. 那 39 个未对上的站点意味着:「这一枪采到的派发点是不是 §53 那批调用方」这个问题**没答上**;
+   普查表覆盖的是另一批站点(它按 `0x1D08520` 的直接调用点建,这一枪的头部站点落在别处)。
+
+⇒ 路线图段4 的问题(「真正的 `CEventScope` 是哪个对象」)**仍未收口**。而按「四根 + 一层解引用 +
+已知集合」这个形状**再打一次,预期得到同一件事**,所以它不是「再开一枪」能推进的。往下需要的 datum
+至少满足其一:
+
+- **换判据集合**(零成本,应先做):1,805 是按 `slot[1]` 过滤的下限。拿一个不过滤的集合
+  (全 `.rdata` vtable 候选)去重跑**已经躺在 `evidence/logs/scope_probe_v2_4_4_4.tsv` 里的 99 个候选**,
+  离线就能做,不要枪、不要进程。
+- **换跟读形状**(要枪):self 之外必须有根 —— 例如从 `helper` 的栈邻位往调用帧方向扫,
+  拿返回地址落回上面那 39 个未判读站点;或对已命中的对象做**第二跳**,看它们的成员里
+  有没有非 CEffect 形状的对象。
+
+### §56.6 现场与清理
+
+- 一进程一次安装:pid 12796 的采样器额度**已用尽**(曾 `installed=1`,现 `installed=0`)。
+- 不 FreeLibrary(约束 5):DLL 仍映射在 `0x7ffc3aad0000`,基址由事后读回确认。
+- 引擎字节完好(`verified=0`,实时读两次)、host 存活(`Responding=True`)。
+- 游戏停在**已载入并运行的 day-1 战役**里。事件窗选项(第一次接触选了四条里的第一条,善意回应)
+  是**我替人做的**,它可能改变后续外交态势与系统数;783 这条刻度是在点那两个窗**之前**测的,
+  本卷不据此推断战役后续状态。
+- daemon 的父壳 cmd(3348)被我杀掉,daemon 本体存活;下次 `just game start` 之前不会再有那个窗。
+- pid 13364(§55 现场)已按授权 `taskkill /F` 退掉。
+
+### §56.7 复现命令行
+
+```
+# 前提:新游戏进程 + 战役已载入 + 已解除暂停
+just launch
+ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Process stellaris).Id"
+ssh Windows_Jiaolong "cd C:\temp; python ns_scope_pre.py"          # 期望 MARKERS 783 EXPECTED 783
+# 投递被拒时先看这条,不要先看 game.log:
+ssh Windows_Jiaolong "cd C:\temp; Get-Content ns_game_log.jsonl -Tail 12"
+
+# 本枪(一次安装额度,跑完不可重打)
+ssh Windows_Jiaolong "python C:/temp/c2_scope_probe.py C:/temp/sqjs_c4_scope_v2.dll --poll-s 120 --settle-s 2 --out C:/temp/c4_scope_probe_v2.tsv --vtables C:/temp/ceffect_vtable_map_4_4_4.txt --census C:/temp/exec_frame_callers_4_4_4.tsv --id-names C:/temp/descriptor_oracle_4_4_4.tsv"
+
+# stdout 丢了之后的恢复读回(证明 detour 已摘、引擎字节完好)
+ssh Windows_Jiaolong "cd C:\temp; python ns_scope_aftermath.py C:/temp/sqjs_c4_scope_v2.dll"
+
+# 拉回 artifact(scp 下载会重置连接,见 docs/offline-tooling.md 陷阱 8)
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_scope_probe_v2.tsv evidence/logs/scope_probe_v2_4_4_4.tsv
+```
+
+`--vtables` 在 host 上**必须显式给**:驱动里的默认值是相对路径 `evidence/xrefs/…`,
+host 的 `C:\temp` 下没有这个目录,不给就会在注入**之前** `SystemExit`(这是设计好的不对称,不是缺陷)。

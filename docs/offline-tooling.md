@@ -814,6 +814,21 @@ just game stop | quit
    (900 字节起连接被重置),不要 `scp -r`。远端控制台是 cp936,shim 与命令行都刻意保持 ASCII。
 9. 纯逻辑(暂停判读、窗口分类、策略、命令词表、几何归一化)在 Linux 上跑:`just host-tests`
    (= `cd scripts/windows && python3 -m pytest tests -q`)。Windows 专有路径只在实机被调用。
+10. **daemon 的父壳 `cmd.exe` 是一个真实的桌面窗口,会占住前台并把游戏从前台挤下去**。
+    `start` 的 shim 是 `.cmd`,任务用 `/ru <machine>\<user> /rl highest` + `/run /I` 跑,所以 cmd 在交互
+    桌面上开了一个可见控制台窗(pythonw 自己无窗)。**daemon 晚于游戏启动时**,这个窗压在画面上并持有
+    前台,`focus()` 的 3 s `GetForegroundWindow()==hwnd` 判据就永远不成立 ⇒ 一切要先 focus 的动词
+    (`console`、`click`、Space)全拒,日志写 `console_refused reason=focus`、状态写
+    `resume_failed: focus refused before Space`。**判据在这两个字符串上,不在 `game.log` 上** ——
+    `game.log` 只收 `log=` 与少量消息(day-1 存档 177 B 完全正常),把它当「有没有战役」的证据会得出
+    错结论(2026-10-24 实机,§56.1)。处置是 `taskkill /F /PID <cmd>` 只杀父壳:pythonw 不是被 job
+    管的树,存活且窗一消失 focus 立刻通。顺带第二条:那个窗会**污染像素判读** —— §54.10 的面板计数和
+    `classify_window` 都读同一张截图,挡与不挡之间 `note` 能从 `paused_no_window` 漂到 `dialog_unknown`。
+11. **ssh 长连接会在长跑的实机驱动跑完之前被重置,那之后 stdout 全丢**。枪的 artifact 若只在结尾
+    打印(判词、Verify rc、host alive),就取不回来了。所以实机驱动的关键状态要能被**事后独立读回**:
+    `scope_probe` 的 `installed` 是实时 bool、`verified` 是 `verify()` 的实时返回值(不是闩锁),
+    配一次 `C2ScopeProbeStatsInto` 双读(`calls` 两秒不涨 = 热路径已还原)就把「Uninstall 跑过、引擎
+    字节完好」证完,不需要驱动那行输出(§56.3)。
 
 ### `scripts/windows/keep_awake.py` —— 桌面可达性守护
 
