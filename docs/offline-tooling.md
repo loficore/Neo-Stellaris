@@ -546,6 +546,9 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
    轮询结束之后 —— 那时栈早被覆盖。这类根进 `root_unreadable` 行与 `unreadable_roots` 计数,不该被当成
    「那个位置是空」。模块外(堆)的地址保留**绝对值**在 `ptr`,只有 `vptr_rva` 才是基址相对的;把堆指针压成
    `rva=0` 会和真正的 0 混成一类。
+4. **实机结果里的 `base` 有两种,判 vtable 命中只用其中一个。** 驱动打印与 `c4_wiring_result.json` 的
+   `base` 是**我们 DLL 的装载地址**(`resolve_base_address(pid, module)` 按模块取),不是 exe 主模块基址;
+   vtable map 的键是 exe 相对 RVA,拿错基址就永远命不中,而失败长得很像「没有候选」。完整对照与取法见 §55.1。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
