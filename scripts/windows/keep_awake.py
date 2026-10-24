@@ -14,6 +14,9 @@ ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED`)掐掉「空闲 → 关屏 → 唤醒�
 (与 `supervisor_ready`/`console_gate` 同一形状)。
 """
 
+import ctypes
+import sys
+
 # --------------------------------------------------------------------------
 # pure core — importable and testable on any OS
 # --------------------------------------------------------------------------
@@ -140,3 +143,94 @@ def task_shim_text(pythonw: str, script: str) -> str:
             f'"{pythonw}" "{script}" serve >> "{OUT_PATH}" 2>&1\r\n')
     text.encode("ascii")
     return text
+
+
+# --------------------------------------------------------------------------
+# Windows edge — ctypes only, runs on the host
+# --------------------------------------------------------------------------
+
+DESKTOP_READOBJECTS = 0x0001
+UDESKF_NAME = 4
+NO_CONSOLE_SESSION = 0xFFFFFFFF
+
+
+def _require_windows() -> None:
+    if sys.platform != "win32":
+        raise SystemExit("keep_awake's live half runs on Windows")
+
+
+def _dll(name: str):
+    """A WinDLL that keeps ctypes' per-call last-error capture alive.
+
+    `use_last_error=True` plus `ctypes.get_last_error()` is the only reliable way to
+    read GetLastError here: calling kernel32.GetLastError() goes through ctypes' own
+    frames, which can overwrite it first.  ctypes caches the instance, so building it
+    per call costs nothing and keeps this module importable off Windows (where
+    `ctypes.WinDLL` doesn't even exist).
+    """
+    return ctypes.WinDLL(name, use_last_error=True)
+
+
+def assert_execution() -> int:
+    """Re-assert the power request; the return value is the *previous* state.
+
+    No judgement here — the caller records the value into the status record so a
+    reader can see the assertion was actually accepted.
+    """
+    _require_windows()
+    return _dll("kernel32").SetThreadExecutionState(execution_flags())
+
+
+def _win_session_ids():
+    """(own, console) session ids; -1 for whichever half the API couldn't answer."""
+    from ctypes import wintypes
+
+    _require_windows()
+    kernel32 = _dll("kernel32")
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    own = -1
+    sid = wintypes.DWORD()
+    if kernel32.ProcessIdToSessionId(kernel32.GetCurrentProcess(), ctypes.byref(sid)):
+        own = int(sid.value)
+    console = int(kernel32.WTSGetActiveConsoleSessionId())
+    if console == NO_CONSOLE_SESSION:
+        console = -1
+    return own, console
+
+
+def desktop_snapshot():
+    """Classify the desktop currently receiving input, with a human-readable detail.
+
+    The session ids are read **before** `OpenInputDesktop` so the failure branch can
+    carry them too — `err=5 sessions=1/1` is what a DACL refusal looks like from the
+    outside, and it is a different problem than a locked screen (§54.9's lesson: a
+    belief about the desktop has to say which way it failed).
+    """
+    import ctypes.wintypes as wintypes
+
+    _require_windows()
+    user32 = _dll("user32")
+    own, console = _win_session_ids()
+    user32.OpenInputDesktop.restype = ctypes.c_void_p
+    user32.CloseDesktop.restype = wintypes.BOOL
+    handle = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)
+    if not handle:
+        gle = ctypes.get_last_error()
+        return (classify_desktop(None, gle, own, console),
+                f"err={gle} sessions={own}/{console}", own, console)
+    try:
+        buf = ctypes.create_unicode_buffer(256)
+        needed = wintypes.DWORD()
+        ok = user32.GetUserObjectInformationW(
+            handle, UDESKF_NAME, buf,
+            ctypes.sizeof(buf) * ctypes.sizeof(ctypes.c_wchar), ctypes.byref(needed))
+        if not ok:
+            gle = ctypes.get_last_error()
+            return (classify_desktop(None, gle, own, console),
+                    f"err={gle} sessions={own}/{console}", own, console)
+        name = buf.value
+    finally:
+        user32.CloseDesktop(handle)
+    if "\\" in name:
+        name = name.split("\\")[-1]   # the API usually returns the bare name; strip any Winsta0\ prefix
+    return classify_desktop(name, 0, own, console), name, own, console

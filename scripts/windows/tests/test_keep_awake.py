@@ -6,6 +6,8 @@ they are the contract the Windows edge feeds into the pure core, so the whole
 decision table stays testable on Linux with no ctypes, PIL or numpy.
 """
 
+import pytest
+
 import keep_awake as ka
 
 
@@ -90,3 +92,11 @@ def test_task_shim_starts_the_serve_verb_and_is_ascii():
     assert text.startswith("@echo off\r\n")
     assert 'keep_awake.py" serve >> ' in text
     assert text.rstrip().endswith("2>&1")        # 与 game_supervisor 的 shim 同形:stdout/err 归 OUT_PATH
+
+
+def test_windows_edge_primitives_refuse_to_run_off_windows(monkeypatch):
+    monkeypatch.setattr(ka.sys, "platform", "linux")
+    for fn in (ka.desktop_snapshot, ka.assert_execution):
+        with pytest.raises(SystemExit) as exc:
+            fn()
+    assert "Windows" in str(exc.value)
