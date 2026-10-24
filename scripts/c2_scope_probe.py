@@ -3,23 +3,31 @@
 
 One bounded shot in one game process. The DLL detour records a 1/512 sample of
 every base-Execute call: the keyword instance identity at [self], [self+8] and
-its vtable shim slot, plus the first eight qwords of the execution frame (ctx).
-The chain X=[ctx+0x30] -> S=[X+8] -> id=[S+8] / object=[S+0x20] is followed
-HERE with ReadProcessMemory, never inside the game: a stale pointer can only
-make one read return None.
+its vtable shim slot, the first eight qwords of the execution frame (ctx), and
+the two scratch slots r8/r9 the dispatch point does not define as parameters.
+
+Four roots are then dereferenced HERE with ReadProcessMemory — self, the frame's
++0x10 helper, r8, r9 — and every pointer-shaped qword is classified by reading
+its own first qword and looking that RVA up in the known CEffect vtable map.
+Nothing is dereferenced inside the game: a stale pointer can only make one read
+return None. The old X=[ctx+0x30] -> S=[X+8] chain is still recorded but no
+longer carries any verdict (c1_validation §53.5 falsified it).
 
 Usage: python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2]
        [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...]
+       [--vtables ...]
 
 This is a LIVE shot and requires an explicit naming from the user for the
 session (docs/roadmap.md authorization table). Cleanup runs in a finally:
 uninstall -> verify -> settle -> assert_game_alive. Never FreeLibrary the DLL,
 whatever the rc.
 
-Verdicts: captured is the only evidence result. no_calls / no_samples /
-lexer_only are ENVIRONMENT results — load a running campaign, unpause, and
-rerun in a NEW game process (this sampler refuses a process that already has a
-detour on 0x1D08520).
+Verdicts: scope_candidate is the only evidence result. no_calls / no_samples /
+all_invalid / lexer_only are ENVIRONMENT results — load a running campaign,
+unpause, and rerun in a NEW game process (this sampler refuses a process that
+already has a detour on 0x1D08520). no_scope_candidate is a real but bounded
+code result: the known-vtable map is a floor, so it says "nothing pointed at a
+vtable in that set", never "nothing pointed at an object".
 """
 
 import argparse
@@ -42,17 +50,23 @@ DEFAULT_CENSUS = os.path.join(
 DEFAULT_ID_NAMES = os.path.join(
     "evidence", "xrefs", "descriptor_oracle_4_4_4.tsv",
 )
+DEFAULT_VTABLES = os.path.join(
+    "evidence", "xrefs", "ceffect_vtable_map_4_4_4.txt",
+)
+EXE_MODULE = "stellaris.exe"
 
 POLL_INTERVAL_S = 1.0
 POLL_TIMEOUT_S = 120.0
 SETTLE_S = 2.0
 
-ENTRY_SIZE = 104
+ENTRY_SIZE = 120
 STATS_SIZE = 512
 LAYOUT_WORDS = 5
 RING_LEN = 256
 MAX_FOLLOW = 32
 CTX_X_OFFSET = 0x30
+CTX_HELPER_OFFSET = 0x10
+OBJ_WORDS_BYTES = 64
 
 VERDICT_DIAGNOSIS = {
     "no_calls": (
@@ -73,10 +87,18 @@ VERDICT_DIAGNOSIS = {
         "calls are lexer-path executions, not normal effect fires (section 52); "
         "they cannot answer which object a real execution frame is."
     ),
-    "chain_unreadable": (
-        "samples are valid but no ctx chain could be read: [ctx+0x30], [X+8], "
-        "[S], [S+8] or [S+0x20] failed in every sample. Keep the entries; the "
-        "failure itself is the observation."
+    "no_scope_candidate": (
+        "no qword under self / the frame's +0x10 helper / r8 / r9 pointed at an "
+        "object whose vtable is in ceffect_vtable_map_4_4_4.txt. That map is a "
+        "FLOOR — it only holds classes whose slot[1] is still base Execute, so "
+        "every class overriding Execute is absent. This does NOT say the roots "
+        "hold no objects; it says the known set matched nothing."
+    ),
+    "scope_candidate": (
+        "at least one pointer-shaped qword under the four roots dereferenced to "
+        "an object whose vtable RVA is in the known CEffect map. The rows name "
+        "which root, which offset, and the matched slot2 entity. Identity of a "
+        "CEventScope is still NOT established by this verdict."
     ),
 }
 
@@ -102,26 +124,26 @@ def decode_layout(words):
         "mask": words[3],
         "version": words[4],
     }
-    if out["entry"] != 104:
-        raise ValueError(f"Entry size drifted: {out['entry']} != 104")
+    if out["entry"] != ENTRY_SIZE:
+        raise ValueError(f"Entry size drifted: {out['entry']} != {ENTRY_SIZE}")
     if out["stats"] != 56:
         raise ValueError(f"Stats size drifted: {out['stats']} != 56")
     if out["ring"] != RING_LEN:
         raise ValueError(f"ring length drifted: {out['ring']} != {RING_LEN}")
     if out["mask"] != 511:
         raise ValueError(f"sample mask drifted: {out['mask']} != 511")
-    if out["version"] != 1:
-        raise ValueError(f"unknown layout version {out['version']} != 1")
+    if out["version"] != 2:
+        raise ValueError(f"unknown layout version {out['version']} != 2")
     return out
 
 
 def decode_entry(raw):
-    """Decode one 104-byte Entry; a short buffer is a ValueError."""
+    """Decode one 120-byte Entry; a short buffer is a ValueError."""
     if len(raw) < ENTRY_SIZE:
         raise ValueError(f"Entry needs {ENTRY_SIZE} bytes, got {len(raw)}")
     (valid, lexer, _pad0, self_vtable_rva, shim_rva, token_id, caller_rva,
-     self_ptr, ctx_ptr, *ctx_words) = struct.unpack(
-        "<BBHIIII4xQQ8Q", raw[:ENTRY_SIZE]
+     self_ptr, ctx_ptr, *rest) = struct.unpack(
+        "<BBHIIII4xQQ8Q2Q", raw[:ENTRY_SIZE]
     )
     return {
         "valid": valid,
@@ -132,7 +154,9 @@ def decode_entry(raw):
         "caller_rva": caller_rva,
         "self_ptr": self_ptr,
         "ctx_ptr": ctx_ptr,
-        "ctx_words": list(ctx_words),
+        "ctx_words": list(rest[:8]),
+        "arg3": rest[8],
+        "arg4": rest[9],
     }
 
 
@@ -241,12 +265,86 @@ def follow_chain(reader, ctx_ptr):
     return out
 
 
-def summarize(entries, stats, chains, census, id_names):
+def plausible_user_ptr(addr):
+    """Same gate as the DLL's plausible(): ring the unusable reads out here."""
+    return (
+        isinstance(addr, int)
+        and 0x10000 <= addr <= 0x0000_7FFF_FFFF_0000
+        and (addr & 7) == 0
+    )
+
+
+def load_vtable_map(path):
+    """ceffect_vtable_map_4_4_4.txt -> {vtable_rva: {"slot0", "slot2"}}.
+
+    Keys are MODULE-RELATIVE RVAs, exactly as the file writes them. Lines that
+    are comments or do not carry both slot columns are skipped. The set is a
+    floor: it only holds classes whose slot[1] is still base Execute.
+    """
+    out = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            cols = line.split()
+            if len(cols) < 6 or cols[0] != "vtable":
+                continue
+            try:
+                vtable_rva = int(cols[1], 16)
+                slot0 = int(cols[3], 16)
+                slot2 = int(cols[5], 16)
+            except ValueError:
+                continue
+            out[vtable_rva] = {"slot0": slot0, "slot2": slot2}
+    return out
+
+
+def follow_object(reader, exe_base, vtables, root_addr, *, source=""):
+    """Read 8 qwords at root_addr and classify every pointer-shaped one.
+
+    Each candidate's first qword is dereferenced once and matched against
+    ``vtables`` by RVA. A failed read stays None instead of becoming 0 — an
+    overwritten stack helper and a qword that really holds zero are different
+    observations. Pointers outside the exe image (heap) keep their absolute
+    value in ``ptr``; only ``vptr_rva`` is base-relative and it is None when the
+    value cannot be turned into an RVA.
+    """
+    out = {
+        "source": source, "root": root_addr, "unreadable": False,
+        "words": [], "candidates": [],
+    }
+    raw = reader(root_addr, OBJ_WORDS_BYTES)
+    if raw is None or len(raw) < OBJ_WORDS_BYTES:
+        out["unreadable"] = True
+        return out
+    words = list(struct.unpack("<8Q", raw[:OBJ_WORDS_BYTES]))
+    out["words"] = words
+
+    for offset, word in enumerate(words):
+        if word == 0 or not plausible_user_ptr(word):
+            continue
+        vptr = _read_u64(reader, word)
+        vptr_rva = vptr - exe_base if (vptr is not None and exe_base and
+                                       vptr >= exe_base) else None
+        hit = vtables.get(vptr_rva) if vptr_rva is not None else None
+        out["candidates"].append({
+            "offset": offset * 8,
+            "ptr": word,
+            "vptr": vptr,
+            "vptr_rva": vptr_rva,
+            "known": hit is not None,
+            "slot2_rva": hit["slot2"] if hit else None,
+        })
+    return out
+
+
+def summarize(entries, stats, chains, census, id_names, objects=None):
     """Aggregate sampled entries, followed chains and the Task 1 census.
 
     ``census`` maps a call site to its function/origin; ``id_names`` maps the
     chain's token id to a keyword name. The id is a keyword token id, never a
-    system id: an unknown id stays ``-`` instead of being guessed.
+    system id: an unknown id stays ``-`` instead of being guessed. ``objects``
+    carries the four-root dereference results and is what the verdict reads.
     """
     by_caller = {}
     vtables = set()
@@ -301,12 +399,29 @@ def summarize(entries, stats, chains, census, id_names):
         key=lambda row: (-row[2], row[0]),
     )
 
+    objects = list(objects or [])
+    known_vtable_hits = 0
+    unknown_ptr_hits = 0
+    unreadable_roots = 0
+    for obj in objects:
+        if obj.get("unreadable"):
+            unreadable_roots += 1
+        for cand in obj.get("candidates", []):
+            if cand.get("known"):
+                known_vtable_hits += 1
+            else:
+                unknown_ptr_hits += 1
+
     return {
         "calls": stats.get("calls", 0),
         "samples": stats.get("samples", 0),
         "valid": valid,
         "lexer": lexer,
         "chain_ok": chain_ok,
+        "known_vtable_hits": known_vtable_hits,
+        "unknown_ptr_hits": unknown_ptr_hits,
+        "unreadable_roots": unreadable_roots,
+        "objects": objects,
         "by_caller": by_caller,
         "distinct_vtables": len(vtables),
         "callers": callers,
@@ -317,7 +432,11 @@ def summarize(entries, stats, chains, census, id_names):
 
 def classify(summary):
     """Fixed order: no_calls -> no_samples -> all_invalid -> lexer_only ->
-    chain_unreadable -> captured."""
+    no_scope_candidate -> scope_candidate.
+
+    The falsified X->S->id chain is deliberately absent from this ladder
+    (c1_validation §53.5): chain_ok no longer rescues or sinks a verdict.
+    """
     if summary.get("calls", 0) == 0:
         return "no_calls"
     if summary.get("samples", 0) == 0:
@@ -326,9 +445,9 @@ def classify(summary):
         return "all_invalid"
     if summary.get("lexer", 0) > 0 and summary.get("lexer", 0) == summary.get("valid", 0):
         return "lexer_only"
-    if summary.get("chain_ok", 0) == 0:
-        return "chain_unreadable"
-    return "captured"
+    if summary.get("known_vtable_hits", 0) == 0:
+        return "no_scope_candidate"
+    return "scope_candidate"
 
 
 def _hex_or_dash(value):
@@ -361,6 +480,22 @@ def write_tsv(path, summary):
                 f"object={_hex_or_dash(chain['object'])}\n"
             )
             rows += 1
+        for obj in summary.get("objects", []):
+            if obj.get("unreadable"):
+                f.write(
+                    f"root_unreadable\t0x{obj['root']:x}\t1\t"
+                    f"source={obj['source']}\n"
+                )
+                rows += 1
+            for cand in obj.get("candidates", []):
+                f.write(
+                    f"object\t0x{obj['root']:x}\t{1 if cand['known'] else 0}\t"
+                    f"source={obj['source']} off=0x{cand['offset']:x} "
+                    f"ptr=0x{cand['ptr']:x} "
+                    f"vptr_rva={_hex_or_dash(cand['vptr_rva'])} "
+                    f"slot2_rva={_hex_or_dash(cand['slot2_rva'])}\n"
+                )
+                rows += 1
     return rows
 
 
@@ -459,6 +594,48 @@ def drain_entries(pid, base, exports, buf):
     ]
 
 
+def _entry_roots(entry):
+    """The four addresses this shot dereferences, as (source, addr) pairs.
+
+    helper is [ctx+0x10]: §53.4.1 recorded it as a pointer (a heap object for
+    the long-lived frame, a neighbouring stack helper for the short ones) and no
+    shot had ever dereferenced it. arg3/arg4 are r8/r9, which the dispatch point
+    does not define as parameters — they are recorded as scratch witnesses.
+    """
+    yield "self", entry["self_ptr"]
+    if entry["valid"] == 1:
+        yield "helper", entry["ctx_words"][CTX_HELPER_OFFSET // 8]
+        yield "arg3", entry["arg3"]
+        yield "arg4", entry["arg4"]
+
+
+def follow_roots(reader, exe_base, vtables, entries, max_follow=MAX_FOLLOW):
+    """Dereference every distinct (source, address) root, capped by max_follow.
+
+    Implausible addresses are counted and never handed to the reader: an
+    environment root that fails the same gate the DLL uses is not a datum about
+    the engine's objects.
+    """
+    objects = []
+    seen = set()
+    implausible = 0
+    for entry in entries:
+        for source, addr in _entry_roots(entry):
+            if not plausible_user_ptr(addr):
+                implausible += 1
+                continue
+            key = (source, addr)
+            if key in seen:
+                continue
+            if len(objects) >= max_follow:
+                return objects, implausible, True
+            seen.add(key)
+            objects.append(
+                follow_object(reader, exe_base, vtables, addr, source=source)
+            )
+    return objects, implausible, False
+
+
 def follow_contexts(pid, entries):
     """Follow the chain for each distinct usable ctx, at most MAX_FOLLOW.
 
@@ -528,13 +705,22 @@ def _cleanup(pid, base, exports, installed_ok, settle_s):
     return restore_ok
 
 
-def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names):
+def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
+        exe_base):
     needed = (
         "C2Sanity", "C2ScopeProbeInstall", "C2ScopeProbeUninstall",
         "C2ScopeProbeVerify", "C2ScopeProbeLayout", "C2ScopeProbeStatsInto",
         "C2ScopeProbeDrainInto", "C2ScopeProbeReset",
     )
+
+    def reader(addr, size):
+        try:
+            return read_memory(pid, addr, size)
+        except Exception:  # noqa: BLE001 - an unreadable address is the datum
+            return None
+
     base, exports = gate_module(pid, dll_path, needed)
+    print(f"[scope] exe_base=0x{exe_base:x} known_vtables={len(vtables)}")
 
     installed_ok = False
     rc = 1
@@ -578,7 +764,12 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names):
                 entries_buf = remote_alloc(pid, RING_LEN * ENTRY_SIZE)
                 entries = drain_entries(pid, base, exports, entries_buf)
                 chains = follow_contexts(pid, entries)
-                summary = summarize(entries, stats, chains, census, id_names)
+                objects, implausible, capped = follow_roots(
+                    reader, exe_base, vtables, entries
+                )
+                summary = summarize(
+                    entries, stats, chains, census, id_names, objects=objects
+                )
                 verdict = classify(summary)
 
                 print(f"STATS: {stats_text.strip()}")
@@ -601,6 +792,16 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names):
                         f"name={chain['name']} "
                         f"object={_hex_or_dash(chain['object'])}"
                     )
+                print("OBJECTS:")
+                for obj in summary["objects"]:
+                    for cand in obj["candidates"]:
+                        print(
+                            f"  source={obj['source']} root=0x{obj['root']:x} "
+                            f"off=0x{cand['offset']:x} ptr=0x{cand['ptr']:x} "
+                            f"vptr_rva={_hex_or_dash(cand['vptr_rva'])} "
+                            f"known={1 if cand['known'] else 0} "
+                            f"slot2_rva={_hex_or_dash(cand['slot2_rva'])}"
+                        )
                 print(
                     f"[scope] entries={len(entries)} "
                     f"valid={summary['valid']} lexer={summary['lexer']} "
@@ -608,13 +809,21 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names):
                     f"distinct_vtables={summary['distinct_vtables']} "
                     f"ids={summary['ids']}"
                 )
+                print(
+                    f"[scope] roots={len(summary['objects'])} "
+                    f"known_vtable_hits={summary['known_vtable_hits']} "
+                    f"unknown_ptr_hits={summary['unknown_ptr_hits']} "
+                    f"unreadable_roots={summary['unreadable_roots']} "
+                    f"implausible_skipped={implausible} "
+                    f"capped={1 if capped else 0}"
+                )
                 rows = write_tsv(out_path, summary)
                 print(f"[scope] wrote {rows} rows to {out_path}")
 
                 print(f"VERDICT: {verdict}")
                 if verdict in VERDICT_DIAGNOSIS:
                     print(VERDICT_DIAGNOSIS[verdict])
-                rc = 0 if verdict == "captured" else 1
+                rc = 0 if verdict == "scope_candidate" else 1
     finally:
         restore_ok = _cleanup(pid, base, exports, installed_ok, settle_s)
     if not restore_ok:
@@ -632,6 +841,7 @@ def main(argv=None):
     parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--census", default=DEFAULT_CENSUS)
     parser.add_argument("--id-names", dest="id_names", default=DEFAULT_ID_NAMES)
+    parser.add_argument("--vtables", default=DEFAULT_VTABLES)
     args = parser.parse_args(argv)
 
     if not os.path.isfile(args.dll):
@@ -658,9 +868,24 @@ def main(argv=None):
             "will be '-' (join offline with descriptor_oracle_4_4_4.tsv)"
         )
 
+    if not os.path.isfile(args.vtables):
+        raise SystemExit(
+            f"{args.vtables} not found — the known-vtable map is what the verdict "
+            "reads. Uploading it is part of the shot procedure (plan Task 6); "
+            "running without it could only ever print no_scope_candidate"
+        )
+    vtables = load_vtable_map(args.vtables)
+    if not vtables:
+        raise SystemExit(
+            f"{args.vtables} parsed to zero vtables — refusing a shot whose "
+            "verdict is decided against an empty set"
+        )
+
     pid = resolve_pid("stellaris")
+    exe_base = resolve_base_address(pid, EXE_MODULE)
     return run(
         pid, args.dll, args.poll_s, args.settle_s, args.out, census, id_names,
+        vtables, exe_base,
     )
 
 
