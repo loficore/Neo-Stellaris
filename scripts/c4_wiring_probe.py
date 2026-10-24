@@ -50,12 +50,17 @@ SAVE_SHA = "6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e"
 # reads the command file; with delivery failure fatal, 1 s can abort a healthy
 # channel on timing alone.
 CONSOLE_SEEN_TIMEOUT_S = 3.0
+# The daemon writes console_refused immediately, so 2 s is enough to name a
+# refusal; console_sent only lands after every key was pressed, so silence
+# here is normal on the success path and never aborts.
+CONSOLE_RECEIPT_TIMEOUT_S = 2.0
 
 DLL = r"C:\temp\sqjs_c4.dll"
 SAVE = r"C:\temp\stellaris_2226.sav"
 GAME_LOG = "~/Documents/Paradox Interactive/Stellaris/logs/game.log"
 SUPERVISOR_STATUS = r"C:\temp\ns_game_status.json"
 SUPERVISOR_CMD = r"C:\temp\ns_game_cmd.txt"
+SUPERVISOR_LOG = r"C:\temp\ns_game_log.jsonl"
 SHOT = r"C:\temp\ns_game_shot.png"
 JSON = r"C:\temp\c4_wiring_result.json"
 
@@ -431,6 +436,29 @@ def count_marker_lines(text, marker):
                if "Log effect, file:" in line and marker in line)
 
 
+CONSOLE_RECEIPT_EVENTS = ("console_sent", "console_refused",
+                          "console_clipboard_failed")
+
+
+def classify_console_receipt(text):
+    """What the daemon last said about a console command, from its own log.
+
+    ``(status, reason)``; ``status`` is ``"no_receipt"`` when the tail holds
+    nothing terminal, which the caller treats as best-effort silence rather
+    than a failure.
+    """
+    status, reason = "no_receipt", None
+    for line in text.splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("event") in CONSOLE_RECEIPT_EVENTS:
+            status = rec["event"]
+            reason = rec.get("reason")
+    return status, reason
+
+
 def supervisor_ready(rec, now, max_age_s=5.0):
     if not isinstance(rec, dict):
         return "supervisor_not_running"
@@ -593,9 +621,31 @@ def _send_console(cmd_path, text):
     return False
 
 
-def _send_console_or_abort(cmd_path, text):
+def _send_console_or_abort(cmd_path, text, log_path=None):
+    # Offset before the write, so only events after *this* command can count;
+    # without it the previous command's console_refused would abort a healthy
+    # shot. A rotation puts the offset past EOF, which reads empty -> silence.
+    offset = _file_size(log_path) if log_path else None
     if not _send_console(cmd_path, text):
         raise _Abort("console_send_failed", text)
+    if offset is None:
+        return
+    # console_sent is written only after the daemon pressed every key, so
+    # timing out here is normal on the success path -- never an abort.
+    deadline = time.time() + CONSOLE_RECEIPT_TIMEOUT_S
+    while True:
+        try:
+            status, reason = classify_console_receipt(
+                _read_text_from(log_path, offset))
+        except OSError:
+            status, reason = "no_receipt", None
+        if status == "console_sent":
+            return
+        if status in ("console_refused", "console_clipboard_failed"):
+            raise _Abort(status, reason or text)
+        if time.time() >= deadline:
+            return
+        time.sleep(0.05)
 
 
 def _wait_marker(path, offset, marker, expected, timeout):
@@ -698,7 +748,8 @@ def _slot2_phase(args, result, exports, pid, base, log_path):
     sbuf = harness.remote_alloc(pid, SLOT2_SIZE)
     before = _read_slot2_stats(pid, base, rva, sbuf)
     offset = _file_size(log_path)
-    _send_console_or_abort(args.supervisor_cmd, _armed_console(pid, "SLOT2"))
+    _send_console_or_abort(
+        args.supervisor_cmd, _armed_console(pid, "SLOT2"), args.supervisor_log)
     sentinel = _wait_marker(log_path, offset, "C4_SLOT2START_%d" % pid,
                             PREFLIGHT_MARKERS, timeout=30.0)
     if sentinel is None:
@@ -733,7 +784,8 @@ def _campaign_preflight(args, result, log_path, pid) -> None:
     preflight = f"C4_PREFLIGHT_{pid}"
     offset = _file_size(log_path)
     t0 = time.time()
-    _send_console_or_abort(args.supervisor_cmd, preflight_console(pid))
+    _send_console_or_abort(
+        args.supervisor_cmd, preflight_console(pid), args.supervisor_log)
     preflight_count = _wait_marker(
         log_path, offset, preflight, PREFLIGHT_MARKERS, timeout=30.0)
     if preflight_count is None:
@@ -836,7 +888,8 @@ def _flow(args, result, state):
     pred_before = _read_pred_stats(
         pid, base, exports["C4PredStatsInto"], pbuf)
     cap_offset = _file_size(log_path)
-    _send_console_or_abort(args.supervisor_cmd, capture_console(pid))
+    _send_console_or_abort(
+        args.supervisor_cmd, capture_console(pid), args.supervisor_log)
     cap_sentinel = _wait_marker(
         log_path, cap_offset, "C4_CAPSTART_%d" % pid, PREFLIGHT_MARKERS,
         timeout=30.0)
@@ -895,7 +948,8 @@ def _flow(args, result, state):
     if mode_rc != 0:
         raise _Abort("apply_setup_failed", f"C4WireSetMode(2)={mode_rc}")
 
-    _send_console_or_abort(args.supervisor_cmd, apply_console(pid))
+    _send_console_or_abort(
+        args.supervisor_cmd, apply_console(pid), args.supervisor_log)
     app_sentinel = _wait_marker(
         log_path, apply_offset, "C4_APPSTART_%d" % pid, PREFLIGHT_MARKERS,
         timeout=30.0)
@@ -1034,6 +1088,7 @@ def _parse_args(argv=None):
     parser.add_argument("--supervisor-status", default=SUPERVISOR_STATUS)
     parser.add_argument("--supervisor-cmd", default=SUPERVISOR_CMD)
     parser.add_argument("--shot", default=SHOT)
+    parser.add_argument("--supervisor-log", default=SUPERVISOR_LOG)
     return parser.parse_args(argv)
 
 

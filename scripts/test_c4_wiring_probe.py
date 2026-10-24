@@ -475,11 +475,12 @@ def _preflight_probe(monkeypatch, count):
     import types
     sent = []
     monkeypatch.setattr(probe, "_send_console_or_abort",
-                        lambda cmd, text: sent.append(text))
+                        lambda *a, **k: sent.append(a[1]))
     monkeypatch.setattr(probe, "_file_size", lambda p: 0)
     monkeypatch.setattr(probe, "_wait_marker",
                         lambda *a, **k: count)
-    return probe, types.SimpleNamespace(supervisor_cmd="just game"), sent
+    return probe, types.SimpleNamespace(supervisor_cmd="just game",
+                                        supervisor_log=None), sent
 
 
 def test_campaign_preflight_aborts_console_unavailable_without_any_harness_call(monkeypatch):
@@ -515,10 +516,11 @@ def test_campaign_preflight_records_wall_clock_wait(monkeypatch):
     probe = _fake_sleeps(
         monkeypatch, ["", _preflight_lines(4242, PREFLIGHT_MARKERS)])
     import types
-    monkeypatch.setattr(probe, "_send_console_or_abort", lambda cmd, text: None)
+    monkeypatch.setattr(probe, "_send_console_or_abort", lambda *a, **k: None)
     monkeypatch.setattr(probe, "_file_size", lambda p: 0)
     result = {}
-    probe._campaign_preflight(types.SimpleNamespace(supervisor_cmd="x"),
+    probe._campaign_preflight(types.SimpleNamespace(supervisor_cmd="x",
+                                                    supervisor_log=None),
                               result, "log", 4242)
     assert result["preflight_wait_s"] == 1.0
 
@@ -597,3 +599,46 @@ def test_flow_refuses_before_touching_the_game_when_the_belief_is_undecided(monk
     assert exc.value.verdict == "console_state_unknown"
     assert "console_px=900" in exc.value.detail
     assert touched == []
+
+
+def test_classify_console_receipt_reports_the_daemons_refusal_reason():
+    text = ('{"event":"serve_start"}\n'
+            '{"event":"console_observed","open":true,"px":2312}\n'
+            '{"event":"console_refused","reason":"console_state_unknown"}\n')
+    assert mod.classify_console_receipt(text) == ("console_refused", "console_state_unknown")
+
+
+def test_classify_console_receipt_ignores_observation_and_sync_events():
+    text = ('{"event":"console_observed","open":true,"px":2312}\n'
+            '{"event":"console_sync","mode":"auto"}\n')
+    assert mod.classify_console_receipt(text) == ("no_receipt", None)
+
+
+def test_classify_console_receipt_takes_the_last_terminal_event():
+    text = ('{"event":"console_refused","reason":"focus"}\n'
+            '{"event":"console_sent","chars":62,"opened":false}\n')
+    assert mod.classify_console_receipt(text) == ("console_sent", None)
+
+
+def test_classify_console_receipt_survives_a_torn_line():
+    text = '{"event":"console_sent"}\n{"event":"console_refu'
+    assert mod.classify_console_receipt(text) == ("console_sent", None)
+
+
+def test_send_console_or_abort_aborts_with_the_refusal_reason(monkeypatch):
+    monkeypatch.setattr(mod, "_send_console", lambda path, text: True)
+    monkeypatch.setattr(mod, "_file_size", lambda p: 0)
+    monkeypatch.setattr(mod, "_read_text_from", lambda p, off: (
+        '{"event":"console_refused","reason":"console_state_unknown"}\n'))
+    with pytest.raises(mod._Abort) as exc:
+        mod._send_console_or_abort("cmd.txt", "effect x = { }", "log.jsonl")
+    assert exc.value.verdict == "console_refused"
+    assert exc.value.detail == "console_state_unknown"
+
+
+def test_send_console_or_abort_proceeds_when_the_log_has_no_receipt(monkeypatch):
+    monkeypatch.setattr(mod, "_send_console", lambda path, text: True)
+    monkeypatch.setattr(mod, "_file_size", lambda p: 0)
+    monkeypatch.setattr(mod, "_read_text_from", lambda p, off: "")
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    mod._send_console_or_abort("cmd.txt", "effect x = { }", "log.jsonl")
