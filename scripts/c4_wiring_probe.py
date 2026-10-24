@@ -61,6 +61,7 @@ GAME_LOG = "~/Documents/Paradox Interactive/Stellaris/logs/game.log"
 SUPERVISOR_STATUS = r"C:\temp\ns_game_status.json"
 SUPERVISOR_CMD = r"C:\temp\ns_game_cmd.txt"
 SUPERVISOR_LOG = r"C:\temp\ns_game_log.jsonl"
+KEEP_AWAKE_STATUS = r"C:\temp\ns_awake_status.json"
 SHOT = r"C:\temp\ns_game_shot.png"
 JSON = r"C:\temp\c4_wiring_result.json"
 
@@ -491,6 +492,41 @@ def console_gate(rec):
     return "ok"
 
 
+_DESKTOP_LOCKED = ("locked",)
+_DESKTOP_UNREADABLE = ("unreadable_denied", "unreadable_error")
+
+
+def keep_awake_gate(rec, now: float, max_age_s: float = 15.0) -> str:
+    """Refuse the shot unless the keep_awake daemon observed a reachable desktop lately.
+
+    Order: structure -> heartbeat -> how to read the observation.  ``unreadable_*``
+    and ``locked`` get different names on purpose: a DACL refusal on
+    ``OpenInputDesktop`` (err=5) is a process that wasn't privileged, not a locked
+    screen, and an operator chasing "locked" here would be hunting a lock that
+    doesn't exist.  Both refuse the shot — the direction is conservative either way,
+    the diagnosis is not.  Anything this function doesn't know (including states
+    keep_awake gains later) is ``desktop_unobserved``, never ``ok``.
+    """
+    if not isinstance(rec, dict) or not all(k in rec for k in ("desktop", "epoch")):
+        return "keep_awake_absent"
+    if rec.get("state", "serving") != "serving":
+        return "keep_awake_stopped"
+    try:
+        age = now - float(rec["epoch"])
+    except (TypeError, ValueError):
+        return "keep_awake_stale"
+    if age > max_age_s:
+        return "keep_awake_stale"
+    desktop = rec["desktop"]
+    if desktop == "unlocked":
+        return "ok"
+    if desktop in _DESKTOP_LOCKED:
+        return "desktop_locked"
+    if desktop in _DESKTOP_UNREADABLE:
+        return "desktop_unreachable"
+    return "desktop_unobserved"
+
+
 def classify_capture(wire, records, find, pred=None):
     if wire.get("calls", 0) == 0:
         if pred is None:
@@ -823,6 +859,11 @@ def _campaign_preflight(args, result, log_path, pid) -> None:
 # ---------------------------------------------------------------------------
 
 def _flow(args, result, state):
+    ka_rec = _read_status(args.keep_awake_status)
+    ka_verdict = keep_awake_gate(ka_rec, time.time())
+    if ka_verdict != "ok":
+        raise _Abort(ka_verdict, f"keep_awake status={ka_rec}")
+
     log_path = os.path.expanduser(args.game_log)
 
     rec, verdict = _wait_ready(args.supervisor_status, args.supervisor_cmd)
@@ -1107,6 +1148,7 @@ def _parse_args(argv=None):
     parser.add_argument("--supervisor-cmd", default=SUPERVISOR_CMD)
     parser.add_argument("--shot", default=SHOT)
     parser.add_argument("--supervisor-log", default=SUPERVISOR_LOG)
+    parser.add_argument("--keep-awake-status", default=KEEP_AWAKE_STATUS)
     return parser.parse_args(argv)
 
 

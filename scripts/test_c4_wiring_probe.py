@@ -1,3 +1,4 @@
+import json
 import pathlib
 import re
 import struct
@@ -544,6 +545,13 @@ def test_required_exports_add_slot2_stats_only_for_slot2():
 
 
 def _slot2_args(tmp_path):
+    # _flow 的第一道门读它:夹具必须交出一条**通过**的桌面观测,否则两条既有测试
+    # 会在碰到游戏之前就以 keep_awake_absent 中止(那是夹具没修好,不是门错了)。
+    awake = str(tmp_path / "awake.json")
+    with open(awake, "w", encoding="utf-8") as f:
+        json.dump({"state": "serving", "desktop": "unlocked",
+                   "desktop_detail": "Default", "epoch": time.time(),
+                   "pid": 7}, f)
     return types.SimpleNamespace(mode="slot2", save="save.sav", allow_drift=False,
                                  dll="sqjs_c4.dll",
                                  game_log=str(tmp_path / "game.log"),
@@ -551,7 +559,8 @@ def _slot2_args(tmp_path):
                                  supervisor_cmd=str(tmp_path / "cmd.txt"),
                                  supervisor_log=None,
                                  shot=str(tmp_path / "shot.png"),
-                                 json=str(tmp_path / "out.json"))
+                                 json=str(tmp_path / "out.json"),
+                                 keep_awake_status=awake)
 
 
 def test_flow_aborts_before_the_game_is_touched_when_slot2_export_missing(monkeypatch, tmp_path):
@@ -697,3 +706,51 @@ def test_send_console_or_abort_skips_the_receipt_when_the_log_cannot_be_stat(mon
     monkeypatch.setattr(time, "sleep", lambda s: None)
     mod._send_console_or_abort("cmd.txt", "effect x = { }", "log.jsonl")
     assert reads == []
+
+
+def test_keep_awake_gate_passes_only_a_fresh_unlocked_record():
+    now = 1000.0
+    rec = {"desktop": "unlocked", "epoch": now - 2.0, "desktop_detail": "Default"}
+    assert mod.keep_awake_gate(rec, now) == "ok"
+
+
+def test_keep_awake_gate_refuses_absent_not_a_dict_and_missing_keys():
+    now = 1000.0
+    assert mod.keep_awake_gate(None, now) == "keep_awake_absent"
+    assert mod.keep_awake_gate([], now) == "keep_awake_absent"
+    assert mod.keep_awake_gate({"desktop": "unlocked"}, now) == "keep_awake_absent"
+    assert mod.keep_awake_gate({"epoch": now, "desktop_detail": "Default"}, now) \
+        == "keep_awake_absent"
+
+
+def test_keep_awake_gate_refuses_stale_and_a_non_numeric_epoch():
+    rec = {"desktop": "unlocked", "epoch": 1000.0}
+    assert mod.keep_awake_gate(rec, 1015.1) == "keep_awake_stale"
+    assert mod.keep_awake_gate({"desktop": "unlocked", "epoch": "x"}, 1000.0) \
+        == "keep_awake_stale"
+
+
+def test_keep_awake_gate_names_locked_apart_from_unreadable():
+    def rec(state):
+        return {"desktop": state, "epoch": 1000.0}
+    assert mod.keep_awake_gate(rec("locked"), 1000.0) == "desktop_locked"
+    assert mod.keep_awake_gate(rec("unreadable_denied"), 1000.0) == "desktop_unreachable"
+    assert mod.keep_awake_gate(rec("unreadable_error"), 1000.0) == "desktop_unreachable"
+
+
+def test_keep_awake_gate_refuses_any_state_it_does_not_know():
+    for state in ("screensaver", "wrong_session", "unknown_name", "unlocked-ish"):
+        rec = {"desktop": state, "epoch": 1000.0}
+        assert mod.keep_awake_gate(rec, 1000.0) == "desktop_unobserved"
+
+
+def test_flow_aborts_on_a_locked_desktop_before_wanting_paused(monkeypatch, tmp_path):
+    touched = []
+    monkeypatch.setattr(mod, "_write_command",
+                        lambda p, line: touched.append(line) or True)
+    monkeypatch.setattr(mod, "_read_status", lambda p: {"desktop": "locked",
+                       "epoch": time.time(), "desktop_detail": "Winlogon"})
+    with pytest.raises(mod._Abort) as exc:
+        mod._flow(_slot2_args(tmp_path), {}, {})
+    assert exc.value.verdict == "desktop_locked"
+    assert touched == []          # 一个命令都没发,游戏侧零打扰
