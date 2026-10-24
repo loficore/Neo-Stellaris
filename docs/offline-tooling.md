@@ -576,14 +576,31 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 永远不是 system id;名字只在 `--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,
 查不到就留 `-`,不猜。`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`);Windows 侧没有这两份表时两列退化为 `-`,离线再 join。
-完整结果写到 `--out`(长表 `kind/key/value/detail`,**meta** / caller / id / chain / object / root_unreadable 六类行)。
+完整结果写到 `--out`(长表 `kind/key/value/detail`,**meta** / caller / id / chain / object /
+root_unreadable / **region** 七类行)。
 `meta` 行在最前面,带 `exe_base`、`image_end`、`image_size`、`dll_sha256`、`vtable_map_count`、`layout`、
-`stats`、`per_source_follow`,以及四根的 `followed_by_source`/`implausible_by_source`/`capped_by_source`/
-`withheld_by_source` 和三个命中计数。**这不是装饰**:§56 那一枪的 stdout 被一次 ssh 重置整段吃掉,而旧 TSV
+`stats`、`per_source_follow`,四根的 `followed_by_source`/`implausible_by_source`/`capped_by_source`/
+`withheld_by_source`、三个命中计数,以及区域仪器的 `regions_queried`/`region_verdicts`。**这不是装饰**:§56 那一枪的 stdout 被一次 ssh 重置整段吃掉,而旧 TSV
 里没有这些数,事后无从区分「某个根读到但没有命中」与「那个根根本没被读」,于是把一次预算耗尽读成了一条
 负结论(陷阱 5)。判据现在住在带判词的 artifact 里。
 
-**七条判读陷阱(§53.4 / §54.8.4 / §56.8 实机与离线复算取到的,读 verdict 之前先看):**
+**内存区域仪器(`VirtualQueryEx`,§56.8 那条「绝对值还是相对值」缺的 datum)**:`follow_roots` 之后、
+清理之前,驱动对**每个被跟过的根地址 + 每条 chain 的 `ctx`** 各问一次 `VirtualQueryEx`,答案写成 `region` 行
+(`region\t0x<addr>\t<verdict>\tsource=.. base=0x.. size=0x.. state=0x.. protect=0x.. type=0x.. alloc_base=0x..`)
+并汇总进 meta 的 `regions_queried`/`region_verdicts`(后者是 `source/verdict=count` 的排序串)。
+**判据是判序,不是标志位的名字**:`None` → `unreadable`;否则**只看地址** ——
+`exe_base <= BaseAddress < image_end` → `image`,这一段刻意不查 `Type`(否则一个落在镜像里的
+`MEM_PRIVATE` 会被读成「不是镜像」);否则 `State` 是 `MEM_FREE`(`0x10000`)→ `free`、
+`MEM_RESERVE`(`0x2000`)→ `reserved`;否则 `MEM_COMMIT`(`0x1000`)时按 `Type` 分派 ——
+`MEM_MAPPED`(`0x40000`)→ `mapped_view`、`MEM_PRIVATE`(`0x20000`)→ `private_committed`、
+`MEM_IMAGE`(`0x1000000`)→ `image`;其余 → `unknown`。查不到句柄、内核拒绝描述、返回字节数不够,一律
+`unreadable`(与 `reader()` 同口径:一个描述不出来的地址是 datum,不是故障)。
+**这条仪器不参与 `classify()` 的六档阶梯**,也不参与退出码 —— 区域判定只进 artifact,供离线复算。
+结构体那条坑记在这里:`MEMORY_BASIC_INFORMATION` 只声明 SDK 的 7 个命名字段,x64 上 ctypes 的自然对齐
+就补出了 `__alignment1`(offsets 0/8/16/24/32/36/40,`sizeof`=48);**把那个 padding 字段也写出来会多插
+4 字节,`State` 读到的其实是 `Protect` 的槽**。
+
+**八条判读陷阱(§53.4 / §54.8.4 / §56.8 实机与离线复算取到的,读 verdict 之前先看):**
 
 1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
    仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
@@ -618,6 +635,12 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
    后者说「这个槽里直接放着一张已知 vtable」(多重继承子对象头,说的是 root 自己的类)。§56 的 99 个候选里
    第一层 14 条、第二层 **44 条**(全在 `self` 上,13 个不同 RVA),后者若喂进 `classify()` 会把
    「root 带子对象头」当成 scope 命中 —— 所以现在单独计数、单独写 TSV,且**不进判词阶梯**。
+8. **`unreadable`、`free` 与「这个数不是地址」是三件事。** 区域仪器只能说「此刻没有一段已提交的内存覆盖这个
+   范围」:`unreadable` 是**问不出来**(句柄、权限或内核不给描述,包含「根来自一条无效 entry」这种没被记下的
+   值),`free` 是**问得出且那里是空洞**。而一个 32 位量级的数落在空洞里,既可以是一个还没被提交的相对偏移,
+   也可以是一个从未被提交过的绝对地址 —— 这一条不能替二者做决定。`reserved` 更弱:地址有效但内容还没提交,
+   拿它解释低地址会把「相对值」这条假说杀掉得不够干净。只有 `private_committed`/`mapped_view`/`image`
+   才正面回答「这是一个有人拥有的地址」。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。

@@ -36,6 +36,7 @@ vtable in that set", never "nothing pointed at an object".
 """
 
 import argparse
+import ctypes
 import hashlib
 import os
 import struct
@@ -46,6 +47,7 @@ from c2_harness import (
     resolve_pid, resolve_base_address, inject_dll,
     list_exports, call_remote, call_remote_with_arg,
     remote_alloc, read_memory, assert_game_alive,
+    open_process_handle, close_handle,
 )
 
 DEFAULT_DLL = r"C:\temp\sqjs_c4.dll"
@@ -60,6 +62,13 @@ DEFAULT_VTABLES = os.path.join(
     "evidence", "xrefs", "ceffect_vtable_map_4_4_4.txt",
 )
 EXE_MODULE = "stellaris.exe"
+
+MEM_COMMIT = 0x1000
+MEM_RESERVE = 0x2000
+MEM_FREE = 0x10000
+MEM_IMAGE = 0x1000000
+MEM_MAPPED = 0x40000
+MEM_PRIVATE = 0x20000
 
 POLL_INTERVAL_S = 1.0
 POLL_TIMEOUT_S = 120.0
@@ -535,6 +544,63 @@ def image_end_from_header(reader, exe_base):
     return exe_base + struct.unpack("<I", raw)[0]
 
 
+def classify_region(info, exe_base, image_end):
+    """What kind of region this value is when read **as an address**.
+
+    The one question this instrument answers: §56.8 left the `ctx` and `helper`
+    roots 32-bit-sized while their fields are 48-bit, so an absolute pointer and
+    a relative offset are not separable from the bytes alone. The region answer is
+    the missing datum, and it is a negative one by construction: a root whose
+    address range nothing is mapped over cannot be a live object, while
+    `reserved`/`free` and "this number is not an address at all" stay three
+    different readings. The ladder below decides range first, flags second.
+
+    Order is the criterion, not an implementation detail:
+    unreadable → image (range only, type never consulted) → free → reserved →
+    committed-by-type → unknown.
+    """
+    if info is None:
+        return "unreadable"
+    if exe_base <= info["base"] < image_end:
+        return "image"
+    state = info["state"]
+    if state == MEM_FREE:
+        return "free"
+    if state == MEM_RESERVE:
+        return "reserved"
+    if state == MEM_COMMIT:
+        if info["type"] == MEM_MAPPED:
+            return "mapped_view"
+        if info["type"] == MEM_PRIVATE:
+            return "private_committed"
+        if info["type"] == MEM_IMAGE:
+            return "image"
+    return "unknown"
+
+
+def region_rows(classify, query, addrs):
+    """One region row per ``(addr, source)`` root the driver followed.
+
+    ``classify`` is a bound one-argument verdict (``info -> str``) and ``query``
+    an injected ``addr -> dict | None``, so the whole mapping is testable without
+    a process. ``addrs`` carries the source because a region row is only
+    readable as "the root that this candidate came from brought us here".
+    """
+    rows = []
+    for addr, source in addrs:
+        info = query(addr)
+        row = {
+            "addr": addr,
+            "source": source,
+            "verdict": classify(info),
+        }
+        for key in ("base", "size", "state", "protect", "type",
+                    "allocation_base"):
+            row[key] = None if info is None else info[key]
+        rows.append(row)
+    return rows
+
+
 def _hex_or_dash(value):
     return "-" if value is None else f"0x{value:x}"
 
@@ -542,6 +608,15 @@ def _hex_or_dash(value):
 def _by_source(root_stats, key):
     """One compact meta value per count kind, e.g. 'self=8/helper=0/...'."""
     return "/".join(f"{s}={root_stats[key][s]}" for s in FOLLOW_SOURCES)
+
+
+def _region_verdicts(regions):
+    """'source/verdict=count/...' — the region census that survives lost stdout."""
+    counts = {}
+    for row in regions:
+        key = f"{row['source']}/{row['verdict']}"
+        counts[key] = counts.get(key, 0) + 1
+    return "/".join(f"{key}={counts[key]}" for key in sorted(counts))
 
 
 def _sha256(path):
@@ -609,6 +684,17 @@ def write_tsv(path, summary, meta=None):
                     f"slot2_rva={_hex_or_dash(cand.get('slot2_rva'))}\n"
                 )
                 rows += 1
+        for reg in summary.get("regions", []):
+            f.write(
+                f"region\t0x{reg['addr']:x}\t{reg['verdict']}\t"
+                f"source={reg['source']} base={_hex_or_dash(reg['base'])} "
+                f"size={_hex_or_dash(reg['size'])} "
+                f"state={_hex_or_dash(reg['state'])} "
+                f"protect={_hex_or_dash(reg['protect'])} "
+                f"type={_hex_or_dash(reg['type'])} "
+                f"alloc_base={_hex_or_dash(reg['allocation_base'])}\n"
+            )
+            rows += 1
     return rows
 
 
@@ -803,6 +889,87 @@ def follow_contexts(pid, entries):
     return chains
 
 
+class MEMORY_BASIC_INFORMATION(ctypes.Structure):
+    """The Win32 layout, field order as in the SDK.
+
+    Only seven fields are declared: the SDK's ``__alignment1`` (and the trailing
+    pad) are what ctypes inserts by itself when a ``c_uint32`` is followed by a
+    ``c_size_t``, so the resulting x64 offsets — 0, 8, 16, 24, 32, 36, 40 — are
+    the C struct's, and ``sizeof`` is 48. Naming the pads as well would double
+    the gap and read State out of Protect's slot.
+    """
+
+    _fields_ = [
+        ("BaseAddress", ctypes.c_void_p),
+        ("AllocationBase", ctypes.c_void_p),
+        ("AllocationProtect", ctypes.c_uint32),
+        ("RegionSize", ctypes.c_size_t),
+        ("State", ctypes.c_uint32),
+        ("Protect", ctypes.c_uint32),
+        ("Type", ctypes.c_uint32),
+    ]
+
+
+_VIRTUAL_QUERY_EX = None
+
+
+def _virtual_query_ex():
+    """Lazily bind VirtualQueryEx with its explicit signature (P3: never at import).
+
+    This instrument binds its own kernel32 entry rather than growing the shared
+    injection-channel table, and it stays inside a function so importing the
+    driver on the Linux test host has no side effect.
+    """
+    global _VIRTUAL_QUERY_EX
+    if _VIRTUAL_QUERY_EX is None:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        fn = k32.VirtualQueryEx
+        fn.restype = ctypes.c_size_t
+        fn.argtypes = [
+            ctypes.c_void_p,                       # HANDLE hProcess
+            ctypes.c_void_p,                       # LPCVOID lpAddress
+            ctypes.POINTER(MEMORY_BASIC_INFORMATION),  # PMEMORY_BASIC_INFORMATION
+            ctypes.c_size_t,                       # SIZE_T dwLength
+        ]
+        _VIRTUAL_QUERY_EX = fn
+    return _VIRTUAL_QUERY_EX
+
+
+def query_region(pid, addr):
+    """One VirtualQueryEx answer for ``addr``, or None when the query fails.
+
+    Same tolerance as the ``reader()`` in run(): an address the kernel will not
+    describe is a datum ("unreadable" is one of the six verdicts), not a fault,
+    so nothing here raises. The handle comes from the harness's existing open
+    path — there is no second OpenProcess call site in this family.
+    """
+    try:
+        handle = open_process_handle(pid)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        info = MEMORY_BASIC_INFORMATION()
+        written = _virtual_query_ex()(
+            handle, addr, ctypes.byref(info), ctypes.sizeof(info)
+        )
+        if written != ctypes.sizeof(info):
+            return None
+        return {
+            "base": 0 if info.BaseAddress is None else info.BaseAddress,
+            "allocation_base": (
+                0 if info.AllocationBase is None else info.AllocationBase
+            ),
+            "size": info.RegionSize,
+            "state": info.State,
+            "protect": info.Protect,
+            "type": info.Type,
+        }
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        close_handle(handle)
+
+
 def _cleanup(pid, base, exports, installed_ok, settle_s):
     """uninstall -> verify -> settle -> host alive. Returns False if not restored."""
     uninstall_rc = None
@@ -922,9 +1089,20 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                 objects, root_stats = follow_roots(
                     reader, exe_base, image_end, vtables, entries
                 )
+                # Region census while the memory is still there: a root that
+                # reads as a plausible 48-bit value is still not an address
+                # until the kernel says a region covers it (§56.8's open item).
+                region_addrs = [(obj["root"], obj["source"]) for obj in objects]
+                region_addrs += [(ctx, "ctx") for ctx in chains]
+                regions = region_rows(
+                    lambda info: classify_region(info, exe_base, image_end),
+                    lambda addr: query_region(pid, addr),
+                    region_addrs,
+                )
                 summary = summarize(
                     entries, stats, chains, census, id_names, objects=objects
                 )
+                summary["regions"] = regions
                 verdict = classify(summary)
                 capped = sum(root_stats["capped_by_source"].values())
 
@@ -961,6 +1139,17 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                             f"known={1 if cand['known'] else 0} "
                             f"slot2_rva={_hex_or_dash(cand['slot2_rva'])}"
                         )
+                print("REGIONS:")
+                for reg in regions:
+                    print(
+                        f"  source={reg['source']} addr=0x{reg['addr']:x} "
+                        f"verdict={reg['verdict']} "
+                        f"base={_hex_or_dash(reg['base'])} "
+                        f"size={_hex_or_dash(reg['size'])} "
+                        f"state={_hex_or_dash(reg['state'])} "
+                        f"protect={_hex_or_dash(reg['protect'])} "
+                        f"type={_hex_or_dash(reg['type'])}"
+                    )
                 print(
                     f"[scope] entries={len(entries)} "
                     f"valid={summary['valid']} lexer={summary['lexer']} "
@@ -1014,6 +1203,8 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                     "member_vtable_hits": summary["member_vtable_hits"],
                     "unknown_ptr_hits": summary["unknown_ptr_hits"],
                     "unreadable_roots": summary["unreadable_roots"],
+                    "regions_queried": len(regions),
+                    "region_verdicts": _region_verdicts(regions),
                     "verdict": verdict,
                 }
                 rows = write_tsv(out_path, summary, meta=meta)

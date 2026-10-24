@@ -9,11 +9,14 @@ import struct
 import pytest
 
 from c2_scope_probe import (
-    _entry_roots, caller_site, classify, decode_entry, decode_layout,
-    decode_stats, exit_code_for, follow_chain, follow_object, follow_roots,
-    image_end_from_header, install_decision, load_call_census,
-    load_vtable_map, plausible_user_ptr, poll_done, summarize, write_tsv,
+    _entry_roots, _region_verdicts, caller_site, classify, classify_region,
+    decode_entry, decode_layout, decode_stats, exit_code_for, follow_chain,
+    follow_object, follow_roots, image_end_from_header, install_decision,
+    load_call_census, load_vtable_map, plausible_user_ptr, poll_done,
+    region_rows, summarize, write_tsv,
 )
+
+BEGIN_REGION_ROW_LITERAL = "region" + "\t"
 
 
 def _entry(**kw):
@@ -578,3 +581,115 @@ def test_write_tsv_writes_meta_rows_before_the_evidence_rows(tmp_path):
     assert lines[1] == "meta\texe_base\t0x7ff6a4270000\t-"
     assert lines[2] == "meta\tper_source_follow\t8\t-"
     assert rows == 2
+
+
+def test_classify_region_decides_image_by_address_range_before_type():
+    # 同一个 type=0x20000(MEM_PRIVATE)的两个地址,一个落在镜像区间内,一个在外。
+    # 落在内 ⇒ "image":这是刻意的前后顺序 —— 判 image 只看地址,不看 type。
+    info = {"base": 0x1900000, "allocation_base": 0x1900000, "protect": 0x04,
+            "state": 0x1000, "type": 0x20000, "size": 0x1000}
+    assert classify_region(info, 0x1400000, 0x4000000) == "image"
+    outside = {**info, "base": 0x5000000, "allocation_base": 0x5000000}
+    assert classify_region(outside, 0x1400000, 0x4000000) == "private_committed"
+
+
+def test_classify_region_names_private_committed_and_reserved_apart():
+    # 字面量是钉子,不 import 模块常量:常量取错值时这条测试必须变红。
+    # 真实 Win32:MEM_COMMIT=0x1000 MEM_RESERVE=0x2000 MEM_FREE=0x10000
+    #            MEM_PRIVATE=0x20000 MEM_MAPPED=0x40000 MEM_IMAGE=0x1000000
+    committed = {"base": 0x7fe000, "protect": 0x04, "state": 0x1000, "type": 0x20000,
+                 "allocation_base": 0x7f0000, "size": 0x1000}
+    assert classify_region(committed, 0x1000000, 0x4000000) == "private_committed"
+    assert classify_region({**committed, "type": 0x40000}, 0x1000000, 0x4000000) == "mapped_view"  # MEM_MAPPED
+    assert classify_region({**committed, "state": 0x2000}, 0x1000000, 0x4000000) == "reserved"    # MEM_RESERVE
+    assert classify_region({**committed, "state": 0x10000, "type": 0},
+                           0x1000000, 0x4000000) == "free"  # MEM_FREE:state 与 type 同时异常时 free 先于 unknown
+
+
+def test_classify_region_reports_unreadable_for_none_and_unknown_for_unmapped_flags():
+    assert classify_region(None, 0x1400000, 0x4000000) == "unreadable"
+    # base 落在镜像区间外:判 image 只看地址(brief 的判序 (2)),所以一条 state/type
+    # 都认不出的行必须先躲过那一档,才能走到 unknown。
+    assert classify_region({"state": 0xdead, "type": 0xdead, "protect": 4,
+                            "base": 0x5000, "size": 1, "allocation_base": 0x5000},
+                           0x1000, 0x2000) == "unknown"
+
+
+def test_region_rows_carries_the_source_and_the_verdict_for_every_queried_root():
+    # 调用顺序钉在 Produces 块的 region_rows(classify, query, addrs) 上:两个参数都是
+    # 可调用对象,顺序写反不会静默走偏,只会在这里炸 —— 这条测试就是那个钉子。
+    bound = lambda info: classify_region(info, 0x1000, 0x2000)  # noqa: E731
+    seen = []
+
+    def query(addr):
+        seen.append(addr)
+        if addr == 0x99:
+            return None
+        return {"base": 0x1500, "allocation_base": 0x1500, "size": 0x1000,
+                "state": 0x1000, "protect": 0x04, "type": 0x20000}
+
+    rows = region_rows(bound, query, [(0x1900, "helper"), (0x99, "ctx")])
+    assert seen == [0x1900, 0x99]
+    assert [r["source"] for r in rows] == ["helper", "ctx"]
+    assert [r["verdict"] for r in rows] == ["image", "unreadable"]
+    assert rows[0]["base"] == 0x1500 and rows[0]["type"] == 0x20000
+    assert all(rows[1][k] is None for k in
+               ("base", "size", "state", "protect", "type", "allocation_base"))
+
+
+def test_region_rows_do_not_change_the_verdict_ladder():
+    # 回归钉:区域仪器是 datum,不参与六档阶梯。将来有人把判定接进去,这条变红。
+    base_summary = {"calls": 10, "samples": 2, "valid": 2, "lexer": 0,
+                    "chain_ok": 0, "known_vtable_hits": 1}
+    with_regions = dict(base_summary,
+                        regions=[{"addr": 0x1900, "source": "helper",
+                                  "verdict": "unreadable"}])
+    assert classify(base_summary) == classify(with_regions) == "scope_candidate"
+
+
+def test_region_rows_are_written_and_are_not_object_rows(tmp_path):
+    from scope_reclassify import parse_object_rows
+    region = {"addr": 0x1900, "source": "helper", "verdict": "unreadable",
+              "base": 0x1000, "size": 0x1000, "state": 0x1000,
+              "protect": 0x4, "type": 0x20000, "allocation_base": 0x1000}
+    summary = {"calls": 10, "samples": 2, "valid": 2, "lexer": 0,
+               "chain_ok": 0, "known_vtable_hits": 0,
+               "callers": [], "ids": [], "chains": [], "objects": [],
+               "regions": [region]}
+    path = tmp_path / "probe.tsv"
+    write_tsv(path, summary, meta={"verdict": "no_scope_candidate"})
+    text = path.read_text()
+    assert text.count(BEGIN_REGION_ROW_LITERAL) >= 1
+    assert len(parse_object_rows(text)) == 0
+
+
+def test_region_row_detail_carries_every_query_field(tmp_path):
+    # 判读一条 region 行不该回头读驱动源码:六个查询字段全在 detail 里,不可用的那
+    # 些是 "-"。字段名 alloc_base= 是 artifact 的线上格式,不是随手起的。
+    region = {"addr": 0x1d28c7d08, "source": "ctx", "verdict": "unknown",
+              "base": None, "size": None, "state": None, "protect": None,
+              "type": None, "allocation_base": None}
+    summary = {"calls": 0, "samples": 0, "valid": 0, "lexer": 0,
+               "callers": [], "ids": [], "chains": [], "objects": [],
+               "regions": [region]}
+    path = tmp_path / "probe.tsv"
+    rows = write_tsv(path, summary, meta={})
+    assert rows == 1
+    assert path.read_text().splitlines()[1] == (
+        "region\t0x1d28c7d08\tunknown\tsource=ctx base=- size=- state=- "
+        "protect=- type=- alloc_base=-"
+    )
+
+
+def test_region_verdict_census_is_one_sorted_line_per_source_and_verdict():
+    census = _region_verdicts([
+        {"source": "helper", "verdict": "private_committed"},
+        {"source": "ctx", "verdict": "unreadable"},
+        {"source": "helper", "verdict": "private_committed"},
+        {"source": "self", "verdict": "image"},
+        {"source": "ctx", "verdict": "free"},
+    ])
+    assert census == (
+        "ctx/free=1/ctx/unreadable=1/helper/private_committed=2/self/image=1"
+    )
+    assert _region_verdicts([]) == ""
