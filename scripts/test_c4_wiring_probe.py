@@ -584,12 +584,10 @@ def test_flow_refuses_before_touching_the_game_when_the_belief_is_undecided(monk
     touched = []
     rec = {"state": "paused", "console_open": None, "console_px": 900,
            "console_forced": False}
-    # 两个名字都打桩(raising=False):RED 阶段 _flow 还叫 _wait_paused,
-    # GREEN 之后叫 _wait_ready;不真去轮询,否则这条测试要白等 15 s。
-    for name in ("_wait_paused", "_wait_ready"):
-        monkeypatch.setattr(mod, name,
-                            lambda *a, **k: (rec, "console_state_unknown"),
-                            raising=False)
+    # 打桩 _wait_ready:这条只验 _flow 的接线位置,让它返回固定 verdict 而不是
+    # 真去轮询状态文件(否则会走完默认 15 s 的 timeout)。
+    monkeypatch.setattr(mod, "_wait_ready",
+                        lambda *a, **k: (rec, "console_state_unknown"))
     monkeypatch.setattr(mod, "_send_console_or_abort",
                         lambda *a, **k: touched.append("console"))
     monkeypatch.setattr(mod.harness, "resolve_pid",
