@@ -37,6 +37,7 @@ from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               bring_to_foreground, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, build_inner_tr,
+                              click_diagnosis, click_trace,
                               game_observe, game_unpause, launcher_click, launcher_handoff,
                               launcher_wait, main, prekill,
                               read_awake_status, run_launch_chain, steam_ready,
@@ -1277,7 +1278,7 @@ def test_run_launch_chain_waits_for_the_launcher_window_then_drives_it(
         mock_handoff, mock_observe, mock_gate):
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_OK
     mock_wait.assert_called_once_with(30)  # --launcher-timeout-s default
-    mock_click.assert_called_once_with(12345)
+    mock_click.assert_called_once_with(12345, 4242)
     # Task 6: the drive is not the end of the chain — the game has to appear
     # and then survive its observation window.
     mock_handoff.assert_called_once_with(30)  # --game-timeout-s default
@@ -2729,3 +2730,95 @@ def test_dry_run_does_not_consult_the_desktop_gate(
     # 与既有 dry-run 口径一致:dry run 不 spawn URI,也就不该被一台机的桌面状态挡住
     assert _run_launch_chain_phases(
         build_arg_parser().parse_args(["--dry-run"])) == EXIT_OK
+
+
+def test_click_diagnosis_says_not_delivered_when_cursor_never_reached_target():
+    traces = [click_trace((0, 0, 100, 100), 0x10, 0x10, (5, 5), True)]
+    # cursor_at 每轮都不在点击坐标上 ⇒ 输入没送达(UIPI / 别的窗口吃掉)
+    assert click_diagnosis(traces) == "click_not_delivered"
+
+
+def test_click_diagnosis_says_wrong_window_when_it_never_owns_the_foreground():
+    traces = [click_trace((0, 0, 100, 100), 0x99, 0x10, (50, 33), True)]
+    assert click_diagnosis(traces) == "wrong_window"
+
+
+def test_click_diagnosis_says_handoff_never_fired_when_everything_landed():
+    traces = [click_trace((0, 0, 100, 100), 0x10, 0x10, (50, 33), True)]
+    assert click_diagnosis(traces) == "handoff_never_fired"
+
+
+def test_click_diagnosis_is_inconclusive_on_empty_or_contradictory_traces():
+    assert click_diagnosis([]) == "inconclusive"
+    assert click_diagnosis([{"rect": None}]) == "inconclusive"
+
+
+def test_click_diagnosis_reads_the_launcher_closing_as_no_longer_alive():
+    # launcher 进程没了但 _handoff_observed 没判成交接 ⇒ 不是「点击没送达」
+    traces = [click_trace((0, 0, 100, 100), 0x10, 0x10, (50, 33), False)]
+    assert click_diagnosis(traces) == "handoff_never_fired"
+
+
+class _FakeTraceUser32:
+    """GetForegroundWindow + GetCursorPos, the two read-backs the trace needs.
+
+    `GetCursorPos` fills the POINT through the pointer the caller passed, the way
+    _FakeUser32.get_thread_pid already does for a DWORD pointer.
+    """
+
+    def __init__(self, foreground=0x10, cursor=(50, 33), cursor_ok=True):
+        self.foreground = foreground
+        self.cursor = cursor
+        self.cursor_ok = cursor_ok
+
+    def get_foreground_window(self):
+        return self.foreground
+
+    def get_cursor_pos(self, pt_ptr):
+        if not self.cursor_ok:
+            return 0
+        pt = ctypes.cast(pt_ptr, ctypes.POINTER(launch_stellaris._POINT))
+        pt[0].x, pt[0].y = self.cursor
+        return 1
+
+
+@patch("launch_stellaris._handoff_observed", return_value=False)
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect", return_value=(0, 0, 100, 100))
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+@patch("launch_stellaris._trace_fns",
+       return_value=(None, None))
+def test_launcher_click_logs_one_trace_per_attempt_and_a_diagnosis(
+        _trace, mock_fg, mock_sleep, mock_rect, mock_click, mock_handoff,
+        capsys):
+    """exit 23 今天只有「点了没推进」这一个信息。三档诊断的证人必须是每轮读回的
+    观测(谁在前台、光标真在哪),而不是一句结论 —— 结论可以现在不下(Task 8 才下)。"""
+    fake = _FakeTraceUser32(foreground=0x10, cursor=(5, 5))
+    _trace.return_value = (fake.get_foreground_window, fake.get_cursor_pos)
+    assert launcher_click(0x10, pid=None) == EXIT_LAUNCHER_NO_ADVANCE
+    lines = [l for l in capsys.readouterr().err.splitlines()
+             if "LAUNCHER_CLICK" in l]
+    traces = [l for l in lines if "step=trace" in l]
+    assert len(traces) == launch_stellaris._CLICK_ATTEMPTS
+    for line in traces:
+        assert "cursor_at=(5, 5)" in line, line
+        assert "owns_foreground=True" in line, line
+        assert "rect=" not in line, line          # rect 已在 step=click 那行记过
+    diagnosis = [l for l in lines if "step=diagnosis" in l]
+    assert len(diagnosis) == 1 and "diagnosis=click_not_delivered" in diagnosis[0]
+
+
+@patch("launch_stellaris._handoff_observed", return_value=False)
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect", return_value=(0, 0, 100, 100))
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+def test_a_failing_trace_readback_never_changes_the_exit_code(
+        mock_fg, mock_sleep, mock_rect, mock_click, mock_handoff, capsys):
+    """回归钉,不是 RED:这台主机上 `ctypes.WinDLL` 根本不存在,读回必然抛。
+    一条诊断日志不值得把 23 变成未记录的 1(docstring 里 OSError → NO_FOCUS 讲的
+    正是同一件事)。既有那四条 launcher_click 测试全走这条路,它们只断退出码。"""
+    assert launcher_click(4242) == EXIT_LAUNCHER_NO_ADVANCE
+    err = capsys.readouterr().err
+    assert "step=diagnosis  diagnosis=inconclusive" in err

@@ -939,6 +939,15 @@ desktop_locked|desktop_unreachable|desktop_unobserved` —— 一律中止,且�
 两者都拒绝,区别只在诊断:桌面被**读到**但不是 `unlocked` 的三种状态,在 launcher 这一侧是「可达性已知为否」,
 `desktop_unobserved` 因此只留给 `DESKTOP_STATES` 以后新增、这个名字还不认识的状态。
 
+**exit 23 现在自带三档观测,但仍不是结论。**`launcher_click` 每轮在 `step=click` 之后补一条
+`step=trace`(`owns_foreground` / `cursor_at` / `launcher_alive`,rect 已在 `step=click` 里记过,不重复),
+耗尽三轮后在返回 23 之前记一条 `step=diagnosis`,值是 `click_not_delivered|wrong_window|
+handoff_never_fired|inconclusive`。**退出码不因它改变**,读回失败(`GetForegroundWindow`/`GetCursorPos`
+任一条抛或返回 FALSE)只把对应字段写成 `None`,而任何一轮带 `None` 就把整条结论压成 `inconclusive` ——
+仪器没测到不等于测到了反面。判读陷阱:`handoff_never_fired` 只说「三轮都拿到焦点、光标都落在那一点、
+launcher 仍没推进」,**不**说「Continue 按钮在别处」;这一档要成为结论得等实机那一次(离线无从知道
+CEF 把按钮画在哪)。
+
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 
 `scripts/disrva.py` 与 `scripts/cap.py` 反汇编的是**游戏**:它们只收 RVA,自己去找 `stellaris.exe`

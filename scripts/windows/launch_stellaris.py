@@ -507,6 +507,16 @@ class _RECT(ctypes.Structure):
     ]
 
 
+class _POINT(ctypes.Structure):
+    """Win32 POINT, for GetCursorPos to write into. LONG fields, same reason as
+    _RECT's c_long: the width is fixed by the API, not by the host."""
+
+    _fields_ = [
+        ("x", _wt.LONG),
+        ("y", _wt.LONG),
+    ]
+
+
 _cursor_fns_cache: tuple[Any, Any, Any] | None = None
 
 
@@ -560,6 +570,76 @@ def _click_at(x: int, y: int) -> None:
         raise OSError(_last_error(), f"SetCursorPos({x}, {y}) refused")
     mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
+_trace_fns_cache: tuple[Any, Any] | None = None
+
+
+def _trace_fns() -> tuple[Any, Any]:
+    """Bind (GetForegroundWindow, GetCursorPos) — the two read-backs of one attempt.
+
+    _cursor_fns is the *input* trio and _input_fns belongs to the SendInput path;
+    neither is asked "who is foreground right now, and where did the cursor
+    actually end up", which is the evidence that separates a refused click from a
+    click that landed while another window owned the screen. GetForegroundWindow
+    is taken from _input_fns rather than bound a second time.
+    """
+    global _trace_fns_cache
+    if _trace_fns_cache is None:
+        _, get_foreground_window = _input_fns()
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        get_cursor_pos = user32.GetCursorPos
+        get_cursor_pos.argtypes = [ctypes.POINTER(_POINT)]
+        get_cursor_pos.restype = _wt.BOOL
+        _trace_fns_cache = (get_foreground_window, get_cursor_pos)
+    return _trace_fns_cache
+
+
+def click_trace(rect, foreground_hwnd, target_hwnd, cursor,
+                launcher_alive) -> dict:
+    """One click attempt as an observable snapshot, with no judgement in it.
+
+    The keys are exactly what one round can see: where the window was, whether it
+    owned the foreground, where the cursor really was, whether the launcher is
+    still a process. Whether the window *moved* is not here — a round cannot
+    compare itself to the previous one, and every rect is already logged in the
+    step=click line for a reader to diff.
+
+    A failed read-back writes None, never False: an instrument that could not
+    measure is not evidence that the launcher lost focus. click_diagnosis turns
+    those None into "inconclusive" for that reason.
+    """
+    owns_foreground = (None if foreground_hwnd is None
+                       else foreground_hwnd == target_hwnd)
+    return {"rect": rect, "owns_foreground": owns_foreground,
+            "cursor_at": cursor, "launcher_alive": launcher_alive}
+
+
+def _read_click_trace(hwnd: int, rect: tuple[int, int, int, int],
+                      pid: int | None) -> dict:
+    """Best effort: read the foreground window and the cursor, then fold them
+    into a trace. Nothing here may escape.
+
+    A diagnostic line is not worth turning a 23 into the undocumented exit code 1
+    an escaping exception becomes — the same reason launcher_click folds
+    GetWindowRect/SetCursorPos OSError into NO_FOCUS instead of letting them out.
+    Whatever fails, the fields it would have filled stay None.
+    """
+    foreground_hwnd: int | None = None
+    cursor: tuple[int, int] | None = None
+    launcher_alive: bool | None = None
+    try:
+        get_foreground_window, get_cursor_pos = _trace_fns()
+        launcher_alive = pid is None or psutil.pid_exists(pid)
+        foreground = get_foreground_window()
+        if foreground:
+            foreground_hwnd = int(foreground)
+        point = _POINT()
+        if get_cursor_pos(ctypes.byref(point)):
+            cursor = (int(point.x), int(point.y))
+    except Exception:
+        pass
+    return click_trace(rect, foreground_hwnd, hwnd, cursor, launcher_alive)
 
 
 class _MOUSEINPUT(ctypes.Structure):
@@ -713,7 +793,57 @@ def _handoff_observed() -> bool:
     return (not launcher_alive) or game_alive
 
 
-def launcher_click(hwnd: int) -> int:
+_CLICK_TARGET_TOLERANCE_PX = 2
+
+
+def _continue_point(rect: tuple[int, int, int, int]) -> tuple[int, int]:
+    """Where launcher_click aims inside this rect. Shared with click_diagnosis on
+    purpose: if the two disagreed about the button, the diagnosis would be grading
+    a click nobody made."""
+    left, top, right, bottom = rect
+    return (int(left + LAUNCHER_CONTINUE_FX * (right - left)),
+            int(top + LAUNCHER_CONTINUE_FY * (bottom - top)))
+
+
+def click_diagnosis(traces: list[dict]) -> str:
+    """Which of the three ways exit 23 can happen the attempts actually show.
+
+    One value out of `{"click_not_delivered", "wrong_window",
+    "handoff_never_fired", "inconclusive"}`. The order is the whole content of
+    this function: focus is judged before delivery, because a round that never
+    owned the foreground says nothing about where its click landed — reading it as
+    "the click was refused" would point the fix at UIPI when the window was never
+    the one on top. Only a round that *did* own the foreground gets asked whether
+    its cursor reached the Continue point, and "every attempt landed and the
+    launcher still did not advance" is what is left.
+
+    A trace with a missing or None field is a broken instrument, not a negative
+    observation, so any one of them collapses the whole verdict to inconclusive
+    rather than letting a failed read-back vote.
+
+    This is an observation label, not a conclusion about the launcher: Task 8's
+    live run is what decides which of these three it was.
+    """
+    if not traces:
+        return "inconclusive"
+    for trace in traces:
+        if (trace.get("rect") is None or trace.get("cursor_at") is None
+                or trace.get("owns_foreground") is None):
+            return "inconclusive"
+    if not any(trace["owns_foreground"] for trace in traces):
+        return "wrong_window"
+    for trace in traces:
+        if not trace["owns_foreground"]:
+            continue
+        want_x, want_y = _continue_point(trace["rect"])
+        got_x, got_y = trace["cursor_at"]
+        if (abs(got_x - want_x) <= _CLICK_TARGET_TOLERANCE_PX
+                and abs(got_y - want_y) <= _CLICK_TARGET_TOLERANCE_PX):
+            return "handoff_never_fired"
+    return "click_not_delivered"
+
+
+def launcher_click(hwnd: int, pid: int | None = None) -> int:
     """Advance the launcher by clicking 「继续」 (Continue), anchored to the
     window rect. Returns EXIT_OK on handoff, EXIT_LAUNCHER_NO_FOCUS if the window
     cannot be raised or the click cannot be delivered, EXIT_LAUNCHER_NO_ADVANCE
@@ -731,24 +861,39 @@ def launcher_click(hwnd: int) -> int:
     click) is reported as NO_FOCUS rather than allowed to escape: it would exit
     main() with an undocumented code 1, and return before _write_marker runs, so
     the outer bridge would learn nothing and report its own timeout instead.
+
+    `pid` is the launcher process, used only by the per-attempt read-back:
+    exit 23 on its own says "nothing advanced", and the three-way label
+    click_diagnosis writes to the timeline says which of the three that was —
+    whether the window ever owned the foreground, whether the cursor reached the
+    point, and whether the launcher is still a process. Observations only: the
+    code stays 23 either way, and a failed read-back labels inconclusive.
     """
     try:
         if not bring_to_foreground(hwnd):
             return EXIT_LAUNCHER_NO_FOCUS
         _time.sleep(_FOCUS_SETTLE_S)
 
+        traces: list[dict] = []
         for attempt in range(1, _CLICK_ATTEMPTS + 1):
-            left, top, right, bottom = _window_rect(hwnd)
-            x = int(left + LAUNCHER_CONTINUE_FX * (right - left))
-            y = int(top + LAUNCHER_CONTINUE_FY * (bottom - top))
+            rect = _window_rect(hwnd)
+            x, y = _continue_point(rect)
             _click_at(x, y)
             log_event("LAUNCHER_CLICK", step="click", attempt=attempt,
-                      x=x, y=y, rect=(left, top, right, bottom))
+                      x=x, y=y, rect=rect)
+            trace = _read_click_trace(hwnd, rect, pid)
+            log_event("LAUNCHER_CLICK", step="trace", attempt=attempt,
+                      owns_foreground=trace["owns_foreground"],
+                      cursor_at=trace["cursor_at"],
+                      launcher_alive=trace["launcher_alive"])
+            traces.append(trace)
             _time.sleep(_CLICK_SETTLE_S)
             if _handoff_observed():
                 log_event("LAUNCHER_CLICK", step="handoff_after_click",
                           attempt=attempt)
                 return EXIT_OK
+        log_event("LAUNCHER_CLICK", step="diagnosis",
+                  diagnosis=click_diagnosis(traces))
         return EXIT_LAUNCHER_NO_ADVANCE
     except OSError as e:
         log_event("LAUNCHER_CLICK", step="click_blocked", error=repr(e))
@@ -1634,7 +1779,7 @@ def _run_launch_chain_phases(args: argparse.Namespace,
 
     if abandoned():
         return EXIT_BRIDGE_ABANDONED
-    rc = launcher_click(found[1])
+    rc = launcher_click(found[1], found[0])
     if rc != EXIT_OK:
         return rc
 
