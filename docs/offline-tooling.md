@@ -542,10 +542,11 @@ vptr 副本/克隆,不经我们的 vtable)、`slot2_body_not_executed`(body 没�
 `--supervisor-status` / `--supervisor-cmd` / `--shot` 也走参数,脚本不读环境变量。
 
 **前置**:supervisor 必须已在 Windows 机上跑着(见下一节)。驱动先写 `want paused` 并等到状态
-`paused`(状态文件超过 5 s 未更新按「没在跑」判),然后才注入。**三条 console 命令都经 supervisor
-的 `console` 动词**(剪贴板 + 按键),不直接对游戏发键。控制台键是**开关**,而命令执行完面板不关
-(2026-10-23 实机),所以 supervisor 自己记 `console_open`:首条命令按一下打开,后两条只清行、
-粘贴、回车;换进程时这个标记复位。
+`paused`(状态文件超过 5 s 未更新按「没在跑」判),然后才注入。**console 命令都经 supervisor
+的 `console` 动词**(剪贴板 + 按键),条数按模式定:`--mode capture` **三条**(预检 + capture +
+apply),`--mode slot2` **两条**(预检 + 判别枪)—— 两种模式都含那条预检;不直接对游戏发键。
+控制台键是**开关**,而命令执行完面板不关(2026-10-23 实机),所以 supervisor 自己记
+`console_open`:首条命令按一下打开,其余每条只清行、粘贴、回车;换进程时这个标记复位。
 
 ```
 effect every_system = { log = "C4_PREFLIGHT_<pid>_[This.GetName]" }             # 预检，应得 783 行
@@ -614,11 +615,19 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 **写命令之前**捕获的字节偏移起,读 daemon 自己的事件日志尾(默认
 `SUPERVISOR_LOG = r"C:\temp\ns_game_log.jsonl"`,`--supervisor-log` 可覆盖)至多
 `CONSOLE_RECEIPT_TIMEOUT_S = 2.0` 秒。偏移取在写之前,否则上一条命令的旧 `console_refused` 会中止
-一发本来健康的枪。`console_refused` / `console_clipboard_failed` 当场中止,把 daemon 记的 `reason`
-放进 result 的 `detail`(daemon 没记 reason 时落命令原文,`reason or text`);`console_sent` 返回;
-**读不到回执不算失败** —— `console_sent` 在 daemon 按完全部键之后才写,而拒绝是即时落盘,日志轮转/
-读不出按 `no_receipt` 吞掉,投递的终判仍是 783 行哨兵。这一条把 §54.9 那种「命令被静默拒绝、30 s 后才
-以零输出暴露」变成 2 s 内的具名失败。
+一发本来健康的枪;日志**stat 不到**(共享争用 / AV 扫描)时偏移记 `None`,直接跳过回执轮询 ——
+读不到就退回 0 等于「从头分类整个文件」,会把上一条命令甚至上一轮运行的拒收算到这条健康命令头上,
+而 `_slot2_phase` 那一枪发生在注入之后,烧掉的是游戏进程。`console_refused` /
+`console_clipboard_failed` 当场中止,把 daemon 记的 `reason` 放进 result 的 `detail`(daemon 没记
+reason 时落命令原文,`reason or text`);窗口内真出现 `console_sent` 才由它返回。**但健康的命令通常
+不是靠 `console_sent` 返回的** —— daemon 的成功行要按完 `console_key_plan` 的全部键才写:
+`BACKSPACE_CLEAR = 64` 个退格(每个 down/up 两个事件 × 20 ms = 2.56 s)、开面板的一下 tap(2 × 80 ms)、
+粘贴/回车(6 × 80 ms)、末尾 0.3 s sleep,合计约 3.5 s(第二条起不按 tap,仍 3.3 s),**严格长于 2 s
+窗口**;即时落盘的只有拒绝(`console_send_plan` 判 `None` 或 `focus` 失败时一个键都不按)。所以
+**读不到回执不算失败,它是健康投递的默认形状,不是回执丢了** —— 静默到点即返回,日志轮转/读不出同样
+按 `no_receipt` 吞掉,投递的终判仍是 783 行哨兵;§55 读一个 2 s 的静默返回时不要去找「缺失的成功回执」。
+这一条把 §54.9 那种「命令被静默拒绝、30 s 后才以零输出暴露」变成 2 s 内的具名失败:窗口只会缩短一个
+已知失败,永远不会推迟一发健康的枪(预批次的代码在 `.seen` 之后就立即返回)。
 
 **verdict 表**(驱动按顺序判,先命中的胜出):**装载前**的结论(`supervisor_*`、
 `console_state_unknown`/`console_belief_pinned`、`campaign_*`、`dll_exports_missing`、`game_not_running`、
@@ -629,7 +638,7 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 |---|---|---|
 | `supervisor_not_running` | 15 s 内状态文件缺失/过期/`no_game`/`stopped` | supervisor 没跑 —— 环境结论 |
 | `supervisor_not_paused` | 状态新鲜但 15 s 内没到 `paused` | 战役没暂停成功,不要注入 |
-| `console_state_unknown` / `console_belief_pinned` | `_wait_ready` 里 `console_gate` 拒:`console_open` 键缺失或为 `None` / `console_forced` 为真值 | 控制台信念不是判决性像素观测(§54.10),一条命令都没发 —— daemon/环境结论,不烧进程 |
+| `console_state_unknown` / `console_belief_pinned` | `_wait_ready` 里 `console_gate` 拒:`console_open` 键缺失或为 `None` / `console_forced` 为真值 | 控制台信念不是判决性像素观测(§54.10),一条 console 命令都没发(`want paused` 已经写了)—— daemon/环境结论,不烧进程 |
 | `campaign_unverified` | 存档 sha256 读不到 | 路径/权限问题 |
 | `campaign_mismatch` | sha256 不匹配(且未 `--allow-drift`),或预检(装载前)行数 ≠ 783 | 不是那场 787 系统的测试战役 |
 | `dll_exports_missing` | 缺 9 个 `C4Wire*`/`C4ScoredStatsInto`/`C4PredStatsInto` 或 `C2Sanity`/`C2Init`/`C1Run`/`C1EffectId`(`--mode slot2` 另需 `C4Slot2StatsInto`,按模式判,见前置门一) | 产物不对,注入之前就判 |
