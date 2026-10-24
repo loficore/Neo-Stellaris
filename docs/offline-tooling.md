@@ -524,7 +524,7 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
 
-### `scripts/c4_wiring_probe.py [--mode capture|slot2] [--dll PATH] [--save PATH] [--json PATH] [--allow-drift]`
+### `scripts/c4_wiring_probe.py [--mode capture|slot2] [--dll PATH] [--save PATH] [--json PATH] [--supervisor-log PATH] [--allow-drift]`
 
 C4 接线驱动,一枪一进程。`--mode capture`(默认):跑 `capture` 找 `ctx`/`a3` 里承载 system id 的列,
 `apply` 把该列喂给 QuickJS 的 787 分数表(tier 阈值 100/200),tier ≥ 1 的 70 个系统 chain donor
@@ -595,17 +595,44 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 环形计数,驱动只读回这 `n` 条。`layout` 导出先钉 `[1, mode, 3368, 2048, 944, 256, 8, 256]`,
 任一字段漂了都是 `layout_drift`,后面的字节一个都不读。
 
-**verdict 表**(驱动按顺序判,先命中的胜出):**装载前**的结论(`supervisor_*`、`campaign_*`、
-`dll_exports_missing`、`game_not_running`、预检三条)**不烧进程**,修好通道可以在同一个 pid 上再打;
+**前置门一 — 导出集按模式取**(`required_exports(mode)`,2026-10-24):capture 要 `REQUIRED_EXPORTS`
+的 13 个名字,slot2 在此之上多一个 `C4Slot2StatsInto`。`_flow` 在 `resolve_pid`/`inject_dll` **之前**
+就拿按模式的集合与 DLL 导出做差,缺了当场 `dll_exports_missing`(detail 是缺名排序表)—— 没有计数器
+导出的 DLL 不许拖进游戏里才在回读 `C4Slot2StatsInto` 时失败。capture 的目标集没有扩大,旧 capture
+批次仍是合法目标。
+
+**前置门二 — 控制台信念必须来自观测**(`console_gate`,与 `supervisor_ready` 并列,见 §54.10):
+`_wait_ready` 在发出第一条 console 命令之前同时要求 supervisor 状态 `paused` + 新鲜(>5 s 按没在跑判)
+**和** console 门通过。`console_gate` 只接受**判决性**观测:`console_open` 为 `True` 或 `False` 都放行
+—— 首条命令之后面板常开,要求 `False` 会拒掉每一个多命令枪;键**缺失或 `None`** 拒成
+`console_state_unknown`(键缺失 = daemon 早于像素通道,那是猜测不是观测);`console_forced` 为真值拒成
+`console_belief_pinned`(钉住的信念不算观测)。两条拒绝的 detail 带 `console_open=` / `console_px=` /
+`console_forced=` 三个实际值(`_wait_gate_detail`;整条状态记录都读不到时三者都是 `-`),读一眼就知道
+是哪个门拒的。两条都发生在注入之前,不烧进程。
+
+**前置门三 — daemon 回执,2 s 内具名**(`_send_console_or_abort`):每条 console 命令写出后,驱动从
+**写命令之前**捕获的字节偏移起,读 daemon 自己的事件日志尾(默认
+`SUPERVISOR_LOG = r"C:\temp\ns_game_log.jsonl"`,`--supervisor-log` 可覆盖)至多
+`CONSOLE_RECEIPT_TIMEOUT_S = 2.0` 秒。偏移取在写之前,否则上一条命令的旧 `console_refused` 会中止
+一发本来健康的枪。`console_refused` / `console_clipboard_failed` 当场中止,把 daemon 记的 `reason`
+放进 result 的 `detail`(daemon 没记 reason 时落命令原文,`reason or text`);`console_sent` 返回;
+**读不到回执不算失败** —— `console_sent` 在 daemon 按完全部键之后才写,而拒绝是即时落盘,日志轮转/
+读不出按 `no_receipt` 吞掉,投递的终判仍是 783 行哨兵。这一条把 §54.9 那种「命令被静默拒绝、30 s 后才
+以零输出暴露」变成 2 s 内的具名失败。
+
+**verdict 表**(驱动按顺序判,先命中的胜出):**装载前**的结论(`supervisor_*`、
+`console_state_unknown`/`console_belief_pinned`、`campaign_*`、`dll_exports_missing`、`game_not_running`、
+预检三条)**不烧进程**,修好通道可以在同一个 pid 上再打;
 `install_failed` 之后的结论才需要换进程。
 
 | verdict | 条件 | 意思 |
 |---|---|---|
 | `supervisor_not_running` | 15 s 内状态文件缺失/过期/`no_game`/`stopped` | supervisor 没跑 —— 环境结论 |
 | `supervisor_not_paused` | 状态新鲜但 15 s 内没到 `paused` | 战役没暂停成功,不要注入 |
+| `console_state_unknown` / `console_belief_pinned` | `_wait_ready` 里 `console_gate` 拒:`console_open` 键缺失或为 `None` / `console_forced` 为真值 | 控制台信念不是判决性像素观测(§54.10),一条命令都没发 —— daemon/环境结论,不烧进程 |
 | `campaign_unverified` | 存档 sha256 读不到 | 路径/权限问题 |
 | `campaign_mismatch` | sha256 不匹配(且未 `--allow-drift`),或预检(装载前)行数 ≠ 783 | 不是那场 787 系统的测试战役 |
-| `dll_exports_missing` | 缺 9 个 `C4Wire*`/`C4ScoredStatsInto`/`C4PredStatsInto` 或 `C2Sanity`/`C2Init`/`C1Run`/`C1EffectId` | 产物不对 |
+| `dll_exports_missing` | 缺 9 个 `C4Wire*`/`C4ScoredStatsInto`/`C4PredStatsInto` 或 `C2Sanity`/`C2Init`/`C1Run`/`C1EffectId`(`--mode slot2` 另需 `C4Slot2StatsInto`,按模式判,见前置门一) | 产物不对,注入之前就判 |
 | `game_not_running` | `resolve_pid("stellaris")` 失败 | 环境结论 |
 | `stale_module` | 注入前 base 已能解析(含 `ambiguous base`),或非 `is not loaded` 的解析失败 | 进程里已有 DLL 副本,**换新进程**,不重装 |
 | `inject_failed` | `inject_dll` 或注入后的 base 解析失败 | 注入通道问题 |
@@ -613,6 +640,7 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 | `layout_drift` | layout 导出 ≠ 8 个字或字段不匹配 | 驱动与 DLL 解码契约断了 |
 | `install_failed` | `C4WireInstall != 0` | 谓词 detour/arm 失败,**不重试**,换进程 |
 | `console_send_failed` | 命令写入 3 s 内 supervisor 未消费（seen-key 不变） | 键盘/supervisor 通道坏了，游戏没收到命令 |
+| `console_refused` / `console_clipboard_failed` | 命令写出后 2 s 内 daemon 事件日志尾(`C:\temp\ns_game_log.jsonl`)出现该具名回执 | daemon 明确拒收,它的 `reason` 进 detail(daemon 没记时落命令原文)—— 预检(装载前)那次不烧进程,装载后的各相位烧;§54.9 的静默拒绝在这里变成具名失败 |
 | `console_unavailable` / `log_unreadable` | 预检(装载前)marker 0 行 / 日志读不了 —— `log_unreadable` 在装载后的 capture、slot2 窗口也会出 | 键盘路径 / 路径问题;只在预检那次不烧进程 |
 | `capture_not_delivered` / `capture_sentinel_mismatch` | capture 哨兵 0 行 / ≠ 783 行 | 命令没进游戏 / 战役形状不对 |
 | `apply_not_delivered` / `apply_sentinel_mismatch` | apply 哨兵 0 行 / ≠ 783 行 | 第二次命令没生效 / 战役形状不对 |
