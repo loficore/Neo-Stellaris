@@ -15,7 +15,7 @@ registration pipeline and identify extension points for new effects/triggers.
 |---|---|
 | 取证 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
 | 取证 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证 §24–§57(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 取证 §24–§59(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两枪 §58–§59) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
 | 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
 | 阶段状态、前置、授权级别 | `docs/roadmap.md` |
@@ -171,7 +171,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x5350D0` = keyword 执行器 / 真实扩展面 | 是按 token-id 的属性 getter,**0 个直接调用点** | §26.1 §28 |
 | `0x1D092C0` 可作 JS 作用域变量桥 | **已否**:它是 parse-error 表追加器。真正的按名变量查找**仍未定位**,不要再从这里找 | §28.3 → §30 |
 | `0x337ACBC` 像「脚本错误计数」 | 是**递归深度** global(净为零) | §30 |
-| 3.x `CEventScope` 布局(`+8`/`+16`) | 被 §26 证伪;`src/dll/api/scope.zig` **仍在读那两个偏移且已链进 DLL**,由 `LAYOUT_CONFIRMED = false` 的测试钉住,逐条处置见 `docs/scope-read-points.md`。**真实 scope 对象仍未定**(§56 那一枪没能确立) | §26 §53 §56 |
+| 3.x `CEventScope` 布局(`+8`/`+16`) | 被 §26 证伪;`src/dll/api/scope.zig` **仍在读那两个偏移且已链进 DLL**,由 `LAYOUT_CONFIRMED = false` 的测试钉住,逐条处置见 `docs/scope-read-points.md`。**真实 scope 对象仍未定**(§56 没能确立;§59 按修正仪器问完四根,负结论这次是「问完了」的) | §26 §53 §56 §59 |
 | `X=[arg2+0x30]→S→id/obj` 可拿 effect token/object | **false**:arg2 类大小 0x20,`+0x30` 在对象外;X 是 `.rdata` vtable、S 是代码 | §53.3 |
 
 ## 新硬编码 keyword 配方(Phase A 结论 — 全程离线,不 patch 静态表)
