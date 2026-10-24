@@ -838,6 +838,11 @@ just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
    状态文件里的 `assert_rc` 是上一次调用的**前一状态**,不是「现在顶没顶住」:`0x80000000` 读作
    「这条断言刚起」,`0x80000003` 读作「起之前还挂着」。
 4. **无人值守请插电**:电池下 3 分钟就睡,而断电是任何软件都救不了的。
+5. **`assert_rc` 是日志字段,不是判据**。`SetThreadExecutionState` 返回 `0`(断言压根没挂上)时 `check`
+   与 `keep_awake_gate` 照旧放行 —— 两处的判决只看 `state`/`epoch`/`desktop`。断言真的挂没挂,证人只有
+   `powercfg /requests`(第 3 条)。
+6. **`locked` 那一格实机未取**。2026-10-24 的验收全程无人按 `Win+L`,所以锁屏分支只有离线测试钉着;
+   日志 §8 留了补它的命令与 Expected(`DESKTOP=locked`、`RC=1`、`desktop_detail` 含 `Winlogon`)。
 
 **与开枪的关系:**`c4_wiring_probe._flow` 的**第一道门**读 `ns_awake_status.json`,
 `keep_awake_gate` 的六个 verdict —— `keep_awake_absent|keep_awake_stopped|keep_awake_stale|
@@ -845,6 +850,9 @@ desktop_locked|desktop_unreachable|desktop_unobserved` —— 一律中止,且�
 `want paused` **之前**(连 launcher 的 22 都不用花)。两端唯一的耦合是两个字符串:状态文件的
 `desktop == "unlocked"` 与 `state == "serving"`,没有 import 关系。这是 §54.9
 「`console_open` 是信念不是观测」在桌面可达性这条新轴上的重申。
+
+**launcher 侧没接这道门**(`launch_stellaris.py` 的 `exit 22` 早停在计划里刻意留下):今天真正花钱的是
+那一步,但它是另一条通道的改动,接口就是上面那两个字符串加一个 verdict 函数,单独出一个计划更干净。
 
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 
