@@ -542,7 +542,8 @@ pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔�
 
 `src/dll/c2/scope_probe.zig` 在 base Execute `0x1D08520` 上挂**只读** detour:每 512 次调用采样一次
 (`calls & 511 == 0`),记录真实 `arg2`(执行帧)的 8 个 qword、`[self+0]` 的 vtable RVA、`[self+8]` 的
-token id、`@returnAddress()` 反推的静态调用点(`caller_rva - 5`),以及派发点上的 `r8`/`r9` 两个 scratch
+token id、`@returnAddress()` 的**返回 RVA**(记的是调用指令的下一条,不是调用点本身 —— 读法见下面 CALLERS
+一段的口径),以及派发点上的 `r8`/`r9` 两个 scratch
 槽(布局 v2 起,`Entry` = 120 字节)。**函数体一律转发原函数**,不改寄存器、不改内存、不改控制流。
 `r8`/`r9` 记的是**值**,不是它们指向的内存 —— 一切解引用都发生在驱动侧的 `ReadProcessMemory`,采样器本身
 不解引用任何二级指针。
@@ -609,6 +610,12 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 永远不是 system id;名字只在 `--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,
 查不到就留 `-`,不猜。`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`);Windows 侧没有这两份表时两列退化为 `-`,离线再 join。
+**CALLERS 行的口径:返回 RVA ≠ 站点**(§59 读圈子的根源,这次修的是产物的声称):行键与 `ret=` 就是
+返回 RVA 本身,`est_site=` 是按「这条 call 是 `E8 rel32`(5 B)」给出的**估值** `caller_rva - 5`
+(`caller_site_estimate`)。虚调用 `call qword ptr [rax+8]` 只有 3 B,`-5` 会把站点画进前一条指令中间,
+census 于是 join 不上而报 `func=-` —— 那读法是「估值不是它的站点」,**不是**「没人调用」。join 仍走估值
+(这是估值的唯一用途);返回 RVA 不足 5 字节时不估值,写 `est_site=-`,绝不因一个被记录的值让 shot 死掉。
+**精确站点归 Task 3 的离线反解工具**:重读 exe 字节反解出真正的 call site(§59.7),本工具的产物不再声称它是站点。
 完整结果写到 `--out`(长表 `kind/key/value/detail`,**meta** / caller / id / chain / object /
 root_unreadable / **region** 七类行)。
 `meta` 行在最前面,带 `exe_base`、`image_end`、`image_size`、`dll_sha256`、`vtable_map_count`、`layout`、
