@@ -107,6 +107,7 @@
 |---|---|
 | `launch_stellaris.py` | 从无人值守的 SSH 会话经 Steam 拉起游戏，点过 launcher 的对话框，可选 `--unpause` |
 | `game_supervisor.py` | 长驻监督器：读暂停图标与事件窗口，按 `want`/`policy` 维持运行态、选事件选项、改速度、截图；文件命令通道 + schtasks 生命周期 |
+| `keep_awake.py` | 顶住空闲 + 观测桌面可达性，产出 `C:\temp\ns_awake_status.json`（Windows 侧；`just awake check` 的退出码） |
 
 ## 一次性探针：`scratch/`
 

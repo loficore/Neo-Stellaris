@@ -789,6 +789,53 @@ just game stop | quit
 9. 纯逻辑(暂停判读、窗口分类、策略、命令词表、几何归一化)在 Linux 上跑:`just host-tests`
    (= `cd scripts/windows && python3 -m pytest tests -q`)。Windows 专有路径只在实机被调用。
 
+### `scripts/windows/keep_awake.py` —— 桌面可达性守护
+
+常驻在交互会话里,用 `SetThreadExecutionState` 顶住空闲,并**观测**当前输入桌面名以判定桌面可达性。
+它掐掉的是 2026-10-24 只读测得的那条自动链:插电 60 分钟关屏(`VIDEOIDLE ac = 0xe10 = 3600 s`)、
+电池 3 分钟即睡(`STANDBYIDLE dc = 0xb4`),唤醒要求登录 ⇒ 桌面变成 `Winlogon`,而 LogonUI 占住 Console
+会话就是那两次 `just launch` 停在 `SetForegroundWindow` FALSE、`inner_exit code=22` 的现场。断言是
+**进程级**的(`ES_CONTINUOUS|ES_DISPLAY_REQUIRED|ES_SYSTEM_REQUIRED`),所以不写注册表、不改电源计划、
+不改屏保与登录策略:进程一退,Windows 立刻恢复原行为。
+
+命令行(经根目录 `justfile`,`just deploy` 之后 `C:/temp/keep_awake.py` 与本地逐字节相同):
+
+```
+just awake start            # schtasks /ru <user> /rl highest 拉起任务 NeoStellarisKeepAwake,等心跳
+just awake status           # 一行摘要,读不到也返回 0(它只报现状,不判决)
+just awake check            # 判决:0 unlocked / 1 锁或读不到或过期 / 2 状态文件 absent
+just awake stop             # 写 quit + 登记去重键 + 删任务;daemon 自己写 state="stopped"
+just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
+```
+
+`serve` 是 daemon 本体:`--interval` 是 tick 秒数,`--assert-every`(`DEFAULT_ASSERT_EVERY_S = 25.0`)
+是重申断言的间隔,`--stop-after-s` 非 0 = 有界会话(也是循环的测试接缝)。状态文件
+`C:\temp\ns_awake_status.json` 每 tick 写一次,`desktop` 七态
+`unlocked|locked|screensaver|wrong_session|unreadable_denied|unreadable_error|unknown_name`,
+`state` 取 `serving|stopped`,`STATUS_MAX_AGE_S = 15.0` 是消费端认可的快照年龄(三个漏拍)。
+另有 `ns_awake_cmd.txt`(+ `.seen` 去重键)、`ns_awake_log.jsonl`(只在桌面状态**变化**时写一行
+`desktop_change`)、`ns_awake_task.cmd`、`ns_awake.out`。
+
+**判读陷阱:**
+
+1. **它只掐空闲链**。人工 `Win+L`、别人远程操作、以后新增的组策略锁都不在能力范围内;`check` 报
+   `locked` 时**先想人,不要想守护坏了**。守护也绝不在 secure desktop 合成输入、不尝试解锁、不猜口令。
+2. **`unreadable_denied` ≠ 锁**。它是 `OpenInputDesktop` 被 DACL 拒(`err=5`,detail 形如
+   `err=5 sessions=1/1`);判决按保守方向走「不可开枪」,但根因可能是进程不够权限而非桌面被锁 ——
+   两个名字分开就是为了不让人去查一个不存在的锁。
+3. **断言随进程消失**。`stop`、被杀、机器重启 ⇒ 顶不住空闲,这是刻意的安全性质(不改电源计划);
+   唯一的发现途径是 `check` 的非 0 退出码,而「屏幕还亮着」不能当证据 —— 顶住它的进程可能已经走了,
+   状态文件里 `state` 仍是 `serving` 的僵尸心跳靠 `STATUS_MAX_AGE_S` 兜住。`powercfg /requests` 是它的
+   证人:断言期间该命令里必须有本进程的 `DISPLAY`/`SYSTEM` 请求条目,`stop` 之后必须消失。
+4. **无人值守请插电**:电池下 3 分钟就睡,而断电是任何软件都救不了的。
+
+**与开枪的关系:**`c4_wiring_probe._flow` 的**第一道门**读 `ns_awake_status.json`,
+`keep_awake_gate` 的六个 verdict —— `keep_awake_absent|keep_awake_stopped|keep_awake_stale|
+desktop_locked|desktop_unreachable|desktop_unobserved` —— 一律中止,且中止发生在为游戏写
+`want paused` **之前**(连 launcher 的 22 都不用花)。两端唯一的耦合是两个字符串:状态文件的
+`desktop == "unlocked"` 与 `state == "serving"`,没有 import 关系。这是 §54.9
+「`console_open` 是信念不是观测」在桌面可达性这条新轴上的重申。
+
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 
 `scripts/disrva.py` 与 `scripts/cap.py` 反汇编的是**游戏**:它们只收 RVA,自己去找 `stellaris.exe`
