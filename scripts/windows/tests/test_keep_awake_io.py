@@ -8,6 +8,7 @@ two ``serve`` tests drive a scripted clock so tick counts are decided by the
 script rather than by wall time.
 """
 
+import io
 import json
 import time
 import types
@@ -154,3 +155,19 @@ def test_status_verb_reports_absent_without_failing(monkeypatch, tmp_path, capsy
     _redirect(monkeypatch, tmp_path)
     assert ka.cmd_status(types.SimpleNamespace()) == 0
     assert capsys.readouterr().out.startswith("DESKTOP=absent")
+
+
+def test_check_reports_instead_of_dying_on_a_console_that_cannot_hold_the_name(
+        monkeypatch, tmp_path):
+    # 2026-10-24 实机:`start` 打赢了,却崩在打印那一步 —— `desktop_detail` 是从 Windows
+    # 读回来的字符串,cp936 控制台编不下它就抛 UnicodeEncodeError,连退出码都交不出去。
+    # 判据是「报告必须落地 + RC 必须是那个数」,不是「不许有非 ASCII」。
+    _redirect(monkeypatch, tmp_path)
+    ka.atomic_write_json(ka.STATUS_PATH, {"pid": 7, "state": "serving",
+                                         "epoch": time.time(), "desktop": "unlocked",
+                                         "desktop_detail": "\u0301"})
+    raw = io.BytesIO()
+    monkeypatch.setattr(ka.sys, "stdout",
+                        io.TextIOWrapper(raw, encoding="gbk", write_through=True))
+    assert ka.cmd_check(types.SimpleNamespace()) == 0
+    assert "detail=?" in raw.getvalue().decode("gbk")

@@ -155,11 +155,13 @@ def _arg(fn, n, value):
 class _FakeKernel32:
     HANDLE = 0xFFFFFFFFFFFFFFFF          # Windows 的 GetCurrentProcess() 就是这个伪句柄
 
-    def __init__(self, prev_state=0x80000003, session=1, console=7):
+    def __init__(self, prev_state=0x80000003, session=1, console=7, pid=4242):
         self.prev_state = prev_state
         self.session = session
         self.console = console
+        self.pid = pid
         self.GetCurrentProcess = _Fn(self._get_current_process)
+        self.GetCurrentProcessId = _Fn(self._get_current_process_id)
         self.ProcessIdToSessionId = _Fn(self._pid_to_session)
         self.WTSGetActiveConsoleSessionId = _Fn(self._console_session)
         self.SetThreadExecutionState = _Fn(self._set_thread_execution_state)
@@ -167,8 +169,16 @@ class _FakeKernel32:
     def _get_current_process(self, fn):
         return _ret(fn, self.HANDLE)
 
-    def _pid_to_session(self, fn, handle, out):
-        _arg(fn, 0, handle)
+    def _get_current_process_id(self, fn):
+        return _ret(fn, self.pid)
+
+    def _pid_to_session(self, fn, pid, out):
+        # 真 API 的第一参是 **进程号**,不是句柄。2026-10-24 实机:传伪句柄 -1 和传
+        # OpenProcess 回来的真句柄,两者一律 `FALSE` + `gle=87`(ERROR_INVALID_PARAMETER)
+        # —— 句柄值当 PID 用,查不到那个进程。这里按同样方向拒:不是 pid 就答不出来。
+        if pid != self.pid:
+            return _ret(fn, 0)
+        _arg(fn, 0, pid)
         out._obj.value = self.session
         return _ret(fn, 1)
 
@@ -184,6 +194,7 @@ class _FakeUser32:
     def __init__(self, name="Default"):
         self.name = name
         self.sizes = []
+        self.classes = []
         self.closed = []
         self.OpenInputDesktop = _Fn(self._open)
         self.CloseDesktop = _Fn(self._close)
@@ -199,8 +210,12 @@ class _FakeUser32:
 
     def _info(self, fn, handle, info_class, buf, n_size, needed):
         _arg(fn, 0, handle)
+        self.classes.append(info_class)
         self.sizes.append(n_size)
-        buf.value = self.name
+        # 只有 UO_NAME 会往缓冲里写字符串;问别的信息号拿到的是一个数,读成宽字符串
+        # 就是实机那次 `desktop_detail="\u0301"` —— 那是被当名字读回来的标志位。
+        if info_class == 2:
+            buf.value = self.name
         return _ret(fn, 1)
 
 
@@ -210,7 +225,10 @@ def _fake_dll(monkeypatch, kernel32, user32):
     monkeypatch.setattr(ka, "_require_windows", lambda: None)
 
 
-def test_win_session_ids_survives_the_64bit_pseudo_handle(monkeypatch):
+def test_win_session_ids_asks_for_the_pid_not_a_handle(monkeypatch):
+    # `ProcessIdToSessionId` 的名字里就写着它的第一个参数是进程号;实机把
+    # `GetCurrentProcess()` 的句柄递进去,两次(伪句柄、OpenProcess 真句柄)都是
+    # `FALSE` + `gle=87`,于是守护永远报 `session=-1`、桌面判决永远 `wrong_session`。
     _fake_dll(monkeypatch, _FakeKernel32(), _FakeUser32())
     assert ka._win_session_ids() == (1, 7)
 
@@ -222,10 +240,12 @@ def test_assert_execution_returns_the_unsigned_dword_the_status_file_stores(monk
     assert ka.assert_execution() == 0x80000003
 
 
-def test_desktop_snapshot_asks_for_the_buffer_it_allocated(monkeypatch):
+def test_desktop_snapshot_reads_the_name_index_and_its_own_buffer_size(monkeypatch):
+    # 信息号 4 不是名字(`UO_NAME = 2`),nSize 是**字节**数,不是字符数 × sizeof(wchar)。
     user32 = _FakeUser32(name="Default")
     _fake_dll(monkeypatch, _FakeKernel32(session=1, console=1), user32)
     assert ka.desktop_snapshot()[0] == "unlocked"
+    assert user32.classes == [2]
     assert user32.sizes == [ctypes.sizeof(ctypes.create_unicode_buffer(256))]
     assert user32.closed == [0x2C4]
 

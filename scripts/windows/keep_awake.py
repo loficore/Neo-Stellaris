@@ -163,6 +163,22 @@ def status_line(rec, now: float) -> str:
             f"session={rec.get('session')}/{rec.get('console_session')}")
 
 
+def emit(text: str) -> None:
+    """Print one report line, whatever the console codepage can hold.
+
+    `desktop_detail` is a string read out of Windows, so it is not ours to bound.  On
+    the host a cp936 console raised `UnicodeEncodeError` inside `print`, which killed
+    `start` *after* it had won and threw away the exit code the caller was waiting for
+    — the report is the interface, so unencodable characters go out as `?`.
+    """
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+    except UnicodeEncodeError:
+        text = text.encode(encoding, "replace").decode(encoding, "replace")
+    print(text)
+
+
 def task_shim_text(pythonw: str, script: str) -> str:
     """ASCII-only .cmd shim that starts the daemon under pythonw.
 
@@ -180,7 +196,7 @@ def task_shim_text(pythonw: str, script: str) -> str:
 # --------------------------------------------------------------------------
 
 DESKTOP_READOBJECTS = 0x0001
-UDESKF_NAME = 4
+UO_NAME = 2
 NO_CONSOLE_SESSION = 0xFFFFFFFF
 
 
@@ -223,23 +239,27 @@ def assert_execution() -> int:
 def _win_session_ids():
     """(own, console) session ids; -1 for whichever half the API couldn't answer.
 
-    Every handle-sized argument needs an explicit `argtypes`: `GetCurrentProcess()`
-    returns the pseudo-handle `(HANDLE)-1`, which a declared `c_void_p` result hands
-    back as `2**64-1` — and passing that to `ProcessIdToSessionId` with ctypes'
-    default `int` parameter is the `OverflowError` that killed the first live tick.
+    `ProcessIdToSessionId` takes a **process id**, not a handle — handing it
+    `GetCurrentProcess()` returned `FALSE` + `gle=87` twice on the host
+    (2026-10-24: once with the `(HANDLE)-1` pseudo-handle, once with a real handle
+    from `OpenProcess`), which reads as `session=-1` and therefore locks the desktop
+    verdict at `wrong_session` forever.  Arguments and results both need explicit
+    prototypes: ctypes' default marshalling is a C `int`, so `2**64-1` raises
+    `OverflowError: int too long to convert` at the call and a `0x80000003` DWORD
+    comes back as `-2147483645`.
     """
     from ctypes import wintypes
 
     _require_windows()
     kernel32 = _dll("kernel32")
-    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-    kernel32.ProcessIdToSessionId.argtypes = [ctypes.c_void_p,
+    kernel32.GetCurrentProcessId.restype = wintypes.DWORD
+    kernel32.ProcessIdToSessionId.argtypes = [wintypes.DWORD,
                                               ctypes.POINTER(wintypes.DWORD)]
     kernel32.ProcessIdToSessionId.restype = wintypes.BOOL
     kernel32.WTSGetActiveConsoleSessionId.restype = wintypes.DWORD
     own = -1
     sid = wintypes.DWORD()
-    if kernel32.ProcessIdToSessionId(kernel32.GetCurrentProcess(), ctypes.byref(sid)):
+    if kernel32.ProcessIdToSessionId(kernel32.GetCurrentProcessId(), ctypes.byref(sid)):
         own = int(sid.value)
     console = int(kernel32.WTSGetActiveConsoleSessionId())
     if console == NO_CONSOLE_SESSION:
@@ -254,6 +274,10 @@ def desktop_snapshot():
     carry them too — `err=5 sessions=1/1` is what a DACL refusal looks like from the
     outside, and it is a different problem than a locked screen (§54.9's lesson: a
     belief about the desktop has to say which way it failed).
+
+    The name is at `UO_NAME = 2`.  Index 4 is the desktop's *flag* struct: read into a
+    wchar buffer on the host it came back as `"\u0301"`, which is a DWORD's bytes
+    wearing a string's clothes, and the status file called that the desktop name.
     """
     import ctypes.wintypes as wintypes
 
@@ -277,7 +301,7 @@ def desktop_snapshot():
         buf = ctypes.create_unicode_buffer(256)
         needed = wintypes.DWORD()
         ok = user32.GetUserObjectInformationW(
-            handle, UDESKF_NAME, buf, ctypes.sizeof(buf), ctypes.byref(needed))
+            handle, UO_NAME, buf, ctypes.sizeof(buf), ctypes.byref(needed))
         if not ok:
             gle = ctypes.get_last_error()
             return (classify_desktop(None, gle, own, console),
@@ -379,12 +403,12 @@ def check_exit_code(rec, now: float) -> int:
 def cmd_check(args) -> int:
     now = time.time()
     rec = read_status()
-    print(status_line(rec, now))
+    emit(status_line(rec, now))
     return check_exit_code(rec, now)
 
 
 def cmd_status(args) -> int:
-    print(status_line(read_status(), time.time()))
+    emit(status_line(read_status(), time.time()))
     return 0
 
 
@@ -405,10 +429,10 @@ def cmd_start(args) -> int:
     while time.time() < deadline:
         rec = read_status()
         if is_new_heartbeat(rec, baseline, time.time(), STATUS_MAX_AGE_S):
-            print(status_line(rec, time.time()))
+            emit(status_line(rec, time.time()))
             return 0
         time.sleep(0.5)
-    print("STATUS=timeout")
+    emit("STATUS=timeout")
     return 1
 
 
@@ -432,9 +456,9 @@ def cmd_stop(args) -> int:
     read_command(CMD_PATH, CMD_SEEN_PATH)
     _delete_task()
     if rec and rec.get("state") == "stopped":
-        print(status_line(rec, time.time()))
+        emit(status_line(rec, time.time()))
         return 0
-    print("STATUS=stop_timeout")
+    emit("STATUS=stop_timeout")
     return 1
 
 
