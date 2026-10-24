@@ -79,15 +79,27 @@ PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 `--who-lea` 另有两条边界:它只认 `48/4C 8D|8B mod=00 rm=101` 这一种编码(不认绝对立即数寻址,也不认
 `.rdata` 里的静态持有),而**站点数 0 不等于没人用** —— `0x3B01A0` 就是 0 站点,因为它只以静态槽值存在。
 
-### `scripts/disrva.py <start_rva> [end_rva|count]`
+### `scripts/disrva.py <start_rva> [<count>|<length>|--end=<rva>|--len=<n>]`
 
 **Any RVA range, disassembled offline** — annotates every
 rip-relative operand with the RVA it resolves to; this is what pinned the descriptor ctors' store order (§20).
 
-**第二个参数的口径（§30 现场踩过）**:它**不是**结束 RVA —— `a > 0xFF` 时脚本算的是 `end = start + a`,
+**第二个参数的口径（§30 现场踩过）**:裸数字**不是**结束 RVA —— `a > 0xFF` 时脚本算的是 `end = start + a`,
 所以 `disrva.py 0x1D092C0 0x1D09330` 会去反汇编 `0x1D092C0..0x3A125F0`(约 30 MB `.text`)。
 要按函数边界读,先 `pdata.py <rva>` 取区间,再传**指令条数**(`a <= 0xFF`)或传**长度** `end-start`。
 本函数边界一律以 `.pdata` 为准,不要靠 `int3` 填充猜结尾。
+
+**`--end=<rva>` / `--len=<n>` 是自 §59.9 起才有的显式形式**(§59.9 那条「往上定帧构造点」的零枪路线要按真边界取区间),
+**取证卷里旧命令一律按旧语义复现** —— 上面那个 `>0xFF` 启发式没有被改写,只是搬进了可测的纯函数 `parse_range`;
+裸数字口径、头一行 `; <exe>  <sec> RVA 0x…  (N insns)` 的条数、rip 注解写法全部不变
+(`scripts/test_disrva.py` 钉语义,影子副本 `git show HEAD:scripts/disrva.py` 逐字节钉输出)。
+`--end=` 的第二段就是结束 RVA(不含),`--len=` 是字节长度;两者与裸数字一样**不猜**:结束 RVA 低于起始、
+非十六进制、负数、`--flag` 缺少数值、未知 flag —— **任何不可判 = 拒绝**,一行 `[disrva] …` 进 stderr 并退出 2。
+
+**`import disrva` 没有副作用**:旧版本在导入时就读 46 MB 镜像、候选链全不存在就 `sys.exit`,现在读镜像是懒加载,
+`resolve_exe()` 返回 `str | None` 而不是退出 —— 所以别的离线工具可以直接 import
+`parse_range`/`resolve_exe` 而不必先有 game data。只有 CLI 在候选链全落空时才报
+`[disrva] 没有可读的 stellaris.exe 拷贝(设 NS_STELLARIS_EXE);候选链 <列表>` 并退出 2。
 
 ### `scripts/emu_desc.py` — the oracle
 
