@@ -7,11 +7,16 @@ its vtable shim slot, the first eight qwords of the execution frame (ctx), and
 the two scratch slots r8/r9 the dispatch point does not define as parameters.
 
 Four roots are then dereferenced HERE with ReadProcessMemory — self, the frame's
-+0x10 helper, r8, r9 — and every pointer-shaped qword is classified by reading
-its own first qword and looking that RVA up in the known CEffect vtable map.
-Nothing is dereferenced inside the game: a stale pointer can only make one read
-return None. The old X=[ctx+0x30] -> S=[X+8] chain is still recorded but no
-longer carries any verdict (c1_validation §53.5 falsified it).
++0x10 helper, r8, r9 — each with its OWN follow budget, so one root cannot starve
+the others into silence. Every pointer-shaped qword gets two lookups: its own
+first qword is dereferenced and matched against the known CEffect vtable map, and
+the qword itself is tested for being a known vtable address. Only values inside
+[exe_base, exe_base+SizeOfImage) become RVAs. Nothing is dereferenced inside the
+game: a stale pointer can only make one read return None. The shot's own inputs —
+base, image size, DLL hash, per-root counts — are written into the TSV as meta
+rows, because the artifact is what survives a lost stdout. The old
+X=[ctx+0x30] -> S=[X+8] chain is still recorded but no longer carries any verdict
+(c1_validation §53.5 falsified it).
 
 Usage: python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2]
        [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...]
@@ -31,6 +36,7 @@ vtable in that set", never "nothing pointed at an object".
 """
 
 import argparse
+import hashlib
 import os
 import struct
 import sys
@@ -64,6 +70,10 @@ STATS_SIZE = 512
 LAYOUT_WORDS = 5
 RING_LEN = 256
 MAX_FOLLOW = 32
+PER_SOURCE_FOLLOW = 8
+FOLLOW_SOURCES = ("self", "helper", "arg3", "arg4")
+E_LFANEW_OFFSET = 0x3C
+SIZE_OF_IMAGE_OFFSET = 0x50
 CTX_X_OFFSET = 0x30
 CTX_HELPER_OFFSET = 0x10
 OBJ_WORDS_BYTES = 64
@@ -92,13 +102,17 @@ VERDICT_DIAGNOSIS = {
         "object whose vtable is in ceffect_vtable_map_4_4_4.txt. That map is a "
         "FLOOR — it only holds classes whose slot[1] is still base Execute, so "
         "every class overriding Execute is absent. This does NOT say the roots "
-        "hold no objects; it says the known set matched nothing."
+        "hold no objects; it says the known set matched nothing. Before reading "
+        "it as a negative about any root, check that root's meta counts: "
+        "capped_by_source and withheld_by_source both mean it was never read."
     ),
     "scope_candidate": (
         "at least one pointer-shaped qword under the four roots dereferenced to "
         "an object whose vtable RVA is in the known CEffect map. The rows name "
         "which root, which offset, and the matched slot2 entity. Identity of a "
-        "CEventScope is still NOT established by this verdict."
+        "CEventScope is still NOT established by this verdict. The member_vtable "
+        "rows are a separate datum — a known vtable address sitting AT root+off "
+        "describes the root's own class, not what that member points at."
     ),
 }
 
@@ -299,16 +313,40 @@ def load_vtable_map(path):
     return out
 
 
-def follow_object(reader, exe_base, vtables, root_addr, *, source=""):
+def _check_image(exe_base, image_end):
+    """Refuse a module span that cannot bound an RVA."""
+    if image_end is None or image_end <= exe_base:
+        raise ValueError(
+            f"image_end={_hex_or_dash(image_end)} must exceed "
+            f"exe_base=0x{exe_base:x} — with no upper bound every stale qword "
+            "becomes a plausible-looking module RVA"
+        )
+
+
+def follow_object(reader, exe_base, image_end, vtables, root_addr, *,
+                  source=""):
     """Read 8 qwords at root_addr and classify every pointer-shaped one.
 
-    Each candidate's first qword is dereferenced once and matched against
-    ``vtables`` by RVA. A failed read stays None instead of becoming 0 — an
-    overwritten stack helper and a qword that really holds zero are different
-    observations. Pointers outside the exe image (heap) keep their absolute
-    value in ``ptr``; only ``vptr_rva`` is base-relative and it is None when the
-    value cannot be turned into an RVA.
+    Two independent lookups run per candidate and they answer different
+    questions. ``known`` dereferences the qword once and matches its vptr — "this
+    member points at an object of a known class". ``member_vtable`` asks whether
+    the qword is ITSELF a known vtable address; a secondary vtable sitting at
+    ``root+off`` is a multiple-inheritance subobject header, so it says something
+    about the root's own class. The two must not be merged: the first is a claim
+    about a member, the second about the root.
+
+    Values outside [exe_base, image_end) never become RVAs — that is the DLL's
+    own ``toRva`` rule, and a fabricated RVA turns a stale pointer into a false
+    hit. A failed read stays None instead of becoming 0: an overwritten stack
+    helper and a qword that really holds zero are different observations.
     """
+    _check_image(exe_base, image_end)
+
+    def to_rva(value):
+        if value is None or not (exe_base <= value < image_end):
+            return None
+        return value - exe_base
+
     out = {
         "source": source, "root": root_addr, "unreadable": False,
         "words": [], "candidates": [],
@@ -324,16 +362,20 @@ def follow_object(reader, exe_base, vtables, root_addr, *, source=""):
         if word == 0 or not plausible_user_ptr(word):
             continue
         vptr = _read_u64(reader, word)
-        vptr_rva = vptr - exe_base if (vptr is not None and exe_base and
-                                       vptr >= exe_base) else None
+        vptr_rva = to_rva(vptr)
         hit = vtables.get(vptr_rva) if vptr_rva is not None else None
+        ptr_rva = to_rva(word)
+        member_hit = vtables.get(ptr_rva) if ptr_rva is not None else None
         out["candidates"].append({
             "offset": offset * 8,
             "ptr": word,
+            "ptr_rva": ptr_rva,
             "vptr": vptr,
             "vptr_rva": vptr_rva,
             "known": hit is not None,
             "slot2_rva": hit["slot2"] if hit else None,
+            "member_vtable": member_hit is not None,
+            "member_slot2_rva": member_hit["slot2"] if member_hit else None,
         })
     return out
 
@@ -401,6 +443,7 @@ def summarize(entries, stats, chains, census, id_names, objects=None):
 
     objects = list(objects or [])
     known_vtable_hits = 0
+    member_vtable_hits = 0
     unknown_ptr_hits = 0
     unreadable_roots = 0
     for obj in objects:
@@ -411,6 +454,8 @@ def summarize(entries, stats, chains, census, id_names, objects=None):
                 known_vtable_hits += 1
             else:
                 unknown_ptr_hits += 1
+            if cand.get("member_vtable"):
+                member_vtable_hits += 1
 
     return {
         "calls": stats.get("calls", 0),
@@ -419,6 +464,7 @@ def summarize(entries, stats, chains, census, id_names, objects=None):
         "lexer": lexer,
         "chain_ok": chain_ok,
         "known_vtable_hits": known_vtable_hits,
+        "member_vtable_hits": member_vtable_hits,
         "unknown_ptr_hits": unknown_ptr_hits,
         "unreadable_roots": unreadable_roots,
         "objects": objects,
@@ -436,6 +482,9 @@ def classify(summary):
 
     The falsified X->S->id chain is deliberately absent from this ladder
     (c1_validation §53.5): chain_ok no longer rescues or sinks a verdict.
+    ``member_vtable_hits`` is deliberately absent too — it is a claim about the
+    root's own class, not about a member pointing at a known object, so folding
+    it in here would let one counter answer two questions.
     """
     if summary.get("calls", 0) == 0:
         return "no_calls"
@@ -450,15 +499,74 @@ def classify(summary):
     return "scope_candidate"
 
 
+def install_decision(words):
+    """Decode the DLL's five layout words and say whether a shot may run.
+
+    Returns (layout, reason); reason is None when the layout matches the pinned
+    contract. A drifted Entry means every offset the sampler reads is a
+    different field than it thinks, so the only safe action is to refuse before
+    install — not to sample and print a verdict computed from shifted bytes.
+    """
+    try:
+        return decode_layout(words), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def exit_code_for(verdict):
+    """Only scope_candidate is an evidence result worth exit 0."""
+    return 0 if verdict == "scope_candidate" else 1
+
+
+def image_end_from_header(reader, exe_base):
+    """One past the last byte of the exe image, from its live PE header.
+
+    e_lfanew is at +0x3C and SizeOfImage at NT-header +0x50 (PE32+). None when
+    either read fails — the caller must then refuse the shot rather than fall
+    back to an unbounded image.
+    """
+    raw = reader(exe_base + E_LFANEW_OFFSET, 4)
+    if raw is None or len(raw) < 4:
+        return None
+    pe_off = struct.unpack("<I", raw)[0]
+    raw = reader(exe_base + pe_off + SIZE_OF_IMAGE_OFFSET, 4)
+    if raw is None or len(raw) < 4:
+        return None
+    return exe_base + struct.unpack("<I", raw)[0]
+
+
 def _hex_or_dash(value):
     return "-" if value is None else f"0x{value:x}"
 
 
-def write_tsv(path, summary):
-    """Long-form evidence dump; returns the number of data rows written."""
+def _by_source(root_stats, key):
+    """One compact meta value per count kind, e.g. 'self=8/helper=0/...'."""
+    return "/".join(f"{s}={root_stats[key][s]}" for s in FOLLOW_SOURCES)
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_tsv(path, summary, meta=None):
+    """Long-form evidence dump; returns the number of data rows written.
+
+    The meta block is not decoration. The shot that produced §56 lost the
+    driver's whole stdout to an ssh reset, and the TSV alone could not answer
+    which base its RVAs were relative to, how many roots were read, or whether a
+    cap had been hit — so a shared cap was read as an absence. Every number the
+    verdict depends on is now in the artifact that carries the verdict.
+    """
     rows = 0
     with open(path, "w", encoding="utf-8") as f:
         f.write("# kind\tkey\tvalue\tdetail\n")
+        for key, value in (meta or {}).items():
+            f.write(f"meta\t{key}\t{value}\t-\n")
+            rows += 1
         for row in summary.get("callers", []):
             site = "-" if row["site"] is None else f"0x{row['site']:x}"
             func = "-" if row["func"] is None else f"0x{row['func']:x}"
@@ -492,8 +600,13 @@ def write_tsv(path, summary):
                     f"object\t0x{obj['root']:x}\t{1 if cand['known'] else 0}\t"
                     f"source={obj['source']} off=0x{cand['offset']:x} "
                     f"ptr=0x{cand['ptr']:x} "
-                    f"vptr_rva={_hex_or_dash(cand['vptr_rva'])} "
-                    f"slot2_rva={_hex_or_dash(cand['slot2_rva'])}\n"
+                    f"ptr_rva={_hex_or_dash(cand.get('ptr_rva'))} "
+                    f"member_vtable={1 if cand.get('member_vtable') else 0} "
+                    f"member_slot2_rva="
+                    f"{_hex_or_dash(cand.get('member_slot2_rva'))} "
+                    f"vptr={_hex_or_dash(cand.get('vptr'))} "
+                    f"vptr_rva={_hex_or_dash(cand.get('vptr_rva'))} "
+                    f"slot2_rva={_hex_or_dash(cand.get('slot2_rva'))}\n"
                 )
                 rows += 1
     return rows
@@ -550,12 +663,11 @@ def gate_module(pid, dll_path, needed):
     return base, exports
 
 
-def read_layout(pid, base, exports):
-    """C2ScopeProbeLayout -> validated dict. Raises ValueError on drift."""
+def read_layout_words(pid, base, exports):
+    """C2ScopeProbeLayout -> the five raw words (validated by install_decision)."""
     buf = remote_alloc(pid, 32)
     call_remote_with_arg(pid, base, exports["C2ScopeProbeLayout"], buf)
-    words = struct.unpack("<5I", read_memory(pid, buf, LAYOUT_WORDS * 4))
-    return decode_layout(words)
+    return struct.unpack("<5I", read_memory(pid, buf, LAYOUT_WORDS * 4))
 
 
 def reset_probe(pid, base, exports):
@@ -595,45 +707,75 @@ def drain_entries(pid, base, exports, buf):
 
 
 def _entry_roots(entry):
-    """The four addresses this shot dereferences, as (source, addr) pairs.
+    """The addresses this record can speak to, as (source, addr, withheld).
 
-    helper is [ctx+0x10]: §53.4.1 recorded it as a pointer (a heap object for
-    the long-lived frame, a neighbouring stack helper for the short ones) and no
-    shot had ever dereferenced it. arg3/arg4 are r8/r9, which the dispatch point
-    does not define as parameters — they are recorded as scratch witnesses.
+    ``withheld`` is a string when the record cannot speak to that root at all.
+    capture() writes arg3/arg4 before any validity gate (the Zig test pins that
+    ordering), so a rejected sample still says what the dispatch point held in
+    r8/r9; self_ptr is written once [self] reads. ctx_words however stay zeroed
+    unless the frame passed plausible(ctx), so the helper root is only offered
+    for a valid entry — counting a never-captured zero as "rejected by the gate"
+    would invent a negative result about a slot that was never read.
+
+    helper is [ctx+0x10]: §53.4.1 recorded it as a pointer (a heap object for the
+    long-lived frame, a neighbouring stack helper for the short ones) and no shot
+    had ever dereferenced it. arg3/arg4 are r8/r9, which the dispatch point does
+    not define as parameters — they are recorded as scratch witnesses.
     """
-    yield "self", entry["self_ptr"]
+    yield "self", entry["self_ptr"], None
     if entry["valid"] == 1:
-        yield "helper", entry["ctx_words"][CTX_HELPER_OFFSET // 8]
-        yield "arg3", entry["arg3"]
-        yield "arg4", entry["arg4"]
+        yield "helper", entry["ctx_words"][CTX_HELPER_OFFSET // 8], None
+    else:
+        yield "helper", 0, "ctx_not_captured"
+    yield "arg3", entry["arg3"], None
+    yield "arg4", entry["arg4"], None
 
 
-def follow_roots(reader, exe_base, vtables, entries, max_follow=MAX_FOLLOW):
-    """Dereference every distinct (source, address) root, capped by max_follow.
+def follow_roots(reader, exe_base, image_end, vtables, entries, *,
+                 per_source=PER_SOURCE_FOLLOW):
+    """Dereference each root's distinct addresses, up to ``per_source`` per root.
 
-    Implausible addresses are counted and never handed to the reader: an
-    environment root that fails the same gate the DLL uses is not a datum about
-    the engine's objects.
+    The budget is deliberately PER SOURCE and not one shared cap: with a shared
+    cap the self roots consume it first and helper/arg3/arg4 are never read,
+    which is indistinguishable in the artifact from "those slots held nothing
+    readable" — that is exactly how §56.4 came to report zero arg3/arg4
+    observations. Four sources at eight each is the same 32 object reads the
+    shot performed before, now spread over the roots instead of spent on one.
+
+    Returns (objects, root_stats). root_stats counts, per source: roots actually
+    read, addresses the gate rejected, distinct addresses dropped by the cap, and
+    roots withheld because the record never captured them.
     """
+    _check_image(exe_base, image_end)
     objects = []
+    root_stats = {
+        "followed_by_source": {s: 0 for s in FOLLOW_SOURCES},
+        "implausible_by_source": {s: 0 for s in FOLLOW_SOURCES},
+        "capped_by_source": {s: 0 for s in FOLLOW_SOURCES},
+        "withheld_by_source": {s: 0 for s in FOLLOW_SOURCES},
+    }
     seen = set()
-    implausible = 0
     for entry in entries:
-        for source, addr in _entry_roots(entry):
+        for source, addr, withheld in _entry_roots(entry):
+            if withheld is not None:
+                root_stats["withheld_by_source"][source] += 1
+                continue
             if not plausible_user_ptr(addr):
-                implausible += 1
+                root_stats["implausible_by_source"][source] += 1
                 continue
             key = (source, addr)
             if key in seen:
                 continue
-            if len(objects) >= max_follow:
-                return objects, implausible, True
             seen.add(key)
+            if root_stats["followed_by_source"][source] >= per_source:
+                root_stats["capped_by_source"][source] += 1
+                continue
+            root_stats["followed_by_source"][source] += 1
             objects.append(
-                follow_object(reader, exe_base, vtables, addr, source=source)
+                follow_object(reader, exe_base, image_end, vtables, addr,
+                              source=source)
             )
-    return objects, implausible, False
+    return objects, root_stats
 
 
 def follow_contexts(pid, entries):
@@ -719,18 +861,31 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
         except Exception:  # noqa: BLE001 - an unreadable address is the datum
             return None
 
-    base, exports = gate_module(pid, dll_path, needed)
-    print(f"[scope] exe_base=0x{exe_base:x} known_vtables={len(vtables)}")
+    image_end = image_end_from_header(reader, exe_base)
+    if image_end is None:
+        print(
+            f"IMAGE_UNAVAILABLE: SizeOfImage could not be read at "
+            f"0x{exe_base:x} — refusing before install. Without an image bound "
+            "no pointer can be turned into an RVA, and a verdict computed "
+            "against a fabricated bound is worse than no shot."
+        )
+        return 1
 
+    base = None
+    exports = None
     installed_ok = False
     rc = 1
     try:
-        try:
-            layout = read_layout(pid, base, exports)
-        except ValueError as exc:
-            print(f"LAYOUT_DRIFT: {exc}")
-            layout = None
-        if layout is not None:
+        base, exports = gate_module(pid, dll_path, needed)
+        print(
+            f"[scope] exe_base=0x{exe_base:x} image_end=0x{image_end:x} "
+            f"known_vtables={len(vtables)}"
+        )
+
+        layout, reason = install_decision(read_layout_words(pid, base, exports))
+        if layout is None:
+            print(f"LAYOUT_DRIFT: {reason} — refusing to install")
+        else:
             print(
                 f"[scope] LAYOUT entry={layout['entry']} stats={layout['stats']} "
                 f"ring={layout['ring']} mask={layout['mask']} "
@@ -764,13 +919,14 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                 entries_buf = remote_alloc(pid, RING_LEN * ENTRY_SIZE)
                 entries = drain_entries(pid, base, exports, entries_buf)
                 chains = follow_contexts(pid, entries)
-                objects, implausible, capped = follow_roots(
-                    reader, exe_base, vtables, entries
+                objects, root_stats = follow_roots(
+                    reader, exe_base, image_end, vtables, entries
                 )
                 summary = summarize(
                     entries, stats, chains, census, id_names, objects=objects
                 )
                 verdict = classify(summary)
+                capped = sum(root_stats["capped_by_source"].values())
 
                 print(f"STATS: {stats_text.strip()}")
                 print("CALLERS:")
@@ -798,6 +954,9 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                         print(
                             f"  source={obj['source']} root=0x{obj['root']:x} "
                             f"off=0x{cand['offset']:x} ptr=0x{cand['ptr']:x} "
+                            f"ptr_rva={_hex_or_dash(cand['ptr_rva'])} "
+                            f"member_vtable={1 if cand['member_vtable'] else 0} "
+                            f"vptr={_hex_or_dash(cand['vptr'])} "
                             f"vptr_rva={_hex_or_dash(cand['vptr_rva'])} "
                             f"known={1 if cand['known'] else 0} "
                             f"slot2_rva={_hex_or_dash(cand['slot2_rva'])}"
@@ -812,20 +971,65 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                 print(
                     f"[scope] roots={len(summary['objects'])} "
                     f"known_vtable_hits={summary['known_vtable_hits']} "
+                    f"member_vtable_hits={summary['member_vtable_hits']} "
                     f"unknown_ptr_hits={summary['unknown_ptr_hits']} "
                     f"unreadable_roots={summary['unreadable_roots']} "
-                    f"implausible_skipped={implausible} "
-                    f"capped={1 if capped else 0}"
+                    f"capped_total={capped}"
                 )
-                rows = write_tsv(out_path, summary)
+                for source in FOLLOW_SOURCES:
+                    print(
+                        f"[scope] root {source}: "
+                        f"followed={root_stats['followed_by_source'][source]} "
+                        f"implausible={root_stats['implausible_by_source'][source]} "
+                        f"capped={root_stats['capped_by_source'][source]} "
+                        f"withheld={root_stats['withheld_by_source'][source]}"
+                    )
+                meta = {
+                    "exe_base": f"0x{exe_base:x}",
+                    "image_end": f"0x{image_end:x}",
+                    "image_size": f"0x{image_end - exe_base:x}",
+                    "dll": os.path.basename(dll_path),
+                    "dll_sha256": _sha256(dll_path),
+                    "vtable_map_count": len(vtables),
+                    "layout": (
+                        f"entry={layout['entry']} stats={layout['stats']} "
+                        f"ring={layout['ring']} mask={layout['mask']} "
+                        f"version={layout['version']}"
+                    ),
+                    "stats": stats_text.strip(),
+                    "per_source_follow": PER_SOURCE_FOLLOW,
+                    "followed_by_source": _by_source(
+                        root_stats, "followed_by_source"),
+                    "implausible_by_source": _by_source(
+                        root_stats, "implausible_by_source"),
+                    "capped_by_source": _by_source(
+                        root_stats, "capped_by_source"),
+                    "withheld_by_source": _by_source(
+                        root_stats, "withheld_by_source"),
+                    "calls": summary["calls"],
+                    "samples": summary["samples"],
+                    "valid": summary["valid"],
+                    "lexer": summary["lexer"],
+                    "known_vtable_hits": summary["known_vtable_hits"],
+                    "member_vtable_hits": summary["member_vtable_hits"],
+                    "unknown_ptr_hits": summary["unknown_ptr_hits"],
+                    "unreadable_roots": summary["unreadable_roots"],
+                    "verdict": verdict,
+                }
+                rows = write_tsv(out_path, summary, meta=meta)
                 print(f"[scope] wrote {rows} rows to {out_path}")
 
                 print(f"VERDICT: {verdict}")
                 if verdict in VERDICT_DIAGNOSIS:
                     print(VERDICT_DIAGNOSIS[verdict])
-                rc = 0 if verdict == "scope_candidate" else 1
+                rc = exit_code_for(verdict)
     finally:
-        restore_ok = _cleanup(pid, base, exports, installed_ok, settle_s)
+        if base is None:
+            print("[scope] nothing was injected — no cleanup to run")
+            restore_ok = True
+        else:
+            restore_ok = _cleanup(
+                pid, base, exports, installed_ok, settle_s)
     if not restore_ok:
         return 1
     return rc
