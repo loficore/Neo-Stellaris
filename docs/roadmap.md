@@ -91,7 +91,7 @@ host 存活;**§50 压测**让另 7 条 `container_of` 路径在实机跑满(`C2
 - **launcher `LAUNCHER_CLICK` exit-23**(`EXIT_LAUNCHER_NO_ADVANCE`：三轮点击 + settle 后窗口不推进)：判据 = 缺陷定位到具体那一步。
   前置 = Windows 机时 + SSH 隧道（环境约束,非门）；授权级 = 一枪(定位缺陷要远程实跑 launcher 观测,每次跑都占该机时枪数)；不能成计划 = 连「点击没送达」还是「窗口判断错」都还不知道(`scripts/windows/launch_stellaris.py`)。
 - **真正的 `CEventScope` 是哪个对象**：判据 = 拿到一个真的 `arg2` 并逐字段读通。
-  前置 = 新点名后重跑 §53.3(第二枪已 `captured`:arg2 = 0x20 B 深度帧,不是 `CEventScope`;采样器与驱动已就绪);授权级 = 点名;不能成计划 = 离线拿不到，§26.2 明写仍未定。
+  前置 = 驱动已具备四根跟读(self/helper/arg3/arg4)与 vtable 集合命中判据;下一枪需新游戏进程 + 点名;授权级 = 点名;不能成计划 = 离线拿不到，§26.2 明写仍未定。
 - **`0x24F9910` 的槽号归属**：判据 = 那个数组的偏移各对应哪个虚槽。
   前置/授权级 = 更深静态(**无**)或实机(点名)；不能成计划 = §28.4 已判定它不可当前提,没有可执行的判据依赖它。
 - **孤儿 `effects/handler.zig` + `triggers/handler.zig`**：判据 = C3 的 JS 路由层真的经过这两个文件。

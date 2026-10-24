@@ -471,20 +471,32 @@ pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔�
 
 `src/dll/c2/scope_probe.zig` 在 base Execute `0x1D08520` 上挂**只读** detour:每 512 次调用采样一次
 (`calls & 511 == 0`),记录真实 `arg2`(执行帧)的 8 个 qword、`[self+0]` 的 vtable RVA、`[self+8]` 的
-token id 与 `@returnAddress()` 反推的静态调用点(`caller_rva - 5`)。**函数体一律转发原函数**,不改
-寄存器、不改内存、不改控制流。到 `X=[ctx+0x30] → S=[X+8] → id=[S+8] / obj=[S+0x20]` 这条链**不在进程内跟**
-——它只在驱动侧用 `ReadProcessMemory` 走,采样器本身不解引用任何二级指针。
+token id、`@returnAddress()` 反推的静态调用点(`caller_rva - 5`),以及派发点上的 `r8`/`r9` 两个 scratch
+槽(布局 v2 起,`Entry` = 120 字节)。**函数体一律转发原函数**,不改寄存器、不改内存、不改控制流。
+`r8`/`r9` 记的是**值**,不是它们指向的内存 —— 一切解引用都发生在驱动侧的 `ReadProcessMemory`,采样器本身
+不解引用任何二级指针。
 
-读的是 7 个导出 + `C2Sanity`:`C2ScopeProbeLayout`(5 个 u32:entry `104` / stats `56` / ring `256` /
-mask `511` / version `1`)、`C2ScopeProbeReset`(装之前先清统计)、`C2ScopeProbeInstall`、
+驱动随后对**四个根**做进程外解引用:`self`、`[ctx+0x10]` 的 helper、`r8`、`r9`;每个根读 8 个 qword,
+每个像指针的 qword 再读它指向处的首 qword,减 `exe_base` 得 RVA,拿去 `--vtables`
+(默认 `evidence/xrefs/ceffect_vtable_map_4_4_4.txt`,1,805 个)做命中判定。**这条取代了旧判据**:
+`X=[ctx+0x30] → S=[X+8] → id=[S+8] / obj=[S+0x20]` 那条链已由 c1_validation **§53.3 第二枪证伪**
+(`+0x30` 不属于 0x20 字节的帧,读到的「id/object」是 `add rsp,0x28` 一类指令字节),链仍然照旧跟、照旧写进
+TSV,但**不再进任何 verdict**。
+
+读的是 7 个导出 + `C2Sanity`:`C2ScopeProbeLayout`(5 个 u32:entry `120` / stats `56` / ring `256` /
+mask `511` / version `2`)、`C2ScopeProbeReset`(装之前先清统计)、`C2ScopeProbeInstall`、
 `C2ScopeProbeStatsInto`、`C2ScopeProbeDrainInto`(环形记录,最老在前)、`C2ScopeProbeUninstall`、
 `C2ScopeProbeVerify`。**layout 任一字段漂了就打 `LAYOUT_DRIFT` 且不装** —— 驱动与 DLL 的解码契约断了,
-后面的字节都不能读。
+后面的字节都不能读。**拿 104 字节的旧 DLL 配 v2 驱动(或反过来)一定会漂**,这不是巧合,是这条判据在生效:
+按 104 解 120 会让每条记录串进下一条,读出一堆「看着像指针的垃圾」。
 
 ```
 python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
-        [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...]
+        [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...] [--vtables ...]
 ```
+
+`--vtables` 指向的那份表**必须在开枪机上存在**(Windows 侧要上传,见「前置条件」),表缺失或解析出 0 条时
+脚本在**注入之前**就退出:判据挂在一个空集合上,那一枪无论怎么打都只会得到 `no_scope_candidate`。
 
 轮询一直采样到 `--poll-s` 截止(不是拿到第一个样本就停),环形记录保留最后 256 条;
 `--poll-s` 太短只会让样本变稀,不会让判读变快。
@@ -512,14 +524,28 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 | `no_samples` | `samples == 0` | 有调用但 1/512 门没触发;唯一手段是更长的 `--poll-s`,本次什么都没采到 |
 | `all_invalid` | `valid == 0` | 每个样本的 `self`/`ctx` 都不可信,一帧没记;环境/调用形状结论,换新进程再试 |
 | `lexer_only` | `lexer > 0` 且 `lexer == valid` | 全部有效样本都带 lexer 哨兵 `[ctx+0x38]==0xb`(§52 那条路径),**不能**回答「真实执行帧是哪个对象」 |
-| `chain_unreadable` | `chain_ok == 0` | 样本有效但 `[ctx+0x30]`/`[X+8]`/`[S]`/`[S+8]`/`[S+0x20]` 没有一次全部读到;条目照留,读不到本身就是观测 |
-| `captured` | 其余 | 至少一条链完整;这是唯一可当证据的结论 |
+| `no_scope_candidate` | `known_vtable_hits == 0` | 四个根下没有任何 qword 指向「vptr 在那 1,805 个已知 vtable 内」的对象。这是**有界的代码结论**,见下面判读陷阱 1 |
+| `scope_candidate` | 其余 | 至少一个 qword 命中已知 vtable 集合;TSV 的 `object` 行指名是哪个根、哪个偏移、匹配到哪个 slot2 实体。这**仍不证明**它是 `CEventScope` |
 
-`captured` 之外一律退出码 1。链里的 `id` 是 **keyword token id**,永远不是 system id;名字只在
-`--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,查不到就留 `-`,不猜。
-`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
+`scope_candidate` 之外一律退出码 1。`no_calls`/`no_samples`/`all_invalid`/`lexer_only` 四条一律先按**环境**读
+(战役是否在跑、有没有取消暂停、进程是不是新进程),不要读成代码结论。链里的 `id` 是 **keyword token id**,
+永远不是 system id;名字只在 `--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,
+查不到就留 `-`,不猜。`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`);Windows 侧没有这两份表时两列退化为 `-`,离线再 join。
-完整结果写到 `--out`(长表 `kind/key/value/detail`,caller / id / chain 三类行)。
+完整结果写到 `--out`(长表 `kind/key/value/detail`,caller / id / chain / object / root_unreadable 五类行)。
+
+**三条判读陷阱(§53.4 / §54.8.4 实机取到的,读 verdict 之前先看):**
+
+1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
+   仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
+   不排除候选是对象,只排除「它属于那个集合」。反过来 `scope_candidate` 也只到「命中已知集合」为止。
+2. **`r8`/`r9` 在派发点不是参数**(§54.8.4 第 1 条:`0x1D08520` 只设 `rcx`/`rdx`,而 `0x3B01A0` 消费四槽,
+   `r8`/`r9` 取的是上一调用者的 scratch)。它们的命中**不能**用来推断调用约定,也不能读成「引擎把 scope 传在了
+   第四个槽」。
+3. **`unreadable` 与「读到但没命中」是两件事。** 短命帧的 `+0x10` 指向邻近栈 helper(§53.4.1),而读取发生在
+   轮询结束之后 —— 那时栈早被覆盖。这类根进 `root_unreadable` 行与 `unreadable_roots` 计数,不该被当成
+   「那个位置是空」。模块外(堆)的地址保留**绝对值**在 `ptr`,只有 `vptr_rva` 才是基址相对的;把堆指针压成
+   `rva=0` 会和真正的 0 混成一类。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
