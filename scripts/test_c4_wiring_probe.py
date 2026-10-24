@@ -626,14 +626,25 @@ def test_classify_console_receipt_survives_a_torn_line():
 
 
 def test_send_console_or_abort_aborts_with_the_refusal_reason(monkeypatch):
-    monkeypatch.setattr(mod, "_send_console", lambda path, text: True)
-    monkeypatch.setattr(mod, "_file_size", lambda p: 0)
+    # 本任务的核心不变量:回执 offset 必须在写命令**之前**取 —— tail 里上一条
+    # 命令的 console_refused 靠字节位置排除,取晚了会把拒收算到本条头上,或把
+    # 一发健康的枪拦死。events 钉顺序,reads 钉读回用的正是写前取到的那个值。
+    events = []
+    offset_before_write = 0x1234  # 非 0、可区分的哨兵值:忽略返回值的实现会露馅
+    monkeypatch.setattr(mod, "_file_size",
+                        lambda p: events.append("file_size") or offset_before_write)
+    monkeypatch.setattr(mod, "_send_console",
+                        lambda path, text: events.append("send_console") or True)
+    reads = []
     monkeypatch.setattr(mod, "_read_text_from", lambda p, off: (
+        reads.append(off) or
         '{"event":"console_refused","reason":"console_state_unknown"}\n'))
     with pytest.raises(mod._Abort) as exc:
         mod._send_console_or_abort("cmd.txt", "effect x = { }", "log.jsonl")
     assert exc.value.verdict == "console_refused"
     assert exc.value.detail == "console_state_unknown"
+    assert events == ["file_size", "send_console"]
+    assert reads == [offset_before_write]
 
 
 def test_send_console_or_abort_proceeds_when_the_log_has_no_receipt(monkeypatch):
