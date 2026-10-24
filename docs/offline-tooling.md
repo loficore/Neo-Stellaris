@@ -49,6 +49,36 @@ Neither needs a license, a running process, or a paused game.
 PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 `rttibatch.py --effects` 产出 `evidence/xrefs/ceffect_vtable_map_4_4_4.txt`。
 
+**`--all-vtables` —— 不过滤的那一张(`evidence/xrefs/vtable_candidates_all_4_4_4.txt`)**:
+`python3 scripts/rttibatch.py --all-vtables [--min-run 3]`。判据**只看形状** —— `.rdata` 里每个 8-对齐位置,
+只要从它起连续 ≥ `min_run` 个 qword 落在 `.text`,就产一行,**绝不读 `RVA_BASE_EXECUTE`**;而且**一个 run 里的
+每个起点都单独成行**(§17 那张下限表的表首正是这种中途起点,只报极大 run 的开头就会把它们全丢掉)。
+每行带 `run=` 与前三个槽的 RVA 原值。4.4.4 上 `min-run=3` 是 **172,296 行**(≈14 MB 明文,gzip 后 1.2 MB)。
+
+**判读陷阱(这条是 §17 那句「覆写了 Execute 的类一个都不在」的直接解药,也是最容易读过头的地方):
+「形状过」不等于「是 vtable」,更不等于「是 CEffect 家族」。** 函数指针数组、`switch` 跳表、虚表片段、
+以及任何「连续几个代码地址」的静态数据都会过这道形状判据 —— 172,296 与 1,805 之间那 16 万多的差**不是**
+「发现了 16 万个新类」。往下筛只有两个字段可用:**`run=` 长度**与 **`slot1` 原值**(slot1 == base Execute
+`0x1D08520` 正好把 §14 那张 1,805 的下限集取回来,这也是 `test_the_floor_map_is_a_subset_of_the_unfiltered_candidate_set`
+钉住的关系);除此之外没有别的静态滤网,所以任何「这张表是谁」的结论都得另找证据(名字池、行为、实机)。
+
+**`--who-tables <rva[,rva]> [--candidates PATH]` / `--who-lea <rva>` —— 两张集合的离线 join(§57)**:
+`slot_hits()` 按候选的 `vtable_rva` **回到镜像里重读前 8 槽**逐个比对(不是只看产物带出的 `slot0..slot2`),
+`lea_sites_to()` 把 `rip_refs()` 那条 modrm 判定推广到**整个 `.text`**,返回指令起始 RVA。接口一律 **RVA**
+(与 `AGENTS.md` 索引、下限图、候选集同口径),命令行里不出现带 image base 的数。`--candidates` 默认读
+`vtable_candidates_all_4_4_4.txt`,所以不必在枪机上重跑 `all_vtables`。
+
+**判读陷阱:`--who-tables` 那张「命中 N 张表」的表,不能拿来证明「引擎复制了表」。** 两个独立原因,
+每一个都足以让这条推断作废(§57 就是在核这一条):
+① **候选集对同一段指针数组产出多个重叠起点**(Task 3 为了让下限集成为子集必须这样构造),所以行数永远
+大于物理槽地址数 —— 4.4.4 上实测 **7,867 行 / 7,832 个表首 / 992 个物理槽**;
+② **靶子若是共用实现,命中数就正比于「继承它的兄弟类个数」,与复制无关** —— `0x3AFD30`(donor 表 slot[1]
+的 Execute 覆写)在镜像里以静态 qword 出现 **538** 次,`0x3B01A0` **454** 次。
+收紧到「前四槽与目标表逐槽相等」把 7,832 压到 5,这一步是有用的枚举,但**仍分不出「另一份表」与
+「同基类未覆写前四槽的兄弟类」** —— 两者在字节上就是同一串。要判身份,得问运行时 `[self+0]`(§57 的下一枪)。
+`--who-lea` 另有两条边界:它只认 `48/4C 8D|8B mod=00 rm=101` 这一种编码(不认绝对立即数寻址,也不认
+`.rdata` 里的静态持有),而**站点数 0 不等于没人用** —— `0x3B01A0` 就是 0 站点,因为它只以静态槽值存在。
+
 ### `scripts/disrva.py <start_rva> [end_rva|count]`
 
 **Any RVA range, disassembled offline** — annotates every
@@ -67,6 +97,35 @@ rip-relative operand with the RVA it resolves to; this is what pinned the descri
 (`python3 scripts/emu_desc.py oracle`). Output: `evidence/xrefs/descriptor_oracle_4_4_4.tsv` plus
 `src/dll/scripted/keyword_registry_golden.zig` (56 vectors the Zig builder is tested against).
 This is how §18's "byte-for-byte identical" claim became a measurement: **9,863/9,863 agree, 0 divergences**.
+
+## 离线重问实机 artifact(读已入库产物,不读 exe、不起进程、不要枪)
+
+### `scripts/scope_reclassify.py [--tsv PATH] [--floor PATH] [--all PATH] [--json PATH]`
+
+**把同一批 scope 候选问两张 vtable 集**:§56 那发只读采样枪留下的
+`evidence/logs/scope_probe_v2_4_4_4.tsv` 的 99 条 `object` 行,同时对着 1,805 条下限集
+(`ceffect_vtable_map_4_4_4.txt`,**import `c2_scope_probe.load_vtable_map` 复用**,不重写解析)和
+172,296 条形状集(`vtable_candidates_all_4_4_4.txt`,`rttibatch.py --all-vtables`)分四桶:
+`floor_hits` / `new_only_hits`(只有新集看得见)/ `still_no` / `undecidable_no_rva`。
+四桶互斥且和为 `total`,由 `scripts/test_scope_reclassify.py` 钉住。产物:stdout 七行计数
+(含 **`floor set` / `shape set` 两个输入集大小**)+ `--json` 全量(含 `new_rows` 每行的 `slot1` 与
+run-length,以及 `input_sets`)。**形状集解析出 0 行就抛错**(`load_candidate_map` 拒绝返回空集):
+`new_only_hits=0` 与「这份文件我读不懂」在计数里长得一模一样,而 §56.9 那一版差点把前者当结论 ——
+行语法(`slot0 0x…`,两列)一旦错一格,172,296 行会被全部静默跳过。两个集的大小打在读数旁边,
+就是为了让「0」永远带着它的分母。
+
+**它不读 exe**,所以不受 `R-env` 约束、不需要 `NS_STELLARIS_EXE`;需要分节普查(判一个 RVA 落在
+`.text`/`.rdata`/`.data`)时那是另一件事 —— 本次用的是
+`scripts/scratch/2026-10_scope_shot/ns_scope_ptr_shape.py`(一次性探针,不是维护接口)。
+
+**判读陷阱 1(本节实测)**:`still_no` 多**不等于**候选不是对象。99 条里 83 条能解出 RVA,而它们的
+`vptr_rva` 分节普查是 `.text` 64 / `.rdata` 14 / `.data` 3 / 镜像外 2 —— 代码 RVA 永远不可能在任何
+vtable 集合里(两张集都只扫 `.rdata`),所以「新集一条都没加」在这个层是**恒真**,不是结论。
+往下筛之前先问:取的是哪一格?`vptr_rva` 是 `[[root+off]]`(多读一层),候选自己那一格是 `ptr`。
+
+**判读陷阱 2**:「不过滤」只指**不按 `slot[1]` 过滤**,新集仍然只扫 `.rdata`,而且它按形状产出
+**每一个** run 起点(下限集必须是它的子集,这是构造要求),所以一张已知表的**内部偏移**也会命中。
+`.data` 里的 vtable、以及中途偏移,都是「无法判定」而不是「新集看到的类」。
 
 ## 调用关系与引用扫描
 
@@ -538,14 +597,31 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 永远不是 system id;名字只在 `--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,
 查不到就留 `-`,不猜。`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`);Windows 侧没有这两份表时两列退化为 `-`,离线再 join。
-完整结果写到 `--out`(长表 `kind/key/value/detail`,**meta** / caller / id / chain / object / root_unreadable 六类行)。
+完整结果写到 `--out`(长表 `kind/key/value/detail`,**meta** / caller / id / chain / object /
+root_unreadable / **region** 七类行)。
 `meta` 行在最前面,带 `exe_base`、`image_end`、`image_size`、`dll_sha256`、`vtable_map_count`、`layout`、
-`stats`、`per_source_follow`,以及四根的 `followed_by_source`/`implausible_by_source`/`capped_by_source`/
-`withheld_by_source` 和三个命中计数。**这不是装饰**:§56 那一枪的 stdout 被一次 ssh 重置整段吃掉,而旧 TSV
+`stats`、`per_source_follow`,四根的 `followed_by_source`/`implausible_by_source`/`capped_by_source`/
+`withheld_by_source`、三个命中计数,以及区域仪器的 `regions_queried`/`region_verdicts`。**这不是装饰**:§56 那一枪的 stdout 被一次 ssh 重置整段吃掉,而旧 TSV
 里没有这些数,事后无从区分「某个根读到但没有命中」与「那个根根本没被读」,于是把一次预算耗尽读成了一条
 负结论(陷阱 5)。判据现在住在带判词的 artifact 里。
 
-**七条判读陷阱(§53.4 / §54.8.4 / §56.8 实机与离线复算取到的,读 verdict 之前先看):**
+**内存区域仪器(`VirtualQueryEx`,§56.8 那条「绝对值还是相对值」缺的 datum)**:`follow_roots` 之后、
+清理之前,驱动对**每个被跟过的根地址 + 每条 chain 的 `ctx`** 各问一次 `VirtualQueryEx`,答案写成 `region` 行
+(`region\t0x<addr>\t<verdict>\tsource=.. base=0x.. size=0x.. state=0x.. protect=0x.. type=0x.. alloc_base=0x..`)
+并汇总进 meta 的 `regions_queried`/`region_verdicts`(后者是 `source/verdict=count` 的排序串)。
+**判据是判序,不是标志位的名字**:`None` → `unreadable`;否则**只看地址** ——
+`exe_base <= BaseAddress < image_end` → `image`,这一段刻意不查 `Type`(否则一个落在镜像里的
+`MEM_PRIVATE` 会被读成「不是镜像」);否则 `State` 是 `MEM_FREE`(`0x10000`)→ `free`、
+`MEM_RESERVE`(`0x2000`)→ `reserved`;否则 `MEM_COMMIT`(`0x1000`)时按 `Type` 分派 ——
+`MEM_MAPPED`(`0x40000`)→ `mapped_view`、`MEM_PRIVATE`(`0x20000`)→ `private_committed`、
+`MEM_IMAGE`(`0x1000000`)→ `image`;其余 → `unknown`。查不到句柄、内核拒绝描述、返回字节数不够,一律
+`unreadable`(与 `reader()` 同口径:一个描述不出来的地址是 datum,不是故障)。
+**这条仪器不参与 `classify()` 的六档阶梯**,也不参与退出码 —— 区域判定只进 artifact,供离线复算。
+结构体那条坑记在这里:`MEMORY_BASIC_INFORMATION` 只声明 SDK 的 7 个命名字段,x64 上 ctypes 的自然对齐
+就补出了 `__alignment1`(offsets 0/8/16/24/32/36/40,`sizeof`=48);**把那个 padding 字段也写出来会多插
+4 字节,`State` 读到的其实是 `Protect` 的槽**。
+
+**八条判读陷阱(§53.4 / §54.8.4 / §56.8 实机与离线复算取到的,读 verdict 之前先看):**
 
 1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
    仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
@@ -580,6 +656,12 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
    后者说「这个槽里直接放着一张已知 vtable」(多重继承子对象头,说的是 root 自己的类)。§56 的 99 个候选里
    第一层 14 条、第二层 **44 条**(全在 `self` 上,13 个不同 RVA),后者若喂进 `classify()` 会把
    「root 带子对象头」当成 scope 命中 —— 所以现在单独计数、单独写 TSV,且**不进判词阶梯**。
+8. **`unreadable`、`free` 与「这个数不是地址」是三件事。** 区域仪器只能说「此刻没有一段已提交的内存覆盖这个
+   范围」:`unreadable` 是**问不出来**(句柄、权限或内核不给描述,包含「根来自一条无效 entry」这种没被记下的
+   值),`free` 是**问得出且那里是空洞**。而一个 32 位量级的数落在空洞里,既可以是一个还没被提交的相对偏移,
+   也可以是一个从未被提交过的绝对地址 —— 这一条不能替二者做决定。`reserved` 更弱:地址有效但内容还没提交,
+   拿它解释低地址会把「相对值」这条假说杀掉得不够干净。只有 `private_committed`/`mapped_view`/`image`
+   才正面回答「这是一个有人拥有的地址」。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
@@ -926,8 +1008,27 @@ desktop_locked|desktop_unreachable|desktop_unobserved` —— 一律中止,且�
 `desktop == "unlocked"` 与 `state == "serving"`,没有 import 关系。这是 §54.9
 「`console_open` 是信念不是观测」在桌面可达性这条新轴上的重申。
 
-**launcher 侧没接这道门**(`launch_stellaris.py` 的 `exit 22` 早停在计划里刻意留下):今天真正花钱的是
-那一步,但它是另一条通道的改动,接口就是上面那两个字符串加一个 verdict 函数,单独出一个计划更干净。
+**launcher 侧也接了这道门**(`launch_stellaris.py` 的 `desktop_gate_or_none`,新退出码 **25**):位置在
+`_run_launch_chain_phases` 里 dry-run 返回之后、`launcher_click` 之前 —— 晚一步就等于没接,锁屏下的点击失败
+仍会被记成 22/23,而那正是 exit 23 至今判不下去的原因。`--keep-awake-status` 的默认值是
+`keep_awake.STATUS_PATH`,不是第二份 `C:\temp\...` 字面量。
+
+两处判决函数(`keep_awake.desktop_gate` 与 `c4_wiring_probe.keep_awake_gate`)**各留一份是刻意的**:开枪通道
+是 `C:/temp/<name>.py` 线上契约的一部分,不能因为 launcher 侧要读同一个文件就获得一个 import 关系。代价有两条,
+都记在这里:(1) 状态窗口 `STATUS_MAX_AGE_S` 在 `keep_awake.py:50` 与 `c4_wiring_probe.py:499` 各有一份字面量
+`15.0`,**本计划不合并** —— 合并意味着给线上契约加一条跨模块依赖;(2) launcher 侧把 `screensaver`/
+`wrong_session`/`unknown_name` 归进 `desktop_unreachable`,而开枪通道把它们留在 `desktop_unobserved`。
+两者都拒绝,区别只在诊断:桌面被**读到**但不是 `unlocked` 的三种状态,在 launcher 这一侧是「可达性已知为否」,
+`desktop_unobserved` 因此只留给 `DESKTOP_STATES` 以后新增、这个名字还不认识的状态。
+
+**exit 23 现在自带三档观测,但仍不是结论。**`launcher_click` 每轮在 `step=click` 之后补一条
+`step=trace`(`owns_foreground` / `cursor_at` / `launcher_alive`,rect 已在 `step=click` 里记过,不重复),
+耗尽三轮后在返回 23 之前记一条 `step=diagnosis`,值是 `click_not_delivered|wrong_window|
+handoff_never_fired|inconclusive`。**退出码不因它改变**,读回失败(`GetForegroundWindow`/`GetCursorPos`
+任一条抛或返回 FALSE)只把对应字段写成 `None`,而任何一轮带 `None` 就把整条结论压成 `inconclusive` ——
+仪器没测到不等于测到了反面。判读陷阱:`handoff_never_fired` 只说「三轮都拿到焦点、光标都落在那一点、
+launcher 仍没推进」,**不**说「Continue 按钮在别处」;这一档要成为结论得等实机那一次(离线无从知道
+CEF 把按钮画在哪)。
 
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 

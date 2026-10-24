@@ -84,6 +84,45 @@ def desktop_reachable(state: str) -> bool:
     return state == "unlocked"
 
 
+_DESKTOP_LOCKED = ("locked",)
+_DESKTOP_UNREACHABLE = ("screensaver", "wrong_session",
+                        "unreadable_denied", "unreadable_error", "unknown_name")
+
+
+def desktop_gate(rec, now: float, max_age_s: float = STATUS_MAX_AGE_S) -> str:
+    """Refuse the launch chain unless the daemon observed a reachable desktop lately.
+
+    Same decision table, same order (structure -> heartbeat -> how to read the
+    observation) as `keep_awake_gate` in `scripts/c4_wiring_probe.py`, and the
+    duplicate is deliberate: that one is part of the `C:/temp` shot-channel wire
+    contract and must not gain an import of the launcher side.  It answers "may
+    this run touch a keyboard" for `launch_stellaris`, which is why `screensaver`,
+    `wrong_session` and `unknown_name` are named `desktop_unreachable` here rather
+    than left as `desktop_unobserved` the way the shot channel leaves them — all
+    three are declared members of `DESKTOP_STATES`, so the desktop *was* read, it
+    just isn't one we can drive.  `unreadable_*` keeps its own name apart from
+    `locked` for the reason §54 records: a DACL refusal on `OpenInputDesktop`
+    (err=5) is an unprivileged process, not a locked screen, and an operator
+    chasing "locked" here would be hunting a lock that doesn't exist.  Anything
+    not in the vocabulary above — including states keep_awake gains later — is
+    `desktop_unobserved`, never `ok`.
+    """
+    if not isinstance(rec, dict) or not all(k in rec for k in ("desktop", "epoch")):
+        return "keep_awake_absent"
+    if rec.get("state", "serving") != "serving":
+        return "keep_awake_stopped"
+    if not is_fresh(rec, now, max_age_s):
+        return "keep_awake_stale"
+    desktop = rec["desktop"]
+    if desktop == "unlocked":
+        return "ok"
+    if desktop in _DESKTOP_LOCKED:
+        return "desktop_locked"
+    if desktop in _DESKTOP_UNREACHABLE:
+        return "desktop_unreachable"
+    return "desktop_unobserved"
+
+
 def is_fresh(rec, now: float, max_age_s: float = STATUS_MAX_AGE_S) -> bool:
     """Whether a status record was written inside the window the gate accepts.
 

@@ -2,10 +2,12 @@ import builtins
 import contextlib
 import ctypes
 import ctypes.wintypes as _wt
+import json
 import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +16,8 @@ import psutil
 import pytest
 from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
-                              EXIT_BRIDGE_TR_TOO_LONG, EXIT_GAME_DID_NOT_SPAWN,
+                              EXIT_BRIDGE_TR_TOO_LONG, EXIT_DESKTOP_UNREACHABLE,
+                              EXIT_GAME_DID_NOT_SPAWN,
                               EXIT_GAME_EXITED_EARLY, EXIT_GAME_UNPAUSE_FAILED,
                               EXIT_INTERNAL,
                               EXIT_JIT_DIALOG, EXIT_LAUNCHER_NO_ADVANCE,
@@ -28,15 +31,24 @@ from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               _handoff_observed, _hwnd_for_pid,
                               _is_jit_dialog_visible, _is_wer_dialog_visible,
                               _poll_marker, _read_marker_pid,
+                              _run_launch_chain_phases,
                               _steam_has_window, _top_windows, _window_rect,
                               _write_marker, bridge_to_interactive_session,
                               bring_to_foreground, build_arg_parser,
                               build_bridge_account, build_bridge_run_command,
                               build_bridge_task_command, build_inner_tr,
+                              click_diagnosis, click_trace,
                               game_observe, game_unpause, launcher_click, launcher_handoff,
                               launcher_wait, main, prekill,
-                              run_launch_chain, steam_ready,
+                              read_awake_status, run_launch_chain, steam_ready,
                               steam_spawn, timeline_event)
+
+
+def _unlocked_desktop(path=None):
+    """A fresh reachable-desktop observation, for tests whose subject is a phase
+    downstream of the gate. Built per call, so the 15 s heartbeat window cannot
+    expire between collection and the assertion."""
+    return {"desktop": "unlocked", "epoch": time.time(), "state": "serving"}
 
 
 def test_exit_codes_match_spec():
@@ -1253,6 +1265,7 @@ def test_launcher_click_re_reads_the_rect_every_attempt(
     ], coords
 
 
+@patch("launch_stellaris.read_awake_status", side_effect=_unlocked_desktop)
 @patch("launch_stellaris.game_observe", return_value=EXIT_OK)
 @patch("launch_stellaris.launcher_handoff", return_value=5555)
 @patch("launch_stellaris.launcher_click", return_value=EXIT_OK)
@@ -1262,23 +1275,24 @@ def test_launcher_click_re_reads_the_rect_every_attempt(
 @patch("launch_stellaris.prekill", return_value=EXIT_OK)
 def test_run_launch_chain_waits_for_the_launcher_window_then_drives_it(
         mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click,
-        mock_handoff, mock_observe):
+        mock_handoff, mock_observe, mock_gate):
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_OK
     mock_wait.assert_called_once_with(30)  # --launcher-timeout-s default
-    mock_click.assert_called_once_with(12345)
+    mock_click.assert_called_once_with(12345, 4242)
     # Task 6: the drive is not the end of the chain — the game has to appear
     # and then survive its observation window.
     mock_handoff.assert_called_once_with(30)  # --game-timeout-s default
     mock_observe.assert_called_once_with(5555, 30)  # --observe-s default
 
 
+@patch("launch_stellaris.read_awake_status", side_effect=_unlocked_desktop)
 @patch("launch_stellaris.launcher_click", return_value=EXIT_LAUNCHER_NO_ADVANCE)
 @patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
 @patch("launch_stellaris.steam_ready", return_value=10748)
 @patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
 @patch("launch_stellaris.prekill", return_value=EXIT_OK)
 def test_run_launch_chain_propagates_a_click_failure(
-        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click):
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click, mock_gate):
     """The launcher's own exit code has to reach the bridge marker verbatim —
     that DONE:<rc> is the only thing the outer process learns."""
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_LAUNCHER_NO_ADVANCE
@@ -1713,7 +1727,8 @@ _HANDOFF_DEFAULT = object()
 @contextlib.contextmanager
 def _full_chain(game_pid=5555, handoff_rc=_HANDOFF_DEFAULT, observe_rc=EXIT_OK):
     """Patch every phase up to and including Task 6; yields the mocks in
-    chain order (prekill, spawn, ready, wait, keyboard, handoff, observe).
+    chain order (prekill, spawn, ready, wait, keyboard, handoff, observe) plus
+    the desktop gate stub last.
 
     handoff_rc=None is a meaningful value — launcher_handoff returning None is
     the EXIT_GAME_DID_NOT_SPAWN case — so the default needs a sentinel
@@ -1728,6 +1743,11 @@ def _full_chain(game_pid=5555, handoff_rc=_HANDOFF_DEFAULT, observe_rc=EXIT_OK):
               return_value=game_pid if handoff_rc is _HANDOFF_DEFAULT
               else handoff_rc),
         patch("launch_stellaris.game_observe", return_value=observe_rc),
+        # The desktop gate is stubbed last on purpose: existing tests index the
+        # phases positionally (mocks[0]..mocks[6]), and appending keeps those
+        # numbers meaning the same call. Chain order would put it between
+        # launcher_wait and launcher_click.
+        patch("launch_stellaris.read_awake_status", side_effect=_unlocked_desktop),
     ]
     mocks = [s.start() for s in specs]
     try:
@@ -2656,3 +2676,149 @@ def test_write_bridge_tr_shim_docstring_states_a_measurable_basis():
     assert "276" not in doc, doc
     assert "309" not in doc, doc
     assert "261" in doc, doc
+
+
+def _status(tmp_path, desktop):
+    p = tmp_path / "ns_awake_status.json"
+    p.write_text(json.dumps({"desktop": desktop, "epoch": time.time(),
+                             "state": "serving"}), encoding="utf-8")
+    return str(p)
+
+
+def test_read_awake_status_returns_none_for_a_half_written_file(tmp_path):
+    p = tmp_path / "ns_awake_status.json"
+    p.write_text('{"desktop": "unloc', encoding="utf-8")   # 原子写被进程打断的形状
+    assert read_awake_status(str(p)) is None
+    assert read_awake_status(str(tmp_path / "absent.json")) is None
+
+
+@patch("launch_stellaris.launcher_click")
+@patch("launch_stellaris.launcher_wait", return_value=(4321, 0x10))
+@patch("launch_stellaris.steam_ready", return_value=4242)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_phases_refuse_before_clicking_when_desktop_is_locked(
+        _prekill, _spawn, _ready, _wait, click, tmp_path):
+    rc = _run_launch_chain_phases(
+        build_arg_parser().parse_args(["--keep-awake-status", _status(tmp_path, "locked")]))
+    assert rc == EXIT_DESKTOP_UNREACHABLE          # 25,不是 22
+    click.assert_not_called()
+
+
+@patch("launch_stellaris.game_observe", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_handoff", return_value=999)
+@patch("launch_stellaris.launcher_click", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_wait", return_value=(4321, 0x10))
+@patch("launch_stellaris.steam_ready", return_value=4242)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_phases_still_click_when_desktop_is_unlocked(
+        _prekill, _spawn, _ready, _wait, click, _handoff, _observe, tmp_path):
+    rc = _run_launch_chain_phases(
+        build_arg_parser().parse_args(["--keep-awake-status", _status(tmp_path, "unlocked")]))
+    assert rc == EXIT_OK
+    assert click.call_args[0][0] == 0x10           # 只断言第一个位置参数是 hwnd
+
+
+@patch("launch_stellaris.read_awake_status", side_effect=AssertionError("gate ran"))
+@patch("launch_stellaris.launcher_wait", return_value=(4321, 0x10))
+@patch("launch_stellaris.steam_ready", return_value=4242)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_dry_run_does_not_consult_the_desktop_gate(
+        _prekill, _spawn, _ready, _wait, _gate):
+    # 与既有 dry-run 口径一致:dry run 不 spawn URI,也就不该被一台机的桌面状态挡住
+    assert _run_launch_chain_phases(
+        build_arg_parser().parse_args(["--dry-run"])) == EXIT_OK
+
+
+def test_click_diagnosis_says_not_delivered_when_cursor_never_reached_target():
+    traces = [click_trace((0, 0, 100, 100), 0x10, 0x10, (5, 5), True)]
+    # cursor_at 每轮都不在点击坐标上 ⇒ 输入没送达(UIPI / 别的窗口吃掉)
+    assert click_diagnosis(traces) == "click_not_delivered"
+
+
+def test_click_diagnosis_says_wrong_window_when_it_never_owns_the_foreground():
+    traces = [click_trace((0, 0, 100, 100), 0x99, 0x10, (50, 33), True)]
+    assert click_diagnosis(traces) == "wrong_window"
+
+
+def test_click_diagnosis_says_handoff_never_fired_when_everything_landed():
+    traces = [click_trace((0, 0, 100, 100), 0x10, 0x10, (50, 33), True)]
+    assert click_diagnosis(traces) == "handoff_never_fired"
+
+
+def test_click_diagnosis_is_inconclusive_on_empty_or_contradictory_traces():
+    assert click_diagnosis([]) == "inconclusive"
+    assert click_diagnosis([{"rect": None}]) == "inconclusive"
+
+
+def test_click_diagnosis_reads_the_launcher_closing_as_no_longer_alive():
+    # launcher 进程没了但 _handoff_observed 没判成交接 ⇒ 不是「点击没送达」
+    traces = [click_trace((0, 0, 100, 100), 0x10, 0x10, (50, 33), False)]
+    assert click_diagnosis(traces) == "handoff_never_fired"
+
+
+class _FakeTraceUser32:
+    """GetForegroundWindow + GetCursorPos, the two read-backs the trace needs.
+
+    `GetCursorPos` fills the POINT through the pointer the caller passed, the way
+    _FakeUser32.get_thread_pid already does for a DWORD pointer.
+    """
+
+    def __init__(self, foreground=0x10, cursor=(50, 33), cursor_ok=True):
+        self.foreground = foreground
+        self.cursor = cursor
+        self.cursor_ok = cursor_ok
+
+    def get_foreground_window(self):
+        return self.foreground
+
+    def get_cursor_pos(self, pt_ptr):
+        if not self.cursor_ok:
+            return 0
+        pt = ctypes.cast(pt_ptr, ctypes.POINTER(launch_stellaris._POINT))
+        pt[0].x, pt[0].y = self.cursor
+        return 1
+
+
+@patch("launch_stellaris._handoff_observed", return_value=False)
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect", return_value=(0, 0, 100, 100))
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+@patch("launch_stellaris._trace_fns",
+       return_value=(None, None))
+def test_launcher_click_logs_one_trace_per_attempt_and_a_diagnosis(
+        _trace, mock_fg, mock_sleep, mock_rect, mock_click, mock_handoff,
+        capsys):
+    """exit 23 今天只有「点了没推进」这一个信息。三档诊断的证人必须是每轮读回的
+    观测(谁在前台、光标真在哪),而不是一句结论 —— 结论可以现在不下(Task 8 才下)。"""
+    fake = _FakeTraceUser32(foreground=0x10, cursor=(5, 5))
+    _trace.return_value = (fake.get_foreground_window, fake.get_cursor_pos)
+    assert launcher_click(0x10, pid=None) == EXIT_LAUNCHER_NO_ADVANCE
+    lines = [l for l in capsys.readouterr().err.splitlines()
+             if "LAUNCHER_CLICK" in l]
+    traces = [l for l in lines if "step=trace" in l]
+    assert len(traces) == launch_stellaris._CLICK_ATTEMPTS
+    for line in traces:
+        assert "cursor_at=(5, 5)" in line, line
+        assert "owns_foreground=True" in line, line
+        assert "rect=" not in line, line          # rect 已在 step=click 那行记过
+    diagnosis = [l for l in lines if "step=diagnosis" in l]
+    assert len(diagnosis) == 1 and "diagnosis=click_not_delivered" in diagnosis[0]
+
+
+@patch("launch_stellaris._handoff_observed", return_value=False)
+@patch("launch_stellaris._click_at")
+@patch("launch_stellaris._window_rect", return_value=(0, 0, 100, 100))
+@patch("launch_stellaris._time.sleep", return_value=None)
+@patch("launch_stellaris.bring_to_foreground", return_value=True)
+def test_a_failing_trace_readback_never_changes_the_exit_code(
+        mock_fg, mock_sleep, mock_rect, mock_click, mock_handoff, capsys):
+    """回归钉,不是 RED:这台主机上 `ctypes.WinDLL` 根本不存在,读回必然抛。
+    一条诊断日志不值得把 23 变成未记录的 1(docstring 里 OSError → NO_FOCUS 讲的
+    正是同一件事)。既有那四条 launcher_click 测试全走这条路,它们只断退出码。"""
+    assert launcher_click(4242) == EXIT_LAUNCHER_NO_ADVANCE
+    err = capsys.readouterr().err
+    assert "step=diagnosis  diagnosis=inconclusive" in err
