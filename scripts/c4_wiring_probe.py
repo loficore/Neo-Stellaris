@@ -448,6 +448,21 @@ def supervisor_ready(rec, now, max_age_s=5.0):
     return "ok"
 
 
+def console_gate(rec):
+    """Refuse the shot unless the daemon's console belief came from pixels.
+
+    ``True`` is fine: after the first console command the panel stays open
+    (§54.1), so demanding closed would block every multi-command run.
+    ``None`` means the pixel read was undecided or the daemon predates the
+    observation channel -- both are guesses, and §54.9 is what guessing costs.
+    """
+    if not isinstance(rec, dict) or rec.get("console_open") is None:
+        return "console_state_unknown"
+    if rec.get("console_forced"):
+        return "console_belief_pinned"
+    return "ok"
+
+
 def classify_capture(wire, records, find, pred=None):
     if wire.get("calls", 0) == 0:
         if pred is None:
@@ -605,17 +620,35 @@ def _wait_marker(path, offset, marker, expected, timeout):
     return best
 
 
-def _wait_paused(status_path, cmd_path, timeout=15.0):
+def _wait_ready(status_path, cmd_path, timeout=15.0):
     _write_command(cmd_path, "want paused")
     deadline = time.time() + timeout
     rec = None
     while time.time() < deadline:
         rec = _read_status(status_path)
-        if supervisor_ready(rec, time.time()) == "ok":
+        if supervisor_ready(rec, time.time()) == "ok" and console_gate(rec) == "ok":
             return rec, None
         time.sleep(0.5)
     rec = _read_status(status_path)
-    return rec, supervisor_ready(rec, time.time())
+    verdict = supervisor_ready(rec, time.time())
+    if verdict == "ok":
+        verdict = console_gate(rec)
+    return rec, verdict
+
+
+def _wait_gate_detail(rec):
+    """Abort detail naming which gate refused and the values it saw.
+
+    ``supervisor state=`` is the whole last status record; the three named
+    console fields let §55 read the pixel-belief values at a glance instead of
+    parsing a dict repr. When ``rec`` is None (no status readable) each field is
+    ``-`` so the refusal still attributes to the belief gate, never a crash.
+    """
+    def field(key):
+        return "-" if not isinstance(rec, dict) else rec.get(key)
+    return (f"supervisor state={rec} console_open={field('console_open')} "
+            f"console_px={field('console_px')} "
+            f"console_forced={field('console_forced')}")
 
 
 def _read_wire_stats(pid, base, rva, buf):
@@ -722,9 +755,9 @@ def _campaign_preflight(args, result, log_path, pid) -> None:
 def _flow(args, result, state):
     log_path = os.path.expanduser(args.game_log)
 
-    _, verdict = _wait_paused(args.supervisor_status, args.supervisor_cmd)
+    rec, verdict = _wait_ready(args.supervisor_status, args.supervisor_cmd)
     if verdict is not None:
-        raise _Abort(verdict, f"supervisor state={_read_status(args.supervisor_status)}")
+        raise _Abort(verdict, _wait_gate_detail(rec))
 
     result["save_sha"] = _sha256_file(args.save)
     gate = campaign_gate(result["save_sha"], SAVE_SHA, args.allow_drift)

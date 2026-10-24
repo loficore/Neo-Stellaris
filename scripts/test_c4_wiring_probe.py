@@ -2,6 +2,7 @@ import pathlib
 import re
 import struct
 import sys
+import time
 import types
 
 import pytest
@@ -14,8 +15,9 @@ from c4_wiring_probe import (
     EXPECTED_TIERS, PREFLIGHT_MARKERS, RECORD_SIZE, SAVE_SHA,
     SCORE_COUNT, apply_console, apply_result, campaign_gate, capture_console,
     classify_apply, classify_capture, classify_delivery,
-    column_sequences, count_marker_lines, decode_pred_stats, decode_records,
-    decode_scored_stats, decode_wire_stats, expected_tiers, find_scope_column,
+    column_sequences, console_gate, count_marker_lines, decode_pred_stats,
+    decode_records, decode_scored_stats, decode_wire_stats, expected_tiers,
+    find_scope_column,
     pack_spec, preflight_console, preflight_gate, predicate_delta,
     supervisor_ready, unpack_spec,
 )
@@ -321,6 +323,18 @@ def test_supervisor_ready_rejects_stale_status_and_playing():
     assert supervisor_ready({"state": "no_game", "epoch": 99.0}, now=100.0) == "supervisor_not_running"
     assert supervisor_ready({"state": "stopped", "epoch": 99.0}, now=100.0) == "supervisor_not_running"
 
+
+def test_console_gate_accepts_a_decisive_observation_open_or_closed():
+    assert console_gate({"console_open": False, "console_forced": False}) == "ok"
+    assert console_gate({"console_open": True, "console_forced": False}) == "ok"
+
+
+def test_console_gate_refuses_unknown_and_pinned():
+    # 旧 daemon 的状态记录里没有这些键 —— 缺失即未知,不是「关」。
+    assert console_gate({"state": "paused"}) == "console_state_unknown"
+    assert console_gate({"console_open": None}) == "console_state_unknown"
+    assert console_gate({"console_open": True, "console_forced": True}) == "console_belief_pinned"
+
 def test_classify_capture_and_apply():
     cap = {"calls": 787, "records": 787, "dropped": 0}
     ok_find = {"status": "ok", "column": "ctx+0x38",
@@ -538,7 +552,7 @@ def _slot2_args(tmp_path):
 
 def test_flow_aborts_before_the_game_is_touched_when_slot2_export_missing(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(mod, "_wait_paused", lambda *a, **k: ({"state": "paused"}, None))
+    monkeypatch.setattr(mod, "_wait_ready", lambda *a, **k: ({"state": "paused"}, None))
     monkeypatch.setattr(mod, "_sha256_file", lambda p: mod.SAVE_SHA)
     monkeypatch.setattr(mod.harness, "list_exports", lambda p: {
         name: 0x10 for name in mod.REQUIRED_EXPORTS})
@@ -550,3 +564,38 @@ def test_flow_aborts_before_the_game_is_touched_when_slot2_export_missing(monkey
     assert exc.value.verdict == "dll_exports_missing"
     assert "C4Slot2StatsInto" in exc.value.detail
     assert calls == []
+
+
+def test_wait_ready_waits_for_the_observation_not_just_for_paused(monkeypatch):
+    now = time.time()          # supervisor_ready 默认 max_age_s=5.0,epoch 必须是「刚刚」
+    recs = [{"state": "playing", "epoch": now, "console_open": False},
+            {"state": "paused", "epoch": now, "console_open": None},
+            {"state": "paused", "epoch": now, "console_open": False}]
+    reads = iter(recs)
+    monkeypatch.setattr(mod, "_read_status", lambda p: next(reads))
+    monkeypatch.setattr(mod, "_write_command", lambda p, line: None)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    rec, verdict = mod._wait_ready("status.json", "cmd.txt", timeout=30.0)
+    assert verdict is None
+    assert rec is recs[2]
+
+
+def test_flow_refuses_before_touching_the_game_when_the_belief_is_undecided(monkeypatch, tmp_path):
+    touched = []
+    rec = {"state": "paused", "console_open": None, "console_px": 900,
+           "console_forced": False}
+    # 两个名字都打桩(raising=False):RED 阶段 _flow 还叫 _wait_paused,
+    # GREEN 之后叫 _wait_ready;不真去轮询,否则这条测试要白等 15 s。
+    for name in ("_wait_paused", "_wait_ready"):
+        monkeypatch.setattr(mod, name,
+                            lambda *a, **k: (rec, "console_state_unknown"),
+                            raising=False)
+    monkeypatch.setattr(mod, "_send_console_or_abort",
+                        lambda *a, **k: touched.append("console"))
+    monkeypatch.setattr(mod.harness, "resolve_pid",
+                        lambda name: touched.append("pid") or 1234)
+    with pytest.raises(mod._Abort) as exc:
+        mod._flow(_slot2_args(tmp_path), {}, {})
+    assert exc.value.verdict == "console_state_unknown"
+    assert "console_px=900" in exc.value.detail
+    assert touched == []
