@@ -14,8 +14,15 @@ ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED`)掐掉「空闲 → 关屏 → 唤醒�
 (与 `supervisor_ready`/`console_gate` 同一形状)。
 """
 
+import argparse
 import ctypes
+import json
+import os
+import subprocess
 import sys
+import time
+
+from game_supervisor import atomic_write_json, atomic_write_text, read_command, rotate_log
 
 # --------------------------------------------------------------------------
 # pure core — importable and testable on any OS
@@ -234,3 +241,193 @@ def desktop_snapshot():
     if "\\" in name:
         name = name.split("\\")[-1]   # the API usually returns the bare name; strip any Winsta0\ prefix
     return classify_desktop(name, 0, own, console), name, own, console
+
+
+# --------------------------------------------------------------------------
+# serve / CLI — the file channel runs anywhere, the schtasks half is Windows
+# --------------------------------------------------------------------------
+
+QUIT_COMMAND = "quit"
+
+
+def write_status(rec) -> None:
+    atomic_write_json(STATUS_PATH, rec)
+
+
+def read_status(path=None):
+    try:
+        with open(path or STATUS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def log_transition(now: float, state: str, detail: str) -> None:
+    rotate_log(LOG_PATH)
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"event": "desktop_change", "epoch": now,
+                            "desktop": state, "detail": detail},
+                           ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def serve(args) -> int:
+    """Hold the power assertion and keep the status record fresh until told to stop.
+
+    One `time.time()` per tick, at the top: it is both the shape of the loop and the
+    seam the io tests drive it through.  The exit checks sit after `write_status` and
+    before `sleep`, so the last observation is never lost — and the closing record
+    keeps `desktop` at that last observation while flipping `state` to "stopped", so
+    "the guard left but the screen is still lit" can never read as "safe to shoot".
+    """
+    start = time.time()
+    now = start
+    asserted_at = 0.0
+    assert_rc = 0
+    last_state = None
+    state, detail, own, console = None, "", -1, -1
+    note = ""
+    while True:
+        now = time.time()
+        state, detail, own, console = desktop_snapshot()
+        do_assert, changed = plan_tick(now, asserted_at, last_state, state,
+                                       args.assert_every)
+        if do_assert:
+            assert_rc = assert_execution()
+            asserted_at = now
+        if changed:
+            log_transition(now, state, detail)
+        write_status(build_status_record(pid=os.getpid(), now=now, desktop_state=state,
+                                         desktop_detail=detail, own_session=own,
+                                         console_session=console, assert_rc=assert_rc,
+                                         asserted_at=asserted_at, state="serving"))
+        last_state = state
+        if read_command(CMD_PATH, CMD_SEEN_PATH) == QUIT_COMMAND:
+            note = "quit"
+            break
+        if args.stop_after_s > 0 and now - start >= args.stop_after_s:
+            note = "stop_after"
+            break
+        time.sleep(args.interval)
+    write_status(build_status_record(pid=0, now=now, desktop_state=state,
+                                     desktop_detail=detail, own_session=own,
+                                     console_session=console, assert_rc=assert_rc,
+                                     asserted_at=asserted_at, state="stopped",
+                                     note=note))
+    return 0
+
+
+def check_exit_code(rec, now: float) -> int:
+    """0 = a fresh, serving, reachable observation; 1 = refuse; 2 = no observation at all."""
+    if not isinstance(rec, dict) or not all(k in rec for k in ("state", "epoch", "desktop")):
+        return 2
+    if rec["state"] != "serving":
+        return 1
+    if not is_fresh(rec, now):
+        return 1
+    if desktop_reachable(rec["desktop"]):
+        return 0
+    return 1
+
+
+def cmd_check(args) -> int:
+    now = time.time()
+    rec = read_status()
+    print(status_line(rec, now))
+    return check_exit_code(rec, now)
+
+
+def cmd_status(args) -> int:
+    print(status_line(read_status(), time.time()))
+    return 0
+
+
+def cmd_start(args) -> int:
+    _require_windows()
+    rec = read_status()
+    now = time.time()
+    if rec and rec.get("state") != "stopped" and is_fresh(rec, now):
+        print(status_line(rec, now))
+        return 0
+    pythonw = args.pythonw or sys.executable.replace("python.exe", "pythonw.exe")
+    atomic_write_text(TASK_SHIM, task_shim_text(pythonw, os.path.abspath(__file__)))
+    ru = f"{os.environ.get('COMPUTERNAME', '')}\\{os.environ.get('USERNAME', '')}"
+    st = time.strftime("%H:%M", time.localtime(time.time() + 120))
+    subprocess.run(["schtasks", "/create", "/tn", TASK_NAME, "/tr", TASK_SHIM,
+                    "/sc", "once", "/st", st, "/ru", ru, "/rl", "highest",
+                    "/f"], check=True, capture_output=True, text=True)
+    subprocess.run(["schtasks", "/run", "/tn", TASK_NAME, "/I"],
+                   check=True, capture_output=True, text=True)
+    deadline = time.time() + args.timeout_s
+    while time.time() < deadline:
+        rec = read_status()
+        if is_fresh(rec, time.time()):
+            print(status_line(rec, time.time()))
+            return 0
+        time.sleep(0.5)
+    print("STATUS=timeout")
+    return 1
+
+
+def cmd_stop(args) -> int:
+    """Ask the daemon to quit, then make sure that request can never be replayed.
+
+    The `read_command` call is the point, not a side effect: it registers the
+    (mtime_ns, size) key of the line we just wrote.  A live daemon has usually
+    consumed it first, so this is idempotent; when it hasn't (it already stopped, or
+    it died), leaving the key unregistered would make the next `start` read yesterday's
+    "quit" and kill itself on the first tick.
+    """
+    atomic_write_text(CMD_PATH, QUIT_COMMAND + "\n")
+    deadline = time.time() + args.timeout_s
+    rec = None
+    while time.time() < deadline:
+        rec = read_status()
+        if rec and rec.get("state") == "stopped":
+            break
+        time.sleep(0.5)
+    read_command(CMD_PATH, CMD_SEEN_PATH)
+    _delete_task()
+    if rec and rec.get("state") == "stopped":
+        print(status_line(rec, time.time()))
+        return 0
+    print("STATUS=stop_timeout")
+    return 1
+
+
+def _delete_task() -> None:
+    _require_windows()
+    for verb in ("/end", "/delete"):
+        with open(os.devnull, "w") as devnull:
+            subprocess.run(["schtasks", verb, "/tn", TASK_NAME, "/f"],
+                           stdout=devnull, stderr=devnull)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description=__doc__)
+    sub = p.add_subparsers(dest="verb", required=True)
+    s = sub.add_parser("serve")
+    s.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S)
+    s.add_argument("--assert-every", type=float, default=DEFAULT_ASSERT_EVERY_S)
+    s.add_argument("--stop-after-s", type=float, default=0.0,
+                   help="0 runs forever; non-zero bounds the session")
+    start = sub.add_parser("start")
+    start.add_argument("--timeout-s", type=int, default=30)
+    start.add_argument("--pythonw", default=None)
+    stop = sub.add_parser("stop")
+    stop.add_argument("--timeout-s", type=int, default=10)
+    sub.add_parser("status")
+    sub.add_parser("check")
+    return p
+
+
+_VERBS = {"serve": serve, "start": cmd_start, "stop": cmd_stop,
+          "status": cmd_status, "check": cmd_check}
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    return _VERBS[args.verb](args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -29,7 +29,7 @@ chokepoints-check:
 check: build test fence host-tests chokepoints-check
 
 deploy:
-    scp scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py {{WIN_HOST}}:{{WIN_TEMP}}/
+    scp scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py scripts/windows/keep_awake.py {{WIN_HOST}}:{{WIN_TEMP}}/
 
 # Launch Stellaris through Steam (launcher clicks included; stays paused).
 launch *args:
@@ -40,6 +40,10 @@ launch *args:
 # console_sync open|closed|auto | console_close | dismiss | close | shot | quit
 game verb *args:
     ssh {{WIN_HOST}} "python {{WIN_TEMP}}/game_supervisor.py {{verb}} {{args}}"
+
+# keep the interactive desktop awake: serve | start | stop | status | check
+awake *args:
+    ssh {{WIN_HOST}} "python {{WIN_TEMP}}/keep_awake.py {{args}}"
 
 # arbitrary command on the Windows host, e.g. just win "Get-Process stellaris"
 win *args:
