@@ -82,6 +82,18 @@ REQUIRED_EXPORTS = (
     "C4PredStatsInto",
 )
 
+
+def required_exports(mode):
+    """The exports a run needs before it touches the game.
+
+    ``C4Slot2StatsInto`` landed after the §54 capture batch, so making it
+    global would fail the pre-check on a DLL that capture mode can still use.
+    """
+    if mode == "slot2":
+        return REQUIRED_EXPORTS + ("C4Slot2StatsInto",)
+    return REQUIRED_EXPORTS
+
+
 SENTINEL_PREFIX = "C4_%sSTART_%d_[This.GetName]"
 
 
@@ -649,9 +661,7 @@ def _slot2_phase(args, result, exports, pid, base, log_path):
     beyond the engine's own donor effects. ``slot2_zero`` is a datum, not a
     failure, so it is written to the verdict rather than raised.
     """
-    rva = exports.get("C4Slot2StatsInto")
-    if not rva:
-        raise _Abort("dll_exports_missing", "C4Slot2StatsInto")
+    rva = exports["C4Slot2StatsInto"]
     sbuf = harness.remote_alloc(pid, SLOT2_SIZE)
     before = _read_slot2_stats(pid, base, rva, sbuf)
     offset = _file_size(log_path)
@@ -723,7 +733,7 @@ def _flow(args, result, state):
         raise _Abort(gate, f"save sha256 {result['save_sha']}")
 
     exports = harness.list_exports(args.dll)
-    missing = sorted(set(REQUIRED_EXPORTS) - set(exports))
+    missing = sorted(set(required_exports(args.mode)) - set(exports))
     if missing:
         raise _Abort("dll_exports_missing", ",".join(missing))
     state["exports"] = exports

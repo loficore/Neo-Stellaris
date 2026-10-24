@@ -2,6 +2,7 @@ import pathlib
 import re
 import struct
 import sys
+import types
 
 import pytest
 
@@ -515,3 +516,37 @@ def test_campaign_preflight_logs_unreadable_before_any_wait_field(monkeypatch):
         probe._campaign_preflight(args, result, "log", 4242)
     assert excinfo.value.verdict == "log_unreadable"
     assert "preflight_wait_s" not in result
+
+
+def test_required_exports_add_slot2_stats_only_for_slot2():
+    assert "C4Slot2StatsInto" not in mod.required_exports("capture")
+    assert "C4Slot2StatsInto" in mod.required_exports("slot2")
+    assert mod.required_exports("capture") == mod.REQUIRED_EXPORTS
+    assert mod.required_exports("slot2") == mod.REQUIRED_EXPORTS + ("C4Slot2StatsInto",)
+
+
+def _slot2_args(tmp_path):
+    return types.SimpleNamespace(mode="slot2", save="save.sav", allow_drift=False,
+                                 dll="sqjs_c4.dll",
+                                 game_log=str(tmp_path / "game.log"),
+                                 supervisor_status=str(tmp_path / "status.json"),
+                                 supervisor_cmd=str(tmp_path / "cmd.txt"),
+                                 supervisor_log=None,
+                                 shot=str(tmp_path / "shot.png"),
+                                 json=str(tmp_path / "out.json"))
+
+
+def test_flow_aborts_before_the_game_is_touched_when_slot2_export_missing(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(mod, "_wait_paused", lambda *a, **k: ({"state": "paused"}, None))
+    monkeypatch.setattr(mod, "_sha256_file", lambda p: mod.SAVE_SHA)
+    monkeypatch.setattr(mod.harness, "list_exports", lambda p: {
+        name: 0x10 for name in mod.REQUIRED_EXPORTS})
+    monkeypatch.setattr(mod.harness, "resolve_pid",
+                        lambda name: calls.append(name) or 1234)
+    result = {}
+    with pytest.raises(mod._Abort) as exc:
+        mod._flow(_slot2_args(tmp_path), result, {})
+    assert exc.value.verdict == "dll_exports_missing"
+    assert "C4Slot2StatsInto" in exc.value.detail
+    assert calls == []
