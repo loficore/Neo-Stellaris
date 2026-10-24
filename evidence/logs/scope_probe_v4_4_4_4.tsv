@@ -1,0 +1,55 @@
+# kind	key	value	detail
+meta	exe_base	0x7ff6abbf0000	-
+meta	image_end	0x7ff6af517000	-
+meta	image_size	0x3927000	-
+meta	dll	sqjs_c4_scope_v2.dll	-
+meta	dll_sha256	373ab26ba87310f0acaffe941b9007bf0807b2a83872a5d27e2740c5d3e30471	-
+meta	vtable_map_count	1805	-
+meta	layout	entry=120 stats=56 ring=256 mask=511 version=2	-
+meta	stats	calls=3061 samples=5 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=5 patch_size=16 installed=1 verified=-1	-
+meta	per_source_follow	8	-
+meta	followed_by_source	self=4/helper=2/arg3=1/arg4=1	-
+meta	implausible_by_source	self=0/helper=0/arg3=2/arg4=0	-
+meta	capped_by_source	self=0/helper=0/arg3=0/arg4=0	-
+meta	withheld_by_source	self=0/helper=0/arg3=0/arg4=0	-
+meta	calls	3061	-
+meta	samples	5	-
+meta	valid	5	-
+meta	lexer	0	-
+meta	known_vtable_hits	0	-
+meta	member_vtable_hits	0	-
+meta	unknown_ptr_hits	16	-
+meta	unreadable_roots	0	-
+meta	regions_queried	10	-
+meta	region_verdicts	arg3/image=1/arg4/image=1/ctx/private_committed=2/helper/private_committed=2/self/private_committed=4	-
+meta	verdict	no_scope_candidate	-
+caller	0x1bcd18d	3	func=0x1bcd120 origin=incoming_arg
+caller	0x1c43699	2	func=- origin=-
+chain	0x7fe768	0	x=0xfffffffffffffff8 s=- vptr=- id=- name=- object=-
+chain	0x7fed78	0	x=0x1426d28f6 s=0x0 vptr=- id=- name=- object=-
+object	0x7feb00	0	source=self off=0x0 ptr=0x103a7fc0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x2d64b6b8 vptr_rva=- slot2_rva=-
+object	0x7feb00	0	source=self off=0x20 ptr=0x7febf0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x7feb00	0	source=self off=0x28 ptr=0x7febd0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x2ddc2c90 vptr_rva=- slot2_rva=-
+object	0x7feb00	0	source=self off=0x30 ptr=0x7febb0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x7fffff00 vptr_rva=- slot2_rva=-
+object	0x7fef70	0	source=helper off=0x38 ptr=0x1400000000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=- vptr_rva=- slot2_rva=-
+object	0x7fe4f0	0	source=self off=0x0 ptr=0x7fe590 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x7fe4f0	0	source=self off=0x20 ptr=0x7fe640 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x7fe4f0	0	source=self off=0x28 ptr=0x1b63a7d0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x7fe960	0	source=helper off=0x10 ptr=0x2ddc2c90 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x7ff6ae06a358 vptr_rva=0x247a358 slot2_rva=-
+object	0x7fe960	0	source=helper off=0x18 ptr=0x317062c0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x23518600 vptr_rva=- slot2_rva=-
+object	0x7fe960	0	source=helper off=0x30 ptr=0x2ab49278 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x102 vptr_rva=- slot2_rva=-
+object	0x1fdf4a8c0	0	source=self off=0x20 ptr=0x400000000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=- vptr_rva=- slot2_rva=-
+object	0x10384d700	0	source=self off=0x0 ptr=0x2199f0890 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x1e4c3ef00 vptr_rva=- slot2_rva=-
+object	0x10384d700	0	source=self off=0x10 ptr=0x37473c60 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x10384d700	0	source=self off=0x20 ptr=0x37c1b500 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x4000000040 vptr_rva=- slot2_rva=-
+object	0x10384d700	0	source=self off=0x38 ptr=0x1000000000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=- vptr_rva=- slot2_rva=-
+region	0x7feb00	private_committed	source=self base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x400000
+region	0x7fef70	private_committed	source=helper base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x400000
+region	0x7ff6ad8f8520	image	source=arg3 base=0x7ff6ad8f8000 size=0x68a000 state=0x1000 protect=0x20 type=0x1000000 alloc_base=0x7ff6abbf0000
+region	0x7ff6add77b28	image	source=arg4 base=0x7ff6add77000 size=0x20b000 state=0x1000 protect=0x20 type=0x1000000 alloc_base=0x7ff6abbf0000
+region	0x7fe4f0	private_committed	source=self base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x400000
+region	0x7fe960	private_committed	source=helper base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x400000
+region	0x1fdf4a8c0	private_committed	source=self base=0x1fdf4a000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1fd0d0000
+region	0x10384d700	private_committed	source=self base=0x10384d000 size=0x73000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x103780000
+region	0x7fed78	private_committed	source=ctx base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x400000
+region	0x7fe768	private_committed	source=ctx base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x400000
