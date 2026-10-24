@@ -1,0 +1,346 @@
+# keep_awake 桌面守护 —— 实机验收(2026-10-24)
+
+> 主机 `Windows_Jiaolong`(= `ns_work.env` 的 `NS_WIN_HOST`,IP 10.66.0.7),远端目录 `C:/temp`,
+> 远端默认 shell 是 PowerShell。**本任务全程不碰游戏**:不 `just launch`、不注入、不发任何
+> `console`/`console_sync` 动词、不动 `console_sync`;它唯一动的东西是电源状态断言和一个
+> 计划任务(建与删都在收尾验掉)。永久性改动一条没做:不写注册表、不 `powercfg /change`、
+> 不改屏保与登录策略。桌面观测只读名字,不在 secure desktop 合成输入、不尝试解锁、不猜口令。
+
+> 离线门的数字在 §10;实机一共打了三枪 —— 第一枪崩在参数编组(§4.3)、第二枪崩在打印(§3)、
+> 第三枪才是真的观测(§5)。前两枪各暴露一批只有 Windows 调用路径才会暴露的缺陷,`dda97a0` 与
+> `3566f5d` 是它们的修复。
+>
+> 记法两条约定:远端中文输出是 GBK,本文引用的均已 `iconv -f GBK -t UTF-8` 转码;带 `...` 的
+> 行是为排版折起的,三条诊断探针的**完整命令行**在 §12。
+
+## 1. 部署与哈希核对
+
+四个文件都要落远端并逐字节核对。`just deploy` 只覆盖 `scripts/windows/` 那三个,探针历史上
+一直是单独 scp 的 —— 沿用同一做法。
+
+    $ just deploy
+    scp scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py scripts/windows/keep_awake.py Windows_Jiaolong:C:/temp/
+
+    $ scp scripts/c4_wiring_probe.py Windows_Jiaolong:C:/temp/
+
+    $ sha256sum scripts/windows/keep_awake.py scripts/c4_wiring_probe.py scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py
+    1fae21a9227a06361dfae2ad78de8db413ddcd0b025796ed6ad438daa098f0e9  scripts/windows/keep_awake.py
+    7da26e56dbff3394772da70494e491b38313941815003d9344f88c2137cfc26b  scripts/c4_wiring_probe.py
+    1ad3f6f7931a15292bf4fd0e1284c358f6fbf8c7f647ce716ef32e78a09e7ec3  scripts/windows/game_supervisor.py
+    3bba05666e59e29ec78c552d4a333dd264c539c869b21ca985cbd6948a9af522  scripts/windows/launch_stellaris.py
+
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command \"(Get-FileHash C:/temp/keep_awake.py).Hash; (Get-FileHash C:/temp/c4_wiring_probe.py).Hash; (Get-FileHash C:/temp/game_supervisor.py).Hash; (Get-FileHash C:/temp/launch_stellaris.py).Hash\""
+    1FAE21A9227A06361DFAE2AD78DE8DB413DDCD0B025796ED6AD438DAA098F0E9
+    7DA26E56DBFF3394772DA70494E491B38313941815003D9344F88C2137CFC26B
+    1AD3F6F7931A15292BF4FD0E1284C358F6FBF8C7F647CE716EF32E78A09E7EC3
+    3BBA05666E59E29EC78C552D4A333DD264C539C869B21CA985CBD6948A9AF522
+
+四行两两对应(`Get-FileHash` 输出大写,与 `sha256sum` 去大小写后逐字符一致)。
+
+修好之后再核一次(`3566f5d` 部署后),差异只可能来自被改的那一个文件:
+
+    $ sha256sum scripts/windows/keep_awake.py
+    de96a01fe44b738496f9918ce594cd276e28e11b09e1a95d1e1ba13961a3027d  scripts/windows/keep_awake.py
+
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command \"(Get-FileHash C:/temp/keep_awake.py).Hash; (Get-FileHash C:/temp/c4_wiring_probe.py).Hash; (Get-FileHash C:/temp/game_supervisor.py).Hash; (Get-FileHash C:/temp/launch_stellaris.py).Hash\""
+    DE96A01FE44B738496F9918CE594CD276E28E11B09E1A95D1E1BA13961A3027D   # keep_awake.py(新)
+    7DA26E56DBFF3394772DA70494E491B38313941815003D9344F88C2137CFC26B   # 与上表同一字节
+    1AD3F6F7931A15292BF4FD0E1284C358F6FBF8C7F647CE716EF32E78A09E7EC3   # 与上表同一字节
+    3BBA05666E59E29EC78C552D4A333DD264C539C869B21CA985CBD6948A9AF522   # 与上表同一字节
+
+只有 `keep_awake.py` 变了,其余三个逐字符不动 —— 远端与本地两边一致,没有带着差异往下走。
+本轮运行的字节由 git blob 索引,不必靠记忆:`git rev-parse 3566f5d:scripts/windows/keep_awake.py`
+= `bff43290c30d8645c0dbb663d9864b749e4eca6c`。
+
+## 2. 远端引号与退出码的取法(两条踩过的坑)
+
+- 远端默认 shell 是 PowerShell,`&` 会被它拒,多命令用 `;` 分隔;路径一律写**正斜杠**
+  (`C:/temp/...`),反斜杠在 `ssh` → PowerShell → `python -c` 三层引号里会逃错。
+- 退出码必须**在同一条 ssh 里**取 `$LASTEXITCODE`,另起一次 ssh 读到的是上一条 ssh 的退出码,
+  那是假证据。而 `$LASTEXITCODE` 在本地 zsh 里会先被展开成空串,所以要写成 `\$LASTEXITCODE`:
+
+        $ ssh Windows_Jiaolong "python -c \"import sys; sys.exit(3)\"; echo RC=\$LASTEXITCODE"
+        RC=3
+
+## 3. 第二枪(字节 `1fae21a9`,即 `dda97a0` 之后):守护起来了,但观测是假的
+
+    $ ssh Windows_Jiaolong "python C:/temp/keep_awake.py start; echo RC=\$LASTEXITCODE"
+    Traceback (most recent call last):
+      File "C:\temp\keep_awake.py", line 477, in <module>
+        raise SystemExit(main())
+      File "C:\temp\keep_awake.py", line 473, in main
+        return _VERBS[args.verb](args)
+      File "C:\temp\keep_awake.py", line 408, in cmd_start
+        print(status_line(rec, time.time()))
+    UnicodeEncodeError: 'gbk' codec can't encode character '\u0301' in position 43: illegal multibyte sequence
+    RC=1
+
+`start` 的等待循环其实赢了(新心跳到位),死的是**打印报告那一步**;traceback 把退出码顶成了 1。
+在这之前还有第一枪:同一族代码起守护后的**第一条 tick** 就崩在参数编组上(`C:/temp/ns_awake.out`
+里那条 `ctypes.ArgumentError`,见 §4.3),`dda97a0` 修的就是那一族;所以这一版字节能跑到打印那一步,
+但它的桌面观测仍是假的。这一版字节写出的状态记录全文:
+
+    $ ssh Windows_Jiaolong "python -c \"print(repr(open('C:/temp/ns_awake_status.json','rb').read()))\""
+    b'{"pid":10612,"epoch":1792825359.8845196,"state":"serving","note":"","desktop":"wrong_session","desktop_detail":"\xcc\x81","session":-1,"console_session":1,"assert_rc":2147483648,"asserted_at":1792825339.877894}'
+
+三个数字自己会说话:`desktop_detail` 是 `\xcc\x81`,即 UTF-8 编码的**单个** `U+0301`(组合重音符);
+`session=-1` 是「这个 API 我没答上来」的哨兵;`desktop` 因此是 `wrong_session`。
+
+## 4. 三条根因,逐条取证
+
+### 4.1 `ProcessIdToSessionId` 的第一参是进程号,不是句柄
+
+    $ ssh Windows_Jiaolong "python -c \"... GetCurrentProcess / GetCurrentProcessId / OpenProcess + ProcessIdToSessionId ...\""   # 完整命令行见 §12
+    handle 18446744073709551615 pid 3816
+    via pseudo False 0 87
+    via openprocess 488 False 0 87
+
+伪句柄 `(HANDLE)-1` 和 `OpenProcess` 拿到的真句柄 488,**两次都是 `FALSE` + `gle=87`
+(ERROR_INVALID_PARAMETER)** —— 因为那个值被当成进程号去查了,而 2⁶⁴-1 和 488 都不是任何进程
+的 pid。函数名里就写着 `ProcessId`,原型里 `GetCurrentProcess()` 换 `GetCurrentProcessId()` 即修好。
+代价是守护永远读不到自己的会话号,`own=-1 != console=1`,`classify_desktop` 在名字之前先判
+session 相等,于是**桌面判决永远卡在 `wrong_session`**:桌面观测这一半整条链从未真正跑过。
+
+### 4.2 桌面名字的信息号是 `UO_NAME = 2`,不是 4
+
+计划里写的 `UDESKF_NAME = 4` 是错的。索引 4 落在桌面对象的**标志结构体**上,把它读进宽字符串
+缓冲,拿回来的就是那个 `0x0301` 的字节形状 `"\u0301"` —— 一个数穿着字符串的衣服。判据是两半:
+文档侧 `UO_NAME = 2` / `UO_TYPE = 4`,实机侧那条 `desktop_detail` 根本不是一个名字的形状。
+改成 2 之后的实机凭据在 §5(读回 `Default`),这条到此闭合;§12 里那条 `idx 2/4` 探针
+**没有**判别力(它从 session 0 起,句柄就是 `NULL`)。
+
+### 4.3 `ctypes` 的原型不是风格问题(第一枪)
+
+第一枪的 traceback(`C:/temp/ns_awake.out`,守护第一条 tick 就死):
+
+    ctypes.ArgumentError: argument 1: OverflowError: int too long to convert
+
+它落在 `keep_awake.py:223` 的 `ProcessIdToSessionId(kernel32.GetCurrentProcess(), ...)` 这一行:
+`GetCurrentProcess` 声明了 `restype = c_void_p`,于是还回 `2**64-1`,而 `ProcessIdToSessionId`
+没声明 `argtypes`,第一参按 C `int` 收 ⇒ 编组阶段就炸。**同一族里另外两处是照规则推出来的、
+不是实机看见的**:`SetThreadExecutionState(0x80000003)` 的实参同样超出默认 `int` 的范围(所以它
+会在下一次 tick 炸),而返回值按默认 `c_int` 重读会把 `0x80000003` 报成 `-2147483645`;
+`GetUserObjectInformationW` 的 `nSize` 又被多乘了一次 `sizeof(wchar)`。修复是补齐四个调用的
+`argtypes`/`restype`(`dda97a0`),三处都各有一条测试钉住规则。
+
+**离线测试结构上抓不到这一族**:编组只发生在真 `_ctypes` 的调用路径里,而
+`ctypes.c_int32(huge)` 与 `from_param(huge)` 都**按 C 规则截断、不抛**(本会话实测过),所以
+Linux 侧要复现它,只能把「超出 32 位有符号范围 ⇒ 拒」这条规则本身写进假 DLL。
+
+### 4.4 三条各自的 RED
+
+三条都先在 Linux 侧复现了实机症状,再动代码(`3566f5d`):
+
+    $ cd scripts/windows && python3 -m pytest tests -q          # 修复前
+    E       assert (-1, 7) == (1, 7)
+    E       AssertionError: assert 'wrong_session' == 'unlocked'
+    E       UnicodeEncodeError: 'gbk' codec can't encode character '\u0301' in position 38: ...
+
+第二个失败是 §4.2 的假 DLL 版:假 `GetUserObjectInformationW` 只对信息号 2 写名字,问 4 就返回
+「这不是名字」。第三个用 `io.TextIOWrapper(BytesIO, encoding="gbk")` 当真控制台,判据是
+「报告必须落地 + 退出码必须是那个数」,不是「不许有非 ASCII」。
+
+## 5. 第三枪(字节 `de96a01f`,即 `3566f5d`):观测第一次是真的
+
+停掉旧守护(它还在用旧字节写心跳),再起新的。`stop` 的 `detail=?` 就是 §4.4 第三条修复在
+真机上的样子 —— 旧守护留下的那个坏名字被安全地替换成 `?` 打了出去,退出码照常交出:
+
+    $ ssh Windows_Jiaolong "python C:/temp/keep_awake.py stop; echo RC=\$LASTEXITCODE"
+    STATE=stopped DESKTOP=wrong_session detail=? age=0.2s pid=0 assert_rc=2147483651 session=-1/1
+    RC=0
+
+    $ ssh Windows_Jiaolong "python C:/temp/keep_awake.py start; echo RC=\$LASTEXITCODE"
+    STATE=serving DESKTOP=unlocked detail=Default age=0.4s pid=15784 assert_rc=2147483648 session=1/1
+    RC=0
+
+    $ ssh Windows_Jiaolong "python C:/temp/keep_awake.py check; echo RC=\$LASTEXITCODE"
+    STATE=serving DESKTOP=unlocked detail=Default age=2.9s pid=15784 assert_rc=2147483648 session=1/1
+    RC=0
+
+状态记录全文(同一时刻):
+
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command \"(Get-Content -Raw C:/temp/ns_awake_status.json)\""
+    {"pid":15784,"epoch":1792825872.863743,"state":"serving","note":"","desktop":"unlocked","desktop_detail":"Default","session":1,"console_session":1,"assert_rc":2147483648,"asserted_at":1792825867.8611531}
+
+`session=1/1` 与 `desktop_detail="Default"` 是本计划里第一次有人**看见**桌面,而不是看见哨兵值。
+顺带一条 host 事实:`start` 建的计划任务把守护放进的是**控制台会话**(不是 session 0),这可以用
+PowerShell 直接证实 —— 桌面观测只有在同一个会话里才可能成功。同一条命令里尾随的
+`query session` 是误用:远端 shell 是 PowerShell,它不认这个 `query` 别名(它是 `qappsrv`/
+`schtasks` 那一路的 CLI 习惯),报 CommandNotFound;会话号已由前半段给出。
+
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command \"Get-Process -Id 10612 | Select-Object Id,SessionId,ProcessName | Format-List; (Get-CimInstance Win32_Process -Filter 'ProcessId=10612').SessionId\"; query session"
+    Id          : 10612
+    SessionId   : 1
+    ProcessName : pythonw
+
+    1
+    query : 无法将“query”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。...
+
+作为对照,从 ssh 起的进程(session 0)`OpenInputDesktop` 直接失败并返回 `gle=1`(完整命令行见 §12):
+
+    $ ssh Windows_Jiaolong "python -c \"... OpenInputDesktop(0, False, DESKTOP_READOBJECTS) ...\""
+    h None 1
+
+⇒ 「守护必须在控制台会话里跑」不是文档上的愿望,是这条 API 的硬要求;而 §4.1 那个 bug 把它
+伪装成了「桌面被锁/会话不对」,这正是把 `unreadable_*` 与 `locked` 分开命名的动机。
+
+**`assert_rc` 的正确读法**:它是上一次调用的**前一状态**,不是「当前顶没顶住」。`2147483648` =
+`0x80000000`(只有 `ES_CONTINUOUS`)说明这条断言是新起的;`2147483651` = `0x80000003` 出现在
+`stop` 之后,说明那时断言还挂在该线程上。判据不在这儿,在 §6。
+
+## 6. 证人:`powercfg /requests`(item 1 的决定性证据)
+
+不需要等 60 分钟看屏幕会不会黑 —— 断言在系统侧可见即成立。远端输出是 GBK,原文与转码各存一份。
+
+    $ ssh Windows_Jiaolong "powercfg /requests" | iconv -f GBK -t UTF-8
+    DISPLAY:
+    [PROCESS] \Device\HarddiskVolume1\SteamLibrary\steamapps\common\Stellaris\stellaris.exe
+    [PROCESS] \Device\HarddiskVolume5\Users\13229\AppData\Local\Programs\Python\Python313\pythonw.exe
+
+    SYSTEM:
+    [DRIVER] Realtek High Definition Audio (HDAUDIO\FUNC_01&VEN_10EC&DEV_0256&SUBSYS_1D05128A&REV_1000\5&7b61df2&0&0001)
+    音频流当前正在使用中。
+    [PROCESS] \Device\HarddiskVolume5\Users\13229\AppData\Local\Programs\Python\Python313\pythonw.exe
+
+    AWAYMODE:
+    无。
+
+    执行:
+    无。
+
+    PERFBOOST:
+    无。
+
+    ACTIVELOCKSCREEN:
+    无。
+
+`DISPLAY` 与 `SYSTEM` 两栏下都有本进程的条目。两条要如实记下:
+
+- **形状与计划里写的不一样**。中文 `powercfg` 打印的是 `[PROCESS] \Device\HarddiskVolumeN\...\pythonw.exe`,
+  计划里预期的英文 `Required:` 字样在这台机器上根本不出现。判据按「本进程在 `DISPLAY` 与 `SYSTEM`
+  各有一条」读,不按字面词读 —— 拿 `grep Required` 当门会在中文 host 上永远红。
+- **那条 `pythonw.exe` 是我们的守护**,凭的不是名字像,而是前后两次的差:起守护时它出现在两栏(本节),
+  `stop` 之后它从两栏消失(§9)。收尾时机器上确实再无 `pythonw`:
+
+        $ ssh Windows_Jiaolong "tasklist /fi \"imagename eq pythonw.exe\""
+        信息: 没有运行的任务匹配指定标准。
+
+`AWAYMODE` 空 —— 与 `execution_flags()` 刻意不带 `ES_AWAYMODE_REQUIRED` 一致。
+`ACTIVELOCKSCREEN: 无` 与状态记录的 `desktop="unlocked"` 互相印证。
+
+两条与本任务无关但要如实记下、**未采取任何动作**的旁证:游戏自己(`stellaris.exe`)在验收期间
+也持有一条 `DISPLAY` 请求,`Realtek` 音频驱动持有 `SYSTEM` 请求。也就是说这台机器的屏幕此前
+「看起来不会黑」有好几个来源,单看屏幕永远不是证据 —— 只有「我们这一条在 `powercfg` 里出现、
+`stop` 之后消失」才是。
+
+## 7. 消费端端到端
+
+守护写的字节与探针的门真的接得上,不是各自绿:
+
+    $ ssh Windows_Jiaolong "python -c \"import json,time,sys; sys.path.insert(0,'C:/temp'); import c4_wiring_probe as m; print(m.keep_awake_gate(json.load(open('C:/temp/ns_awake_status.json')), time.time()))\""
+    ok
+
+两端唯一的耦合仍是两个字符串(`desktop == "unlocked"` 与 `state == "serving"`),没有 import 关系。
+
+## 8. 锁屏对照:未观测
+
+`not_observed(现场无人配合)`。验收全程无人按 `Win+L`,桌面始终 `unlocked`;不做任何解锁尝试、
+不在 secure desktop 合成输入、不猜口令,所以这一条**不为填满日志而绕过**。`locked` 与
+`unreadable_denied` 两条分支由离线测试钉住(`test_check_exit_code_table`、
+`test_classify_*`),实机缺这一条不影响交付 —— 缺了就写缺了。
+
+想补这一格随时可以:主机上按一次 `Win+L`,立刻跑
+
+    $ ssh Windows_Jiaolong "python C:/temp/keep_awake.py check; echo RC=\$LASTEXITCODE"
+
+Expected:`DESKTOP=locked`、`RC=1`、`desktop_detail` 含 `Winlogon`;然后解锁即可,守护会自己把
+观测写回 `unlocked`(下一 tick)。
+
+## 9. 收尾:断言真的收回、任务真的没了
+
+    $ ssh Windows_Jiaolong "python C:/temp/keep_awake.py stop; echo RC=\$LASTEXITCODE"
+    STATE=stopped DESKTOP=unlocked detail=Default age=0.3s pid=0 assert_rc=2147483651 session=1/1
+    RC=0
+
+    $ ssh Windows_Jiaolong "powercfg /requests" | iconv -f GBK -t UTF-8
+    DISPLAY:
+    [PROCESS] \Device\HarddiskVolume1\SteamLibrary\steamapps\common\Stellaris\stellaris.exe
+
+    SYSTEM:
+    [DRIVER] Realtek High Definition Audio (HDAUDIO\FUNC_01&VEN_10EC&DEV_0256&SUBSYS_1D05128A&REV_1000\5&7b61df2&0&0001)
+    音频流当前正在使用中。
+
+    AWAYMODE:
+    无。
+    ...
+
+`pythonw.exe` 从 `DISPLAY` 与 `SYSTEM` 两栏**双双消失**(游戏与音频驱动那两条原样留着,我们没动
+别人家的请求)。这就是「不改电源计划、进程退了就复原」这条设计性质的实机证据。
+
+    $ ssh Windows_Jiaolong "python C:/temp/keep_awake.py check; echo RC=\$LASTEXITCODE"
+    STATE=stopped DESKTOP=unlocked detail=Default age=9.2s pid=0 assert_rc=2147483651 session=1/1
+    RC=1
+
+    $ ssh Windows_Jiaolong "schtasks /query /tn NeoStellarisKeepAwake"
+    错误: 系统找不到指定的文件。
+
+`check` 的 `RC=1`:收尾记录 `state="stopped"` 且心跳新鲜,按 Task 3 的表落进「守护已停,不放行」
+那一格 —— 而 §9 那份 `powercfg` 里游戏自己那条 `DISPLAY` 请求**还在**,正是「屏幕亮着不能当证据」
+这条陷阱的实物例子:灯还亮着,但顶住它的人不是我们。`schtasks` 报找不到任务:任务没留下。
+主机侧回到验收前的形状。
+
+## 10. 离线门复测
+
+    $ cd scripts/windows && python3 -m pytest tests -q
+    249 passed in 4.90s
+    $ python3 -m pytest scripts/test_c4_wiring_probe.py -q
+    62 passed in 2.67s
+    $ just fence
+    27 passed in 0.16s
+    $ wc -l docs/roadmap.md
+    138 docs/roadmap.md
+
+## 11. 这一轮改了什么,为什么只有实机能告诉你
+
+Task 1–5 的离线门一路全绿(每任务收尾各跑一次,数字见 §10),`keep_awake` 的两半仍然**一次都没
+真正观测到桌面**:三个缺陷(句柄当 pid、标志结构当名字、控制台编不下就崩)全都住在 Windows 的
+调用路径里,Linux 侧的测试连不到 —— 除非把 ctypes 自己的编组规则写进假 DLL。反过来,
+`powercfg /requests` 一条命令就把「断言确实在系统里可见」和「进程走了它就复原」两件事各钉了一枚
+钉子,不用等 60 分钟,也不用碰游戏。
+
+本轮提交:`ef504ec`(纯核)→ `47e14cd`(边缘原语)→ `9953483`(serve/CLI/部署面)→
+`ab7b6be`(开枪第一道门)→ `d2e3654`(文档)→ `82911b9`(评审修复:`start` 只认更新的心跳)→
+`dda97a0`(实机第一枪:原型)→ `3566f5d`(实机第二枪:pid / `UO_NAME` / 编码)→ 本日志。
+
+## 12. 附录:诊断探针的完整命令行
+
+正文里带 `...` 的三条是诊断探针(python 表达式为排版折过),这里逐字给出。它们全是只读的:
+不写电源状态、不动别的进程。
+
+退出码取法的定标(§2),这条决定了后面所有 RC 的读法:
+
+    $ ssh Windows_Jiaolong "python -c \"import sys; sys.exit(3)\"; echo RC=\$LASTEXITCODE"
+    RC=3
+
+会话号两条路径 + 桌面名两个信息号(§4.1、§4.2 的前半):
+
+    $ ssh Windows_Jiaolong "python -c \"import ctypes as c, ctypes.wintypes as w; k=c.WinDLL('kernel32',use_last_error=True); k.GetCurrentProcess.restype=c.c_void_p; k.ProcessIdToSessionId.argtypes=[c.c_void_p,c.POINTER(w.DWORD)]; k.ProcessIdToSessionId.restype=w.BOOL; s=w.DWORD(); r=k.ProcessIdToSessionId(k.GetCurrentProcess(),c.byref(s)); print('psi',bool(r),s.value,c.get_last_error()); u=c.WinDLL('user32',use_last_error=True); u.OpenInputDesktop.argtypes=[w.DWORD,w.BOOL,w.DWORD]; u.OpenInputDesktop.restype=c.c_void_p; d=u.OpenInputDesktop(0,0,1); print('h',d,c.get_last_error()); f=lambda i:print('idx',i,bool(u.GetUserObjectInformationW(d,i,(buf:=c.create_unicode_buffer(256)),c.sizeof(buf),nd:=c.pointer(w.DWORD()))),nd.contents.value,repr(buf.value),c.get_last_error()); [f(i) for i in (2,4)]\""
+    psi False 0 87
+    h None 1
+    idx 2 False 0 '' 1
+    idx 4 False 0 '' 1
+
+**这条只证了一半**:`psi ... 87` 与 `h None 1` 是真的(ssh 起的进程在 session 0,
+`OpenInputDesktop` 直接失败 ⇒ 桌面观测在那个会话里根本做不了);但既然句柄是 `NULL`,
+后两行 `idx 2/4` 的失败是同一件事的重复,对「信息号该是几」**没有判别力**。UO_NAME=2 的
+实机凭据在 §5:改完之后守护自己(控制台会话)读回 `desktop_detail="Default"`。
+
+句柄 vs 进程号(§4.1):
+
+    $ ssh Windows_Jiaolong "python -c \"import ctypes as c, ctypes.wintypes as w; k=c.WinDLL('kernel32',use_last_error=True); k.GetCurrentProcess.restype=c.c_void_p; h=k.GetCurrentProcess(); pid_k=k.GetCurrentProcessId(); print('handle',h,'pid',pid_k); k.OpenProcess.argtypes=[w.DWORD,w.BOOL,w.DWORD]; k.OpenProcess.restype=c.c_void_p; k.ProcessIdToSessionId.argtypes=[c.c_void_p,c.POINTER(w.DWORD)]; s=w.DWORD(); r=k.ProcessIdToSessionId(h,c.byref(s)); print('via pseudo',bool(r),s.value,c.get_last_error()); p=k.OpenProcess(0x1000,0,pid_k); s2=w.DWORD(); r2=k.ProcessIdToSessionId(p,c.byref(s2)); print('via openprocess',p,bool(r2),s2.value,c.get_last_error())\""
+    handle 18446744073709551615 pid 3816
+    via pseudo False 0 87
+    via openprocess 488 False 0 87
+
+`gle=87`(不是 `5`)排除了「句柄权限不够」这条路;真句柄 488 也一样被拒,说明那个位置要的是
+进程号。闭环同样是 §5:换成 `GetCurrentProcessId()` 之后状态记录里出现 `session=1/1`。
