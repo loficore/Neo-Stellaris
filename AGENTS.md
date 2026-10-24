@@ -5,26 +5,26 @@
 Reverse engineering `stellaris.exe` (Clausewitz engine, codename "augustus") to map the mod system's
 registration pipeline and identify extension points for new effects/triggers.
 
-**Game version**: **4.4.4** (as of 2026-09). 3.4.5–3.7.4 的地址表已移入
-`docs/version-compatibility.md`,**不要用于 4.4.4**。
-**Binary / game data**: 路径、sha256、`NS_STELLARIS_EXE` 覆盖方式见 `docs/offline-tooling.md` 的"前置条件"。
-`evidence/` 下所有产物的生产者也在该文件里说明。
+**Game version**: **4.4.4**. 3.4.5–3.7.4 的地址表在 `docs/version-compatibility.md`,**不要用于 4.4.4**。
+**Binary / game data 的路径、sha256、`NS_STELLARIS_EXE` 覆盖方式,以及 `evidence/` 产物的生产者**:
+`docs/offline-tooling.md` 的「前置条件」。
 
-**文档地图 — 本文件只放约束与索引,论证在别处:**
+**文档地图 —— 本文件只放约束与索引。论证、逐枪读数、判读陷阱都不在这里:**
 
 | 内容 | 位置 |
 |---|---|
-| 取证过程 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
-| 取证过程 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证过程 §24–§30(donor 别名决策、A5 交叉验证、ABI 修正、`0x5350D0` 复评、backlog、兜底路径定性)+ §31–§50、§52(C2 QuickJS bootstrap:harness、`heap_free` use-after-free、native Task 5/6、2026-10-21 实机 `C2Init rc=3` 与游戏退出、§37 探针双义缺陷的修复、**§38** 四条观测通道与读回竞态(`rc=3` 当步骤码的读法在此**撤回**)、**§39** 内存序列排除分配风暴 + §39.5 pre-context 标记把失败位置钉到 `JS_NewRuntime2`(host 死前先把自己释放干净)、**§40** 只执行 `kernel32!Sleep(8000)` 的长远程线程让 host 存活 ⇒ 死因专属于我们的序列、不是「有条长线程」,靶 = `JS_NewRuntime2`、**§41** 给 `heap_mf` 回调打只读标记后 live 一枪:witness 停在 `new_rt MMM` —— `JS_NewRuntime2` 进了我们的 allocator 三次(序言先死之说 §40(a) 排除),死在该调用内部、第 3 次 `heap_malloc` 之后、返回之前;`rt=` 从未出现,黑箱从「整个调用」缩到「调用内部」、**§42** 把 `heap_malloc` 拆成三相只读标记(入口 `M`/成功返回 `m`/NULL `!`)后 live 一枪:witness 停在 `new_rt MmMmMm` —— 三次 `heap_malloc` **全部干净返回、无悬空 `M`** ⇒ §41 那道分叉判给**引擎侧**:死不在我们的 allocator/`HeapAlloc`,死在第 3 次分配返回之后、第 4 次进入之前的 ~6.9s 零分配段。**§43** 离线读 vendored `quickjs.c` + 忠实复刻 `heap_mf` 重放:把 §42 那段窗口钉到 `JS_InitAtoms` 首个 `__JS_NewAtomInit` 迭代(`:3430` 名字串分配→`:3330` `atom_array` 增长)之间一段**直线平凡代码**,并**否掉两条 QuickJS-内部假说**(跨线程 `JS_UpdateStackTop` 守卫——它在 `:2116` 晚于死点;坏 hash/自由链——该处 `atom_hash` 刚清零)⇒ 6.9s 不可能是 QuickJS 控制流;下一步是**对远程线程 `Rip`+CPU-time 的只读新型采样**(超 `ReadProcessMemory` 级,需 点名),先于并可能取消「hook QuickJS」那次升级 —— **该升级与 §42 那段 6.9s 窗口在 §44/§45 双双作废**、**§44** 那一枪(单发射,已耗尽)返回 22/22 `SuspendThread gle=5` + `pr_user_us` 22 采样一动 0 µs + 内存单调下降:80 ms 起进程**已在终止**,那段窗口是 teardown 不是执行(两条零成本对照分别判掉「仪器坏」与「线程已退出」;scratch 的 2×2 句柄矩阵把 gle=5 钉成「线程已退出」的签名)、**§45** 零游戏复现:同一份字节在自有子进程里以退出码 **3 = UCRT `abort()`** 死掉,witness 与实机逐字相同,`.pdata` + UBSan `TypeMismatchData` 记录把 trap 离线钉到 quickjs.c:1494 `js_rc` 的 `container_of`(在 `__JS_NewAtomInit` 内)⇒ **死因是我们这份产物自己**,不是 host;`rc=3 → bucket=intrinsic name=Date` 的读法连机制一起撤回;修复循环现在是离线的(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)、**§46** 在自有 `heap_mf` 回调里装只读环形记录器,零游戏读回 13 条 `Mx`(size `5a0`/`808`/`ff0`):ptr 全 8 对齐且 `≡8 mod 16`、每次完整渲染**恰好 2 个** `st` 且第二个 = 运行时块 `+0x408` = `offsetof(malloc_ctx.malloc_state)` ⇒ **§45.5 那三条候选被数据判完,判定表落到第四行**(候选表不完整,不是第四条机制);死点由记录器缩到「40 字节 arena 交付成功之后、任何下一次 `mf` 调用之前」,**下一步归人,不自造第四候选**;**§47** 八帧 in-DLL 链(逐帧 `.pdata` 区间 + 源行)+ 131 字节 trap 反汇编:aborting report 的指针操作数是 **编译期常量 0** —— `cutils.h:43-45` 的 fallback `offsetof`(`&((type *)0)->field`;quickjs.c 不含 `<stddef.h>`,故它是生效定义)在 `container_of` 里造出的空成员访问(`.pdata` + UBSan 记录落在 `quickjs.c:1494:12`),`js_rc` **第一次调用即无条件 abort**;§45 的「pointer was 8」**撤回**,运行时 `str` 的来源仍未观测;修复选项交回人,**allocator 是错的靶**;**§48** 按授权实施修复 (a):`libs/quickjs/cutils.h` 引入 `<stddef.h>`(`offsetof` 改用 builtin),新产物(sha `79c8dc24…`)零游戏 `C2DiagQJSInto` 返回 `rc=0`、witness 出现 `rt=` 并跑到 `diag_rc=0`;UBSan 记录 141→133,8 条 fallback `container_of` 全移除(`:1494:12` 及 7 条 free/realloc/usable-size 同源隐患);**§49 实机一枪(同一份字节,一次游戏启动)**:Task 5 `C2Init rc=0`、`g_test_rt`/`g_test_ctx` 非空,Task 6 `1+1` 经 `JS_Eval` 返回 int32 2(rc=11)、`--noinit` 守卫返回 0 不崩,host 全程存活,`C:/temp/c2_diag_9932.log` 首次实机写出 ⇒ C2 收口;**§50 实机压测**:固定脚本在实机跑 8 轮字符串/数组增长 + `JSON.stringify`,经 `js_realloc2`→`__js_realloc`/`__js_malloc_usable_size` 与 `__js_free` 打满另 7 条 fallback `container_of` 路径,`C2EvalStressOne rc=63619`(n=15904,Node 独立算、native test 钉住),两次模块副本同值、host 存活 ⇒ §48 修复的八条路径全部有实机证据;**§52 C4 执行路径实机一枪**:谓词 `0x3B1420` detour 把 `[child]` 换成 DLL 的 25 槽 donor vtable 副本,slot[1] `+0x08` 虚 Execute(`0x3AFD30`,chain 实机 OFF)经 C 桥进 QuickJS,`js_ok=1`、哨兵 1504、host 存活;**§53 base Execute 的 arg2 与 effect 应用入口**:§53.1 离线普查直接调用点(17/62 个已判读:12 个转发调用方入口 `rdx`、5 个函数内重载,无帧构造点)、§53.2 四条应用入口候选(开枪前 A/B/C/D 全部 `unresolved`);只读采样器(`0x1D08520` 1/512,链只在驱动侧跟)两枪(2026-10-23,两次点名):第一枪 `no_calls`(环境:游戏暂停),第二枪在新游戏进程 `captured`(339,118 次调用、256/256 valid、`Verify rc=0`、host 存活)⇒ arg2 = **调用方内联构造的 0x20 字节执行深度帧**(vptr `0x26E4FA8` 单槽,`+8`=trace 深度,`+0x10`=helper,`+0x18/+0x19`=标志),计划预设的 `X=[arg2+0x30]→S→id/obj` 链**证伪**(X 是 .rdata vtable `0x247B098`,S 是代码;类大小 0x20 ⇒ `+0x30` 在对象外);§53.4 候选 A/B/D 仍 `unresolved`、C 改记 `located(构造形状已知,可用性未证)`(内联构造点 `0x1C750D0`/`0x1C3CED0`/`0x9EC290`);**§54** C4 试点一接线实机一枪(2026-10-23,pid 9552):787 次 per-system body 执行(783 条渲染名)只命中 slot[1] **1 次**、谓词 armed-token 只匹配 1 次 ⇒ `count_mismatch`,slot[1] 是实例化入口、不是 per-system 执行入口;判别下一个 datum = 在本 DLL vtable 副本的 **slot[2]**(donor 的 `0x3B01A0`)上装只读计数器(787 ⇒ base Execute 经我们的副本派发;0 ⇒ donor vptr 副本/克隆);**§54.9** 把「命令没进去」的根因钉在 supervisor 自己的 `console_open`——那是信念不是观测,自动输入(pause 空格/点行/关窗)不写日志却能改面板状态、dedupe 被剔除、**§54.10** 补上观测:单帧数面板文本框(窗口比例 `(120,640)-(400,880)`@2160×1440,亮度>180)的密集亮点,实机关=0/开=2315,模糊带判 `None`⇒拒绝,**帧差已否**(同态两帧差 5.4 万像素、变化框铺满全窗,主菜单背景在动)、**§55 slot[2] 判别枪实机一枪**(2026-10-24,pid 13364,一次注入):三道前置门先放行(导出 diff 空 / `console_open=false`+`console_forced=false` 来自像素 / 写命令前偏移起 2 s 内无 `console_refused`)、预检 783 行 `4.18 s`、`install_rc=0`、哨兵 783 + body 783,而 **slot[2] delta=0** ⇒ §54.6 的 fork 判给 **(b)**(donor vptr 是副本/克隆:per-system 执行既不经 slot[1] 也不经 slot[2])⇒ 试点一**换 chokepoint**,且「下一个靶子」未定;仪器自证 = `slot2_target - exe_base = 0x3B01A0` 零余数(读回的是真 donor instantiate);**读法陷阱**:`c4_wiring_result.json` 的 `base` 是**我们 DLL 的装载地址**不是 exe 基址(`resolve_base_address(pid, module)`);未排除的四条写在 §55.4(入口≠良构调用 / 真正入口未指名 / `SCORE_COUNT=787` 那条刻度从未被正向命中 / §54.8.4 第 2 条张力仍在) | `evidence/analysis/runtime_444_c1_validation.md` |
-| 离线脚本用法与判读陷阱 | `docs/offline-tooling.md` |
-| `api/scope` 假偏移的逐条读点处置(16 行 `src/` + 1 行 `build.zig`)与 P15 绿定义的旧/新句、增量出处 | `docs/scope-read-points.md` |
-| 脚本速查表(哪个读什么、产出哪个 artifact)+ 命名与目录约定 | `scripts/README.md`、`scripts/test_scripts_layout.py`(约定的执行者)、本文件「scripts/ 命名与目录约定」 |
+| 取证 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
+| 取证 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
+| 取证 §24–§56(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§56) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
+| 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
+| 阶段状态、前置、授权级别 | `docs/roadmap.md` |
+| `api/scope` 假偏移的逐条读点处置(16 行 `src/` + 1 行 `build.zig`)与 P15 绿定义 | `docs/scope-read-points.md` |
+| 脚本速查表(哪个读什么、产出哪个 artifact) | `scripts/README.md`、`scripts/test_scripts_layout.py`(约定的执行者) |
 | 4.4.4 锚点全表(Frida 重锚定) | `evidence/xrefs/anchors_4_4_4.md` |
 | keyword→behaviour 机器可读转储(3,900 条) | `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`(`scripts/thunkarrays.py`) |
 | CEffect 类图(1,805 个 vtable,**是下限不是类数**,§14/§17) | `evidence/xrefs/ceffect_vtable_map_4_4_4.txt` |
 | descriptor 回放 oracle | `evidence/xrefs/descriptor_oracle_4_4_4.tsv` |
-| 阶段计划与授权状态 | `docs/roadmap.md` |
 
 **细计划在 `docs/superpowers/plans/`,该目录不进 git**;要状态与前置看 `docs/roadmap.md`,要步骤得在本地私有目录里找名字。
 
@@ -37,102 +37,66 @@ registration pipeline and identify extension points for new effects/triggers.
    交叉引用用 `scripts/find_refs.py`(离线、完整)而不是 IDA xrefs。IDB 是**从 exe 建的**,没有
    Windows 侧的命名/类型历史。
 3. **C1(真机注册一个新 keyword)的门现在是开的**:`src/dll/scripted/keyword_registry.zig:211` 的
-   `authorize.c1_registration = true`(2026-10 由 C1 的授权动作翻转;`:725` 的测试断言它为 true),所以
-   `pub fn register`(`:419`)会走到执行器 `registerSequence`(`:432`,仍 file-private)。
-   **翻回 `false` 即撤回** —— 翻转那一个常量就是 C1 的授权步骤,动实机注册前先核对这条。
-4. **任何新 keyword 名在进 `0x1D13270` 之前必须先过 `scripts/c1_preflight.py` 且退出码 0**
-   (§25.5):token 查找**大小写不敏感**,`Add_Modifier` 会拿回 `add_modifier` 的 `10104`,
-   我们的插入会**接管一个官方 keyword**,而 `eax` 分不清 mint 与命中。运行时同一条规则由
-   `keyword_registry.NameCheck` 执行(空串 / §20 首字符 / 全小写)。
+   `authorize.c1_registration = true`(`:725` 的测试断言它为 true),`pub fn register`(`:419`)会走到
+   执行器 `registerSequence`(`:432`)。**翻回 `false` 即撤回** —— 翻转那一个常量就是 C1 的授权步骤。
+4. **任何新 keyword 名在进 `0x1D13270` 之前必须先过 `scripts/c1_preflight.py` 且退出码 0**(§25.5):
+   token 查找**大小写不敏感**,`Add_Modifier` 会拿回 `add_modifier` 的 `10104`,我们的插入会**接管一个
+   官方 keyword**,而 `eax` 分不清 mint 与命中。运行时同一条规则由 `keyword_registry.NameCheck` 执行。
 5. **class_info 只能 ALIAS 官方的,不要伪造对象**(§24)。docstring 用 donor 自带的 `.rdata` 字符串
-   (§24.6),使**我们的 DLL 没有任何指针留在 db 里** — 引擎持有它的生命周期超过我们 DLL 的卸载。
+   (§24.6),使**我们的 DLL 没有任何指针留在 db 里** —— 引擎持有它的生命周期超过我们 DLL 的卸载。
    C4 之后 `[obj+0]` 还会指向 DLL `.data` 的 vtable 副本,已 patch 的对象会让卸载后的下一次 Execute
    跳进空页 —— 同样**永不 `FreeLibrary`**。
 6. **ABI**:`0x2185218` 保留并转发完整 `rcx`,thunk 写的是 `ecx`,所以从 Zig 传 **u64** 而不是 u32;
    `0x1D13270`/`0x89F960` 的名字持有者其 std::string 在 **`holder+0x10`**,一个 char 一字节(§20/§27)。
-7. **禁止热路径 detour `0x5350D0`** — 它是某个类的虚属性 getter,**detour 价值 = 0**(§28.5:
-   `fastcalls` 找不到任何直接调用点,`.rdata` 只有 1 处引用)。
+7. **禁止热路径 detour `0x5350D0`** — 它是某个类的虚属性 getter,**detour 价值 = 0**(§28.5)。
 8. **实机看到「host 死了」,先按「我们自己的产物 trip」排除**(§45)。出货的 DLL 是 **Debug** 构建
-   (`build.zig` 的 `standardOptimizeOption(.{})` 默认),clang/Zig 的 safety check 就编译在跑进 host 的代码里,
-   一次 trip → `abort()` → 退出码 **3** → host 被杀。零游戏判别器是维护中工具
-   `scripts/c2_selfabort_repro.py`(把出货字节装进自己的子进程看它会不会死,并读回 §46 的环形记录器
-   `MFREC`)与 `scripts/dll_ubsan_site.py`(无符号无 debug 段也能用 `.pdata` + UBSan 记录把 panic
-   钉到源文件行号),它不要枪、不要点名;冻结的原批次仍在 `scripts/scratch/2026-10_abortexit/`,字节不动。
-   **§47 的机制与运行时指针值无关**:`type_mismatch` 报告的指针操作数是 fallback `offsetof` 的
-   **编译期常量 0**,所以 allocator 形状 / 记录器数据**不能**当判别器。**§48 已按授权实施修复选项 (a)**:
-   `libs/quickjs/cutils.h` 引入 `<stddef.h>`,`offsetof` 改用 builtin;新产物(sha `79c8dc24…`)在零游戏
-   复现器里 `SURVIVED rc=0`、witness 出现 `rt=` 并跑到 `diag_rc=0`,UBSan 记录 141→133
-   (`:1494:12` 消失,另 7 条 free/realloc/usable-size 同源隐患一并移除)。**§49 实机一枪已通过**
-   (同一份字节,一次游戏启动):Task 5 `C2Init rc=0` + 非空 `g_test_rt`/`g_test_ctx`、Task 6
-   `1+1` 经 DLL 自己的 `JS_Eval` 返回 int32 2(rc=11)、`--noinit` 守卫返回 0 不崩、host 全程存活,
-   `C:/temp/c2_diag_9932.log` 首次在实机写出。**§50 压测已通过**(同一产物 `938b6e15…`、同一会话):
-   固定脚本经 `C2EvalStressOne` 在实机跑 8 轮字符串/数组增长 + `JSON.stringify`,打满 §48 移除仪表的另
-   7 条 `container_of` 路径,`rc=63619`(n=15904)两次模块副本一致、host 存活。另:`header-only` 改动可能命中 Zig 缓存(`compile … cached`、sha 不变),重建后先核
-   compile 状态与 sha,必要时换 `--cache-dir`(见 `docs/offline-tooling.md`)。
+   (`build.zig` 的 `standardOptimizeOption(.{})` 默认),safety check 就编译在跑进 host 的代码里,
+   一次 trip → `abort()` → 退出码 **3** → host 被杀。零游戏判别器(不要枪、不要点名):
+   `scripts/c2_selfabort_repro.py`(把出货字节装进自己的子进程,读回 §46 的环形记录器 `MFREC`)与
+   `scripts/dll_ubsan_site.py`(用 `.pdata` + UBSan 记录把 panic 钉到源文件行号)。
+   **该机制与运行时指针值无关**(§47:报告里的指针操作数是 fallback `offsetof` 的编译期常量 0),
+   所以 allocator 形状 / 记录器数据都不能当判别器。§48 的修复已实施,并有实机证据(§49 一枪、§50 压测)。
+   `header-only` 改动可能命中 Zig 缓存(`compile … cached`、sha 不变),重建后先核 compile 状态与 sha。
 
 ## Evidence Collection
 
 All analysis artifacts go to `evidence/` at project root:
-- `evidence/disasm/` — disassembly snippets, decompiled pseudocode
-- `evidence/strings/` — relevant string references with addresses
-- `evidence/xrefs/` — cross-reference maps for key functions
-- `evidence/external/` — findings from external sources (stellarstellaris-win, forums, docs)
-- `evidence/errors/` — error logs from failed operations
-- `evidence/analysis/` — synthesis reports, extension point analysis
+`disasm/`(反汇编/伪码)、`strings/`(带地址的串引用)、`xrefs/`(交叉引用地图)、
+`external/`(外部研究)、`errors/`(失败操作日志)、`analysis/`(综合报告、扩展点)、`logs/`(实机产出)。
 
-**Naming convention**: `<component>_<finding>.md` (e.g., `effect_dispatch_switch_cases.md`)
+**Naming convention**: `<component>_<finding>.md`。取证卷与 `evidence/logs/` **按 basename 记录出处,
+追加不改写**;改名等于让取证记录指向不存在的文件。
 
 ## scripts/ 命名与目录约定
 
-**顶层只放维护中的接口**:离线 PE 工具、`c1_*`/`c2_*` 实机注入通道、`windows/` launcher。一次性探针进
-`scripts/scratch/<年-月>_<主题>/`,判据两条:**只读 exe 拷贝 = 工具,需要进程 = 探针**;**有没有在用的
-东西依赖它**(文档、`src/` 注释、测试 import、产出的 artifact)。速查表在 `scripts/README.md`。
+规则的机械部分由 `python3 -m pytest scripts/test_scripts_layout.py -q` 执行(十条规则各是一个纯函数);
+下面这段是这些规则文本的权威位置。
 
-**命名:`<通道或对象>_<动作或问题>.py`**,读名字就该知道它读什么、对谁动手(正例 `thunkarrays.py`、
-`createsites.py`、`c2_control_sleep.py`)。禁止 `2`/`final`/`new`/`misc` 这类版本后缀 —— 版本属于 git,
-不属于文件名。不要用 stdlib 模块名当 basename(`dis.py` 曾遮蔽 stdlib `dis`,已改名 `fridadis.py`,
-旧名记在它自己的 docstring 里)。
+- **顶层只放维护中的接口**:离线 PE 工具、`c1_*`/`c2_*` 实机注入通道、`windows/` launcher。一次性探针进
+  `scripts/scratch/<年-月>_<主题>/`。判据两条:**只读 exe 拷贝 = 工具,需要进程 = 探针**;以及
+  **有没有在用的东西依赖它**(文档、`src/` 注释、测试 import、产出的 artifact)。
+- **命名:`<通道或对象>_<动作或问题>.py`**,读名字就该知道它读什么、对谁动手。禁止 `2`/`final`/`new`/`misc`
+  这类版本后缀(版本属于 git,不属于文件名)。不要用 stdlib 模块名当 basename。
+- **移入 scratch 的一次性脚本保留原 basename**(见上节)。
+- **改维护中工具的名字是一个文档动作**,不是 `git mv` 就完:`evidence/` 里已有的引用不改写,新旧名映射记进
+  `docs/offline-tooling.md`,并在被改文件自己的 docstring 里留一句旧名。
+- **每个维护中的工具在 `docs/offline-tooling.md` 有一节**(用法 + 判读陷阱);新工具第一次被文档引用时就要补。
+  **写死绝对路径的脚本不算维护中** —— 要么改成 `NS_STELLARIS_EXE`,要么进 `scratch/`。
+- **`.py` 驱动与同名 `.js` 是一对**(驱动 + 注进去的脚本),移动必须成对。
+- **`c1_*`/`c2_*` 的文件名还是 scp 到 `C:/temp/<name>.py` 的线上契约**(裁定 P5),且
+  `scripts/test_c2_harness.py` 用裸名 import 它们、按「上两级」定位 `zig-out/` 的 DLL —— 这一族既不能改名,
+  也不能下沉一级目录。
+- **根目录 `justfile` 只做薄索引**(`just --list`);`just check` 一次跑构建 + 两套测试 + 布局围栏,它不实现逻辑。
 
-**移入 scratch 的一次性脚本保留原 basename。** `evidence/` 三卷与 `evidence/logs/` 按 basename 记录出处
-(含字面的 `python3 scripts/<name>.py …` 命令行),改名等于让取证记录指向不存在的文件。
-
-**改维护中工具的名字是一个文档动作**,不是 `git mv` 就完:`evidence/` 里已有的引用**不改写**,新旧名映射
-记进 `docs/offline-tooling.md`,并在被改文件自己的 docstring 里留一句旧名 —— 这是本仓库的先例,不是可选项。
-
-**每个维护中的工具在 `docs/offline-tooling.md` 有一节**(用法 + 判读陷阱);新工具第一次被文档引用时就要
-补上那一节。**写死绝对路径的脚本不算维护中** —— 要么改成 `NS_STELLARIS_EXE`,要么进 `scratch/`。
-`.py` 驱动与同名 `.js` 是一对(驱动 + 注进去的脚本),移动必须成对。
-`c1_*`/`c2_*` 的文件名还是 scp 到 `C:/temp/<name>.py` 的**线上契约**(裁定 P5),且
-`scripts/test_c2_harness.py` 用裸名 import 它们、按「上两级」定位 `zig-out/` 的 DLL —— 所以这一族既不能改名,
-也不能下沉一级目录。
-
-**这一节里可机械判定的部分现在是机器判据**,由 `python3 -m pytest scripts/test_scripts_layout.py -q` 执行;
-十条规则各是一个纯函数。根目录的 `justfile` 只做**薄索引**(`just --list`),`just check` 一次跑构建 +
-两套测试 + 布局围栏;它不实现逻辑。`R-env` **`violates_env_var`** 只管**从磁盘读 `stellaris.exe`** 的脚本 —— 判据是行为
-(带 `CreateRemoteThread` 的实机脚本被排除),不看族名;缺的是 `NS_STELLARIS_EXE` 候选而非绝对路径本身,
-候选链旁边的 `D:\SteamLibrary\…` fallback(现 5 个)**是合规的,不是缺陷**。
-`R-pair` **`violates_pairing`** 只扫顶层,`scratch/` 里 `body.js` 那种历史孤儿由它自己的 README 解释。
-`R-suffix` **`violates_version_suffix`** 放行 `444` —— 那是游戏版本号,不是工具版本后缀。
-`R-depth` **`violates_family_depth`** 管 `c1_*`/`c2_*`/`test_c2_harness.py`,`windows/` 不在范围内。
-`R-rva` **`violates_hardcoded_rvas`** 就是 P10:和 `R-pair` 同一口径**只扫顶层** —— `scratch/` 是冻结的历史、
-`windows/` 是 launcher,都不在 `top_level_scripts` 范围内;顶层维护脚本里模块级 `RVAS = {…}` 字面量一个都不许留。
-`R-refs` **`dangling_script_refs`** 要求 living docs(`AGENTS.md`、`docs/**`,剔掉私有的
-`docs/superpowers/`)里写出的 `scripts/<path>` 解析得到,scratch 按 basename 兜底;`evidence/` 不可变,永不扫。
-`R-wire` **`violates_remote_script_refs`** 管根目录 `justfile` 里的 `C:/temp/<name>.py`:它必须是 `scripts/`
-下某个非 scratch 源文件的 basename —— 线上名与源文件脱节是这条规则要响的事。
-`R-roadmap` **`violates_roadmap_shape`** 管 `docs/roadmap.md` 这个尺寸与指针:≤140 行、不许写私有计划目录的路径、
-阶段状态表**按状态**必填出处(`blocked`/`in-progress` 要卷名 + §,`planned` 要计划文件名,`done` 两者之一)——
-这是「状态表不会再长回一份叙述性计划」的唯一机械防线。
-`R-header` **`violates_missing_roadmap_header`** 是 `R-roadmap` 的同伴:`R-roadmap` 靠那五个列名定位状态表,
-所以**改掉一个列名**会让它找不到表、静默解除所有按行检查而真树测试照样绿 —— 这条规则只钉「存在一行同时带齐
-五个列名」,让降级表头这件事必须响。
-`R-stray` **`stray_windows_literal_paths`** 管 `scripts/` 子树里**文件名本身是 Windows 路径**的残留
-(basename 含 `\` 或 `:`,例如 host 测试没重定向 `game_supervisor.LOG_PATH` 时落下的
-`C:\temp\ns_game_log.jsonl`):Linux 上它能被创建,`git status` 会把它当未跟踪文件,而它的出处是一次
-`just host-tests` —— 这条规则把「host 测试必须重定向模块全局」从口头约定变成真树判据。
-**加豁免 = 把文件名写进那条规则函数的 docstring,不是 `xfail`** —— `xfail` 会藏掉这座围栏就是为了防的漂移,
-所以连 P10 都不给豁免。反过来,改名要写文档、每个维护中的工具在 `docs/offline-tooling.md` 有一节 —— 这两条
-**不在围栏里**(改名留下的死引用只被 `R-refs` 兜住一半:它只看 living docs,不看 `evidence/`),仍然只有人在读。
+**围栏的口径边界**(读报错前先核这几条,否则会把合规读成缺陷):`R-env` 只管**从磁盘读 `stellaris.exe`**
+的脚本(带 `CreateRemoteThread` 的实机脚本被排除),候选链旁的 `D:\SteamLibrary\…` fallback 合规;
+`R-pair` 与 `R-rva`(即 P10)同一口径**只扫顶层**,`scratch/` 与 `windows/` 不在范围;`R-suffix` 放行 `444`
+(那是游戏版本号);`R-depth` 管 `c1_*`/`c2_*`/`test_c2_harness.py`;`R-refs` 只扫 living docs
+(`AGENTS.md`、`docs/**`,剔掉私有 `docs/superpowers/`),`evidence/` 永不扫;`R-wire` 管 `justfile` 里的
+`C:/temp/<name>.py` 必须对得上某个非 scratch 源文件的 basename;`R-roadmap` + `R-header` 管
+`docs/roadmap.md` 的行数(≤140)、禁写私有计划路径、状态表按状态必填出处、以及表头五个列名必须齐;
+`R-stray` 管 `scripts/` 子树里**文件名本身是 Windows 路径**的残留(host 测试没重定向模块全局时会落下)。
+**加豁免 = 把文件名写进那条规则函数的 docstring,不是 `xfail`。**
 
 ## IDA Pro MCP Workflow
 
@@ -151,64 +115,64 @@ Cross-reference work prefers the offline scripts (约束 2)。
 
 ## Stellaris 4.4.4 RVA 索引(add to runtime module base, ASLR on)
 
-只列**是什么**与**在哪论证**;任何行内论证的完整版在对应 §。
+只列**是什么**与**在哪论证**;行内论证的完整版在对应 §。
 
 ### keyword 注册管线(可写的扩展面)
 
 | RVA | 含义 | 证据 |
 |-----|------|------|
 | `0x1D13270` | **`eax = GetOrAddToken(rcx = *name holder)` — 运行时 token 分配器**;`rdx` 死;名以 `-` 或数字开头则 `eax=0` | §18 §20 |
-| `0x1D12C60` / `0x37347A0` | token DB singleton 访问器 / 对象(vtable `0x26E5180`, ctor `0x1D13570`, guard `0x3734790`) | §18 |
-| **`0x1D12CD0`** | **`id → name` 反查表构建器**(无参,自取 singleton):`[db+0x70] + id*0x30` 的 holder 数组,`std::string` 在 `holder+0x10`;两半灌入 —— 9,863 条静态描述符 + `[db+0x58]`/`[db+0x64]` 的动态 map | **§30.2** |
+| `0x1D12C60` / `0x37347A0` | token DB singleton 访问器 / 对象 | §18 |
+| **`0x1D12CD0`** | **`id → name` 反查表构建器**(无参):holder 数组在 `[db+0x70] + id*0x30`,静态 + 动态两半灌入 | **§30.2** |
 | `0x1D15270` / `0x1D152D0` | descriptor 写手:静态路径 / 动态路径 | §20 |
-| `0x1D158A0` | **两条路径共用的 slot writer** ⇒ 运行时 descriptor 与静态字节一致 | §18 §20 |
+| `0x1D158A0` | 两条路径共用的 slot writer ⇒ 运行时 descriptor 与静态字节一致 | §18 §20 |
 | `0x337B400` | descriptor 数组,**stride `0x120` × 9,863**,只含 `{token id, SSO name}`,无 behaviour 槽 | §17 §20 |
 | `0x247F480..0x2494070` | keyword 名字池(上面 SSO 串的载体) | §17 |
-| `0x172E50..0x1AF1E7` | token-name driver(247 KB,每 entry 一个 `lea rcx,[0x337B400+0x120*n]`) | §17 |
-| `0x23AC600` ×754 / `0x23AF628` ×482 / `0x23B0540` ×405 | effect / trigger **注册 thunk 数组**(约 106 B/thunk) | §17 |
+| `0x172E50..0x1AF1E7` | token-name driver(每 entry 一个 `lea rcx,[0x337B400+0x120*n]`) | §17 |
+| `0x23AC600` ×754 / `0x23AF628` ×482 / `0x23B0540` ×405 | effect / trigger **注册 thunk 数组** | §17 |
 | `0x33746E8` / `0x32611C8` | ScriptedEffectDB / ScriptedTriggerDB 全局;BST 根在 `[db+0x18]` / `[db+0x88]` | §1 §21 |
-| `0x3AEBA0` / `0x347BD0` | db 拉起:effect placement ctor(要 caller 先 `new(0x70)`) / trigger 无参 ensure 自发布 | §21 |
-| `0x3AEF60` / `0x348150` | BST insert,effect 走 `db+0x18`、trigger 走 `db+0x88`,**参数形状相同但不可互换** | §21 |
+| `0x3AEBA0` / `0x347BD0` | db 拉起:effect placement ctor(要 caller 先 `new(0x70)`) / trigger 无参 ensure | §21 |
+| `0x3AEF60` / `0x348150` | BST insert,**参数形状相同但不可互换** | §21 |
 | `0x3B01A0` / `0x349AE0` | **消费者**:按 token id 查树并 `call create`,键无范围检查 | §23 |
 | `0x3AF130` / `0x348450` | 全树枚举,对每个节点 `create` ⇒ **注册不是惰性的** | §23.3 |
-| `0x260ABD8` | `add_modifier` 的 class_info = `{deleter 0x34C090, create 0x18A3340}`;字段 0 是**共享** deleting destructor | §17 §22.2 |
-| `0x269CAA8` / `0x2611070` | **C1 donor class_info**:trigger `has_crisis_perk`(create `0x1B30450`, `new(0x80)`)/ effect `hidden_effect`(create `0x1893130`, `new(0xc0)`) | §24 §24.6 |
+| `0x260ABD8` | `add_modifier` 的 class_info(deleter `0x34C090` 是**共享** deleting destructor) | §17 §22.2 |
+| `0x269CAA8` / `0x2611070` | **C1 donor class_info**:trigger `has_crisis_perk` / effect `hidden_effect` | §24 §24.6 |
 | `0x26C1BA0` / `0x2616260` | donor 自带 `.rdata` docstring(C1 用这两个,不用我们的串) | §24.6 |
 | `0x2185218` | `operator new(size)` | §17 §21 |
 | `0x1930E70..0x196D3E6` | 101 个 scope-iterator 注册函数 — **官方自带的加 keyword 模板,可直接照抄** | §19 |
 | `0x195A580..0x19A7268` | 104 个 iterator **名字拼接器**(头 keyword 可以完全没有静态 descriptor) | §25.4 |
-| `0x388130`…`0x389224` / `0x3797C0..0x37B056` / `0x114CE0` | 9 个 Meyers 惰性 token 访问器 / `mod_%s` 生成器 / 仅被 `.rdata` 指针数组引用的 25 B shim | §19 |
+| `0x388130`…`0x389224` / `0x3797C0..0x37B056` / `0x114CE0` | 惰性 token 访问器 / `mod_%s` 生成器 / 仅被 `.rdata` 引用的 25 B shim | §19 |
 
 ### 热路径与执行
 
 | RVA | 含义 | 证据 |
 |-----|------|------|
-| `0x1D08520` | **`CEffect::Execute` (base) — 热路径**,~5,300 calls/s,派发到 `call [rax+0x10]` = slot[2] `ExecuteActual` | §10 §14 |
-| `0x1D08520` arg2 | 执行帧:**`+8` 是调用深度计数**(`inc`/`dec` 包着那次虚调用),不是 3.x 声称的 scope type | §26 |
-| `0x3B1330` | effect `[vptr+0x70]` base impl = 递归 parse(先调 `[vptr+0x68]`,再走 `[obj+0x10]`/`[obj+0x1c]*8` 子向量);723/723 携带 | §24.4.2 |
-| `0x3B1420` | effect `[vptr+0x98]` base impl = **bool 谓词**,不是 parse;两参 (child, parent),21 字节 prologue(§52 的 detour 点) | §23.1 §24.4.2 §52 |
-| `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写 — chain 的原函数;实机保持 OFF | §52 |
-| `0x2606FE0` | donor effect vtable:slot[1]=Execute、slot[2]=instantiate、slot[15]=`+0x78`、slot[19]=谓词,25 槽可复制 | §52 |
-| `0x89F960` / `0x8A0450` | `GetScriptedEffect` / `GetScriptedTrigger` — **不是 getter**:填进去的 vtable 是常量,命中与否无法从 `out` 观察;唯一副作用是重复定义告警 ⇒ 该告警是 §25.5 劫持的运行时检测器 | §27 |
+| `0x1D08520` | **`CEffect::Execute` (base) — 热路径**,~5,300 calls/s,派发到 `call [rax+0x10]` = slot[2] | §10 §14 |
+| `0x1D08520` arg2 | **调用方内联构造的 0x20 B 执行深度帧**:`+8` 是调用深度计数,`+0x10` 是 helper;**不是** scope 对象 | §26 §53 |
+| `0x3B1330` | effect `[vptr+0x70]` base impl = 递归 parse(子向量在 `[obj+0x10]`/`[obj+0x1c]*8`) | §24.4.2 |
+| `0x3B1420` | effect `[vptr+0x98]` base impl = **bool 谓词**,不是 parse(§52 的 detour 点) | §23.1 §52 |
+| `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写;实机保持 OFF | §52 |
+| `0x2606FE0` | donor effect vtable,25 槽可复制(slot[1]=Execute、slot[2]=instantiate、slot[19]=谓词) | §52 |
+| `0x89F960` / `0x8A0450` | `GetScriptedEffect` / `GetScriptedTrigger` — **不是 getter**;唯一副作用是重复定义告警 | §27 |
 | `0x1C91C30` | 上述重复告警走的 logger | §27 |
-| `0x24B1990` | `CScriptedEffectTemplate` vtable(CEffect 家族**没有 RTTI**,`vtable[-8]` 永远是别的 code slot) | §14 |
+| `0x24B1990` | `CScriptedEffectTemplate` vtable(CEffect 家族**没有 RTTI**) | §14 |
 | `0x1B5B10` | `CScriptedEffectTemplateDatabase` ctor(中可信度) | `anchors_4_4_4` |
-| `0x5BBF80` | token-id 二分查找派发树 — **不是 keyword 注册表**,别在此找 keyword 绑定 | §17 |
-| `0x9F5750` / `0x9F6420` / `0x9F65E0` | Event command handlers(`eventcommands.cpp`,需更深 trace 选点) | `anchors_4_4_4` |
+| `0x5BBF80` | token-id 二分查找派发树 — **不是 keyword 注册表** | §17 |
+| `0x9F5750` / `0x9F6420` / `0x9F65E0` | Event command handlers(需更深 trace 选点) | `anchors_4_4_4` |
 
 ### 已证伪 — 不要再当锚点用
 
 | 曾经的断言 | 实况 | 证据 |
 |---|---|---|
-| `0xCCCEB0` = master keyword registrar | **false**;唯一调用方 `0x266D3D` 是把 token 解析成对象的通用运行时处理 | §15 |
-| `0x337A844` = 一次性注册守卫 | 是 trace-enable bool(C3 旧触发条件作废,论证见 §16) | §16 |
-| effect dispatch switch(`3.x 0x180B050`) | 4.4.x **不存在**;改为 per-class vtable 派发 | §3 §14 |
-| lexer/parser 会从脚本文本 mint token | **false**;567 个调用点分 139 桶无一处在解析器里,且 `0x1D13270` **零 qword 引用**。mod 脚本里的新词**不会**有 id,DLL 必须自己调 | §19 |
-| `0x5350D0` = keyword 执行器 / 真实扩展面 | 是按 token-id 的属性 getter,22 个派发消息里混着 `graphicsSettings`/`sendgame`;**0 个直接调用点** | §26.1 §28 |
-| `0x1D092C0` 可作 JS 作用域变量桥的候选锚点 | **已否**(§30):它是 parse-error 表追加器 —— `new(0x80)` 节点写进 `[obj+0x10]/+0x18/count +0x20` 链表、置 `[obj+0x28]=1`,尾调 tokenizer 推进 `0x1D09130`;`0x1D09330` 的 **22** 个调用方全部传**错误文案**(`'Unexpected token'`/`'Unreadable String'`/`'Unhandled Entry'`/`'Expected list start'`)。真正的按名变量查找**仍未定位**,不要再从这里找 | §28.3 → **§30** |
-| `0x337ACBC` 像"脚本错误计数" | 是**递归深度** global:全镜像只有 2 处引用,都在 `0x1D09130` 内(入口 `inc`、提前返回路径 `dec`),净为零 | §30 |
-| 3.x `CEventScope` 布局(`+8` scope type / `+16` object id) | 被 §26 证伪;`src/dll/api/scope.zig` **仍在读 `+8`/`+16` 且已链进 DLL** —— 但自 2026-10-22 起每个读点自带 `UNCONFIRMED LAYOUT` 标注、`offsets.c_event_scope.LAYOUT_CONFIRMED = false` 由一条测试钉住,逐条处置见 `docs/scope-read-points.md`。语义未改:真实布局仍未定(§26.2),那条线在 roadmap 段4 等实机帧指针;§53 第二枪 `captured` 后 arg2 = 0x20 B 执行深度帧、不是 `CEventScope`,真实 scope 对象仍未定 | §26 §26.3 §53 |
-| `X=[arg2+0x30] → S=[X+8] → id=[S+8] / obj=[S+0x20]` 可拿 effect token/object | **false**:arg2 类大小 0x20(`+0x30` 在对象外),X 是 `.rdata` vtable `0x247B098`、S 是代码;实机 CHAIN 行的 id/object 是 `add rsp,0x28` 一类指令字节,`descriptor_oracle` 全回 `-` | §53.3 |
+| `0xCCCEB0` = master keyword registrar | **false**;唯一调用方是通用的 token→对象运行时处理 | §15 |
+| `0x337A844` = 一次性注册守卫 | 是 trace-enable bool(C3 旧触发条件作废) | §16 |
+| effect dispatch switch(3.x `0x180B050`) | 4.4.x **不存在**;改为 per-class vtable 派发 | §3 §14 |
+| lexer/parser 会从脚本文本 mint token | **false**;mod 里的新词**不会**有 id,DLL 必须自己调 `0x1D13270` | §19 |
+| `0x5350D0` = keyword 执行器 / 真实扩展面 | 是按 token-id 的属性 getter,**0 个直接调用点** | §26.1 §28 |
+| `0x1D092C0` 可作 JS 作用域变量桥 | **已否**:它是 parse-error 表追加器。真正的按名变量查找**仍未定位**,不要再从这里找 | §28.3 → §30 |
+| `0x337ACBC` 像「脚本错误计数」 | 是**递归深度** global(净为零) | §30 |
+| 3.x `CEventScope` 布局(`+8`/`+16`) | 被 §26 证伪;`src/dll/api/scope.zig` **仍在读那两个偏移且已链进 DLL**,由 `LAYOUT_CONFIRMED = false` 的测试钉住,逐条处置见 `docs/scope-read-points.md`。**真实 scope 对象仍未定**(§56 那一枪没能确立) | §26 §53 §56 |
+| `X=[arg2+0x30]→S→id/obj` 可拿 effect token/object | **false**:arg2 类大小 0x20,`+0x30` 在对象外;X 是 `.rdata` vtable、S 是代码 | §53.3 |
 
 ## 新硬编码 keyword 配方(Phase A 结论 — 全程离线,不 patch 静态表)
 
@@ -224,45 +188,29 @@ Cross-reference work prefers the offline scripts (约束 2)。
        effects:  0x2611070  hidden_effect     create 0x1893130  new(0xc0)   docstring 0x2616260
 ```
 
-**插入后引擎会怎么写、怎么调**(§23,C1 stub 必须满足):命中后 `0x3B01A0`/`0x349AE0` 先
-`call create`,然后**往对象里写** — effect 得到 `{id @ +0x20, name std::string @ +0x28}` 再
-`call [vptr+0x98]`;trigger 得到 `{id @ +0x38, name @ +0x40}` 再 `call [vptr+0x80]`,`al` 的 bool 决定
-`trigger.cpp` 是否打印 `'An error occurred when reading trigger.h %s'`。加上全树枚举器会对每个节点
-`create`,所以 **C1 用的必须是真·良构对象,vtable 至少到 `+0x98`**,不是一槽垫片。
-
-**时机**(§19):步骤 1 是**强制**的(解析器永不 mint token)。不需要全局同步点;真正的前置只有
-两个 —— 目标 db 已拉起,以及我们的插入早于任何 *求值* 引用该 keyword。id 空间在整个启动期间持续增长
-(iterator 初始化数组、惰性访问器),所以"等 id 不再变化"是错的判据。
-
-**插入后的读回验伪,以及时序错了会长什么样**(§30):`0x1D12CD0` 会把 `[db+0x70] + id*0x30` 的反查表
-从静态描述符**和**动态 map 重灌一遍,所以我们 mint 的名字应能按 `[[0x37347A0+0x70] + id*0x30 + 0x10]`
-读回 —— 这条不依赖任何脚本走到 BST,是判据 ② 之外的独立只读观测(候选:守卫 `[db+0x7c] != [db+0x80]
-是否被我们的 mint 触发,仍需实机)。反过来,若脚本在我们插入**之前**就引用了新 keyword,落点是
-`0x5350D0` 默认分支 → `0x1D092C0` → `0x1D09330`,产出的是 **`'Unexpected token'` 错误表项 + `[obj+0x28]=1`**,
-即「报错」而非「静默没命中」——杂散的 `Unexpected token` 就是时序问题的信号。
-`0x1D092C0` 本身**不是**作用域变量桥(§30 判定为 error-view 构建器)。
-
-**Zig 侧**:`src/dll/scripted/keyword_registry.zig` — 字节层(`buildDescriptor`/`ValueRecord`/`NameCheck`,
-对 56 条 golden 向量做测试)+ 带门执行器(按 §19 顺序 `getToken` → `ensureDb` → `new(0x10)` → insert)。
-`ClassInfo` 由调用方提供,`ClassInfo.triggerDonor`/`effectDonor` 构造 §24 决定的那对官方地址。
-`scripted/lookup_hook.zig` 按 §27 建模 `NameHolder`/`ScriptedRef`,把 `out+0x00` 分类为
-`Shape.{ref, null_template, unknown}`,常量在 `offsets.scripted_lookup`。
-**Caveat**:db 全局需在实机会话里重读(主菜单值曾看起来像 arena/相对指针或未初始化)。
+- **插入后引擎怎么写、怎么调**(§23):命中后消费者先 `call create` 再**往对象里写** —— effect 得
+  `{id @ +0x20, name @ +0x28}` 再 `call [vptr+0x98]`;trigger 得 `{id @ +0x38, name @ +0x40}` 再
+  `call [vptr+0x80]`。全树枚举器会对每个节点 `create`,所以 **C1 用的必须是真·良构对象,vtable 至少到 `+0x98`**。
+- **时机**(§19):步骤 1 是**强制**的。前置只有两个:目标 db 已拉起,且插入早于任何*求值*引用该 keyword。
+  id 空间在整个启动期间持续增长 ⇒ "等 id 不再变化"是错的判据。
+- **读回验伪 / 时序错了长什么样**(§30):mint 的名字应能按 `[[0x37347A0+0x70] + id*0x30 + 0x10]` 读回;
+  若脚本在插入前就引用新词,落点是 `0x5350D0` 默认分支 → `0x1D092C0`,产出**`'Unexpected token'` 错误表项**,
+  即「报错」而非「静默没命中」—— 杂散的 `Unexpected token` 就是时序问题的信号。
+- **Zig 侧**:`src/dll/scripted/keyword_registry.zig`(字节层 + 带门执行器)、`scripted/lookup_hook.zig`
+  (按 §27 建模 `NameHolder`/`ScriptedRef`)、常量在 `offsets.scripted_lookup`。
+- **Caveat**:db 全局需在实机会话里重读(主菜单值曾看起来像 arena/相对指针或未初始化)。
 
 ## Engine Architecture(外部研究结论)
 
-**C++ 类名**(Linux 符号,经 stellarstellaris-win 证实):`CEffect::ExecuteActual(CEventScope*)`
-(每个 effect 的入口,虚函数)、`CTrigger::Evaluate(const CEventScope&)`、`CEvent::PerformImmediate`、
-`COnActionDatabase::PerformEvent`、`CToken::Init` / `CTextLexer::GetTok`。注意 `CEventScope` 的 3.x
-偏移已被 §26 证伪(见上表)。
+**C++ 类名**(Linux 符号,经 stellarstellaris-win 证实):`CEffect::ExecuteActual(CEventScope*)`、
+`CTrigger::Evaluate(const CEventScope&)`、`CEvent::PerformImmediate`、`COnActionDatabase::PerformEvent`、
+`CToken::Init` / `CTextLexer::GetTok`。注意 `CEventScope` 的 3.x 偏移已被证伪(见上表)。
 
-**Jomini layer**: game 与 engine 共享的库,实现 scope types / event targets / variables /
-scripted effects & triggers。注册类别:Types, Promotes, Functions, Callbacks。
+**Jomini layer**:game 与 engine 共享的库,实现 scope types / event targets / variables / scripted
+effects & triggers。注册类别:Types, Promotes, Functions, Callbacks。
 
-**关键约束的现状**:「没有公开项目成功新增过 hardcoded effect keyword」— 这条**已被正面满足**
-(2026-09-29,Phase A + C0):上面的配方通过引擎自己的 `0x1D13270` + BST 插入注册**真正全新**的
-keyword,不 patch 静态表,Zig 侧已写好并对引擎自己的写手做了字节校验。门
-`authorize.c1_registration` 已由 C1 的授权动作翻为 `true`(状态与改动点见 `docs/roadmap.md` 段2)。
+**关键约束的现状**:「没有公开项目成功新增过 hardcoded effect keyword」— 这条**已被正面满足**(Phase A + C0):
+上面的配方注册的是**真正全新**的 keyword,不 patch 静态表,Zig 侧已对引擎自己的写手做了字节校验。
 
 ## External References
 
@@ -274,11 +222,8 @@ keyword,不 patch 静态表,Zig 侧已写好并对引擎自己的写手做了字
 ## Game Data Structure
 
 The engine auto-registers script definitions by scanning `common/` subdirectories:
-- `common/scripted_effects/` — 42 files, macro effects with `$PARAM$` substitution
-- `common/scripted_triggers/` — 37 files, conditional logic
-- `common/on_actions/` — 4 files, event hooks (on_game_start, on_monthly_pulse, etc.)
-- `common/scripted_actions/` — 6 files, fleet/megastructure commands
-- `events/` — 170 event files
+`scripted_effects/`(42 files, `$PARAM$` 宏)、`scripted_triggers/`(37)、`on_actions/`(4)、
+`scripted_actions/`(6),外加 `events/`(170 files)。
 
 Script DSL features: scope chains (This/Root/Prev/From), parameterized macros, inline math `@[expr]`,
 `optimize_memory` tag, conditional blocks `[[PARAM] ... ]`.

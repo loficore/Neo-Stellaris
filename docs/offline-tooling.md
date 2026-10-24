@@ -471,20 +471,38 @@ pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔�
 
 `src/dll/c2/scope_probe.zig` 在 base Execute `0x1D08520` 上挂**只读** detour:每 512 次调用采样一次
 (`calls & 511 == 0`),记录真实 `arg2`(执行帧)的 8 个 qword、`[self+0]` 的 vtable RVA、`[self+8]` 的
-token id 与 `@returnAddress()` 反推的静态调用点(`caller_rva - 5`)。**函数体一律转发原函数**,不改
-寄存器、不改内存、不改控制流。到 `X=[ctx+0x30] → S=[X+8] → id=[S+8] / obj=[S+0x20]` 这条链**不在进程内跟**
-——它只在驱动侧用 `ReadProcessMemory` 走,采样器本身不解引用任何二级指针。
+token id、`@returnAddress()` 反推的静态调用点(`caller_rva - 5`),以及派发点上的 `r8`/`r9` 两个 scratch
+槽(布局 v2 起,`Entry` = 120 字节)。**函数体一律转发原函数**,不改寄存器、不改内存、不改控制流。
+`r8`/`r9` 记的是**值**,不是它们指向的内存 —— 一切解引用都发生在驱动侧的 `ReadProcessMemory`,采样器本身
+不解引用任何二级指针。
 
-读的是 7 个导出 + `C2Sanity`:`C2ScopeProbeLayout`(5 个 u32:entry `104` / stats `56` / ring `256` /
-mask `511` / version `1`)、`C2ScopeProbeReset`(装之前先清统计)、`C2ScopeProbeInstall`、
+驱动随后对**四个根**做进程外解引用:`self`、`[ctx+0x10]` 的 helper、`r8`、`r9`;每个根读 8 个 qword,
+每个像指针的 qword 再读它指向处的首 qword,减 `exe_base` 得 RVA,拿去 `--vtables`
+(默认 `evidence/xrefs/ceffect_vtable_map_4_4_4.txt`,1,805 个)做命中判定。**跟读预算按根类型各自给**
+(每源 8 个不同地址,四源合计仍是 32)—— 共用一个预算会让排在后面的源必然是 0 行,见下面陷阱 5。
+每个候选做**两次独立查表**:`known` 查 `[ptr]` 的 vptr(成员指向已知类的对象),`member_vtable` 查
+`ptr` 本身是不是一个已知 vtable 地址(root+off 直接放着一张 vtable = 多重继承子对象头,说的是 root
+自己的类);两者是两件事,后者**故意不喂给 `classify()`**。RVA 一律界在 `[exe_base, exe_base+SizeOfImage)`
+(`SizeOfImage` 从活进程 PE 头读:`e_lfanew` 在 `+0x3C`,`SizeOfImage` 在 NT 头 `+0x50`),界外不产生 RVA。
+**这条取代了旧判据**:
+`X=[ctx+0x30] → S=[X+8] → id=[S+8] / obj=[S+0x20]` 那条链已由 c1_validation **§53.3 第二枪证伪**
+(`+0x30` 不属于 0x20 字节的帧,读到的「id/object」是 `add rsp,0x28` 一类指令字节),链仍然照旧跟、照旧写进
+TSV,但**不再进任何 verdict**。
+
+读的是 7 个导出 + `C2Sanity`:`C2ScopeProbeLayout`(5 个 u32:entry `120` / stats `56` / ring `256` /
+mask `511` / version `2`)、`C2ScopeProbeReset`(装之前先清统计)、`C2ScopeProbeInstall`、
 `C2ScopeProbeStatsInto`、`C2ScopeProbeDrainInto`(环形记录,最老在前)、`C2ScopeProbeUninstall`、
 `C2ScopeProbeVerify`。**layout 任一字段漂了就打 `LAYOUT_DRIFT` 且不装** —— 驱动与 DLL 的解码契约断了,
-后面的字节都不能读。
+后面的字节都不能读。**拿 104 字节的旧 DLL 配 v2 驱动(或反过来)一定会漂**,这不是巧合,是这条判据在生效:
+按 104 解 120 会让每条记录串进下一条,读出一堆「看着像指针的垃圾」。
 
 ```
 python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
-        [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...]
+        [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...] [--vtables ...]
 ```
+
+`--vtables` 指向的那份表**必须在开枪机上存在**(Windows 侧要上传,见「前置条件」),表缺失或解析出 0 条时
+脚本在**注入之前**就退出:判据挂在一个空集合上,那一枪无论怎么打都只会得到 `no_scope_candidate`。
 
 轮询一直采样到 `--poll-s` 截止(不是拿到第一个样本就停),环形记录保留最后 256 条;
 `--poll-s` 太短只会让样本变稀,不会让判读变快。
@@ -512,14 +530,56 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 | `no_samples` | `samples == 0` | 有调用但 1/512 门没触发;唯一手段是更长的 `--poll-s`,本次什么都没采到 |
 | `all_invalid` | `valid == 0` | 每个样本的 `self`/`ctx` 都不可信,一帧没记;环境/调用形状结论,换新进程再试 |
 | `lexer_only` | `lexer > 0` 且 `lexer == valid` | 全部有效样本都带 lexer 哨兵 `[ctx+0x38]==0xb`(§52 那条路径),**不能**回答「真实执行帧是哪个对象」 |
-| `chain_unreadable` | `chain_ok == 0` | 样本有效但 `[ctx+0x30]`/`[X+8]`/`[S]`/`[S+8]`/`[S+0x20]` 没有一次全部读到;条目照留,读不到本身就是观测 |
-| `captured` | 其余 | 至少一条链完整;这是唯一可当证据的结论 |
+| `no_scope_candidate` | `known_vtable_hits == 0` | 四个根下没有任何 qword 指向「vptr 在那 1,805 个已知 vtable 内」的对象。这是**有界的代码结论**,见下面判读陷阱 1 |
+| `scope_candidate` | 其余 | 至少一个 qword 命中已知 vtable 集合;TSV 的 `object` 行指名是哪个根、哪个偏移、匹配到哪个 slot2 实体。这**仍不证明**它是 `CEventScope` |
 
-`captured` 之外一律退出码 1。链里的 `id` 是 **keyword token id**,永远不是 system id;名字只在
-`--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,查不到就留 `-`,不猜。
-`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
+`scope_candidate` 之外一律退出码 1。`no_calls`/`no_samples`/`all_invalid`/`lexer_only` 四条一律先按**环境**读
+(战役是否在跑、有没有取消暂停、进程是不是新进程),不要读成代码结论。链里的 `id` 是 **keyword token id**,
+永远不是 system id;名字只在 `--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,
+查不到就留 `-`,不猜。`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`);Windows 侧没有这两份表时两列退化为 `-`,离线再 join。
-完整结果写到 `--out`(长表 `kind/key/value/detail`,caller / id / chain 三类行)。
+完整结果写到 `--out`(长表 `kind/key/value/detail`,**meta** / caller / id / chain / object / root_unreadable 六类行)。
+`meta` 行在最前面,带 `exe_base`、`image_end`、`image_size`、`dll_sha256`、`vtable_map_count`、`layout`、
+`stats`、`per_source_follow`,以及四根的 `followed_by_source`/`implausible_by_source`/`capped_by_source`/
+`withheld_by_source` 和三个命中计数。**这不是装饰**:§56 那一枪的 stdout 被一次 ssh 重置整段吃掉,而旧 TSV
+里没有这些数,事后无从区分「某个根读到但没有命中」与「那个根根本没被读」,于是把一次预算耗尽读成了一条
+负结论(陷阱 5)。判据现在住在带判词的 artifact 里。
+
+**七条判读陷阱(§53.4 / §54.8.4 / §56.8 实机与离线复算取到的,读 verdict 之前先看):**
+
+1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
+   仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
+   不排除候选是对象,只排除「它属于那个集合」。反过来 `scope_candidate` 也只到「命中已知集合」为止。
+2. **`r8`/`r9` 在派发点不是参数**(§54.8.4 第 1 条:`0x1D08520` 只设 `rcx`/`rdx`,而 `0x3B01A0` 消费四槽,
+   `r8`/`r9` 取的是上一调用者的 scratch)。它们的命中**不能**用来推断调用约定,也不能读成「引擎把 scope 传在了
+   第四个槽」。
+3. **`unreadable` 与「读到但没命中」是两件事。** 短命帧的 `+0x10` 指向邻近栈 helper(§53.4.1),而读取发生在
+   轮询结束之后 —— 那时栈早被覆盖。这类根进 `root_unreadable` 行与 `unreadable_roots` 计数,不该被当成
+   「那个位置是空」。模块外(堆)的地址保留**绝对值**在 `ptr`,只有 `vptr_rva` 才是基址相对的;把堆指针压成
+   `rva=0` 会和真正的 0 混成一类。
+4. **实机结果里的 `base` 有两种,判 vtable 命中只用其中一个。** 驱动打印与 `c4_wiring_result.json` 的
+   `base` 是**我们 DLL 的装载地址**(`resolve_base_address(pid, module)` 按模块取),不是 exe 主模块基址;
+   vtable map 的键是 exe 相对 RVA,拿错基址就永远命不中,而失败长得很像「没有候选」。完整对照与取法见 §55.1。
+5. **某个 `source` 在 TSV 里是 0 行,先读 `capped_by_source` 与 `withheld_by_source`,再谈它是负结论。**
+   旧版四根**共用**一个 32 的跟读预算,而迭代顺序是每条记录先交 `self`:排在后面的源必然是 0 行,
+   这个 0 与「引擎在那个槽里没有指针」在 artifact 里长得一模一样。§56 就这么把「`arg3`/`arg4` 一行都没有」
+   读成「过不了 `plausible_user_ptr` 门」,把「`helper` 只有 1 个地址」读成观测量 —— 实际是
+   `31 self + 1 helper = 32` 预算刚好耗尽(§56.8)。`withheld` 是另一半:entry 无效时 `ctx` 没被记,
+   `helper` 根不是「读了没命中」而是「无从读起」。**没有 meta 行的旧 artifact 不能事后重开这个判断**,
+   只能按未定处理。
+6. **两个「像指针」的假象:`vptr_rva` 可以根本不在镜像里,`ptr` 可以根本不是指针。**
+   旧 `to_rva` 只有下界没有上界,§56 的 artifact 里就有 2 条 `vptr_rva` 是
+   `0x7360ec6ccc426873` / `0x4e5ed44eaa1a4c50` 这种垃圾 qword 减出来的数 —— 它过了「是个 RVA」的形状检查,
+   却没过「这个模块有这个偏移」。现在界在 `[exe_base, exe_base+SizeOfImage)`,界外留 `-`。另一半:
+   `plausible_user_ptr` 只看范围与 8 对齐,而 §56 的候选里有 **2 条的值是 ASCII `"PLANET"`**
+   (`0x54454e414c50`,两处 `off=0x18`)—— 它合法地过了门。所以「pointer-shaped」不等于 pointer,
+   命中表里出现一个可疑成员时先按值读一遍,再按指针解引用。同一类还有**量级**:§56 的 `ctx` 帧
+   (`0x7fe768`/`0x7fed78`)与 `helper` 根(`0x1900ede0`)都在 32 位量级,而 x64 的栈与模块装载在
+   `0x7ff…` 量级 —— 低地址不等于栈,把它们读成绝对指针之前要先按数值比量级(§56.8 末段)。
+7. **`known` 与 `member_vtable` 是两个不同的陈述,不能相加。** 前者说「这个成员指向一个已知类的对象」,
+   后者说「这个槽里直接放着一张已知 vtable」(多重继承子对象头,说的是 root 自己的类)。§56 的 99 个候选里
+   第一层 14 条、第二层 **44 条**(全在 `self` 上,13 个不同 RVA),后者若喂进 `classify()` 会把
+   「root 带子对象头」当成 scope 命中 —— 所以现在单独计数、单独写 TSV,且**不进判词阶梯**。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
@@ -788,6 +848,21 @@ just game stop | quit
    (900 字节起连接被重置),不要 `scp -r`。远端控制台是 cp936,shim 与命令行都刻意保持 ASCII。
 9. 纯逻辑(暂停判读、窗口分类、策略、命令词表、几何归一化)在 Linux 上跑:`just host-tests`
    (= `cd scripts/windows && python3 -m pytest tests -q`)。Windows 专有路径只在实机被调用。
+10. **daemon 的父壳 `cmd.exe` 是一个真实的桌面窗口,会占住前台并把游戏从前台挤下去**。
+    `start` 的 shim 是 `.cmd`,任务用 `/ru <machine>\<user> /rl highest` + `/run /I` 跑,所以 cmd 在交互
+    桌面上开了一个可见控制台窗(pythonw 自己无窗)。**daemon 晚于游戏启动时**,这个窗压在画面上并持有
+    前台,`focus()` 的 3 s `GetForegroundWindow()==hwnd` 判据就永远不成立 ⇒ 一切要先 focus 的动词
+    (`console`、`click`、Space)全拒,日志写 `console_refused reason=focus`、状态写
+    `resume_failed: focus refused before Space`。**判据在这两个字符串上,不在 `game.log` 上** ——
+    `game.log` 只收 `log=` 与少量消息(day-1 存档 177 B 完全正常),把它当「有没有战役」的证据会得出
+    错结论(2026-10-24 实机,§56.1)。处置是 `taskkill /F /PID <cmd>` 只杀父壳:pythonw 不是被 job
+    管的树,存活且窗一消失 focus 立刻通。顺带第二条:那个窗会**污染像素判读** —— §54.10 的面板计数和
+    `classify_window` 都读同一张截图,挡与不挡之间 `note` 能从 `paused_no_window` 漂到 `dialog_unknown`。
+11. **ssh 长连接会在长跑的实机驱动跑完之前被重置,那之后 stdout 全丢**。枪的 artifact 若只在结尾
+    打印(判词、Verify rc、host alive),就取不回来了。所以实机驱动的关键状态要能被**事后独立读回**:
+    `scope_probe` 的 `installed` 是实时 bool、`verified` 是 `verify()` 的实时返回值(不是闩锁),
+    配一次 `C2ScopeProbeStatsInto` 双读(`calls` 两秒不涨 = 热路径已还原)就把「Uninstall 跑过、引擎
+    字节完好」证完,不需要驱动那行输出(§56.3)。
 
 ### `scripts/windows/keep_awake.py` —— 桌面可达性守护
 

@@ -4,8 +4,9 @@
 // register, argument, or the control flow of the original. The chain
 // X=[ctx+0x30] -> S=[X+8] -> id=[S+8] / obj=[S+0x20] is NOT followed in-process;
 // the Python driver follows it with ReadProcessMemory so a stale pointer cannot
-// fault the host. The detour goes through exec_hook.installWith and always
-// forwards to exec_hook.original().
+// fault the host. arg3/arg4 are recorded as VALUES only -- dereferencing them is
+// the driver's job, for the same reason. The detour goes through
+// exec_hook.installWith and always forwards to exec_hook.original().
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -18,7 +19,7 @@ const is_windows = builtin.os.tag == .windows;
 pub const RVA_BASE_EXECUTE: usize = offsets.keyword_reg.RVA_BASE_EXECUTE; // = 0x1D08520
 pub const RING_LEN: usize = 256;
 pub const SAMPLE_MASK: u64 = 511;
-pub const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_VERSION: u32 = 2;
 pub const LEXER_SENTINEL: u32 = 0xb;
 pub const CTX_X: usize = 0x30;
 pub const SELF_TOKEN_ID: usize = 0x08;
@@ -36,6 +37,8 @@ pub const Entry = extern struct {
     self_ptr: u64 = 0,
     ctx_ptr: u64 = 0,
     ctx_words: [8]u64 = [_]u64{0} ** 8,
+    arg3: u64 = 0,
+    arg4: u64 = 0,
 };
 
 pub const Stats = extern struct {
@@ -49,7 +52,7 @@ pub const Stats = extern struct {
 };
 
 comptime {
-    if (@sizeOf(Entry) != 104) @compileError("Entry must be 104 bytes");
+    if (@sizeOf(Entry) != 120) @compileError("Entry must be 120 bytes");
     if (@sizeOf(Stats) != 56) @compileError("Stats must be 56 bytes");
 }
 
@@ -96,11 +99,13 @@ pub fn shouldSample(call_index: u64) bool {
     return (call_index & SAMPLE_MASK) == 0;
 }
 
-fn capture(self: usize, ctx: usize, caller: usize) void {
+fn capture(self: usize, ctx: usize, a3: u64, a4: u64, caller: usize) void {
     const idx: usize = @intCast(seq.fetchAdd(1, .monotonic) % @as(u64, RING_LEN));
     const e = &ring[idx];
     e.* = .{};
     e.caller_rva = toRva(caller);
+    e.arg3 = a3;
+    e.arg4 = a4;
 
     if (readU64(self)) |vtbl| {
         e.self_ptr = self;
@@ -137,7 +142,7 @@ fn scopeDetour(self: u64, ctx: u64, a3: u64, a4: u64) callconv(.c) u64 {
     const calls = @atomicRmw(u64, &stats.calls, .Add, 1, .monotonic) + 1;
     if (shouldSample(calls)) {
         _ = @atomicRmw(u64, &stats.samples, .Add, 1, .monotonic);
-        capture(@intCast(self), @intCast(ctx), @returnAddress());
+        capture(@intCast(self), @intCast(ctx), a3, a4, @returnAddress());
     }
     const f: OrigFn = @ptrCast(exec_hook.original() orelse return 0);
     return f(self, ctx, a3, a4);
@@ -253,7 +258,7 @@ pub fn reset() void {
 }
 
 test "entry layout is pinned for the Python decoder" {
-    try std.testing.expectEqual(@as(usize, 104), @sizeOf(Entry));
+    try std.testing.expectEqual(@as(usize, 120), @sizeOf(Entry));
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(Entry, "valid"));
     try std.testing.expectEqual(@as(usize, 1), @offsetOf(Entry, "lexer"));
     try std.testing.expectEqual(@as(usize, 4), @offsetOf(Entry, "self_vtable_rva"));
@@ -263,13 +268,15 @@ test "entry layout is pinned for the Python decoder" {
     try std.testing.expectEqual(@as(usize, 24), @offsetOf(Entry, "self_ptr"));
     try std.testing.expectEqual(@as(usize, 32), @offsetOf(Entry, "ctx_ptr"));
     try std.testing.expectEqual(@as(usize, 40), @offsetOf(Entry, "ctx_words"));
+    try std.testing.expectEqual(@as(usize, 104), @offsetOf(Entry, "arg3"));
+    try std.testing.expectEqual(@as(usize, 112), @offsetOf(Entry, "arg4"));
     var l: [5]u32 = undefined;
     try std.testing.expectEqual(@as(u32, 5), layoutInto(&l));
-    try std.testing.expectEqual(@as(u32, 104), l[0]);
+    try std.testing.expectEqual(@as(u32, 120), l[0]);
     try std.testing.expectEqual(@as(u32, 56), l[1]);
     try std.testing.expectEqual(@as(u32, 256), l[2]);
     try std.testing.expectEqual(@as(u32, 511), l[3]);
-    try std.testing.expectEqual(@as(u32, 1), l[4]);
+    try std.testing.expectEqual(@as(u32, 2), l[4]);
 }
 
 test "plausible rejects bad pointers" {
@@ -287,7 +294,7 @@ test "capture records identity, ctx words and caller rva" {
     img_end = win + 0x10_0000;
     f.arm(win + 0x1500, 0x1f3);
     std.mem.writeInt(u64, f.ctx[0x30..][0..8], 0x5000_0000_0000, .little);
-    capture(@intFromPtr(&f.obj), @intFromPtr(&f.ctx), win + 0x1234);
+    capture(@intFromPtr(&f.obj), @intFromPtr(&f.ctx), 0xaaaa_bbbb_cccc_dddd, 0x1111_2222_3333_4444, win + 0x1234);
     var buf: [4]Entry = undefined;
     try std.testing.expectEqual(@as(u32, 1), drainInto(@ptrCast(&buf[0])));
     try std.testing.expectEqual(@as(u8, 1), buf[0].valid);
@@ -297,6 +304,8 @@ test "capture records identity, ctx words and caller rva" {
     try std.testing.expectEqual(@as(u32, 0x1f3), buf[0].token_id);
     try std.testing.expectEqual(@as(u32, 0x1234), buf[0].caller_rva);
     try std.testing.expectEqual(@as(u64, 0x5000_0000_0000), buf[0].ctx_words[6]);
+    try std.testing.expectEqual(@as(u64, 0xaaaa_bbbb_cccc_dddd), buf[0].arg3);
+    try std.testing.expectEqual(@as(u64, 0x1111_2222_3333_4444), buf[0].arg4);
     try std.testing.expectEqual(@as(u8, 0), buf[0].lexer);
 }
 
@@ -309,11 +318,11 @@ test "capture marks bad self, bad ctx and the lexer sentinel" {
     f.arm(0, 0);
     const self = @intFromPtr(&f.obj);
     const ctx = @intFromPtr(&f.ctx);
-    capture(self, 0, win + 0x77);                 // bad ctx
-    capture(self, ctx, win + 0x88);               // normal
+    capture(self, 0, 0, 0, win + 0x77);                 // bad ctx
+    capture(self, ctx, 0, 0, win + 0x88);               // normal
     std.mem.writeInt(u32, f.ctx[0x38..][0..4], LEXER_SENTINEL, .little);
-    capture(self, ctx, win + 0x99);               // lexer
-    capture(0, ctx, win + 0xAA);                  // bad self
+    capture(self, ctx, 0, 0, win + 0x99);               // lexer
+    capture(0, ctx, 0xfeed, 0xf00d, win + 0xAA);        // bad self
     var buf: [4]Entry = undefined;
     try std.testing.expectEqual(@as(u32, 4), drainInto(@ptrCast(&buf[0])));
     try std.testing.expectEqual(@as(u8, 0), buf[0].valid);
@@ -322,6 +331,10 @@ test "capture marks bad self, bad ctx and the lexer sentinel" {
     try std.testing.expectEqual(@as(u8, 1), buf[2].lexer);
     try std.testing.expectEqual(@as(u8, 0), buf[3].valid);
     try std.testing.expectEqual(@as(u32, 0xAA), buf[3].caller_rva);
+    // The two scratch slots are recorded before any self/ctx validity gate, so a
+    // rejected sample still shows what the dispatch point was holding.
+    try std.testing.expectEqual(@as(u64, 0xfeed), buf[3].arg3);
+    try std.testing.expectEqual(@as(u64, 0xf00d), buf[3].arg4);
     try std.testing.expectEqual(@as(u64, 1), stats.invalid_ctx);
     try std.testing.expectEqual(@as(u64, 1), stats.invalid_self);
     try std.testing.expectEqual(@as(u64, 1), stats.lexer);
@@ -344,7 +357,7 @@ test "drain returns the newest RING_LEN records oldest first" {
     img_base = 0x1000_0000;
     img_end = 0x2000_0000;
     var i: usize = 0;
-    while (i < RING_LEN + 5) : (i += 1) capture(0, 0, 0x1000_0000 + i);
+    while (i < RING_LEN + 5) : (i += 1) capture(0, 0, 0, 0, 0x1000_0000 + i);
     var buf: [RING_LEN + 16]Entry = undefined;
     try std.testing.expectEqual(@as(u32, RING_LEN), drainInto(@ptrCast(&buf[0])));
     try std.testing.expectEqual(@as(u32, 5), buf[0].caller_rva);
