@@ -4756,3 +4756,85 @@ scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_scope_probe_v2.tsv evidence/
 
 `--vtables` 在 host 上**必须显式给**:驱动里的默认值是相对路径 `evidence/xrefs/…`,
 host 的 `C:\temp` 下没有这个目录,不给就会在注入**之前** `SystemExit`(这是设计好的不对称,不是缺陷)。
+
+### §56.8 更正:§56.4 里三句话不成立,以及这一枪真正的 datum(2026-10-24)
+
+终评审对着仪器重读了 §56.4,发现三个判读越界。原因是两个仪器缺陷加上一个缺 artifact 的乘积,
+不是采样本身出错。修正提交:`e2567e3`。本节只追加,§56.4/§56.5 原文不改写。
+
+**撤回 1 —— 「`arg3`/`arg4`:0 个地址过 `plausible_user_ptr` 门」。** 这三根**一次都没被读**。
+旧的 `_entry_roots` 把 `arg3`/`arg4` 和 `helper` 一起放在 `valid == 1` 之后,而 `follow_roots` 的
+`MAX_FOLLOW = 32` 是**四根共用**的预算:
+
+```
+for entry in entries:                      # 旧代码
+    for source, addr in _entry_roots(entry):
+        ...
+        if len(objects) >= max_follow:
+            return objects, implausible, True   # 整轮立刻结束,不是跳过这一根
+```
+
+artifact 里正好 **31 个 `self` 根 + 1 个 `helper` 根 = 32** —— 预算在 `helper` 上刚好耗尽,
+同一批 valid 条目的 `arg3`/`arg4` 连门都没到过。所以「TSV 里一条 `source=arg*` 行都没有」
+是**没读**,不是**过不了门**。`capture()` 是在任何 self/ctx 门**之前**写 arg3/arg4 的,
+这两个槽的数据一直躺在环形记录里等着被读。
+
+**撤回 2 —— 「`helper` 只有 1 个不同地址」。** 「1」是上面那条预算的算术结果,不是观测量。
+而且它带的括号「(栈地址)」越界得更远:本枪没有判读这个地址属于哪个区域。§53.4.1 说「短命帧的
+`+0x10` 可能是邻位栈助手」,这一枪**没有**确立 `0x1900ede0` 是栈。
+
+**撤回 3 —— 「它 `+0x0` 那个 qword 解出 `0x9ec250` → 代码,不是 vtable」。** 方向反了:
+vtable 的每一个槽本来都是代码,「`[x]` 是代码」是 vtable 形状的**支持**证据而不是反驳。
+这一枪真正的 helper datum 是把上界补上之后才露出来的:
+
+```
+root=0x1900ede0  off=0x0  ptr=0x7ff6a694c2d0  → 在 exe 镜像内,RVA 0x26dc2d0
+```
+
+`0x26dc2d0` 落在 `.rdata` 的 vtable 带里(§53 那个执行帧 vtable `0x26e4fa8` 同带),
+不在 1,805 的下限集合内(下限只含 `slot[1]` 仍是 base Execute 的类),而它的第一个 qword 是代码
+⇒ **一个 vtable 形状**。它不是「一个对象」,但也绝不是「一个被覆盖的栈残值」。
+off=0x10 那一格是 `0x101000000`,镜像外,`vptr_rva=-`。
+
+**因此:「四根 + 一层解引用 + 已知集合」这个形状没有退役。** §56.5 结尾那句「再打一次预期得到
+同一件事」只在 `self` 那一根上成立 —— 四根里有三根从未被跟读,退役结论建立在一个只跑了
+四分之一的形状上。§56.5 负结论的第 2 条(「非 self 的三根一条命中都没有」)**没有证据支撑**,
+应当读作「非 self 的根没有被读过」。
+
+`VERDICT: scope_candidate` 本身不变:14 条 `known` 命中不依赖上面任何一句话,复算仍是 14。
+变的是这张判词**没有说**的东西。
+
+**新增的离线复算(零成本,不要枪、不要进程)。** 脚本
+`scripts/scratch/2026-10_scope_shot/ns_scope_recount.py` 只读两份已入库 artifact
+(`evidence/logs/scope_probe_v2_4_4_4.tsv` + `evidence/xrefs/ceffect_vtable_map_4_4_4.txt`),
+镜像界取 `exe_base = 0x7ff6a4270000`、`SizeOfImage = 0x3927000`(离线从 PE 头读,不是 DLL 基址 —— 陷阱 4):
+
+- 候选总数 **99** = `self` 97 + `helper` 2;**在镜像内 64 条,镜像外 35 条**。
+- 第二层查表(候选 qword **本身**是不是一个已知 vtable 地址,即多重继承子对象头的形状):
+  **44 条,全部 `source=self`,13 个不同 RVA** ——
+  `0x024b3690`×16、`0x024c69e8`×5、`0x024b3050`×5、`0x02517180`×4,
+  ×2 的 `0x02545e40`/`0x0254a190`/`0x0254fa58`/`0x025531b0`/`0x025531e8`,
+  ×1 的 `0x024b1c88`/`0x02551620`/`0x02553140`/`0x02553178`。
+  其中 `0x024b3050`、`0x024c69e8` 同时出现在 §56.4 第一层的命中表里,即同一批地址既作为
+  「成员的 vptr」出现,也作为「成员槽的值」出现。这是关于 **root 自己的类**的陈述,和第一层
+  「成员指向某个已知类的对象」不是同一件事 ⇒ 修正后的仪器把 `member_vtable` **单独计数,
+  并且故意不喂给 `classify()`** —— 喂进去会把「root 有子对象头」当成 scope 命中。
+- **2 条 `vptr_rva` 是伪造的**:`0x7360ec6ccc426873`、`0x4e5ed44eaa1a4c50`。旧 `to_rva` 只有下界
+  没有上界,一个明显是垃圾的 qword 被减出「像 RVA」的数。已补 DLL 自己的规则
+  `[exe_base, exe_base+SizeOfImage)`;另有 16 条 `vptr_rva=-`。
+- **2 条候选 ptr 是 ASCII 文本**:值 `0x54454e414c50` = `"PLANET"`,出现在两处 `off=0x18`
+  (root `0x17ec8f580`、`0x17ec02c80`)。`plausible_user_ptr` 只看范围与 8 对齐,一段 6 字符
+  文本正好满足 ⇒ 「pointer-shaped」不等于 pointer,这一格读的是个名字标签不是链接。
+
+**判读陷阱(新)**:一条「某个 source 有 0 行」只有在预算没耗尽时才是负结论。共用预算 +
+先到先得的迭代顺序 = 排在后面的根**必然**是 0,而这个 0 和「引擎在那个槽里没有指针」在
+artifact 里长得一模一样。本枪就是因为 TSV 里没有 meta 行、stdout 又被 ssh 重置吃掉(陷阱 11),
+事后无从区分「没读到」与「读到但没有」。修正后:预算按根类型各自给(每源 8,总量仍是 32),
+驱动打 `followed/implausible/capped/withheld` 四个 per-source 计数,并把它们连同 exe_base、
+image_end、layout、stats 一起写进 TSV 的 `meta` 行 —— 判据现在住在带判词的 artifact 里。
+
+**仪器侧另外两处**:装 `C2ScopeProbeStatsInto` 之前先过 `install_decision`(布局五字漂移就
+拒绝安装,而不是带着位移过的偏移打完整一枪);`ns_scope_aftermath.py` 现在经 `gate_module`
+拿 `base`/`exports`,即恢复读回也要 `C2Sanity == 42` 才派发 —— 它仍然先读一次
+`resolve_base_address` 并在 `base == 0` 时早退,否则 `gate_module` 自己会把没映射的模块装进来,
+`NOT_LOADED` 就永远打不出来。
