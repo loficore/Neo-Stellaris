@@ -4416,4 +4416,180 @@ daemon 日志(`C:\temp\ns_game_log.jsonl`,只读拉取)记到的转换:
     ssh Windows_Jiaolong "python C:/temp/panel_pixel_map.py bbox a f"
     just game status   # console_open / console_px / console_forced
 
+## §55 C4 slot[2] 判别枪:base Execute 经不经我们的 vtable 副本(2026-10-24)
+
+§54.6 把「per-system 执行到底走哪个入口」缩成一次二选一,§54.8 在开枪前离线钉死了它的读法与
+两条「不覆盖」。本节是那**一枪**的结果:一个游戏进程、一次注入、一条判别命令。
+
+### §55.1 授权与环境
+
+点名原话:**「执行 Task 6」**(2026-10-24,用户)。这正是 Task 6 Step 1 自己要的那句话
+(「只有用户明确说『打这一枪 / 执行 Task 6』才继续」),不是我从别处推出来的许可。
+
+**这一枪之前先烧掉的不是资源,是半天。** `just launch` 连续两次以退出码 22
+(`EXIT_LAUNCHER_NO_FOCUS`)失败:`SetForegroundWindow` 返回 FALSE 且 `gle=0`。根因不在 launcher ——
+Console 会话 1 自 12:02:11 起由 `LogonUI.exe` 停在锁屏上,锁屏桌面不接受注入的输入。
+我当时评估过「远程解锁」这条路并**否掉**(架构上不可达:锁屏期间的输入被拒、`ImageGrab` 走的是屏幕 DC
+而 ssh 起的进程看不到桌面;host 是 Win11 Home,没有入站 RDP 服务端 —— 补一句:
+**给 Home 打 `termsrv.dll` 补丁是绕过许可,不是配置,这条我没做也不会做**)。
+最后是**由人**在现场解锁,第三次 `just launch` 成功:`foreground_ok`,点击 handoff 在第 2 次尝试命中,
+pid 13364。两次 22 都停在 `bring_to_foreground`,launcher 不做注入,所以没有消耗 pid 13364 的一次注入额度。
+
+**产物:六项 sha256 本地 ↔ host 逐条相等**,且其中两项与结果 json 里的字段逐字相同。
+
+| 本地 | host | sha256 |
+|---|---|---|
+| `zig-out/bin/stellaris_quickjs.dll` | `C:/temp/sqjs_c4.dll` | `1b568cd4154da1e9afcb25c451c5f9000ea5ce5cf6afdc995fd9760e06412ba9`(= json `dll_sha`) |
+| `scripts/c4_wiring_probe.py` | `C:/temp/c4_wiring_probe.py` | `8a066109629ce79dc153036f97597dfcdf02b27c16082742e733036ba18ea09f` |
+| `scripts/windows/game_supervisor.py` | `C:/temp/game_supervisor.py` | `1ad3f6f7931a15292bf4fd0e1284c358f6fbf8c7f647ce716ef32e78a09e7ec3` |
+| `scripts/windows/launch_stellaris.py` | `C:/temp/launch_stellaris.py` | `3bba05666e59e29ec78c552d4a333dd264c539c869b21ca985cbd6948a9af522` |
+| (gated,不在仓库) | `C:/temp/stellaris_2226.sav` | `6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e`(= json `save_sha`) |
+| `scripts/c2_harness.py` | `C:/temp/c2_harness.py` | `0c8bca42a70ab9a2cf28bba6036de1d039ff30ec01dba93550a9af5ded485713`(注入通道的驱动侧,枪没重新上传它) |
+
+出处:`sha256sum …`(Linux 侧)+ `ssh Windows_Jiaolong "powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 C:/temp/sqjs_c4.dll,C:/temp/c4_wiring_probe.py,C:/temp/c2_harness.py,C:/temp/game_supervisor.py,C:/temp/launch_stellaris.py,C:/temp/stellaris_2226.sav | Format-Table Path,Hash -AutoSize\""`,逐条原样在 `evidence/logs/c4_slot2_live_4_4_4.log` 第 8 节。
+
+**观测前提(daemon 自己报的,不是我以为的)**,`just win "python C:/temp/game_supervisor.py status"`
+在 13:03:09 那条记录里:`console_open=false`、`console_px=0`、`console_forced=false`。
+⇒ 信念来自像素,且没被 `console_sync` 钉住。**没有为了凑这个前提去按 `console_sync`** ——
+计划写死了这条禁令,§54.9 就是违反它的代价。同一份记录还有 `note=dialog_unknown`(策略想处理对话框,但 `auto_dismiss` 没开 —— `game_supervisor.py:1037-1046`)。
+这里要说清两件事**不同源**,别把它们读成同一个框:`window.bbox=[1006,584,1939,840]` 是**事件带里检出的亮面板**,屏幕坐标(`_panel_bbox`,`:660-703`);而 A 框是**按游戏窗口宽高取比例**算出来的(`CONSOLE_BOX_FRACTIONS`,`:63`;`_console_box`,`:603-609`)。「那个面板会不会自己点亮 A 框」本枪**没证**,也不需要证:门二读到的就是 `false / px=0`,即那一瞬间 A 框是暗的;而投递真没被挡住 —— 预检随后拿到 783 行。
+
+**进程地址两条,别混。** 结果 json 的 `base = 140721292902400 = 0x7ffc3aad0000` 是**我们 DLL 的装载地址**
+(`_flow` 取 `harness.resolve_base_address(pid, os.path.basename(args.dll)`,`scripts/c4_wiring_probe.py:852-854、865`),
+不是 exe 基址。`stellaris.exe` 主模块基址另取(`ssh Windows_Jiaolong "powershell … (Get-Process -Id 13364).MainModule.BaseAddress"`
+= `140697292701696 = 0x7ff6a4270000`)。这对 §55.4 的仪器自证是关键,数字在那一节算。
+
+**开枪前的离线门(Task 1–3 的判据)**,`python3 -m pytest scripts/test_c4_wiring_probe.py -q` → **56 passed**;
+`just fence` → **27 passed**;`just host-tests` → **223 passed**;`zig build test` → **445/445 tests passed**
+(其中 `-Mroot=src/dll/exports.zig` 那一条链接步按 `docs/offline-tooling.md`「Host caveat」与裁定 P15 记为绿,
+本批 `src/dll/` 一行未动)。`C4Slot2StatsInto` 在产物里的 rva 为 **`0x44b420`**(零游戏,离线枚举 PE 导出:
+`python3 -c "import sys;sys.path.insert(0,'scripts');import c2_harness as h;e=h.list_exports('zig-out/bin/stellaris_quickjs.dll');print('C4Slot2StatsInto' in e, hex(e['C4Slot2StatsInto']))"`,`scripts/c2_harness.py:236`)。
+
+### §55.2 三道前置门的实际判定
+
+门顺序:`_wait_ready`(`:689`)先 `supervisor_ready` 再 `console_gate`,然后才是 save 哈希门、
+导出 diff、`resolve_pid`、`_campaign_preflight`(`:799`,**注入之前**)。
+
+1. **门一 · 导出集按模式**(`required_exports("slot2")`,`:91-99`):
+   `REQUIRED_EXPORTS + ("C4Slot2StatsInto",)`,与产物导出做差集 ⇒ **空,放行**。
+   含义:那一枪不可能走到 `_slot2_phase` 才发现导出不在(§54 那批 DLL 有 capture 的导出、没有 slot2 的)。
+2. **门二 · 信念必须是观测**(`console_gate(rec)`,`:479-491`):
+   输入 = §55.1 那条记录 ⇒ `console_open` 非 `None`、`console_forced` falsy ⇒ **`"ok"`,放行**。
+   这里要点名是哪一轴(Task 3 复核留下的那条 minor):驱动侧的 verdict 名 `console_state_unknown`
+   与 daemon 侧的拒收 `reason` 名**恰好同名,是两个东西**。本枪**两个都没触发** ——
+   驱动没判 `console_state_unknown`(像素决定性),daemon 没写 `console_refused`(见门三)。
+   `console_belief_pinned` 那一支也没触发(`forced=false`)。
+3. **门三 · 拒收理由 2 s 内中止**(`classify_console_receipt`,`:443-460`;窗口常量
+   `CONSOLE_RECEIPT_TIMEOUT_S = 2.0`,`:56`):
+   每条 console 命令**写命令文件之前**先记 JSONL 的长度作偏移,2 s 内只分类该偏移之后的尾巴。
+   本枪两条都是 **`no_receipt` ⇒ best-effort 静默放行**,这是健康形状:daemon 的 `console_sent`
+   要按完整键计划(≈3.5 s,第二条起 ≈3.3 s)才落盘,严格长于 2 s 窗口 —— 所以**读静默返回时不要去找
+   「缺失的成功回执」**(`docs/offline-tooling.md` 前置门三已写明)。事后从 JSONL 尾巴读到的确认为:
+   `{"event": "console_sent", "chars": 67, "opened": true, "t": "…13:04:32"}` 与
+   `{"event": "console_sent", "chars": 148, "opened": false, "t": "…13:04:38"}`
+   (`ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Content C:/temp/ns_game_log.jsonl -Tail 12)"`)。
+   **无 `console_refused`,无 `console_clipboard_failed`** ⇒ 门三没有东西可中止。
+   slot2 模式一共两条 console 命令(预检 + 判别),与计划一致(capture 模式是三条)。
+
+**预检(注入前)**:`_campaign_preflight` 拿到 **783 行**哨兵 = 门限
+(json `preflight_marker_count: 783`,`python3 -c "import json;print(json.load(open('/tmp/c4_wiring_result_slot2.json'))['preflight_marker_count'])"`),
+等待 **4.18 s**(json `preflight_wait_s: 4.18`)。⇒ campaign 形状对、面板投递通、日志读回不瞎。
+
+**我自己制造的一次噪声(如实记,与判读无关)**:`just win "python C:/temp/game_supervisor.py send shot"`
+—— `send` 不是子命令(daemon 的 CLI 只认 `serve|start|stop|status|cmd`,其余首词按字面量走命令通道,
+`game_supervisor.py:1191-1196`),于是命令文件收到字符串 `send shot`,daemon 回了
+`{"event": "unknown_command", "raw": "send shot"}`。它落在枪**之前**,不影响任何门的输入。
+
+### §55.3 一枪
+
+    $ just win "python C:/temp/c4_wiring_probe.py --mode slot2 --dll C:/temp/sqjs_c4.dll --save C:/temp/stellaris_2226.sav --json C:/temp/c4_wiring_result.json"
+    VERDICT: slot2_zero
+    error: recipe `win` failed on line 46 with exit code 1
+
+退出码 1 不是崩溃:`main()` 只在 `verdict == "ok"` 返回 0(`scripts/c4_wiring_probe.py:1133-1136`),
+而 `_slot2_phase` 的 docstring 早就写明 `slot2_zero` **is a datum, not a failure**。
+
+`VERDICT: slot2_zero` 由 `classify_slot2(sentinel=783, body_hits=783, delta=0)` 得出
+(`:198-210`);`detail` 逐字 `"slot2 delta=0 body=783 sentinel=783 target=0x7ff6a46201a0"`。
+
+| 量 | 值 | 出处 |
+|---|---|---|
+| armed 哨兵 `C4_SLOT2START_13364` | **783 行** | json `slot2.sentinel` |
+| `NEO_CHOKE_EFFECT` body | **783 行** | json `slot2.body_hits` |
+| slot[2] 计数 before | `slot2_calls=0` | json `slot2.before` |
+| slot[2] 计数 after | `slot2_calls=0` | json `slot2.after` |
+| **delta** | **0** | json `slot2.delta` |
+| 转发的 donor 地址 `slot2_target` | before = after = `140697296568736` = **`0x7ff6a46201a0`** | json `slot2.before/after` |
+| 接线安装 | `install_rc=0`(**注入发生了,pid 13364 的一次额度已用掉**) | json `install_rc` |
+| armed token | `effect_id=68637 = 0x10c1d` | json `effect_id` |
+| wire 布局 | `[0x1, 0x0, 0xd28, 0x800, 0x3b0, 0x100, 0x8, 0x100]` = 与 `expected_layout` 逐槽相等 | json `layout`;比对在 `:888-891` |
+| campaign 门 | `"ok"` | json `campaign_gate` |
+
+### §55.4 判读
+
+**`delta = 0` 判给 §54.6 的 (b)。** donor vptr 是一次**副本/克隆**:per-system body 执行既不经我们
+vtable 副本的 slot[1](§54 已证 1/787),**也不经 slot[2]**(本枪)。⇒ 试点一要找的入口不在我们
+那份 25 槽副本上,**换 chokepoint,不是修 slot[2] 包装器**。
+
+**为什么这个 0 不是仪器故障 —— 三条独立自证:**
+
+1. **计数器装在对的槽上。** `slot2_target - exe_base = 0x7ff6a46201a0 - 0x7ff6a4270000 = 0x3b01a0`,
+   零余数,正好是 donor instantiate 的 RVA(§54.8.1 钉的 `+0x10 -> 3b01a0`)。
+   包装器转发的靶子是真的引擎 `0x3B01A0`,不是别处的值。
+2. **blob 两次都读到了,且自洽。** before/after 同值(`0 / 0x7ff6a46201a0`)⇒ 不是「读回失败当成 0」;
+   `C4Slot2StatsInto` 写满 16 B 才返回 true(`src/dll/c2/vtable.zig:119-124`),
+   短读会抛 `ValueError` 走中止路径,不会静默给 0。
+3. **投递与执行都在。** 哨兵 783 + body 783 两次独立等齐(`_wait_marker` 定义在 `:667`,两次调用在 `_slot2_phase` 内 `:771、:775`)⇒
+   「命令没进去」这条 §54.9 的老失败被排除;`install_rc=0` + 布局逐槽相等 ⇒ 接线本身成立。
+
+**没排除的事,四条,读这节时必须带着:**
+
+1. **入口 ≠ 良构调用(§54.8.4 第 1 条原样有效)。** 派发点 `0x1D08520` 只设 `rcx`/`rdx`,而 `0x3B01A0`
+   消费 `rcx/rdx/r8/r9` 四槽,`r8`/`r9` **不是 Execute 的参数**、取的是上一调用者的 scratch。
+   所以这一判据的形状是「计数只证明有人进来」;本枪连「有人进来」都没证明,结论比它更强(0),
+   但也**不能反过来**用它推断参数形状。
+2. **0 只否证「经我们副本的 slot[2]」这一条路,没有指名真正的入口。** per-system 执行走的是
+   donor vtable 原件、还是引擎自己复制的另一份表、还是压根不经虚派发 —— 本枪三者不分。
+   换 chokepoint 是结论,**下一个靶子不是**。
+3. **非零那一支从未被正向验证过。** `classify_slot2` 把 `delta == SCORE_COUNT`(`SCORE_COUNT = 787`,`:39`)
+   判成 `slot2_counted`,而我们的哨兵/body 是 **783**。783 是**渲染出的唯一 system 名数**,
+   787 是 §54 那次记的 **per-system 执行次数** —— 两个数本来就不同源(§54.4 记过 787/783 的差)。
+   如果 per-system 执行真经 slot[2],落在 `slot2_counted` 上的概率并不自动成立,可能落 `slot2_other`。
+   本枪判读走的是 0 那一支,**不依赖 787 这个数字**;但「787 ⇒ counted」这条判据从未被实机命中过这一点,
+   要写在这里,不能让下一批人拿它当已验证的刻度。
+4. **§54.8.4 第 2 条那道张力仍在。** 入口门 `[rdx+0x38]` 与 §53 的「arg2 类大小 `0x20`」直接冲突
+   (`0x38 > 0x20`),离线判不掉。本枪对它**中性** —— 既没支持也没否证「Execute 转发给 slot[2] 的
+   `rdx` 就是 §53 量到的那个 0x20 对象」。
+
+**这一节不改写 §54.6 或 §54.8 的正文**,只把它们的 fork 判到 (b)。
+
+### §55.5 清理
+
+`C4WireDisarm` **`disarm_rc = 0`**、**`host_alive = true`**(json `cleanup`),
+`finally` 里走的是 `_cleanup`(`:1023`)。**没有 `FreeLibrary`** —— 被 patch 过的对象 `[obj+0]` 仍指向
+DLL `.data` 的副本,卸载会让下一次 Execute 跳进空页(约束 5)。
+
+pid 13364 在枪后仍存活。事后状态(`ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Content C:/temp/ns_game_status.json -Raw)"`,13:13:36):
+`state="paused_no_window"`、`console_open=true`、`console_px=2315`、`console_forced=false`。
+`2315` 就是 §54.10 校准的「开」值 ⇒ 控制台是枪留下的现场,**我没有为了收尾再去按键关闭它**:
+那要再发一次输入,不属于这一枪的判据,也无助于任何结论。
+
+**这一枪的现场是单向的**:pid 13364 注入过、额度用尽(约束:`stale_module` 不得放宽,一进程一次注入)。
+它的处置(留着暂停、还是 `just game quit`)由人定,我不自行关游戏。
+
+### §55.6 复现命令行
+
+原始输出、误用、传输层的坑全在 `evidence/logs/c4_slot2_live_4_4_4.log`(逐条原样)。索引:
+
+    just launch                                   # 第 1 节(两次 22 + 一次成功)
+    just win "python C:/temp/game_supervisor.py status"     # 第 2 节(观测前提)
+    ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Process stellaris).Id"
+    ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Content C:/temp/ns_game_log.jsonl -Tail 12)"  # 第 4 节(门三输入)
+    just win "python C:/temp/c4_wiring_probe.py --mode slot2 --dll C:/temp/sqjs_c4.dll --save C:/temp/stellaris_2226.sav --json C:/temp/c4_wiring_result.json"   # 第 5 节(本枪)
+    ssh Windows_Jiaolong "powershell -NoProfile -Command \"(Get-Content C:/temp/c4_wiring_result.json -Raw)\""   # 第 6 节(json 原文)
+    ssh Windows_Jiaolong "powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 …\""   # 第 8 节(六项哈希)
+
+**再打同一枪的前置**(不是本节结论,是给下一批人的提醒):换一个游戏进程(注入额度已用)、
+重跑 `just fence` / probe 56 / host-tests 223、并重新满足 §55.1 的观测前提。
+
 

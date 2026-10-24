@@ -1,0 +1,185 @@
+# C4 slot[2] 判别枪 —— 实机一枪(2026-10-24)
+# 本轮全部命令行逐条原样记录,含失败的与误用的。
+
+## 1. launcher(把游戏带到可见桌面)
+
+`just launch` 只把 stdout 留在会话里,host 侧不落 launcher 日志,所以这一节是**叙述而非原样输出**。
+
+前两次退出码 22(`EXIT_LAUNCHER_NO_FOCUS`):`SetForegroundWindow` 返回 FALSE、
+`gle=0`。根因不在 launcher —— Console 会话 1 自 12:02:11 起由 `LogonUI.exe` 处于锁屏,
+锁屏桌面不接受注入的输入。第三次由人解锁后成功:`foreground_ok`,点击 handoff
+在第 2 次尝试命中,游戏进程 pid 13364。两次 22 都停在 `bring_to_foreground`,
+launcher 本身不做注入(注入在 `c4_wiring_probe.py`),所以那两次没有消耗 pid 13364 的一次注入额度。
+
+## 2. 观测前提(daemon 状态记录)
+
+    $ just win "python C:/temp/game_supervisor.py status"
+
+{"pid":13364,"hwnd":458820,"state":"paused","note":"dialog_unknown","want":"playing","policy":"first","red":821,"green":0,"handled":0,"window":{"bright":0.071,"gold":5274,"rows":15,"bbox":[1006,584,1939,840]},"speed_sha":null,"shot":"C:\\temp\\ns_game_shot.png","console_open":false,"console_px":0,"console_forced":false,"last_cmd":"shot","updated":"2026-10-24T13:03:09","epoch":1792818189.599}
+
+`console_open=false` 且 `console_forced=false` ⇒ 门二(信念必须是观测)的条件成立。
+`note=dialog_unknown`(`auto_dismiss` 未开,`game_supervisor.py:1037-1046`)没挡住投递:
+预检随后拿到 783 行。注意 `window.bbox` 是**事件带里检出的亮面板**(屏幕坐标,`_panel_bbox` `:660-703`),
+A 框是**按窗口宽高取比例**算的(`_console_box` `:603-609`)—— 两者不同源,判读时别混。
+
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Process stellaris).Id"
+    13364
+
+## 3. 一次误用(如实记录)
+
+    $ just win "python C:/temp/game_supervisor.py send shot"
+
+`send` 不是子命令(daemon 的 CLI 只有 `serve|start|stop|status|cmd`,其余首词按字面量写进命令
+文件,`game_supervisor.py:1191-1196`),所以命令文件收到的是字符串 `send shot`,daemon 回了
+`unknown_command` —— 原始两条记录见第 4 节 `12:53:57` 那两行。
+
+正确用法是 `just game shot`(或 `... cmd shot`),第 4 节 `12:55:40` 那次用的就是它。
+
+## 4. 前置快门与 console 通道回执(daemon JSONL 尾)
+
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Content C:/temp/ns_game_log.jsonl -Tail 12)"
+
+{"event": "command", "line": "quit", "t": "2026-10-24T12:16:03"}
+{"event": "serve_stop", "handled": 0, "t": "2026-10-24T12:16:03"}
+{"event": "serve_start", "pid": 9140, "t": "2026-10-24T12:17:13"}
+{"event": "console_observed", "open": true, "px": 7013, "t": "2026-10-24T12:52:00"}
+{"event": "console_observed", "open": false, "px": 0, "t": "2026-10-24T12:52:30"}
+{"event": "command", "line": "send shot", "t": "2026-10-24T12:53:57"}
+{"event": "unknown_command", "raw": "send shot", "t": "2026-10-24T12:53:57"}
+{"event": "command", "line": "shot", "t": "2026-10-24T12:55:40"}
+{"event": "command", "line": "console effect every_system = { log = \"C4_PREFLIGHT_13364_[This.GetName]\" }", "t": "2026-10-24T13:04:28"}
+{"event": "console_sent", "chars": 67, "opened": true, "t": "2026-10-24T13:04:32"}
+{"event": "command", "line": "console effect every_system = { log = \"C4_SLOT2START_13364_[This.GetName]\" neo_action = { log = \"NEO_CHOKE_EFFECT_[This.GetName]\" set_name = \"NEO_CHOKE\" } }", "t": "2026-10-24T13:04:34"}
+{"event": "console_sent", "chars": 148, "opened": false, "t": "2026-10-24T13:04:38"}
+
+`12:52:00 open=true px=7013` 是载入局里另一块屏幕把 A 框点亮的那类读数 ——
+§54.10 记下的正是这个坑,它发生在枪之前,不是枪的观测。
+枪只用了两条 console 命令(预检 + 判别),无 `console_refused`,无 `console_clipboard_failed`。
+
+## 5. 判别枪
+
+    $ just win "python C:/temp/c4_wiring_probe.py --mode slot2 --dll C:/temp/sqjs_c4.dll --save C:/temp/stellaris_2226.sav --json C:/temp/c4_wiring_result.json"
+
+原样输出(`just win` 会先回显它展开出的 ssh 命令行,`justfile:45-46`):
+
+    ssh Windows_Jiaolong python C:/temp/c4_wiring_probe.py --mode slot2 --dll C:/temp/sqjs_c4.dll --save C:/temp/stellaris_2226.sav --json C:/temp/c4_wiring_result.json
+    VERDICT: slot2_zero
+    error: recipe `win` failed on line 46 with exit code 1
+
+`main()` 只在 `verdict == "ok"` 时返回 0(`scripts/c4_wiring_probe.py:1133-1136`),
+所以 `slot2_zero` 这颗**数据**同样以退出码 1 出场 —— 不是崩溃。
+`_slot2_phase` 的 docstring 说的正是这件事:`slot2_zero` is a datum, not a failure。
+
+## 6. 结果 json 原文
+
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command \"(Get-Content C:/temp/c4_wiring_result.json -Raw)\""
+
+{
+  "verdict": "slot2_zero",
+  "detail": "slot2 delta=0 body=783 sentinel=783 target=0x7ff6a46201a0",
+  "save_sha": "6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e",
+  "dll_sha": "1b568cd4154da1e9afcb25c451c5f9000ea5ce5cf6afdc995fd9760e06412ba9",
+  "pid": 13364,
+  "base": 140721292902400,
+  "effect_id": 68637,
+  "layout": [
+    1,
+    0,
+    3368,
+    2048,
+    944,
+    256,
+    8,
+    256
+  ],
+  "install_rc": 0,
+  "preflight_marker_count": 783,
+  "capture": {
+    "stats": null,
+    "find": null,
+    "sentinel": null
+  },
+  "slot2": {
+    "before": {
+      "slot2_calls": 0,
+      "slot2_target": 140697296568736
+    },
+    "after": {
+      "slot2_calls": 0,
+      "slot2_target": 140697296568736
+    },
+    "delta": 0,
+    "sentinel": 783,
+    "body_hits": 783
+  },
+  "spec": null,
+  "apply": {
+    "before": null,
+    "after": null,
+    "delta": null,
+    "scored": null,
+    "log_hits": null,
+    "sentinel": null
+  },
+  "screenshot": {
+    "path": "C:\\temp\\ns_game_shot.png",
+    "sha256": null
+  },
+  "cleanup": {
+    "disarm_rc": 0,
+    "host_alive": true
+  },
+  "campaign_gate": "ok",
+  "preflight_wait_s": 4.18
+}
+
+数值换算(离线,`python3` 直接 `hex()`):
+
+    $ python3 -c "exe=140697292701696; t=140697296568736; dll=140721292902400; print(hex(exe),hex(dll),hex(t),hex(t-exe))"
+
+| 量 | 十进制 | hex | 是哪一块 |
+|---|---|---|---|
+| `base`(json) | 140721292902400 | `0x7ffc3aad0000` | **我们 DLL 的装载地址**,不是 exe。`_flow` 取的是 `harness.resolve_base_address(pid, module)`,`module = os.path.basename(args.dll)`(`scripts/c4_wiring_probe.py:852-854、865`);导出寻址 `base + rva` 也按它,所以 `C4Slot2StatsInto`(rva `0x44b420`)落在 `0x7ffc3af1b420` |
+| pid 13364 主模块 | 140697292701696 | `0x7ff6a4270000` | `stellaris.exe` 基址(只读:`Get-Process -Id 13364).MainModule.BaseAddress`) |
+| `slot2_target` | 140697296568736 | `0x7ff6a46201a0` | `0x7ff6a4270000 + 0x3B01A0` ⇒ **正好是 exe 基址加 donor instantiate 的 RVA**(§54.8.1 钉的 `+0x10 -> 3b01a0`) |
+
+`slot2_target - exe_base = 0x3b01a0`,零余数。这一条把「计数器装错槽 / 读到别处」这类仪器故障在
+`delta=0` 判读**之前**就排除掉了:`base - slot2_target = 0x5964afe60` 那个看起来吓人的差值,
+只是 DLL 与 exe 两个模块各自 ASLR placement 的差,不是异常。
+
+其余:`effect_id = 68637 = 0x10c1d`,
+`layout = [0x1, 0x0, 0xd28, 0x800, 0x3b0, 0x100, 0x8, 0x100]`。
+
+## 7. 枪后的 daemon 状态记录(清理判据)
+
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Content C:/temp/ns_game_status.json -Raw)"
+
+{"pid":13364,"hwnd":458820,"state":"paused_no_window","note":"paused_no_window","want":"playing","policy":"first","red":132,"green":0,"handled":0,"window":{"bright":0.089,"gold":4994,"rows":13,"bbox":null},"speed_sha":null,"shot":"C:\\temp\\ns_game_shot.png","console_open":true,"console_px":2315,"console_forced":false,"last_cmd":"console effect every_system = { log = \"C4_SLOT2START_13364_[This.GetName]\" neo_action = { log = \"NEO_CHOKE_EFFECT_[This.GetName]\" set_name = \"NEO_CHOKE\" } }","updated":"2026-10-24T13:13:36","epoch":1792818816.973}
+
+pid 13364 仍在,`console_open=true px=2315`(§54.10 校准的"开"值),`console_forced=false`。
+**控制台是枪留下的现场,没有去关它** —— 关它要再发一次输入,不属于这一枪的判据。
+
+## 8. 产物 sha256(local ↔ remote 逐条相等)
+
+    $ sha256sum zig-out/bin/stellaris_quickjs.dll scripts/c4_wiring_probe.py scripts/c2_harness.py scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py
+    $ ssh Windows_Jiaolong "powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 C:/temp/sqjs_c4.dll,C:/temp/c4_wiring_probe.py,C:/temp/c2_harness.py,C:/temp/game_supervisor.py,C:/temp/launch_stellaris.py,C:/temp/stellaris_2226.sav | Format-Table Path,Hash -AutoSize\""
+
+| 本地 | host | sha256 |
+|---|---|---|
+| `zig-out/bin/stellaris_quickjs.dll` | `C:/temp/sqjs_c4.dll` | `1b568cd4154da1e9afcb25c451c5f9000ea5ce5cf6afdc995fd9760e06412ba9` |
+| `scripts/c4_wiring_probe.py` | `C:/temp/c4_wiring_probe.py` | `8a066109629ce79dc153036f97597dfcdf02b27c16082742e733036ba18ea09f` |
+| `scripts/c2_harness.py` | `C:/temp/c2_harness.py` | `0c8bca42a70ab9a2cf28bba6036de1d039ff30ec01dba93550a9af5ded485713` |
+| `scripts/windows/game_supervisor.py` | `C:/temp/game_supervisor.py` | `1ad3f6f7931a15292bf4fd0e1284c358f6fbf8c7f647ce716ef32e78a09e7ec3` |
+| `scripts/windows/launch_stellaris.py` | `C:/temp/launch_stellaris.py` | `3bba05666e59e29ec78c552d4a333dd264c539c869b21ca985cbd6948a9af522` |
+| (gated,不在仓库) | `C:/temp/stellaris_2226.sav` | `6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e` |
+
+两个落在结果 json 里的字段 `dll_sha` / `save_sha` 与上表逐字相同。
+`c2_harness.py` 是注入通道的驱动侧,这一枪没有重新上传它(枪前只重取了一次哈希)。
+
+## 9. 传输层的坑(如实记录,与判读无关)
+
+这一轮 `ssh` 到 host 的通路间歇性 `Read from remote host 10.66.0.7: Connection reset by peer`,
+`scp`(包括 1 KB 文件)与部分 `ssh host "python -" < script` 会话被重置,游戏载入期间更频繁
+(RAM 3.2 GB、重 I/O)。绕法:小 stdin 探针重试,以及改用 PowerShell `Get-Content -Raw` /
+`-Tail` 取文件。另:从 ssh 起的 python 里直接 `ImageGrab.grab()` 抛 `OSError: screen grab failed`,
+这正是 §54.10 记的那条 —— 观测必须走 daemon 的 `shot`/`console` 动词,因为桥跑在会话 1 里。
