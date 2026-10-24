@@ -49,6 +49,19 @@ Neither needs a license, a running process, or a paused game.
 PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 `rttibatch.py --effects` 产出 `evidence/xrefs/ceffect_vtable_map_4_4_4.txt`。
 
+**`--all-vtables` —— 不过滤的那一张(`evidence/xrefs/vtable_candidates_all_4_4_4.txt`)**:
+`python3 scripts/rttibatch.py --all-vtables [--min-run 3]`。判据**只看形状** —— `.rdata` 里每个 8-对齐位置,
+只要从它起连续 ≥ `min_run` 个 qword 落在 `.text`,就产一行,**绝不读 `RVA_BASE_EXECUTE`**;而且**一个 run 里的
+每个起点都单独成行**(§17 那张下限表的表首正是这种中途起点,只报极大 run 的开头就会把它们全丢掉)。
+每行带 `run=` 与前三个槽的 RVA 原值。4.4.4 上 `min-run=3` 是 **172,296 行**(≈14 MB 明文,gzip 后 1.2 MB)。
+
+**判读陷阱(这条是 §17 那句「覆写了 Execute 的类一个都不在」的直接解药,也是最容易读过头的地方):
+「形状过」不等于「是 vtable」,更不等于「是 CEffect 家族」。** 函数指针数组、`switch` 跳表、虚表片段、
+以及任何「连续几个代码地址」的静态数据都会过这道形状判据 —— 172,296 与 1,805 之间那 16 万多的差**不是**
+「发现了 16 万个新类」。往下筛只有两个字段可用:**`run=` 长度**与 **`slot1` 原值**(slot1 == base Execute
+`0x1D08520` 正好把 §14 那张 1,805 的下限集取回来,这也是 `test_the_floor_map_is_a_subset_of_the_unfiltered_candidate_set`
+钉住的关系);除此之外没有别的静态滤网,所以任何「这张表是谁」的结论都得另找证据(名字池、行为、实机)。
+
 ### `scripts/disrva.py <start_rva> [end_rva|count]`
 
 **Any RVA range, disassembled offline** — annotates every

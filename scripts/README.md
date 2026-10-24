@@ -37,7 +37,7 @@
 | `createsites.py` | 找出所有从 value record 调 `create` 槽的代码点（按形状而非地址） | `create_shape_sites_4_4_4.txt` |
 | `vptrslots.py` | 每个 keyword `create` 把 vpointer 发布到哪几个槽 | `vptr_publish_slots_4_4_4.txt` |
 | `vtable.py` | dump 一个 vtable：槽位、每槽的 `.pdata` 函数边界、该函数引用的字符串 | — |
-| `rttibatch.py` | 直接从磁盘 PE 给一串 vtable RVA 解出 MSVC C++ 类名 | `ceffect_vtable_map_4_4_4.txt`（`--effects`） |
+| `rttibatch.py` | 直接从磁盘 PE 给一串 vtable RVA 解出 MSVC C++ 类名；`--all-vtables` 另出**不过滤 slot[1]** 的形状候选集 | `ceffect_vtable_map_4_4_4.txt`（`--effects`）、`vtable_candidates_all_4_4_4.txt`（`--all-vtables`） |
 | `tokencorpus.py` | A5：把 token 空间与随游戏发的脚本离线对账，join 应当精确 | `token_corpus_crosscheck_4_4_4.tsv` |
 | `emu_desc.py` | C0.3 oracle：用 unicorn 跑引擎自己的两个描述符写手，逐字节产出 golden 向量 | `descriptor_oracle_4_4_4.tsv` + `src/dll/scripted/keyword_registry_golden.zig` |
 | `c1_preflight.py` | **约束 4 的门**：候选 keyword 名进 `0x1D13270` 之前的离线只读预检，退出码必须 0 | — |

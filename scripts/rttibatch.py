@@ -132,6 +132,47 @@ def effects(img):
     return out
 
 
+_MAX_RUN_REPORTED = 8
+
+
+def all_vtables(img, min_run: int = 3):
+    """Every 8-aligned .rdata position that starts a run of >= min_run pointers into .text.
+
+    The floor map above filters on slot[1] == base Execute, so a class that *overrides*
+    Execute — the thing C4 is looking for — has no static entity in it. This is the set
+    without that filter, and it carries slot[1]'s raw value so "which of these override
+    Execute" is answerable offline from the artifact alone.
+
+    Shape only: this is NOT a class table. Function-pointer arrays, switch jump tables
+    and vtable fragments all pass, which is why every row reports its run length and its
+    first four slot RVAs verbatim. Those two fields are the only way downstream can filter
+    further, so nothing here may pre-judge them.
+
+    Every run start is emitted, not just the start of each maximal run: a vtable header can
+    sit in the middle of a longer run, and the floor map's own entries are exactly such
+    mid-run starts. run_length counts forward from the position and stops at
+    _MAX_RUN_REPORTED, the window a slot reader looks at anyway.
+    """
+    text_bounds = [(va, va + vs) for i, (va, vs, _praw) in enumerate(img.secs)
+                   if section_name(img, i) == '.text']
+    out = []
+    for i, (va, vs, praw) in enumerate(img.secs):
+        if section_name(img, i) != '.rdata':
+            continue
+        blob = img.blob[praw:praw + vs]
+        words = struct.unpack('<%dQ' % (len(blob) // 8), blob[:len(blob) // 8 * 8])
+        flags = [any(lo <= q - img.image_base < hi for lo, hi in text_bounds)
+                 for q in words]
+        runs = [0] * (len(flags) + 1)
+        for at in range(len(flags) - 1, -1, -1):
+            runs[at] = min(runs[at + 1] + 1, _MAX_RUN_REPORTED) if flags[at] else 0
+        for at, run in enumerate(runs[:-1]):
+            if run >= min_run:
+                out.append((va + at * 8, run,
+                            [w - img.image_base for w in words[at:at + 4]]))
+    return out
+
+
 def cstring(img, rva, limit=96):
     """Printable string at an RVA, or None."""
     try:
@@ -223,6 +264,18 @@ def main():
               'See runtime_444_keyword_pipeline.md §17.')
         for vt, slot0, slot2 in rows:
             print(f'vtable {vt:#010x}  slot0 {slot0:#010x}  ExecuteActual(slot2) {slot2:#010x}')
+        return
+    if '--all-vtables' in args:
+        img = Image(open(EXE, 'rb').read())
+        min_run = 3
+        if '--min-run' in args:
+            min_run = int(args[args.index('--min-run') + 1])
+        rows = all_vtables(img, min_run)
+        print(f'# {len(rows)} vtable-shaped runs in .rdata, run>={min_run}, '
+              'NOT filtered by slot[1]')
+        for vt, run, slots in rows:
+            cols = ''.join(f'  slot{k} {s:#010x}' for k, s in enumerate(slots[:3]))
+            print(f'vtable {vt:#010x}  run={run}{cols}')
         return
     if '--dump' in args:
         img = Image(open(EXE, 'rb').read())
