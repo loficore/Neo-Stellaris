@@ -5049,3 +5049,94 @@ python3 scripts/disrva.py 0x3afb40 0xd5                                         
 
 观测 3 与「静态持有者 = 0」那两条是段内全扫(`Image.secs` + `struct`),目前**没有 CLI flag**,
 一次性脚本没入库 —— 要复核它们就照 §57.5 第 3 条的口径自己扫,别拿 `--who-lea` 的输出去对。
+
+## §58 修正仪器重打:第一枪是环境空值,成因有名(2026-10-25,点名)
+
+**授权级别**:点名授权下的实机段。人对本段的原话是「**授权:我退进程 + 新 launch + 按修正流程重打**」;
+现场弹窗另给一句「**你可以用现成的命令来关闭,如果还是不行,那就截图加自己点**」。本段没有新的 C1 注册、
+没有引擎写入、没有 `FreeLibrary`。计划 = `2026-10-24-scope-reinterpret-and-desktop-gate` 的 Task 7,
+PR #13(merge `534116d`)之后。
+
+### §58.1 开枪前的四条(D 组),以及第四条错在哪
+
+| # | 前置 | 实测 |
+|---|---|---|
+| 1 | 注入体字节不变 | 远端 `C:/temp/sqjs_c4_scope_v2.dll` 与本地 `zig-out/bin/stellaris_quickjs.dll` 同为 `373ab26b…30471`,与 §56 记下的逐字一致;部署的 7 个 host 文件与 repo HEAD 全部 hash 相同 |
+| 2 | 预检刻度 | `ns_scope_pre.py` → `MARKERS 783 EXPECTED 783` |
+| 3 | 新进程 | pid **13132**(§56.6 那台 12796 的额度早已用尽) |
+| 4 | 战役已载入**且已解除暂停** | 载入 ✓;「暂停」这一半**在预检之后没有重读** ⇒ 见 §58.3 |
+
+第四条是这一枪唯一的实质损失,而且它不是「忘了看」:预检这个动作本身就会把状态打回暂停(§58.3)。
+所以这条前置的正确读法是**紧邻开枪读**,不是流程更早时的某一次读数 —— 已写进
+`docs/offline-tooling.md` 判读陷阱 9。
+
+### §58.2 读数:装上了,一次都没穿过
+
+artifact = `evidence/logs/scope_probe_v3_4_4_4.tsv`(25 行,全量拉回)。
+
+- `meta exe_base 0x7ff6abbf0000`(新 ASLR 基址)、`layout … version=2`、`per_source_follow 8` —— 仪器侧全部就位;
+- `calls=0 samples=0 valid=0`;四根 `followed/implausible/capped/withheld` **全为 0**,
+  即 Task 5 那笔账(§56.8 的「三个源恒 0」)在这一枪**没有得到任何检验**;
+- `regions_queried=0`、`region_verdicts` 空 ⇒ §56.8 末段那条低地址未决项**仍未测**;
+- `known_vtable_hits / member_vtable_hits / unknown_ptr_hits / unreadable_roots` 全 0;
+- `verdict no_calls`。
+
+`scope_reclassify.py` 重问同一份 artifact:`object rows 0`,四桶全 0。⇒ **计划 Task 7 Step 4 那条
+`undecidable_no_rva == 0` 的验收在零行 artifact 上恒真**,它这一刻不证明任何事;要有意义必须先有行。
+
+### §58.3 成因:控制台开着 ⇒ 引擎暂停 ⇒ 热路径没有调用
+
+开枪前后的监督器记录读的是 `{'state': 'paused', 'note': 'dialog_unknown', 'red': 167→132, 'green': 0,
+'console_open': True}`。`ns_scope_pre.py` 的通道就是调试控制台(剪贴板粘贴 + 回车),而 **Stellaris 在控制台
+打开期间暂停**。链条因此是:`MARKERS 783` 成功 ⇒ 控制台仍开 ⇒ 游戏暂停 ⇒ `0x1D08520` 一次不被调用 ⇒
+采样器 `install=1` 但计数为零。
+
+这条 `no_calls` 是**环境结论,不是代码结论**,与 §56.2 那条「看到 `no_calls` 先核是否真在跑」同型,
+只是这次的原因具体到控件。它也不推翻 Task 5 的仪器改动 —— 四个源各自预算的改动只在有 entry 时才起作用。
+
+### §58.4 ssh 重置、清理、以及那行 `installed=1 verified=-1` 该怎么读
+
+ssh 长连接在驱动跑完之前被重置(§56.3 的重复,判读陷阱 11)。**没有重开枪**;走事后读回。
+
+- artifact 里 `stats … installed=1 verified=-1` **不是遗留安装**:驱动在 `finally` 之前写 TSV
+  (`scripts/c2_scope_probe.py:1210` 写,`:1222` 才 `_cleanup`),所以那一行是**写 artifact 时刻**的快照。
+- 事后实时读回:手工那一遍跑之前就是 `installed=0 verified=0` ⇒ 驱动自己的 Uninstall/Verify 已跑完;
+  `scripts/scratch/2026-10_scope_shot/ns_scope_finish_cleanup.py` 再幂等复核一次:
+  `C2ScopeProbeUninstall rc=0`、`C2ScopeProbeVerify rc=0`(引擎字节完好)、host 存活、`RESTORE_OK`。
+- 不 `FreeLibrary`(约束 5),DLL 仍映射。
+- 预防措施:`scripts/scratch/2026-10_scope_shot/c4_scope_run_v4.cmd` —— 把驱动装在 host 上 detached 跑,
+  stdout 与 `EXIT:%ERRORLEVEL%` 落 `C:\temp\c4_scope_run_v4.txt`,这样一次 ssh 重置不可能再把安装 orphan 在
+  Uninstall 之前。**这是预防,不是 §58.4 上面那条的替代解释。**
+
+### §58.5 重打被什么挡住
+
+pid 13132 的「一进程一次安装」额度已用尽 ⇒ 按授权 `taskkill /F /PID 13132`,新 `just launch` 起 pid **22220**
+(`hwnd=330684`,进战役)。第二遍预检再次 `MARKERS 783 EXPECTED 783`;但随后现场卡在
+`state=paused, note=dialog_unknown, console_open=True, console_px 2313→2307` —— `console_close` 两次没落地,
+`dismiss` 的读数被 ssh 争用打断(`JSONDecodeError`)。截图路线(人已授权)拉回 `ns_shot_small.jpg` 时
+**主机整体不可达**:2026-10-25 `10.66.0.7` 走 `wg0`,ping 100% 丢包,ssh 三次 `Connection timed out`。
+⇒ **修正流程的那一枪(v4)没有打**,`evidence/logs/scope_probe_v4_4_4_4.tsv` 不存在。§56.5 那个问题
+(真正的 `CEventScope` 是哪个对象)在本段之后**仍未收口**,状态与 §56.8 相同。
+
+本地一侧不受影响。merge 后的树上:`just check` 在 `build` 之后停在 `test`(exit 1),那一条是基线形状
+(`26/29 steps; 445/445 tests passed` + 16 个 kernel32 `undefined symbol`,依 ruling P15 记为绿);
+因此 `fence`/`host-tests`/`chokepoints-check` 三个门单独跑,分别 27 passed、262 passed、exit 0;
+计划 Task 9 Step 2 点名的五个 Python 文件 160 passed、0 failed。
+
+### §58.6 附带实机观测:桌面门上线后的第一次 `just launch --verbose`
+
+计划 Task 8 Step 1。两次 `just launch --verbose` 都退 **0**,时间线里各有 `step=trace` 行,attempt 1 为
+`owns_foreground=True cursor_at=(1064,339) launcher_alive=True`,但交接要到 attempt 2 才成 —— 这正是被记为
+deferred minor M3 的「点击落了但被吞掉」在实机上的一次重现,读数本身入档,修复不在本段范围。
+
+**两条计划期望与实现的差,当场判掉(是判读,不是改代码):**
+
+1. Task 8 Step 1 的 Expected 要求时间线里出现 `DESKTOP_GATE` 行。实现
+   (`scripts/windows/launch_stellaris.py:1679-1692`)在 `verdict == "ok"` 时**先 return 再 log**,即桌面门
+   **只在拒绝时留痕**。所以 exit 0 的那两轮根本没有 `DESKTOP_GATE` 行可看,这条 Expected 恒不满足。
+   桌面门在实机上的正面 datum 只能来自退出码 **25**,而那需要 Task 8 Step 2(人当场按 `Win+L`)—— 未取。
+2. Expected 里的 `step=diagnosis` 只在点击失败路径上打印(`:895-896`),成功交接的轮次**不可能**有这一行。
+   同一次运行的 `cursor_at=(1064,339)` 但交接失败,已经证明「三档诊断」这条路径值得拿到实机读数 —— 它要的是
+   失败轮,不是成功轮。
+
+`desktop=locked` 那一格仍然只有离线测试钉着(§8 判读陷阱 6 的原话未过期)。

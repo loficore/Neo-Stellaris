@@ -621,7 +621,7 @@ root_unreadable / **region** 七类行)。
 就补出了 `__alignment1`(offsets 0/8/16/24/32/36/40,`sizeof`=48);**把那个 padding 字段也写出来会多插
 4 字节,`State` 读到的其实是 `Protect` 的槽**。
 
-**八条判读陷阱(§53.4 / §54.8.4 / §56.8 实机与离线复算取到的,读 verdict 之前先看):**
+**九条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 实机与离线复算取到的,读 verdict 之前先看):**
 
 1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
    仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
@@ -662,6 +662,14 @@ root_unreadable / **region** 七类行)。
    也可以是一个从未被提交过的绝对地址 —— 这一条不能替二者做决定。`reserved` 更弱:地址有效但内容还没提交,
    拿它解释低地址会把「相对值」这条假说杀掉得不够干净。只有 `private_committed`/`mapped_view`/`image`
    才正面回答「这是一个有人拥有的地址」。
+9. **`no_calls` 先读控制台,再读代码。** `ns_scope_pre.py` 走的是调试控制台,而**控制台开着 ⇒ 引擎暂停**
+   ⇒ base Execute 那条热路径一次都不被调用。这条路径上的采样器会**装得上、验得了字节、计数为零**,
+   §58 就是这一枪:预检通过后没有回头确认控制台已关、状态回 `playing`,烧掉了 pid 13132 的「一进程一次
+   安装」额度换来一个 `calls=0`。所以**「已载入且已解除暂停」这条前置的读数必须紧邻开枪取**
+   (`state=playing` 且 `console_open=false`,两个都要,不是预检时刻的那一次)——预检与开枪之间隔着多久,
+   这条前置就作废多久。同理:`regions_queried=0` 与四桶全 0 在这种枪里是**同一件事的四个写法**,
+   不能读成「区域仪器判了 0 个」或「形状集没命中」;而 `scope_reclassify.py` 的
+   `undecidable_no_rva == 0` 这条验收在零行 artifact 上**恒真**,零行时它不证明任何事。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
