@@ -334,6 +334,8 @@ def test_console_gate_refuses_unknown_and_pinned():
     assert console_gate({"state": "paused"}) == "console_state_unknown"
     assert console_gate({"console_open": None}) == "console_state_unknown"
     assert console_gate({"console_open": True, "console_forced": True}) == "console_belief_pinned"
+    # 顺序是有意的:对一个未知值的钉住不是观测,unknown 判在 forced 之前。
+    assert console_gate({"console_open": None, "console_forced": True}) == "console_state_unknown"
 
 def test_classify_capture_and_apply():
     cap = {"calls": 787, "records": 787, "dropped": 0}
@@ -582,6 +584,27 @@ def test_wait_ready_waits_for_the_observation_not_just_for_paused(monkeypatch):
     assert rec is recs[2]
 
 
+def test_wait_ready_timeout_with_a_decisive_reread_is_not_a_verdict(monkeypatch):
+    # 契约是两值的:verdict_or_None,None 才是「可以开枪」。超时分支的复读专属于慢启动
+    # —— 环境在最后一个轮询间隔里变成 paused + 判决性观测;此时把字符串 "ok" 当
+    # verdict 交回,调用方会 raise _Abort("ok"),result json 里 "verdict": "ok" 与
+    # 退出码 1 并存,是自相矛盾的证据。时钟按 _fake_sleeps 的形状走,让循环靠
+    # deadline 退出而不是靠某条通过的记录。
+    not_paused = {"state": "playing", "epoch": 0.0, "console_open": False}
+    undecided = {"state": "paused", "epoch": 0.0, "console_open": None}
+    passing = {"state": "paused", "epoch": 0.0, "console_open": False}
+    reads = iter([not_paused, undecided, not_paused, undecided, passing])
+    clock = {"t": 0.0}
+    monkeypatch.setattr(mod, "_read_status", lambda p: next(reads))
+    monkeypatch.setattr(mod, "_write_command", lambda p, line: None)
+    monkeypatch.setattr(mod.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(mod.time, "sleep",
+                        lambda s: clock.__setitem__("t", clock["t"] + 0.5))
+    rec, verdict = mod._wait_ready("status.json", "cmd.txt", timeout=2.0)
+    assert verdict is None
+    assert rec is passing
+
+
 def test_flow_refuses_before_touching_the_game_when_the_belief_is_undecided(monkeypatch, tmp_path):
     touched = []
     rec = {"state": "paused", "console_open": None, "console_px": 900,
@@ -631,8 +654,8 @@ def test_send_console_or_abort_aborts_with_the_refusal_reason(monkeypatch):
     # 一发健康的枪拦死。events 钉顺序,reads 钉读回用的正是写前取到的那个值。
     events = []
     offset_before_write = 0x1234  # 非 0、可区分的哨兵值:忽略返回值的实现会露馅
-    monkeypatch.setattr(mod, "_file_size",
-                        lambda p: events.append("file_size") or offset_before_write)
+    monkeypatch.setattr(mod, "_file_size_or_none",
+                        lambda p: events.append("file_size_or_none") or offset_before_write)
     monkeypatch.setattr(mod, "_send_console",
                         lambda path, text: events.append("send_console") or True)
     reads = []
@@ -643,13 +666,34 @@ def test_send_console_or_abort_aborts_with_the_refusal_reason(monkeypatch):
         mod._send_console_or_abort("cmd.txt", "effect x = { }", "log.jsonl")
     assert exc.value.verdict == "console_refused"
     assert exc.value.detail == "console_state_unknown"
-    assert events == ["file_size", "send_console"]
+    assert events == ["file_size_or_none", "send_console"]
     assert reads == [offset_before_write]
 
 
 def test_send_console_or_abort_proceeds_when_the_log_has_no_receipt(monkeypatch):
     monkeypatch.setattr(mod, "_send_console", lambda path, text: True)
-    monkeypatch.setattr(mod, "_file_size", lambda p: 0)
+    monkeypatch.setattr(mod, "_file_size_or_none", lambda p: 0)
     monkeypatch.setattr(mod, "_read_text_from", lambda p, off: "")
     monkeypatch.setattr(time, "sleep", lambda s: None)
     mod._send_console_or_abort("cmd.txt", "effect x = { }", "log.jsonl")
+
+
+def test_send_console_or_abort_skips_the_receipt_when_the_log_cannot_be_stat(monkeypatch):
+    # _file_size 的 0-on-OSError 在读取回执这一处等于「从头分类整个文件」:一次瞬时
+    # 的 stat 失败(Windows 上的共享争用 / AV 扫描,文件本身仍可读)会让上一条命令
+    # 甚至上一轮运行的 console_refused 中止这条健康命令 —— 正是写前偏移要排除的
+    # 误归因,而 _slot2_phase 那一枪发生在注入之后,烧掉的是游戏进程。判据两条:
+    # 不中止,而且根本没去读 tail。
+    reads = []
+
+    def cannot_stat(path):
+        raise OSError("share violation")
+
+    monkeypatch.setattr(mod, "_send_console", lambda path, text: True)
+    monkeypatch.setattr(mod.os.path, "getsize", cannot_stat)
+    monkeypatch.setattr(mod, "_read_text_from", lambda p, off: (
+        reads.append(off) or
+        '{"event":"console_refused","reason":"focus"}\n'))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    mod._send_console_or_abort("cmd.txt", "effect x = { }", "log.jsonl")
+    assert reads == []

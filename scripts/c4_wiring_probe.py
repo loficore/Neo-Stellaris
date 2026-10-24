@@ -572,6 +572,20 @@ def _file_size(path):
         return 0
 
 
+def _file_size_or_none(path):
+    """Size, or None when the path cannot be stat'ed at all.
+
+    ``_file_size`` answers 0 for both, and 0 downstream means "classify the
+    whole file" -- for the console receipt offset that hands the previous
+    command's (or the previous run's) ``console_refused`` to the current
+    command. ``None`` is already the caller's "skip receipt polling".
+    """
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
 def _read_text_from(path, offset):
     with open(path, "rb") as f:
         f.seek(offset)
@@ -625,7 +639,9 @@ def _send_console_or_abort(cmd_path, text, log_path=None):
     # Offset before the write, so only events after *this* command can count;
     # without it the previous command's console_refused would abort a healthy
     # shot. A rotation puts the offset past EOF, which reads empty -> silence.
-    offset = _file_size(log_path) if log_path else None
+    # A log we cannot stat gives None: best-effort silence beats classifying
+    # the whole file from 0 and blaming an old refusal on this command.
+    offset = _file_size_or_none(log_path) if log_path else None
     if not _send_console(cmd_path, text):
         raise _Abort("console_send_failed", text)
     if offset is None:
@@ -683,6 +699,8 @@ def _wait_ready(status_path, cmd_path, timeout=15.0):
     verdict = supervisor_ready(rec, time.time())
     if verdict == "ok":
         verdict = console_gate(rec)
+        if verdict == "ok":
+            return rec, None
     return rec, verdict
 
 
