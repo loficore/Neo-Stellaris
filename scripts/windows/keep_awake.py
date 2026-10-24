@@ -205,19 +205,38 @@ def assert_execution() -> int:
     """Re-assert the power request; the return value is the *previous* state.
 
     No judgement here — the caller records the value into the status record so a
-    reader can see the assertion was actually accepted.
+    reader can see the assertion was actually accepted.  It is recorded as the
+    unsigned DWORD the API returns: with ctypes' default `int` result this very call
+    handed back `2147483651 & 0xFFFFFFFF` as `-2147483645`, and the flag argument
+    `0x80000003` does not fit a default `int` parameter at all — it raised
+    `ArgumentError: int too long to convert` on the host (2026-10-24, first tick).
     """
+    from ctypes import wintypes
+
     _require_windows()
-    return _dll("kernel32").SetThreadExecutionState(execution_flags())
+    kernel32 = _dll("kernel32")
+    kernel32.SetThreadExecutionState.argtypes = [wintypes.DWORD]
+    kernel32.SetThreadExecutionState.restype = wintypes.DWORD
+    return kernel32.SetThreadExecutionState(execution_flags())
 
 
 def _win_session_ids():
-    """(own, console) session ids; -1 for whichever half the API couldn't answer."""
+    """(own, console) session ids; -1 for whichever half the API couldn't answer.
+
+    Every handle-sized argument needs an explicit `argtypes`: `GetCurrentProcess()`
+    returns the pseudo-handle `(HANDLE)-1`, which a declared `c_void_p` result hands
+    back as `2**64-1` — and passing that to `ProcessIdToSessionId` with ctypes'
+    default `int` parameter is the `OverflowError` that killed the first live tick.
+    """
     from ctypes import wintypes
 
     _require_windows()
     kernel32 = _dll("kernel32")
     kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.ProcessIdToSessionId.argtypes = [ctypes.c_void_p,
+                                              ctypes.POINTER(wintypes.DWORD)]
+    kernel32.ProcessIdToSessionId.restype = wintypes.BOOL
+    kernel32.WTSGetActiveConsoleSessionId.restype = wintypes.DWORD
     own = -1
     sid = wintypes.DWORD()
     if kernel32.ProcessIdToSessionId(kernel32.GetCurrentProcess(), ctypes.byref(sid)):
@@ -241,8 +260,14 @@ def desktop_snapshot():
     _require_windows()
     user32 = _dll("user32")
     own, console = _win_session_ids()
+    user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     user32.OpenInputDesktop.restype = ctypes.c_void_p
+    user32.CloseDesktop.argtypes = [ctypes.c_void_p]
     user32.CloseDesktop.restype = wintypes.BOOL
+    user32.GetUserObjectInformationW.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD)]
+    user32.GetUserObjectInformationW.restype = wintypes.BOOL
     handle = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)
     if not handle:
         gle = ctypes.get_last_error()
@@ -252,8 +277,7 @@ def desktop_snapshot():
         buf = ctypes.create_unicode_buffer(256)
         needed = wintypes.DWORD()
         ok = user32.GetUserObjectInformationW(
-            handle, UDESKF_NAME, buf,
-            ctypes.sizeof(buf) * ctypes.sizeof(ctypes.c_wchar), ctypes.byref(needed))
+            handle, UDESKF_NAME, buf, ctypes.sizeof(buf), ctypes.byref(needed))
         if not ok:
             gle = ctypes.get_last_error()
             return (classify_desktop(None, gle, own, console),

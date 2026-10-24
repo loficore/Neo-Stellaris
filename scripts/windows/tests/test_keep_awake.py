@@ -6,6 +6,8 @@ they are the contract the Windows edge feeds into the pure core, so the whole
 decision table stays testable on Linux with no ctypes, PIL or numpy.
 """
 
+import ctypes
+
 import pytest
 
 import keep_awake as ka
@@ -111,3 +113,119 @@ def test_windows_edge_primitives_refuse_to_run_off_windows(monkeypatch):
         with pytest.raises(SystemExit) as exc:
             fn()
     assert "Windows" in str(exc.value)
+
+
+class _Fn:
+    """一个带 `restype`/`argtypes` 属性的假 WinDLL 函数(与真 ctypes 同形)。"""
+
+    def __init__(self, impl):
+        self._impl = impl
+        self.restype = None
+        self.argtypes = None
+
+    def __call__(self, *args):
+        return self._impl(self, *args)
+
+
+def _ret(fn, raw):
+    """ctypes 的还值规则:没声明 `restype` ⇒ 按 32 位**有符号**重读那四个字节。"""
+    if fn.restype is None:
+        return ctypes.c_int32(raw).value
+    return fn.restype(raw).value
+
+
+def _arg(fn, n, value):
+    """ctypes 的编组规则:没声明 `argtypes` ⇒ 按 C `int` 收,64 位句柄在这里就炸。
+
+    2026-10-24 实机第一条 tick 就是这么死的:`GetCurrentProcess()` 声明了
+    `restype = c_void_p`,于是还回 `2**64-1`,而 `ProcessIdToSessionId` 没声明
+    `argtypes`,第一参默认 `c_int` ⇒ `ArgumentError: OverflowError: int too long to
+    convert`(原始 traceback 逐字进了 `evidence/logs/keep_awake_live_4_4_4.log`)。
+    「构造 `c_int32(huge)`」不会抛(它按 C 规则截断),抛的是**函数调用时的参数编组**,
+    而那条路径只在 `_ctypes` 里有,所以这里把规则本身写出来:超出 32 位有符号范围 ⇒ 拒。
+    """
+    if not fn.argtypes:
+        if isinstance(value, int) and not -(2 ** 31) <= value < 2 ** 31:
+            raise ctypes.ArgumentError(
+                f"argument {n + 1}: OverflowError: int too long to convert")
+        return value
+    return fn.argtypes[n].from_param(value)
+
+
+class _FakeKernel32:
+    HANDLE = 0xFFFFFFFFFFFFFFFF          # Windows 的 GetCurrentProcess() 就是这个伪句柄
+
+    def __init__(self, prev_state=0x80000003, session=1, console=7):
+        self.prev_state = prev_state
+        self.session = session
+        self.console = console
+        self.GetCurrentProcess = _Fn(self._get_current_process)
+        self.ProcessIdToSessionId = _Fn(self._pid_to_session)
+        self.WTSGetActiveConsoleSessionId = _Fn(self._console_session)
+        self.SetThreadExecutionState = _Fn(self._set_thread_execution_state)
+
+    def _get_current_process(self, fn):
+        return _ret(fn, self.HANDLE)
+
+    def _pid_to_session(self, fn, handle, out):
+        _arg(fn, 0, handle)
+        out._obj.value = self.session
+        return _ret(fn, 1)
+
+    def _console_session(self, fn):
+        return _ret(fn, self.console)
+
+    def _set_thread_execution_state(self, fn, flags):
+        _arg(fn, 0, flags)
+        return _ret(fn, self.prev_state)
+
+
+class _FakeUser32:
+    def __init__(self, name="Default"):
+        self.name = name
+        self.sizes = []
+        self.closed = []
+        self.OpenInputDesktop = _Fn(self._open)
+        self.CloseDesktop = _Fn(self._close)
+        self.GetUserObjectInformationW = _Fn(self._info)
+
+    def _open(self, fn, flags, inherit, access):
+        _arg(fn, 0, flags)
+        return _ret(fn, 0x2C4)
+
+    def _close(self, fn, handle):
+        self.closed.append(handle)
+        return _ret(fn, 1)
+
+    def _info(self, fn, handle, info_class, buf, n_size, needed):
+        _arg(fn, 0, handle)
+        self.sizes.append(n_size)
+        buf.value = self.name
+        return _ret(fn, 1)
+
+
+def _fake_dll(monkeypatch, kernel32, user32):
+    libs = {"kernel32": kernel32, "user32": user32}
+    monkeypatch.setattr(ka, "_dll", lambda name: libs[name])
+    monkeypatch.setattr(ka, "_require_windows", lambda: None)
+
+
+def test_win_session_ids_survives_the_64bit_pseudo_handle(monkeypatch):
+    _fake_dll(monkeypatch, _FakeKernel32(), _FakeUser32())
+    assert ka._win_session_ids() == (1, 7)
+
+
+def test_assert_execution_returns_the_unsigned_dword_the_status_file_stores(monkeypatch):
+    # 状态文件里的 assert_rc 与 serve 测试钉的 0x80000003 是同一份字节契约;
+    # 默认 c_int 会把它读成 -2147483645,而传参那一步在真 ctypes 上直接炸。
+    _fake_dll(monkeypatch, _FakeKernel32(prev_state=0x80000003), _FakeUser32())
+    assert ka.assert_execution() == 0x80000003
+
+
+def test_desktop_snapshot_asks_for_the_buffer_it_allocated(monkeypatch):
+    user32 = _FakeUser32(name="Default")
+    _fake_dll(monkeypatch, _FakeKernel32(session=1, console=1), user32)
+    assert ka.desktop_snapshot()[0] == "unlocked"
+    assert user32.sizes == [ctypes.sizeof(ctypes.create_unicode_buffer(256))]
+    assert user32.closed == [0x2C4]
+
