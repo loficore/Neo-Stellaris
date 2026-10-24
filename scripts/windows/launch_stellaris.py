@@ -10,6 +10,7 @@ import ctypes
 import ctypes.wintypes as _wt
 import dataclasses
 import datetime as _dt
+import json
 import os
 import platform
 import subprocess
@@ -21,6 +22,8 @@ from typing import Any
 
 import psutil
 
+import keep_awake as ka
+
 # Exit codes — see spec §4.
 EXIT_OK = 0
 EXIT_PREKILL_PERMISSION = 2
@@ -31,6 +34,11 @@ EXIT_LAUNCHER_WINDOW_MISSING = 21
 EXIT_LAUNCHER_NO_FOCUS = 22
 EXIT_LAUNCHER_NO_ADVANCE = 23
 EXIT_LAUNCHER_HANDOFF_STUCK = 24
+# The input desktop is not reachable, so no keystroke or click was attempted.
+# 22 and 23 both mean "we clicked and it did not work"; this one means "we knew
+# before clicking that nothing could land", which is the reading exit 23 never
+# allowed (a locked screen was recorded as a failed click). See desktop_gate_or_none.
+EXIT_DESKTOP_UNREACHABLE = 25
 EXIT_GAME_DID_NOT_SPAWN = 31
 EXIT_GAME_EXITED_EARLY = 32
 EXIT_JIT_DIALOG = 33
@@ -282,6 +290,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "keypress into the loading screen is lost. Raising it "
                         "above the default may require raising "
                         "--bridge-timeout-s too.")
+    p.add_argument("--keep-awake-status", type=str, default=ka.STATUS_PATH,
+                   help="Path to the keep_awake daemon's status record, consulted "
+                        "once before the click phase. An unreadable, stale or "
+                        "locked desktop exits 25 rather than being recorded as a "
+                        "failed click (22/23). Default is keep_awake's own "
+                        "STATUS_PATH, not a second copy of that string.")
     p.add_argument("--bridge-timeout-s", type=int, default=None,
                    help="How long the outer waits for the inner's completion "
                         f"marker (default {DEFAULT_BRIDGE_TIMEOUT_S}, or "
@@ -1502,6 +1516,37 @@ class ChainResult:
     pid: int | None = None
 
 
+def read_awake_status(path) -> dict | None:
+    """One read of the keep_awake status file, or None — never an exception.
+
+    A half-written or absent file is read as "not observed", not as a crash: a
+    traceback here would leave main() with an undocumented code 1 before
+    _write_marker runs, and the outer bridge would report its own timeout
+    instead of a desktop verdict. Same shape as c4_wiring_probe._read_status.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def desktop_gate_or_none(args: argparse.Namespace) -> int | None:
+    """None when the desktop is reachable, else the exit code to return.
+
+    Runs before the click phase, not after it: a locked screen that gets as far
+    as launcher_click is recorded as EXIT_LAUNCHER_NO_FOCUS/NO_ADVANCE, which is
+    how exit 23 stayed undiagnosable. Placing it after the abandoned() check
+    would misreport a lock as a lost bridge.
+    """
+    verdict = ka.desktop_gate(read_awake_status(args.keep_awake_status),
+                              _time.time())
+    if verdict == "ok":
+        return None
+    log_event("DESKTOP_GATE", verdict=verdict, path=args.keep_awake_status)
+    return EXIT_DESKTOP_UNREACHABLE
+
+
 def run_launch_chain(args: argparse.Namespace,
                      result: ChainResult | None = None) -> int:
     """PREKILL .. GAME_OBSERVE. This is the inner's body.
@@ -1582,6 +1627,10 @@ def _run_launch_chain_phases(args: argparse.Namespace,
         # A dry run spawns no URI, so a launcher window here is some other
         # game's. Never click into a window nobody asked us to touch.
         return EXIT_OK
+
+    gate = desktop_gate_or_none(args)
+    if gate is not None:
+        return gate
 
     if abandoned():
         return EXIT_BRIDGE_ABANDONED

@@ -926,8 +926,18 @@ desktop_locked|desktop_unreachable|desktop_unobserved` —— 一律中止,且�
 `desktop == "unlocked"` 与 `state == "serving"`,没有 import 关系。这是 §54.9
 「`console_open` 是信念不是观测」在桌面可达性这条新轴上的重申。
 
-**launcher 侧没接这道门**(`launch_stellaris.py` 的 `exit 22` 早停在计划里刻意留下):今天真正花钱的是
-那一步,但它是另一条通道的改动,接口就是上面那两个字符串加一个 verdict 函数,单独出一个计划更干净。
+**launcher 侧也接了这道门**(`launch_stellaris.py` 的 `desktop_gate_or_none`,新退出码 **25**):位置在
+`_run_launch_chain_phases` 里 dry-run 返回之后、`launcher_click` 之前 —— 晚一步就等于没接,锁屏下的点击失败
+仍会被记成 22/23,而那正是 exit 23 至今判不下去的原因。`--keep-awake-status` 的默认值是
+`keep_awake.STATUS_PATH`,不是第二份 `C:\temp\...` 字面量。
+
+两处判决函数(`keep_awake.desktop_gate` 与 `c4_wiring_probe.keep_awake_gate`)**各留一份是刻意的**:开枪通道
+是 `C:/temp/<name>.py` 线上契约的一部分,不能因为 launcher 侧要读同一个文件就获得一个 import 关系。代价有两条,
+都记在这里:(1) 状态窗口 `STATUS_MAX_AGE_S` 在 `keep_awake.py:50` 与 `c4_wiring_probe.py:499` 各有一份字面量
+`15.0`,**本计划不合并** —— 合并意味着给线上契约加一条跨模块依赖;(2) launcher 侧把 `screensaver`/
+`wrong_session`/`unknown_name` 归进 `desktop_unreachable`,而开枪通道把它们留在 `desktop_unobserved`。
+两者都拒绝,区别只在诊断:桌面被**读到**但不是 `unlocked` 的三种状态,在 launcher 这一侧是「可达性已知为否」,
+`desktop_unobserved` 因此只留给 `DESKTOP_STATES` 以后新增、这个名字还不认识的状态。
 
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 

@@ -2,10 +2,12 @@ import builtins
 import contextlib
 import ctypes
 import ctypes.wintypes as _wt
+import json
 import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +16,8 @@ import psutil
 import pytest
 from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               EXIT_BRIDGE_SCHTASKS_DENIED, EXIT_BRIDGE_TIMEOUT,
-                              EXIT_BRIDGE_TR_TOO_LONG, EXIT_GAME_DID_NOT_SPAWN,
+                              EXIT_BRIDGE_TR_TOO_LONG, EXIT_DESKTOP_UNREACHABLE,
+                              EXIT_GAME_DID_NOT_SPAWN,
                               EXIT_GAME_EXITED_EARLY, EXIT_GAME_UNPAUSE_FAILED,
                               EXIT_INTERNAL,
                               EXIT_JIT_DIALOG, EXIT_LAUNCHER_NO_ADVANCE,
@@ -28,6 +31,7 @@ from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               _handoff_observed, _hwnd_for_pid,
                               _is_jit_dialog_visible, _is_wer_dialog_visible,
                               _poll_marker, _read_marker_pid,
+                              _run_launch_chain_phases,
                               _steam_has_window, _top_windows, _window_rect,
                               _write_marker, bridge_to_interactive_session,
                               bring_to_foreground, build_arg_parser,
@@ -35,8 +39,15 @@ from launch_stellaris import (EXIT_BRIDGE_ABANDONED, EXIT_BRIDGE_NO_SESSION,
                               build_bridge_task_command, build_inner_tr,
                               game_observe, game_unpause, launcher_click, launcher_handoff,
                               launcher_wait, main, prekill,
-                              run_launch_chain, steam_ready,
+                              read_awake_status, run_launch_chain, steam_ready,
                               steam_spawn, timeline_event)
+
+
+def _unlocked_desktop(path=None):
+    """A fresh reachable-desktop observation, for tests whose subject is a phase
+    downstream of the gate. Built per call, so the 15 s heartbeat window cannot
+    expire between collection and the assertion."""
+    return {"desktop": "unlocked", "epoch": time.time(), "state": "serving"}
 
 
 def test_exit_codes_match_spec():
@@ -1253,6 +1264,7 @@ def test_launcher_click_re_reads_the_rect_every_attempt(
     ], coords
 
 
+@patch("launch_stellaris.read_awake_status", side_effect=_unlocked_desktop)
 @patch("launch_stellaris.game_observe", return_value=EXIT_OK)
 @patch("launch_stellaris.launcher_handoff", return_value=5555)
 @patch("launch_stellaris.launcher_click", return_value=EXIT_OK)
@@ -1262,7 +1274,7 @@ def test_launcher_click_re_reads_the_rect_every_attempt(
 @patch("launch_stellaris.prekill", return_value=EXIT_OK)
 def test_run_launch_chain_waits_for_the_launcher_window_then_drives_it(
         mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click,
-        mock_handoff, mock_observe):
+        mock_handoff, mock_observe, mock_gate):
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_OK
     mock_wait.assert_called_once_with(30)  # --launcher-timeout-s default
     mock_click.assert_called_once_with(12345)
@@ -1272,13 +1284,14 @@ def test_run_launch_chain_waits_for_the_launcher_window_then_drives_it(
     mock_observe.assert_called_once_with(5555, 30)  # --observe-s default
 
 
+@patch("launch_stellaris.read_awake_status", side_effect=_unlocked_desktop)
 @patch("launch_stellaris.launcher_click", return_value=EXIT_LAUNCHER_NO_ADVANCE)
 @patch("launch_stellaris.launcher_wait", return_value=(4242, 12345))
 @patch("launch_stellaris.steam_ready", return_value=10748)
 @patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
 @patch("launch_stellaris.prekill", return_value=EXIT_OK)
 def test_run_launch_chain_propagates_a_click_failure(
-        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click):
+        mock_prekill, mock_spawn, mock_ready, mock_wait, mock_click, mock_gate):
     """The launcher's own exit code has to reach the bridge marker verbatim —
     that DONE:<rc> is the only thing the outer process learns."""
     assert run_launch_chain(build_arg_parser().parse_args([])) == EXIT_LAUNCHER_NO_ADVANCE
@@ -1713,7 +1726,8 @@ _HANDOFF_DEFAULT = object()
 @contextlib.contextmanager
 def _full_chain(game_pid=5555, handoff_rc=_HANDOFF_DEFAULT, observe_rc=EXIT_OK):
     """Patch every phase up to and including Task 6; yields the mocks in
-    chain order (prekill, spawn, ready, wait, keyboard, handoff, observe).
+    chain order (prekill, spawn, ready, wait, keyboard, handoff, observe) plus
+    the desktop gate stub last.
 
     handoff_rc=None is a meaningful value — launcher_handoff returning None is
     the EXIT_GAME_DID_NOT_SPAWN case — so the default needs a sentinel
@@ -1728,6 +1742,11 @@ def _full_chain(game_pid=5555, handoff_rc=_HANDOFF_DEFAULT, observe_rc=EXIT_OK):
               return_value=game_pid if handoff_rc is _HANDOFF_DEFAULT
               else handoff_rc),
         patch("launch_stellaris.game_observe", return_value=observe_rc),
+        # The desktop gate is stubbed last on purpose: existing tests index the
+        # phases positionally (mocks[0]..mocks[6]), and appending keeps those
+        # numbers meaning the same call. Chain order would put it between
+        # launcher_wait and launcher_click.
+        patch("launch_stellaris.read_awake_status", side_effect=_unlocked_desktop),
     ]
     mocks = [s.start() for s in specs]
     try:
@@ -2656,3 +2675,57 @@ def test_write_bridge_tr_shim_docstring_states_a_measurable_basis():
     assert "276" not in doc, doc
     assert "309" not in doc, doc
     assert "261" in doc, doc
+
+
+def _status(tmp_path, desktop):
+    p = tmp_path / "ns_awake_status.json"
+    p.write_text(json.dumps({"desktop": desktop, "epoch": time.time(),
+                             "state": "serving"}), encoding="utf-8")
+    return str(p)
+
+
+def test_read_awake_status_returns_none_for_a_half_written_file(tmp_path):
+    p = tmp_path / "ns_awake_status.json"
+    p.write_text('{"desktop": "unloc', encoding="utf-8")   # 原子写被进程打断的形状
+    assert read_awake_status(str(p)) is None
+    assert read_awake_status(str(tmp_path / "absent.json")) is None
+
+
+@patch("launch_stellaris.launcher_click")
+@patch("launch_stellaris.launcher_wait", return_value=(4321, 0x10))
+@patch("launch_stellaris.steam_ready", return_value=4242)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_phases_refuse_before_clicking_when_desktop_is_locked(
+        _prekill, _spawn, _ready, _wait, click, tmp_path):
+    rc = _run_launch_chain_phases(
+        build_arg_parser().parse_args(["--keep-awake-status", _status(tmp_path, "locked")]))
+    assert rc == EXIT_DESKTOP_UNREACHABLE          # 25,不是 22
+    click.assert_not_called()
+
+
+@patch("launch_stellaris.game_observe", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_handoff", return_value=999)
+@patch("launch_stellaris.launcher_click", return_value=EXIT_OK)
+@patch("launch_stellaris.launcher_wait", return_value=(4321, 0x10))
+@patch("launch_stellaris.steam_ready", return_value=4242)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_phases_still_click_when_desktop_is_unlocked(
+        _prekill, _spawn, _ready, _wait, click, _handoff, _observe, tmp_path):
+    rc = _run_launch_chain_phases(
+        build_arg_parser().parse_args(["--keep-awake-status", _status(tmp_path, "unlocked")]))
+    assert rc == EXIT_OK
+    assert click.call_args[0][0] == 0x10           # 只断言第一个位置参数是 hwnd
+
+
+@patch("launch_stellaris.read_awake_status", side_effect=AssertionError("gate ran"))
+@patch("launch_stellaris.launcher_wait", return_value=(4321, 0x10))
+@patch("launch_stellaris.steam_ready", return_value=4242)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_dry_run_does_not_consult_the_desktop_gate(
+        _prekill, _spawn, _ready, _wait, _gate):
+    # 与既有 dry-run 口径一致:dry run 不 spawn URI,也就不该被一台机的桌面状态挡住
+    assert _run_launch_chain_phases(
+        build_arg_parser().parse_args(["--dry-run"])) == EXIT_OK

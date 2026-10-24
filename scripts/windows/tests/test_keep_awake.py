@@ -7,6 +7,7 @@ decision table stays testable on Linux with no ctypes, PIL or numpy.
 """
 
 import ctypes
+import inspect
 
 import pytest
 
@@ -249,3 +250,24 @@ def test_desktop_snapshot_reads_the_name_index_and_its_own_buffer_size(monkeypat
     assert user32.sizes == [ctypes.sizeof(ctypes.create_unicode_buffer(256))]
     assert user32.closed == [0x2C4]
 
+
+
+def test_desktop_gate_uses_the_shot_channels_verdict_vocabulary():
+    now = 1_000.0
+    good = {"desktop": "unlocked", "epoch": now, "state": "serving"}
+    assert ka.desktop_gate(good, now) == "ok"
+    assert ka.desktop_gate(None, now) == "keep_awake_absent"
+    assert ka.desktop_gate({"desktop": "unlocked"}, now) == "keep_awake_absent"
+    assert ka.desktop_gate({**good, "state": "stopped"}, now) == "keep_awake_stopped"
+    assert ka.desktop_gate({**good, "epoch": now - 15.1}, now) == "keep_awake_stale"
+    assert ka.desktop_gate({**good, "desktop": "locked"}, now) == "desktop_locked"
+    assert ka.desktop_gate({**good, "desktop": "unreadable_denied"}, now) == "desktop_unreachable"
+    assert ka.desktop_gate({**good, "desktop": "screensaver"}, now) == "desktop_unreachable"
+    # 一个 keep_awake 以后才有的状态,不可判 = 拒绝,不是放行
+    assert ka.desktop_gate({**good, "desktop": "brand_new_state"}, now) == "desktop_unobserved"
+
+
+def test_desktop_gate_window_comes_from_the_daemon_not_a_second_literal():
+    # STATUS_MAX_AGE_S 只有一个事实源:keep_awake 自己
+    default = inspect.signature(ka.desktop_gate).parameters["max_age_s"].default
+    assert default == ka.STATUS_MAX_AGE_S
