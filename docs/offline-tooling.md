@@ -62,6 +62,23 @@ PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 `0x1D08520` 正好把 §14 那张 1,805 的下限集取回来,这也是 `test_the_floor_map_is_a_subset_of_the_unfiltered_candidate_set`
 钉住的关系);除此之外没有别的静态滤网,所以任何「这张表是谁」的结论都得另找证据(名字池、行为、实机)。
 
+**`--who-tables <rva[,rva]> [--candidates PATH]` / `--who-lea <rva>` —— 两张集合的离线 join(§57)**:
+`slot_hits()` 按候选的 `vtable_rva` **回到镜像里重读前 8 槽**逐个比对(不是只看产物带出的 `slot0..slot2`),
+`lea_sites_to()` 把 `rip_refs()` 那条 modrm 判定推广到**整个 `.text`**,返回指令起始 RVA。接口一律 **RVA**
+(与 `AGENTS.md` 索引、下限图、候选集同口径),命令行里不出现带 image base 的数。`--candidates` 默认读
+`vtable_candidates_all_4_4_4.txt`,所以不必在枪机上重跑 `all_vtables`。
+
+**判读陷阱:`--who-tables` 那张「命中 N 张表」的表,不能拿来证明「引擎复制了表」。** 两个独立原因,
+每一个都足以让这条推断作废(§57 就是在核这一条):
+① **候选集对同一段指针数组产出多个重叠起点**(Task 3 为了让下限集成为子集必须这样构造),所以行数永远
+大于物理槽地址数 —— 4.4.4 上实测 **7,867 行 / 7,832 个表首 / 992 个物理槽**;
+② **靶子若是共用实现,命中数就正比于「继承它的兄弟类个数」,与复制无关** —— `0x3AFD30`(donor 表 slot[1]
+的 Execute 覆写)在镜像里以静态 qword 出现 **538** 次,`0x3B01A0` **454** 次。
+收紧到「前四槽与目标表逐槽相等」把 7,832 压到 5,这一步是有用的枚举,但**仍分不出「另一份表」与
+「同基类未覆写前四槽的兄弟类」** —— 两者在字节上就是同一串。要判身份,得问运行时 `[self+0]`(§57 的下一枪)。
+`--who-lea` 另有两条边界:它只认 `48/4C 8D|8B mod=00 rm=101` 这一种编码(不认绝对立即数寻址,也不认
+`.rdata` 里的静态持有),而**站点数 0 不等于没人用** —— `0x3B01A0` 就是 0 站点,因为它只以静态槽值存在。
+
 ### `scripts/disrva.py <start_rva> [end_rva|count]`
 
 **Any RVA range, disassembled offline** — annotates every
