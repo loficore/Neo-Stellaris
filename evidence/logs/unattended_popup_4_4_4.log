@@ -1,0 +1,145 @@
+# 无人值守弹窗处置 —— 实机批次(Task 6 的 A 组地面验收 + OCR 成本 + 名单外停手首跑)
+
+# 目的: 把「exit-23 三档诊断」「桌面被锁住时我们到底知道什么」「OCR 到底多贵」这三件
+#   一直只有离线依据的事,在真机各取一次读数;并证明新代码首跑在名单是空的时候**没有动手**。
+# 授权: 用户点名 —— 2026-10-25 「开始吧，实际测试开始」(本计划的实机门),物理配合动作为
+#   用户所按的 Win+L 与随后的解锁(「我按照你说的操作过了」)。Windows 侧动作仅限
+#   ssh/scp/schtasks 起的既有 daemon 与 `python C:/temp/*.py`,不改电源计划、不动游戏文件。
+# 主机: Windows_Jiaolong(远端本地时间 = UTC+8)。游戏 stellaris.exe pid 8364(本批次内唯一进程)。
+# 部署物 sha256(远端 `C:\temp\` 前 16 位,取产物时现算):
+#   game_supervisor.py 71772731c2a2f84d   popup_ocr.py 8f8d0f4066196052
+#   popup_guard.py     3a66838c536f9d73   popup_identity.py 15f0e03b3f69e2a4
+#   本地基准 = 仓库提交 3d3d8d4(Task 1–5 已入库的字节)。
+# 判读口径: 本文件只记读数与读数之间的关系;所有「这个数不能读成什么」在
+#   docs/offline-tooling.md 的判读陷阱(本批次改的是陷阱 6 与陷阱 10)。
+
+## Step 2 —— exit-23 三档诊断: 本场没有落到 23(not_observed)
+
+    just launch          # PREKILL 先杀当时在跑的游戏进程
+    RC=0
+
+launcher 日志里没有 `step=diagnosis` 的 `LAUNCHER_CLICK` 事件(该事件只在 exit 23 路径写)。
+⇒ 三档里的任何一档本场都**没有样本**。roadmap 段4 那句「连点击没送达还是窗口判断错都还不知道」
+  按这个读数改写为「本场未复现 exit 23,三档仍未定」—— 不是「已排除某一档」。
+
+## Step 3 —— 桌面被锁住那一格: 实际读数是 `unreadable_denied`,不是 `locked`
+
+按下的 Win+L 之后立刻读:
+
+    just awake status
+    STATE=serving DESKTOP=unreadable_denied …(err=5)
+
+(该行其余字段未逐字留存 —— `ns_awake_status.json` 每拍被重写,锁屏那一拍的文件已被后续拍覆盖;
+ 解锁后的同一条命令读到的是 `DESKTOP=unlocked detail=Default age=2.2s pid=11640
+ assert_rc=2147483651 session=1/1`。)
+计划期望的是 `DESKTOP=locked` 且 `desktop_detail` 含 `Winlogon`。实机不是: 守护进程
+`OpenInputDesktop` 被拒(err=5),`keep_awake.classify_desktop` 走 `unreadable_denied` 分支
+—— 我们**连桌面名字都问不到**,于是「锁着」与「这台机不让我看」在状态串里是同一个形状。
+`assert_rc` 是日志字段不是判据;判据是 `just awake check` 的 rc,而 `check_exit_code` 对
+非 reachable 的 desktop 判 1 —— **这条是纯函数推的,实机 rc 本场未回显,记 not_observed(待复测)**。
+
+无人值守关键读数(这条拿到了): **锁屏期间 daemon 心跳继续更新** —— 锁屏前后
+`just awake status` 的 `age` 都 <2 s、`epoch` 在递增,`STATE=serving` 没断。
+⇒ 「daemon 活着但动不了手」与「daemon 死了」是两种故障,本场实证前者是可区分的(靠心跳),
+  但**桌面状态本身不可区分**(靠 desktop 字段)。
+
+## Step 4 —— OCR 成本(不是决策): 一次 12 行裁片当场击穿 24 s 会话总额
+
+    python C:/temp/popup_ocr.py warm
+    STATUS=ok MS=7494 LINES=0            # 本批次现测的加载成本
+
+同一场里第一个真弹窗(12 行文本)的那一次 OCR:
+
+    popup_seen popup_id=text:26f8c449 source=text ocr_status=ok ms=27134.894 ocr_ms_total=27134.894
+
+扣除加载 7,494 ms ⇒ 12 行裁片的**预测量 ≈ 19.6 s**。对照 2026-10-25 基准线
+`1.5 s + 0.7 s × 行` = 9.9 s:19.6/9.9 ≈ 1.98×,刚好落在「偏离两倍才算异常」的边界内侧。
+不需要异常判定就已经出的结论: **`POPUP_OCR_BUDGET_MS = 24 s` 在一扇窗的第一次真识别里就被用完**
+(`ocr_ms_total` 之后一直是 27134.894,后面 384 次边缘全部 `ocr_status=budget_spent`)。
+
+「向人买下的停摆秒数」这条按 brief 要求原样进日志,并附方法失效声明: 计划设想用
+「OCR 那次 tick 前后两行 supervisor 日志的时间差」量停摆,但**边沿触发的第一枪前面没有 popup 行可比**
+(它前一行的时间戳是 18:49:44 的一条 `command`,中间是空闲)⇒ 本场停摆秒数只能读 `ms` = **27.135 s**。
+顺带取到真实 tick 周期: 有窗时相邻 popup 三元组间隔 **≈ 2.2–2.5 s**(不是计划假设的 0.8 s),
+所以 27 s 停摆 ≈ 丢 11–12 拍。
+
+## Step 5 —— 新代码首跑: 认不出来时没动手(判据满足)
+
+    just game status                       # 名单为空的第一拍
+    STATUS=paused note=popup_hold_unclassified ...
+    # C:\temp\ns_game_status.json 的 popup 格(同一次读数):
+    #   popup_id=text:26f8c449 source=text ocr=ok ocr_ms=27134.894
+    #   ocr_ms_total=27134.894 attempts=0 same_hits=1
+
+jsonl 侧三元组齐全: `popup_seen`(source=text)+ `popup_evidence`(path=C:\temp\ns_popup\text_26f8c449.png)
++ `popup_decision`(action=hold、reason=unclassified_hold、allow_status=absent、attempts=0)。
+整场 `attempts` 恒为 0 ⇒ **没有任何一次点击发生**。首跑没有「点成功」,符合判据。
+
+## Step 6 —— 关闭点复核: 三个数并排,其中「量得的点」不存在
+
+同一扇窗(bbox `[879,555,1939,872]`,crop `C:\temp\ns_popup\geom_1060x320_r11.png`,1060×317):
+
+    算得的点  close_point(bbox, CLOSE_INSET) = (1843, 606)      # bbox[2]-96, bbox[1]+51
+    量得的点  无 —— 这张裁片里根本没有 ✖ glyph
+    no_effect 读数  not_observed(见下)
+
+裁片内容(人眼复核,本地落点 /tmp/ns_popup_batch/half.png): 左半是星图与一艘船的立绘,
+中上是两个带白色六边形「工程/科研」图标的舰队条,右半是舰队列表文字(CNS…、工程…、科研…)。
+亮度剖面找到的最强标记在 local x≈625 ⇒ screen x≈1504(白色六边形图标,span 25 px、mass 228),
+不是关闭按钮;算得的点 (1843,606) 落进舰队列表文字区。
+⇒ 比 §59.2 的「偏移差 500 px」更硬的事实浮出来了: **这个 bbox 不是一扇窗**,它是面板检测器
+  在主 UI 上切出的一块;在它上面算 close_point 并点击,等于往舰队列表上点一下。
+
+`no_effect` 取不到,两个原因叠着: 取读数时那扇「窗」已经不在(下面 Step 7 的 id 流水显示分类器
+随后转向别的几何形状),而 `dismiss` 分支的前置 `state.get('paused') == 'paused'` 也不满足
+—— 当时 `state=unknown`(`note=unreadable`,控制台覆盖层把脉冲图标读数弄糊了)。
+⇒ 陷阱 10 的措辞保持「未被证明对任何窗正确」,并补上「bbox 可能是主 UI 切片」这一条更强的理由。
+
+## Step 7 —— 产物三元组(远端路径 + sha256 + 本地落点)
+
+    C:\temp\ns_game_log.jsonl   ae24a656b75ae638…  -> evidence/logs/unattended_popup_4_4_4.jsonl
+    C:\temp\ns_awake_status.json 6100909907990793… -> 内容原样抄在下方(该文件每拍被重写,
+                                  远端哈希随读取时刻变;本地副本 68aec6dbb081f037… 只是其中一拍)
+    C:\temp\ns_game_shot.png    9a396e9f88a8ea11…  -> 不入库(见下方陷阱读数)
+
+取产物用 `scp`,不是分块 base64 —— 判读陷阱 8 限的是**单次 ssh 输出的字节数**,scp 不落终端,
+所以 281 KB 的日志一次到位;本文件的每条读数都是这么取回来的。
+
+`ns_game_log.jsonl` 全场 1,444 行(含 10-23 起的旧场次),本批次窗口 18:45:44–19:10:24 共 1,176 行,
+其中 popup 三元组 385 组。入库的切片是**按 (event, popup_id, reason, note, ocr_status, source) 去重**
+后的 73 行,每行带 `count` 字段 = 该形状在原文件里出现的次数 —— 原文件路径与哈希在上面,可复原。
+
+本批次的 id 流水(385 次边缘、23 个 distinct id):
+
+    geom:1060x320:r11  349 次   text:26f8c449  1 次   其余 21 个 geom id 各 1–4 次
+    reason 分布: id_stuck 344 / unclassified_hold 23 / console_panel 18
+    source 分布: geometry 384 / text 1        ocr 分布: budget_spent 384 / ok 1
+
+`C:\temp\ns_game_shot.png` 这一拍的读数是 **356×59 全黑**(extrema 三通道全 0)。它不是「屏幕是黑的」:
+`just game shot` 走的是 ssh 起的进程里的 `grab_box(window_rect(hwnd))`,而 ssh 侧那个 hwnd 已经拿不到
+有效矩形 ⇒ 拿到一个小矩形并抓到空洞。**像素必须从 schtasks 起的 daemon 取**(与 §59 之前那条
+「ssh python 抓屏会 OSError: screen grab failed」是同一家族的新变体:这次不报错,给你一张全黑小图)。
+
+## Step 8 —— 清理
+
+    just game stop     -> STATUS=stopped note=quit pid=0 hwnd=0 age=0.4s cmd=quit
+    just awake stop    -> STATE=stopped DESKTOP=unlocked detail=Default age=0.5s pid=0 assert_rc=2147483651
+
+之后 `powercfg /requests`(远端原样,非 ASCII 段是 cp936 渲染的「无」/「当前正在使用」):
+
+    DISPLAY:
+    [PROCESS] \Device\HarddiskVolume1\SteamLibrary\steamapps\common\Stellaris\stellaris.exe
+    SYSTEM:
+    [DRIVER] Realtek High Definition Audio (…)
+    AWAYMODE / 执行 / PERFBOOST / ACTIVELOCKSCREEN: 无
+
+⇒ **我们自己的 python/pythonw 进程在两条 stop 之后不再持有任何电源请求**;DISPLAY 那条属于游戏本体
+(它本来就持有,与我们无关)。这就是「不改电源计划、进程退了就复原」的实机证据。
+
+## 本场没拿到的两条读数(下次有窗/有人配合时补)
+
+1. `just awake check` 在锁屏期间的**实机 rc**(本场只拿到 `DESKTOP=unreadable_denied` 这条状态串;
+   rc=1 是由 `check_exit_code` 的纯函数推出来的,不是观测)。
+2. 一次真·事件窗上的 `dismiss_attempt` + `dismiss`(`no_effect`)三元组。本场取不到的两个原因写在
+   Step 6:目标那一拍之后分类器换了形状,且 `dismiss` 分支要求 `paused == "paused"`。
+   名单外停手首跑(Step 5)已经证明「认不出来时没动手」,所以缺的只是**关闭点量测**,不是安全性证据。

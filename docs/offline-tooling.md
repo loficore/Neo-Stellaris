@@ -746,6 +746,15 @@ root_unreadable / **region** 七类行)。
     `no_effect: false`(`bbox_after` 出自同一个当初把右界量到侧栏的检测器,§59.2 的原失效模式并未被这条事件根除)。
     留痕把问题从「无痕」降级为「待复核」,判定仍靠下面的手动量测(`shot` + `just game click`)。
     **但 §59.2 只有一个反样本,不足以推量测式 —— 第一版刻意不发明几何规则**;复核要等下一次有窗的实机机会。
+    **2026-10-25 复核做过一次,结论是「未证正确」并把理由变强了**(`evidence/logs/unattended_popup_4_4_4.log` Step 6):
+    对 bbox `[879,555,1939,872]` 的那一拍,算得的点仍是 `(1843, 606)`;把当拍的工具自己存下的裁片
+    `C:\temp\ns_popup\geom_1060x320_r11.png` 取回本地人眼复核 —— 里面**根本没有 ✖ glyph**:左半是星图与舰船立绘,
+    中上是带白色六边形工程/科研图标的舰队条(亮度剖面最强标记在 screen x≈1504),右半是舰队列表文字,
+    而算得的点落在舰队列表文字上。⇒ 比「偏移差 500 px」更硬的一条浮出: **这个 bbox 不是一扇窗,是面板检测器
+    在主 UI 上切出的一块**;在它上面点 close_point 等于误点舰队列表。`no_effect` 那第三个数本场取不到
+    (两因叠加: 那一拍之后分类器转向了别的几何形状,而 `dismiss` 分支的前置 `paused == "paused"` 在
+    控制台覆盖层把脉冲图标读成 `state=unknown` 时不满足)。陷阱 10 的标题句因此**不改**:偏移对任何窗的正确性
+    仍未被证明,且现在多了一条不依赖 §59.2 那一个反样本的理由。
     复核之前的临时取代:先 `shot` + 裁 `titlebar` 量 glyph 中心,再 `just game click <x> <y>`(坐标是**屏幕绝对**的,
     `window_metrics` 的 bbox 已经加过窗口原点)。
 11. **`form=none` 是窗口陈述,不是调用者陈述。** `exec_frame_sites.py` 报 `none` 只说明**返回 RVA 前
@@ -1055,6 +1064,11 @@ just game stop | quit
 
 12. **OCR 状态不是弹窗身份。** `ocr=unavailable` 只说明我们的眼睛坏了,`geom:*` 那条 id 仍可能对应一个
     完全无害的窗;它的作用是让 daemon 停手,不是判那个窗有害。
+    **2026-10-25 实机补一条同族的: 身份会随「我们还问不问得出字」而变。** 同一扇窗的第一拍读到 12 行
+    ⇒ `text:26f8c449`,那一次就烧掉 27.1 s 把会话总额 24 s 用完;从第二拍起同一扇窗只能记成
+    `geom:1060x320:r11`。后果不是「换了个名字」而已:`same_hits` 从 0 重计,`id_stuck` 全部累计在
+    几何 id 上(本场 344 次),而 `text:` 那条 id 的 `attempts` 永远停在 0 —— 读表的人若按 id 聚合,
+    会把一扇窗看成两扇(一扇有字、一扇卡住)。
 13. **弹窗只在 `paused == "paused"` 时被扫**(本计划刻意**没**改成每 tick 无条件扫窗,所以不暂停游戏的
     弹窗 —— 覆盖层、系统通知、驱动倒计时确认 —— 现在仍然看不见)。这是范围决定,不是缺陷;要扩到那一条
     得另开计划,代价是每 tick 一次全窗口截图。
@@ -1064,6 +1078,11 @@ just game stop | quit
     时间也不省字(256 档反而 20.3 s 且逐行比对只剩 9/19 认对,surya 检测器自己会把输入放大到固定边长),
     调 batch 也不省(CPU 默认已是检测 8/识别 32,单次 ≤20 行本来就在一批里)。所以看到「心跳怎么停了
     7 秒」先查 `popup.ocr_ms_total` 有没有在涨、`ocr` 那一格是不是 `budget_spent`,而不是去改图片尺寸。
+    **2026-10-25 实机读数把这条的成本抬高、节拍改口**:加载 `STATUS=ok MS=7494`(不是 1.5 s 那一档),
+    一次 12 行裁片在 tick 内共 27,134.9 ms(扣加载 ⇒ 预测量 ≈ 19.6 s ≈ 基准线的 1.98 倍,刚好没到「两倍算异常」),
+    一扇窗的首次真识别就把 `POPUP_OCR_BUDGET_MS = 24 s` 用光。节拍: 有窗时相邻 popup 三元组实测
+    **≈ 2.2–2.5 s 一组**(不是这里写的 0.8 s),所以一次询问 ≈ 丢 11–12 拍。另外「用前后两行日志的时间差
+    量停摆」这个设想在**边沿触发的第一枪**上用不了 —— 它前面没有 popup 行可比,只能读 `ms` 字段。
 
 ### `scripts/windows/popup_*.py` —— 弹窗身份三件套
 
@@ -1142,8 +1161,15 @@ just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
 5. **`assert_rc` 是日志字段,不是判据**。`SetThreadExecutionState` 返回 `0`(断言压根没挂上)时 `check`
    与 `keep_awake_gate` 照旧放行 —— 两处的判决只看 `state`/`epoch`/`desktop`。断言真的挂没挂,证人只有
    `powercfg /requests`(第 3 条)。
-6. **`locked` 那一格实机未取**。2026-10-24 的验收全程无人按 `Win+L`,所以锁屏分支只有离线测试钉着;
+6. **`locked` 那一格实机取到了,但不是 `locked`**。2026-10-24 的验收全程无人按 `Win+L`,所以锁屏分支只有离线测试钉着;
    日志 §8 留了补它的命令与 Expected(`DESKTOP=locked`、`RC=1`、`desktop_detail` 含 `Winlogon`)。
+   **2026-10-25 有人按了**(`evidence/logs/unattended_popup_4_4_4.log` Step 3):实际读数是
+   `DESKTOP=unreadable_denied` —— 守护进程的 `OpenInputDesktop` 被拒(err=5),我们**连桌面名字都问不到**,
+   所以期望里的 `Winlogon` 永远进不到 `desktop_detail`。两条后果:①「锁着」与「这台机不让我看桌面」在状态串
+   里是同一个形状,任何按 `locked` 字面量写的判据在这台机上永不触发;②`just awake check` 的 rc 仍按
+   「非 reachable ⇒ 1」判,但那是 `check_exit_code` 的纯函数推论,**实机 rc 本场未回显,待复测**。
+   同场拿到的关键正面读数:**锁屏期间 daemon 心跳继续更新**(`STATE=serving`、`age<2 s`、`epoch` 递增)
+   —— 「daemon 活着但动不了手」与「daemon 死了」靠心跳可分,靠 desktop 字段不可分。
 
 **与开枪的关系:**`c4_wiring_probe._flow` 的**第一道门**读 `ns_awake_status.json`,
 `keep_awake_gate` 的六个 verdict —— `keep_awake_absent|keep_awake_stopped|keep_awake_stale|
