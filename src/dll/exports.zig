@@ -783,7 +783,10 @@ test "PushCApplicationPtr stores pointer" {
 test "DllMain returns TRUE" {
     const result = DllMain(null, 1, null);
     try std.testing.expectEqual(@as(i32, 1), result);
-    // Cleanup
+    // The DETACH call below is an inert smoke call, not a cleanup: DllMain's
+    // DETACH arm mutates nothing (see the DETACH invariant test), and this test
+    // never touched engine_ptr, so there is no state to revert. It only proves
+    // reason=0 does not fault from this call site.
     _ = DllMain(null, 0, null);
 }
 
@@ -809,6 +812,32 @@ test "DllMain: DLL_PROCESS_DETACH leaves engine_ptr untouched" {
     // DETACH must not clear (nor otherwise touch) it.
     _ = DllMain(null, 0, null);
     try std.testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0xDEAD)), getEnginePtr());
+
+    // Cleanup
+    args.appPtr = null;
+    PushCApplicationPtr(&args);
+}
+
+test "DllMain: DLL_PROCESS_ATTACH leaves engine_ptr untouched" {
+    // Issue #18 review gap: the DETACH test above (and its comment) asserts that
+    // DllMain mutates nothing for ANY reason code, yet PROCESS_ATTACH (reason=1)
+    // — the one arm with real code (writeMarker) — had only a return-value check.
+    // writeMarker is a kernel32 no-op off Windows and a file write on Windows;
+    // neither path touches engine_ptr, so the shipping (x86_64-windows) DllMain
+    // leaves the pointer exactly as PushCApplicationPtr set it. This test closes
+    // the coverage hole so the set is as strong as its comment claims; it is a
+    // self-contained add (no ordering dependency), asserting bitwise equality
+    // like the DETACH sibling.
+    var args = PushArgs{
+        .appPtr = @ptrFromInt(0xFEED),
+        .base = 0x140000000,
+    };
+    PushCApplicationPtr(&args);
+    try std.testing.expect(getEnginePtr() != null);
+
+    // PROCESS_ATTACH must not clear (nor otherwise touch) it.
+    _ = DllMain(null, 1, null);
+    try std.testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0xFEED)), getEnginePtr());
 
     // Cleanup
     args.appPtr = null;
