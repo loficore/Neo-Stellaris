@@ -41,6 +41,12 @@ def decide_action(*, popup_id: str, allow: dict[str, str] | None,
         return ("hold", "id_stuck")
     if attempts >= MAX_DISMISS_ATTEMPTS:
         return ("hold", "attempt_budget_spent")
+    if console_open is not False:
+        # 陷阱 6「未知就拒绝」:None 是「看不清这块亮的是不是一扇窗」,不是
+        # 「控制台关着」。2026-10-25 一期实测 console_panel 只命中 18/385 个
+        # 边缘,所以「不是 True」这个读法在无人值守里等于把键押在一个没标定
+        # 过的判据上。
+        return ("hold", "console_state_unknown")
     if (allow or {}).get(popup_id) == "dismiss":
         return ("dismiss", "allowlisted")
     return ("hold", "unclassified_hold")

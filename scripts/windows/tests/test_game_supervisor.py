@@ -549,7 +549,8 @@ def test_console_belief_true_holds_even_an_allowlisted_id(monkeypatch):
 def test_unknown_fingerprint_holds_and_comes_back_geometry_only():
     got = gs.popup_tick(0, "p.png", [0, 0, 700, 300], 0,
                         {"popup_id": None, "popup_attempts": 0,
-                         "popup_same_hits": 0, "popup_last_ocr_ts": 0.0},
+                         "popup_same_hits": 0, "popup_last_ocr_ts": 0.0,
+                         "console_open": False},
                         lambda p: ([], "model_missing", 3.0), now=1000.0)
     assert (got["action"], got["reason"]) == ("hold", "unclassified_hold")
     assert got["source"] == "geometry" and got["ocr_status"] == "model_missing"
@@ -685,7 +686,8 @@ def test_a_second_dialog_of_the_same_shape_is_not_dismissed_as_the_first(monkeyp
     allow = {}
     monkeypatch.setattr(gs, "load_allowlist", lambda path: (dict(allow), "ok"))
     state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
-             "popup_last_ocr_ts": 0.0, "popup_ocr_ms": 0.0}
+             "popup_last_ocr_ts": 0.0, "popup_ocr_ms": 0.0,
+             "console_open": False}
     box = [0, 0, 900, 400]
     lines = iter([["proceed?"], ["something else"]])
 
@@ -719,3 +721,35 @@ def test_a_dialog_without_geometry_holds_and_records_no_evidence_path():
     assert [r["event"] for r in logged] == ["popup_seen", "popup_evidence",
                                             "popup_decision"]
     assert logged[1]["path"] is None
+
+
+def test_every_reason_the_guard_can_return_has_a_supervisor_note():
+    # POPUP_NOTES[reason] 在副作用层查表且没有兜底:新增一个 reason 忘了补
+    # note,会在 serve 里 KeyError 并把守护进程打死(心跳一断,后面全被判成
+    # 「守护坏了」)。所以 reason 面由这张矩阵钉住,而不是靠人记得。
+    reasons = set()
+    for console in (True, False, None):
+        for bbox in (None, [0, 0, 900, 400]):
+            for hits in (1, 99):
+                for attempts in (0, 99):
+                    for allow in ({}, {"text:aaa": "dismiss"}):
+                        reasons.add(gs.decide_action(
+                            popup_id="text:aaa", allow=allow, attempts=attempts,
+                            same_id_hits=hits, console_open=console,
+                            has_bbox=bbox is not None)[1])
+    assert reasons <= set(gs.POPUP_NOTES)
+
+
+def test_a_dismiss_listed_geometry_id_in_the_file_still_holds(tmp_path):
+    # Review Focus 1 的前提「几何 id 天生不在名单里」现在由 parse 层守:操作者
+    # 照旧模板抄一行 geom,也换不到一次点击。
+    p = tmp_path / "allow.json"
+    p.write_text(json.dumps({"allow": [
+        {"popup_id": "geom:900x400:r0", "action": "dismiss"}]}), encoding="utf-8")
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0, "console_open": False}
+    got = gs.popup_tick(0, "p.png", [0, 0, 900, 400], 0, state,
+                        lambda path: ([], "model_missing", 3.0), now=1_000.0,
+                        allow_path=str(p))
+    assert got["popup_id"].startswith("geom:") and got["allow_status"] == "ok"
+    assert (got["action"], got["reason"]) == ("hold", "unclassified_hold")

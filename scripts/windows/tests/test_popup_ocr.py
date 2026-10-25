@@ -41,3 +41,16 @@ def test_warm_cli_prints_one_status_line_with_zero_lines(capsys):
     out = capsys.readouterr().out
     assert out.startswith("STATUS=")
     assert "MS=" in out and out.endswith("LINES=0\n")
+
+
+def test_the_cli_png_from_sys_argv_is_the_target(monkeypatch, capsys):
+    # `python popup_ocr.py <png>` 走的是 main() 无参这条路:argv=None 必须落到
+    # sys.argv[1:],否则文档里那条成本测量对操作者是静默失效的。
+    calls = []
+    monkeypatch.setattr(popup_ocr, "ocr_texts",
+                        lambda path: (calls.append(path)
+                                      or (["x"], "ok", 1500.0)))
+    monkeypatch.setattr(sys, "argv", ["popup_ocr.py", "crop.png"])
+    assert popup_ocr.main() == 0
+    assert calls == ["crop.png"]
+    assert capsys.readouterr().out == "STATUS=ok MS=1500 LINES=1\n"

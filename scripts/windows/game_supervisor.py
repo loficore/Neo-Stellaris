@@ -100,6 +100,7 @@ POPUP_OCR_BUDGET_MS = 24_000.0
 # note vocabulary, so the note never re-derives anything.
 POPUP_NOTES = {"allowlisted": "popup_dismissed",
                "console_panel": "popup_hold_console_panel",
+               "console_state_unknown": "popup_hold_console_unknown",
                "attempt_budget_spent": "popup_hold_budget",
                "id_stuck": "popup_stuck",
                "unclassified_hold": "popup_hold_unclassified",

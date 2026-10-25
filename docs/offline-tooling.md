@@ -1101,6 +1101,18 @@ just game stop | quit
   既不会放行也不会报错,只有状态记录的 `allow_status` 说它整份可不可解析。文件缺失/坏 JSON ⇒
   `absent`/`malformed`,名单换成空表,处置一律退成 hold。模板在
   `scripts/windows/popup_allowlist.example.json`。
+- **`geom:*` 进不了名单(2026-10-25 收尾审查后加的,代码层,不是提醒)。** 上面那个格式块里
+  `geom:<宽>x<高>:r<行数>` 那行**照抄无效** —— `parse_allowlist` 现在拒掉任何以 `geom:` 开头的
+  `popup_id`,计入 `dropped_entries`,名单退成空表。理由: 一个 10 px 的几何桶不是一次人工确认,
+  而 OCR 不可用时**同一个窗的 id 恰恰就是 `geom:*`**(陷阱 12);留着它等于把「读不到 ⇒ hold」换成
+  「读不到 ⇒ 形状对上就点」。一期取证还给了两条实证: 2 个 `geom:` id 是主 UI 切片(屏上没有 ✖),
+  同一扇控制台面板的 bbox 一场之内从 `340x970` 漂到 `1500x1000`。**抄进去既不会报错也不会放行** ——
+  只会一直看到 `popup_hold_unclassified`。要放行就必须在 OCR 状态 `ok` 时抄 `text:` id。
+  同一次审查还钉了 `load_allowlist`: 记事本存成 UTF-16 的名单现在算 `malformed`(整个 `read()`
+  都包在 `ValueError` 里,以前 `UnicodeDecodeError` 会逃进 serve 循环把守护打死)。
+  另: `console_open` 现在是**正向**判据 —— 只有 `is False`(看清了控制台关着)才允许点,`None`
+  (看不清)一律 hold,note `popup_hold_console_unknown`。本场 `console_panel` 只命中 18/385 个边缘,
+  所以这条在检测器重新标定之前实际把「放行」能力停在一边;名单本来是空的,没损失任何已验证的行为。
 - **抄 id 之前先确认那块亮的是不是一扇窗。** 第一批实机留证给了比例:一场 385 次边缘、23 个 distinct
   `popup_id`,其中 **21 个是调试控制台的文本面板**被亮度剖面切成的一块块(形状从 `340x970` 一路漂到
   `1500x1000`,所以每换一次形状就是一个新 id),**2 个是主 UI 切片**(星图 + 舰船立绘 + 舰队侧栏,

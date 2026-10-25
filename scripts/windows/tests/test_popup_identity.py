@@ -46,3 +46,29 @@ def test_unreadable_or_unknown_action_entries_are_dropped_not_allowed():
 def test_load_allowlist_reports_absent_instead_of_raising(tmp_path):
     allow, status = load_allowlist(str(tmp_path / "nope.json"))
     assert allow == {} and status == "absent"
+
+
+def test_load_allowlist_a_non_utf8_save_is_malformed_not_a_crash(tmp_path):
+    # Windows 记事本可能存成 UTF-16。UnicodeDecodeError 是 ValueError 的子类,
+    # 从 fh.read() 抛出而不是从 json.loads —— 逃出去就会打死 serve 循环。
+    p = tmp_path / "allow.json"
+    p.write_bytes('{"allow": []}'.encode("utf-16"))
+    allow, status = load_allowlist(str(p))
+    assert allow == {} and status == "malformed"
+
+
+def test_parse_allowlist_refuses_geometry_ids():
+    # 一个 10 px 的几何桶不是一次人工确认:一期取证里 2 个 geom id 是主 UI
+    # 切片,同一扇控制台面板的 bbox 还从 340x970 漂到 1500x1000。
+    allow, dropped = parse_allowlist(json.dumps({"allow": [
+        {"popup_id": "geom:900x400:r0", "action": "dismiss"},
+        {"popup_id": "text:aaa", "action": "dismiss"}]}))
+    assert allow == {"text:aaa": "dismiss"} and dropped == 1
+
+
+def test_load_allowlist_a_geometry_only_file_lists_nothing(tmp_path):
+    p = tmp_path / "allow.json"
+    p.write_text(json.dumps({"allow": [
+        {"popup_id": "geom:900x400:r0", "action": "dismiss"}]}), encoding="utf-8")
+    allow, status = load_allowlist(str(p))
+    assert status == "ok" and allow == {}

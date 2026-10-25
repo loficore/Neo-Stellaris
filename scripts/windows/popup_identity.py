@@ -62,8 +62,12 @@ def parse_allowlist(text: str) -> tuple[dict[str, str], int]:
     allow: dict[str, str] = {}
     dropped = 0
     for entry in entries:
+        # 几何 id 一律进不了名单:10 px 一个桶不是人工确认。OCR 不可用时同一个
+        # 窗的 id 就是 geom:*(陷阱 12),所以「读不到就 hold」必须由这里兜住,
+        # 不能只靠「操作者别抄那行」的约定。
         if (isinstance(entry, dict) and entry.get("action") == "dismiss"
-                and isinstance(entry.get("popup_id"), str)):
+                and isinstance(entry.get("popup_id"), str)
+                and not entry["popup_id"].startswith("geom:")):
             allow[entry["popup_id"]] = "dismiss"
         else:
             dropped += 1
@@ -76,7 +80,10 @@ def load_allowlist(path: str) -> tuple[dict[str, str], str]:
             text = fh.read()
     except FileNotFoundError:
         return {}, "absent"
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError 不是多余的兜底:记事本的 UTF-16 存盘会在 fh.read() 里抛
+        # UnicodeDecodeError(ValueError 的子类),而不是走到下面的 json.loads。
+        # 让它逃出去 = 名单读一次就把 serve 打死。
         return {}, "malformed"
     try:
         data = json.loads(text)

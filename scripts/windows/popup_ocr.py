@@ -26,6 +26,7 @@ Two hard rules, both from the 2026-10-25 plan:
 from __future__ import annotations
 
 import os
+import sys
 import time
 
 ENGINE = "surya"
@@ -150,7 +151,8 @@ def main(argv=None) -> int:
     ``warm`` times the model load alone (``LINES=0``); a PNG path reads via
     ``ocr_texts`` and reports that call's own ms.
     """
-    target = "warm" if argv is None else list(argv)[0]
+    args = list(sys.argv[1:] if argv is None else argv)
+    target = args[0] if args else "warm"
     if target == "warm":
         start = time.monotonic()
         status = warm()
@@ -164,5 +166,4 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    import sys
     raise SystemExit(main())

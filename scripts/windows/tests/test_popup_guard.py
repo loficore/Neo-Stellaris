@@ -46,3 +46,11 @@ def test_the_same_id_across_ticks_toward_the_stuck_limit():
                          same_id_hits=state["popup_same_hits"],
                          console_open=False, has_bbox=True) == \
            ("hold", "id_stuck")
+
+
+def test_an_undecided_console_belief_is_refused_not_assumed_closed():
+    # 陷阱 6「未知就拒绝」:console_open is None 不等于「控制台关着」。放行键
+    # 落在一个未决的亮面板上就是往控制台里点(本场检测器只命中 18/385)。
+    assert decide_action(popup_id="text:aaa", allow={"text:aaa": "dismiss"},
+                         attempts=0, same_id_hits=1, console_open=None,
+                         has_bbox=True) == ("hold", "console_state_unknown")
