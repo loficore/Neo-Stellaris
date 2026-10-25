@@ -1056,6 +1056,13 @@ just game stop | quit
     错结论(2026-10-24 实机,§56.1)。处置是 `taskkill /F /PID <cmd>` 只杀父壳:pythonw 不是被 job
     管的树,存活且窗一消失 focus 立刻通。顺带第二条:那个窗会**污染像素判读** —— §54.10 的面板计数和
     `classify_window` 都读同一张截图,挡与不挡之间 `note` 能从 `paused_no_window` 漂到 `dialog_unknown`。
+    **2026-10-25 批次 2 出现第三种落法,比「漂」更糟:父壳窗挡住真弹窗 ⇒ 读到「没有窗」。** 一扇星系调查
+    完毕的事件窗确实在屏上,检测器报 `paused_no_window`;把那两个 cmd 窗**最小化**之后,同一扇窗立刻被读成
+    `text:2188ca0b`(`evidence/logs/unattended_popup_batch2_4_4_4.log` Step 7)。⇒ `popup` 那一格的
+    「有没有窗」不是屏幕的事实,是**我们自己的遮挡状态的函数**;拿不到弹窗时先看截图里有没有我们的黑底
+    控制台窗,再怀疑检测器。同批次一条同族读数:`just game shot` 在游戏被切到后台时给 141 B 的退化图,
+    切回前台给 1,134,993 B 的有效截图 —— 与批次 1 那张「356×59 全黑」不是同一个机制(那条是 hwnd 拿不到
+    有效矩形,这条是窗被最小化/切走),但都读成「屏幕上没有东西」。
 11. **ssh 长连接会在长跑的实机驱动跑完之前被重置,那之后 stdout 全丢**。枪的 artifact 若只在结尾
     打印(判词、Verify rc、host alive),就取不回来了。所以实机驱动的关键状态要能被**事后独立读回**:
     `scope_probe` 的 `installed` 是实时 bool、`verified` 是 `verify()` 的实时返回值(不是闩锁),
@@ -1083,6 +1090,18 @@ just game stop | quit
     一扇窗的首次真识别就把 `POPUP_OCR_BUDGET_MS = 24 s` 用光。节拍: 有窗时相邻 popup 三元组实测
     **≈ 2.2–2.5 s 一组**(不是这里写的 0.8 s),所以一次询问 ≈ 丢 11–12 拍。另外「用前后两行日志的时间差
     量停摆」这个设想在**边沿触发的第一枪**上用不了 —— 它前面没有 popup 行可比,只能读 `ms` 字段。
+    **2026-10-25 批次 2 的第三组样本把「每行 0.7 s」这个斜率也撤掉**:三组同机同 `DEVICE=cpu` 同未缩小裁片
+    —— 12 行 27,134.894 ms(批次 1)、14 行 36,810.77 ms(批次 1)、**12 行 42,885.37 ms(批次 2,
+    `text:2188ca0b`)**。同样 12 行相差 **58%** ⇒ 固定+线性那个模型只能当量级,不能当预测;**能当判据的只有
+    「一次真识别必然打穿 `POPUP_OCR_BUDGET_MS = 24 s`」这一条,它现在是三次一致的读数**(不是样本小的巧合)。
+    打穿之后每一拍退回几何 id(陷阱 12 的机制),所以「`attempts` 怎么一直是 0」有一部分就是这么来的。
+15. **逐拍重写的证据裁片不是版本化的文件,是同一个路径上的流**。`C:\temp\ns_popup\geom_<WxH>_r<n>.png`
+    按**几何 id** 命名,而同一形状每拍都会再出现一次 ⇒ daemon 原地反复重写同一个路径,写方**不做原子替换**。
+    批次 2 实测:同一个路径两次 ssh 之间远端 sha256 就从 `B2D5DEFF…` 变到 `E01E10FF…`,两次 scp 拿回的
+    都是**带完整 IEND 但 IDAT 解不开**的图(PIL `unrecognized data stream contents`),尺寸 271,374 / 271,714 B
+    对远端 271,826 B。对照:`text_2188ca0b.png` 逐字节稳定且可解码 —— 那个 text id 只出现过一次(预算随后花完)。
+    ⇒ 「这张证据图能不能读」不是传输方式的函数,是**那个 id 会不会再出现**的函数;取 `text:*` 可以 scp,
+    取 `geom:*` 要预期半写,判定得靠可解码的那一份。别把半写读成「daemon 写坏了图」。
 
 ### `scripts/windows/popup_*.py` —— 弹窗身份三件套
 
@@ -1121,6 +1140,15 @@ just game stop | quit
   里面根本没有 ✖ glyph)。`console_panel` 这条 reason 在那一场只认出 **18/385** 次边缘,其余全部以
   `unclassified_hold` / `id_stuck` 停手 —— 停手是对的方向,但**别把这些 id 当弹窗抄进名单**。
   逐条判读在 `evidence/xrefs/popup_fingerprints_4_4_4.tsv`。
+  **2026-10-25 批次 2 把这条的适用范围扩到 `text:` id(`evidence/logs/unattended_popup_batch2_4_4_4.log` Step 6):**
+  `text:2188ca0b` 是 OCR 状态 `ok`、12 行、`source=text` 的一个 id —— 上面那句「要放行就必须在 OCR 状态 `ok`
+  时抄 `text:` id」在批次 2 之后**只是必要条件,不是充分条件**。它的证据裁片(1060×317,远端
+  `C:\temp\ns_popup\text_2188ca0b.png`,本地副本 sha256 前 16 位 `2fdd05d2a639c6c0`)左半是「事件链: 追寻风信子号」
+  那扇真对话框,**右半是星图 + 舰队列表**(`CNS… 工程船` / `CNS… 科研船` 那几条)⇒ 这个 bbox 是**两块 UI 的并集切片**。
+  `close_point = (bbox[2]-96, bbox[1]+51)` 定义在同一个 bbox 上,换算到裁片本地恒为 **(964, 51)**,
+  落点就是舰队列表条目 —— 点它等于选中一条舰队,不是关窗。⇒ 名单条目没写,`dismiss_attempt` /
+  `dismiss`(`no_effect`) 三元组仍是 **not_observed**,而缺的前提从「量一次关闭点」改成
+  **「先证明 bbox 是一扇窗而不是切片」**;这一条判据没达成之前,`attempts` 恒 0 是设计行为不是故障。
 - 三个模块的分工:`popup_identity.py`(指纹与名单解析)、`popup_guard.py`(判据与熔断,阈值只在这定义)、
   `popup_ocr.py`(引擎唯一出口)。前两个 stdlib-only,Linux 上就能 `import` 并跑测试;`popup_ocr` 只在
   Windows 宿主上跑得动(surya + torch CPU 轮子),但它的**加载成本现在有了实机数字**:2026-10-25 首枪
@@ -1147,6 +1175,9 @@ just awake check            # 判决:0 unlocked / 1 锁或读不到或过期 / 2
 just awake stop             # 写 quit + 登记去重键 + 删任务;daemon 自己写 state="stopped"
 just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
 ```
+
+`check` 那行的 rc 是**状态文件里 `desktop` 字段**的函数,不是屏幕的函数:2026-10-25 两次人工 `Win+L`
+期间它实机返回 **0**(下面陷阱 6 有全部读数与排除)。
 
 `serve` 是 daemon 本体:`--interval` 是 tick 秒数,`--assert-every`(`DEFAULT_ASSERT_EVERY_S = 25.0`)
 是重申断言的间隔,`--stop-after-s` 非 0 = 有界会话(也是循环的测试接缝)。状态文件
@@ -1190,6 +1221,17 @@ just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
    「非 reachable ⇒ 1」判,但那是 `check_exit_code` 的纯函数推论,**实机 rc 本场未回显,待复测**。
    同场拿到的关键正面读数:**锁屏期间 daemon 心跳继续更新**(`STATE=serving`、`age<2 s`、`epoch` 递增)
    —— 「daemon 活着但动不了手」与「daemon 死了」靠心跳可分,靠 desktop 字段不可分。
+   **2026-10-25 批次 2 把上面两条推论里的一条改写了(`evidence/logs/unattended_popup_batch2_4_4_4.log` Step 1–3):**
+   又按了两次 `Win+L`,这次读到的**不是** `unreadable_denied`,而是 `DESKTOP=unlocked detail=Default`
+   配 **实机 `RC=0`** —— 上一条末尾那句「rc 仍按「非 reachable ⇒ 1」判」的推论在实机上不成立,因为
+   `check_exit_code` 拿到的输入本身就是假的。锁着的证人另有其人在:`LogonUI.exe 2188/2216 Console 1`
+   (解锁后消失),而 daemon 一侧 `session=1/1` + 任务 `<LogonType>InteractiveToken</LogonType>` +
+   父链 `svchost → cmd → pythonw` 把「不在 WinSta0」和「权限不够」两种归因**都排除**了。
+   ⇒ 本文件的开头那句「唤醒要求登录 ⇒ 桌面变成 `Winlogon`」是 Windows 的事实,**不是我们能读到的事实**:
+   `desktop_locked` 这个 verdict 在这台机上从未被任何一次真锁产生,`desktop_gate` 在锁屏期间返回 `ok`,
+   所以开枪通道的第一道门与 launcher 的 exit 25 都**拦不住一次锁屏下的键盘注入**。
+   `err=5` 在这两次锁里只以「一拍的 blip」出现(4 组 `err=5 → Default` 对,组内间隔恰好 5 s),
+   锁着的整段时间变更日志**零新增** ⇒ 「锁屏 ⇒ 至少一条 err=5」与「读到 err=5 ⇒ 正在锁屏」两头都不能当判据。
 
 **与开枪的关系:**`c4_wiring_probe._flow` 的**第一道门**读 `ns_awake_status.json`,
 `keep_awake_gate` 的六个 verdict —— `keep_awake_absent|keep_awake_stopped|keep_awake_stale|

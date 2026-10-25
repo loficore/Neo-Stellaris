@@ -1,0 +1,182 @@
+# 无人值守弹窗处置 —— 实机批次 2(批次 1 点名的两条读数 + OCR 第三组成本)
+
+# 目的: 补批次 1 结尾「本场没拿到的两条读数」—— ① 锁屏期间 `just awake check` 的**实机 rc**
+#   (批次 1 只有纯函数推的 rc=1),② 真事件窗上的 `dismiss_attempt` + `dismiss`(`no_effect`) 三元组;
+#   并取 OCR 成本的第三组样本。
+# 授权: 用户点名 —— 2026-10-25「继续」(进入 B 组读数)与随后的物理配合(「锁了」「我已经解锁了」
+#   「锁屏了」「我把这两个CmD窗口最小化了」)。Windows 侧动作仅限既有 daemon、`python C:/temp/*.py`、
+#   scp 取产物、`just deploy`;不改电源计划、不动游戏文件、**本场没有点过任何一个窗**。
+# 主机: Windows_Jiaolong(远端本地时间 = UTC+8)。游戏 stellaris.exe pid 8364、hwnd=199030。
+# 部署物 sha256(远端 `C:\temp\` 前 16 位,取产物时现算;六个都与本地工作树逐字节相同,
+#   本地基准 = 提交 aa4c05c。远端 `dir` 显示 game_supervisor.py 最后写入 2026-10-25 21:41,
+#   即本场 `just deploy` 推上去的那一次):
+#   game_supervisor.py 981B4C4CC2FF361E  popup_ocr.py      70CBFDC9D57E1F71
+#   popup_guard.py     59CE87C4D25D0800  popup_identity.py AD007BAACC8E6C27
+#   keep_awake.py      ACDF647AB555B7D6  c4_wiring_probe.py 7DA26E56DBFF3394
+#   与批次 1 记的哈希不同,是因为 3d3d8d4 之后落库的 d66e99f、9275244 改过 popup 那一族;
+#   本批次没有改任何部署物的内容。
+# 判读口径: 本文件只记读数与读数之间的关系;所有「这个数不能读成什么」在
+#   docs/offline-tooling.md 的判读陷阱(本批次改的是 keep_awake 侧陷阱 6、supervisor 侧陷阱 10 与 14,
+#   并在 supervisor 侧新增一条关于逐拍原地重写裁片的陷阱)。
+
+## Step 1 —— 锁屏期间的 `just awake check`: 实机 rc = 0,两次按锁都是 0
+
+第一次(用户报「锁了」之后立刻读,同一分钟内):
+
+    python C:/temp/keep_awake.py check
+    STATE=serving DESKTOP=unlocked detail=Default age=… pid=9540 assert_rc=2147483651 session=1/1
+    RC=0
+
+第二次(用户报「锁屏了」之后,同一条命令):
+
+    STATE=serving DESKTOP=unlocked detail=Default …  RC=0
+
+⇒ **批次 1 留的那个待复测项的答案是 rc=0,不是推出来的 1。** 两次读数里 `desktop` 都是 `unlocked`,
+所以 `check_exit_code` 走的是「reachable ⇒ 0」那一支 —— 纯函数没错,是**它拿到的输入在锁屏期间是假的**。
+`desktop_locked` 这个 verdict 在这台机上**从未被任何一次真锁产生过**。
+
+后果写在它该影响的地方(offline-tooling 陷阱 6 已追加):`keep_awake.desktop_gate` 在锁屏期间返回
+`"ok"`,`c4_wiring_probe` 的第一道门与 launcher 的 `desktop_gate_or_none`(exit 25)在这台机上
+**不会**拦下一次锁屏下的键盘注入。
+
+## Step 2 —— 「那时真的锁着」的判别器: LogonUI 在场,且归因排除了窗口站
+
+锁着的时候同场读到的进程证人(远端 `tasklist /FI "IMAGENAME eq LogonUI.exe"`):
+
+    LogonUI.exe   2188  Console  1     # 第一次锁屏期间
+    LogonUI.exe   2216  Console  1     # 第二次锁屏期间
+    (两次解锁后同一条命令都是 "INFO: No tasks are running which match the specified criteria")
+
+⇒ 桌面确实被锁住(登录 UI 起来并占住 Console 1),而我们**问不到**这件事。
+
+`unreadable_denied` 的两种已知归因都不成立:
+- **不是「守护进程权限不够」**(陷阱 2 的 err=5 那一支):同一次锁屏里 daemon 继续每拍写心跳,
+  且 `err=5` 只在个别拍出现(见 Step 3),其余拍 `OpenInputDesktop` 成功返回 `Default`。
+- **不是「daemon 不在控制台会话/窗口站」**:那条任务在 `schtasks /xml` 里是
+  `<LogonType>InteractiveToken</LogonType>`,父链是 `svchost 2512 → cmd 15856 → pythonw 9540`,
+  而 `session=1/1`(自己的会话号与控制台会话号一致)。WinSta0 这一侧的假设**被排除**。
+
+## Step 3 —— 变更日志的形状: 每个「切换」一个 5 秒 err=5 blip,锁着的整段时间零事件
+
+`C:\temp\ns_awake_log.jsonl` 全场 8 行,四组 `(unreadable_denied → unlocked)` 对,每组间隔恰好一拍(5 s):
+
+    19:03:08 err=5 sessions=1/1  →  19:03:13 Default     # 批次 1 的那一次
+    21:07:35 err=5 sessions=1/1  →  21:07:40 Default
+    21:14:35 err=5 sessions=1/1  →  21:14:40 Default
+    21:37:40 err=5 sessions=1/1  →  21:37:45 Default
+
+本场两次按锁与两次解锁落在 21:07–21:14 与 21:37–之后。两点要分开记:
+1. **锁着的整段时间里没有一条 `desktop_change`** —— 第二次锁屏期间日志零新增,而 Step 1 的 `check` 在
+   同一段时间里读到 `unlocked`。也就是说 daemon 一路都"看见"`Default`,不是一直在报错。
+2. **哪个 blip 对应按锁、哪个对应解锁,本场分不开**:四个 blip 对里有三个落在本场的两个锁区间边界上,
+   但解锁那一次未必产生 blip(21:37:45 之后日志再无新增)。所以「每次按键切换 ⇒ 一个 5 s 的 err=5」
+   这条**未被证明**,能证明的只有「err=5 是瞬时的、一拍的,并且从不持续」。
+   ⇒ 反过来读也一样:「锁屏 ⇒ err=5 至少一次」不能当判据(第 1 点里那段完整锁屏就没有持续报错),
+   「读到 err=5 ⇒ 正在锁屏」更不能(它是切换态的一拍,桌面名随后仍是 `Default`)。
+
+## Step 4 —— 正读数: 锁屏期间断言仍在手上,心跳仍在写
+
+第一次锁屏期间远端 `powercfg /requests` 的 DISPLAY 段里,除了游戏自己那条以外还有
+我们的 `pythonw`(pid 9540);`just awake status` 的 `age` 全程 < 2 s。
+⇒ 陷阱 6 里那条「daemon 活着但动不了手 vs daemon 死了靠心跳可分」在锁屏这一格再次成立,
+且这次是**在桌面字段给出假答案的同时**成立 —— 心跳能证「进程活着」,不能证「桌面可达」。
+
+## Step 5 —— 真事件窗的身份读到了: `text:2188ca0b`,`hold`,attempts=0
+
+用户把游戏界面切到星图并最小化我们自己的两个 cmd 窗之后(见 Step 7),daemon 在 22:03:03 读到一扇
+星系调查完毕的事件窗,三元组齐全:
+
+    popup_seen      {"popup_id":"text:2188ca0b","source":"text","ocr_status":"ok",
+                    "ms":42885.36689999455,"ocr_ms_total":42885.36689999455,"texts_n":12,"action":"hold",
+                    "reason":"unclassified_hold","allow_status":"absent", ...}
+    popup_evidence  {"popup_id":"text:2188ca0b","path":"C:\\temp\\ns_popup\\text_2188ca0b.png",
+                     "t":"2026-10-25T22:03:03"}
+    popup_decision  {"popup_id":"text:2188ca0b","action":"hold","reason":"unclassified_hold",
+                     "note":"popup_hold_unclassified","attempts":0,"path":"…text_2188ca0b.png"}
+
+随后同一扇窗退回几何身份(`geom:1060x320:r11`)+ `ocr=budget_spent`,`same_hits` 一路涨到
+`popup_stuck`;整场 `attempts` 恒为 0 ⇒ **没有任何一次点击发生**(与批次 1 Step 5 同判)。
+
+## Step 6 —— 名单条目不写: 这张裁片本身就是 bbox 的内容,关闭点落在舰队列表上
+
+批次 2 的目标是拿一次 `dismiss_attempt`。要不要写名单条目,取决于「这个 bbox 是不是一扇窗」。
+证据不靠坐标换算,靠裁片内容:
+
+- `close_point = (bbox[2] - 96, bbox[1] + 51)`,裁片尺寸 1060×317 = 同一个 bbox 的像素。
+  ⇒ 关闭点在裁片本地恒为 **(964, 51)**,与这张图是同一坐标系。
+- 该裁片(远端 `C:\temp\ns_popup\text_2188ca0b.png`,本地副本 sha256 前 16 位 `2fdd05d2a639c6c0`,
+  271,692 B,与远端逐字节一致、可解码)的右侧是**星图 + 舰队列表面板**
+  (`CNS… 工程船` / `CNS… 科研船` 那几条),左侧才是「事件链: 追寻风信子号」那扇对话框。
+  ⇒ `(964, 51)` 落在舰队列表条目上,点它等于选中一条舰队,不是关窗。
+- 结论按「分类放行 / 名单外绝不动手」执行:**不写名单条目**,所以 `dismiss_attempt`/`dismiss`(`no_effect`)
+  三元组本场取不到,记 **not_observed**,理由比批次 1 的那条更硬 —— 批次 1 说的是「分类器换了形状 +
+  `dismiss` 分支要求 `paused == "paused"`」,这次是「检测器给的不是窗,是主 UI 上的一块切片,
+  在它上面算关闭点会点到别的东西」。这条不改陷阱 10 的编号,追加在陷阱 10 与 popup 一节里。
+
+## Step 7 —— 陷阱 10 的新变体: 我们自己的 cmd 父壳窗盖住了真弹窗
+
+最小化那两个 cmd 窗之前,`just game start`(它重置 OCR 会话预算)之后检测器报的是
+`paused_no_window` —— 不是「没有窗」,而是**弹窗在,但被我们的控制台窗挡住**,像素判读里只剩 cmd 的黑底。
+用户手工最小化之后,同一扇窗立刻被读成 `text:2188ca0b`。
+⇒ 陷阱 10 原来只写了「父壳窗抢前台 ⇒ focus 类动词全拒」和「挡与不挡之间 `note` 会漂」;
+这次是第三种落法:**挡住真窗 ⇒「没有窗」**,即"窗的有无"这一格也不是屏幕的事实,而是我们遮挡状态的函数。
+顺带一条与批次 1「全黑小图」同族的读数:`ns_game_shot.png` 在游戏被切到后台时是 141 B 的退化图,
+切回前台后同一条命令取到 1,134,993 B 的有效截图(本地副本 sha 前 16 位 `fe71d71492c43506`)。
+
+## Step 8 —— OCR 成本第三组样本: 一次 12 行 = 42,885 ms,与同行数那一组差 +58%
+
+    组  行数   总耗时(ms)   出处
+     1   12    27,134.894   批次 1 Step 5(text:26f8c449)
+     2   14    36,810.77    批次 1(popup_*.py 一节的暖机后读数)
+     3   12    42,885.37    本批次 Step 5(text:2188ca0b)
+
+⇒ 两组 12 行相差 **58%**,所以「固定 1.5 s + 每行 0.7 s」这个成本模型在**同一台机、同一个 DEVICE=cpu、
+同一份未缩小的裁片**下也不稳。三组都 > `POPUP_OCR_BUDGET_MS = 24_000` ⇒ **「一次真识别必然打穿会话预算」
+在这台机上已是三次一致的读数,不是样本小的巧合**。预算打穿之后的所有拍都退回几何 id(陷阱 12 的机制),
+这也是本批次里 `attempts` 不可能涨的原因之一。
+
+## Step 9 —— 取产物: 远端逐拍重写的 `geom_*` 裁片,两次 scp 都拿到解不开的图
+
+`C:\temp\ns_popup\geom_1060x320_r11.png` 这个文件名是按几何 id 定的,而同一形状每拍都会再出现一次
+⇒ daemon **原地反复重写同一个路径**。本场三次取它:
+
+    第一次本地副本 271,374 B,sha e492a7a6fe71b046 —— PIL: unrecognized data stream contents
+    远端哈希(第 1 次问)B2D5DEFF3B315634          # 与批次 1 取回的 265 KB 那张不同
+    远端哈希(几秒后第 2 次问)E01E10FFD6944302     # 同一个路径,哈希在两次 ssh 之间变了
+    第二次本地副本 271,714 B(带完整 IEND)—— PIL 同样解不开;远端此刻 271,826 B,mtime 22:11
+
+⇒ 半写不是 scp 的问题,也不是"文件名不稳定"的问题:**写方不做原子替换**,任何外部读者
+(包括我们自己取证据)都有可能拿到跨越两次写入的字节流。带 IEND 却解不开 IDAT 就是这个形状。
+对照 `text_2188ca0b.png`:它逐字节稳定、可解码,因为那个 text id 只出现过一次(随后预算花完,
+不再有同 id 的拍)。⇒ 「这张证据图能不能读」不是传输方式的函数,是**那个 id 会不会再出现**的函数。
+批次 1 用来做「没有 ✖ glyph」判断的那张 `geom` 裁片(本地 265 KB,19:25 取)当时是可解码的,
+本场的半写不影响它的结论。
+
+## Step 10 —— 本场另外两条没解释的读数
+
+1. **`STATUS=stopped pid=0` 与 `stellaris.exe` pid 8364 并存**:读到过一条 status 是
+   `stopped pid=0`,而同一分钟 `tasklist` 里游戏进程在。本场之后同一命令读到 `pid=8364`。
+   原因未查(可能落在 start/stop 的间隙里),**记为未解释,不当成缺陷结论**。
+2. **supervisor 的 pythonw 内存在本场涨到约 4.47 GB**(`tasklist` / `Get-Process` 读到 WorkingSet
+   4,465,156,096 B,pid 11156,父 cmd 15344;同一时刻 awake daemon pid 9540 是 4.9 MB 量级)。
+   本场没有判定这是加载模型(surya)的常驻权重还是逐拍累积 —— 只有「一次读数」和「它比 awake 大三个数量级」。
+
+## 本场达成的与没达成的
+
+- ✅ 批次 1 第 1 条:**锁屏期间 `just awake check` 的实机 rc = 0**(不是推的 1),并给出锁着的证人
+  (LogonUI pid 2188 / 2216)与两条归因排除。这条是**否定性结论,而且是判据级的**:桌面可达性这道门
+  在这台机上对真锁无感。
+- ✅ OCR 成本第三组样本 42,885.37 ms / 12 行(Step 8)。
+- ⛔ 批次 1 第 2 条(`dismiss_attempt` + `dismiss`(`no_effect`) 三元组):**本场没拿到,而且不是差一次点击** ——
+  差的是「这个 bbox 是哪扇窗」这件事先要能成立。按名单外绝不动手,本场一个像素都没点,`attempts` 恒 0。
+  这一条要继续挂在 roadmap 的弹窗行上,判据从「量测一次关闭点」改成「先证明 bbox 是窗而不是切片」。
+- ⏳ 那扇事件窗**现在还开着**(supervisor `STATUS=paused note=popup_stuck pid=8364`),
+  本场不会替用户点掉它 —— 请手动关闭。
+
+## 后续(读数之后发生的文档动作,与本场的哈希有关)
+
+本场读数取完之后,`scripts/windows/keep_awake.py` 的模块 docstring 里那句
+「`Winsta0\Default` = 已解锁,`Winlogon` = 锁着」按 Step 1–3 改成了「映射见 `classify_desktop` +
+实测更正:这台机上真锁期间读到的是 `Default`」。**行为没动**(纯注释),但 C:/temp 那一份从此与
+工作树不再逐字节相同 ⇒ 上面「部署物 sha256」那一块只在**下一次 `just deploy` 之前**是基准;
+下次取 keep_awake 相关读数前先重算哈希,别拿 21:41 那一版当现场。
