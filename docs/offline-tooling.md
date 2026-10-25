@@ -1103,11 +1103,13 @@ just game stop | quit
   `scripts/windows/popup_allowlist.example.json`。
 - **`geom:*` 进不了名单(2026-10-25 收尾审查后加的,代码层,不是提醒)。** 上面那个格式块里
   `geom:<宽>x<高>:r<行数>` 那行**照抄无效** —— `parse_allowlist` 现在拒掉任何以 `geom:` 开头的
-  `popup_id`,计入 `dropped_entries`,名单退成空表。理由: 一个 10 px 的几何桶不是一次人工确认,
-  而 OCR 不可用时**同一个窗的 id 恰恰就是 `geom:*`**(陷阱 12);留着它等于把「读不到 ⇒ hold」换成
-  「读不到 ⇒ 形状对上就点」。一期取证还给了两条实证: 2 个 `geom:` id 是主 UI 切片(屏上没有 ✖),
-  同一扇控制台面板的 bbox 一场之内从 `340x970` 漂到 `1500x1000`。**抄进去既不会报错也不会放行** ——
-  只会一直看到 `popup_hold_unclassified`。要放行就必须在 OCR 状态 `ok` 时抄 `text:` id。
+  `popup_id`。**那个 dropped 计数目前不落任何盘面**(`load_allowlist` 只把名单和状态返回给
+  `popup_tick`,`dropped_entries` 在 `parse_allowlist` 里算完就被丢掉),所以实际效果就是**静默
+  不放行**:抄进去既不报错也不放行,只会一直看到 `popup_hold_unclassified`。理由: 一个 10 px
+  的几何桶不是一次人工确认,而 OCR 不可用时**同一个窗的 id 恰恰就是 `geom:*`**(陷阱 12);留着它
+  等于把「读不到 ⇒ hold」换成「读不到 ⇒ 形状对上就点」。一期取证还给了两条实证: 2 个 `geom:` id
+  是主 UI 切片(屏上没有 ✖),同一扇控制台面板的 bbox 一场之内从 `340x970` 漂到 `1500x1000`。
+  要放行就必须在 OCR 状态 `ok` 时抄 `text:` id。
   同一次审查还钉了 `load_allowlist`: 记事本存成 UTF-16 的名单现在算 `malformed`(整个 `read()`
   都包在 `ValueError` 里,以前 `UnicodeDecodeError` 会逃进 serve 循环把守护打死)。
   另: `console_open` 现在是**正向**判据 —— 只有 `is False`(看清了控制台关着)才允许点,`None`
