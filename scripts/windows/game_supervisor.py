@@ -780,7 +780,13 @@ def click_close(hwnd: int, bbox, inset=CLOSE_INSET) -> None:
     After a real click the window is re-read so "clicked but the dialog is
     still there" surfaces as ``dismiss`` with ``no_effect: true``.  This
     makes the fixed offset observable and overridable — it does not prove it
-    correct for any window (§59.2).
+    correct for any window (§59.2).  ``no_effect`` is the panel detector's
+    statement, not a glyph statement, and misreports both ways: a re-read
+    locking onto another bright panel reports true after a real dismiss, a
+    missed click whose detector loses the gold lock reports false with the
+    dialog still up — ``bbox_after`` comes from the same detector that
+    mis-measured in the first place.  Re-check by manual measurement
+    (shot + ``just game click``).
     """
     x, y, method = close_point(bbox, inset)
     if not _inside(window_rect(hwnd), x, y):

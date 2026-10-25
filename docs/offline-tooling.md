@@ -741,6 +741,10 @@ root_unreadable / **region** 七类行)。
     (屏幕绝对点仍走 `just game click`)。每次尝试**先**写 `dismiss_attempt`(本来会点的坐标、
     `method ∈ {fixed_inset, refused}`、inset、bbox),真点击后重读窗写 `dismiss`(`no_effect` 即「点后窗还在」);
     判 `refused` 则不点击、raise,状态 note 为 `dismiss_refused`。「dismiss 成功但窗还在」由此变成**可检出的事件**。
+    「检出」的边界要写明:`no_effect` 是 **panel 检测器的陈述,不是 glyph 的陈述**,两个方向都可能误报 ——
+    重读若锁上*另一块*亮面板,窗真没了也报 `no_effect: true`;漏点后检测器若丢掉金色锁定,窗还在也只报
+    `no_effect: false`(`bbox_after` 出自同一个当初把右界量到侧栏的检测器,§59.2 的原失效模式并未被这条事件根除)。
+    留痕把问题从「无痕」降级为「待复核」,判定仍靠下面的手动量测(`shot` + `just game click`)。
     **但 §59.2 只有一个反样本,不足以推量测式 —— 第一版刻意不发明几何规则**;复核要等下一次有窗的实机机会。
     复核之前的临时取代:先 `shot` + 裁 `titlebar` 量 glyph 中心,再 `just game click <x> <y>`(坐标是**屏幕绝对**的,
     `window_metrics` 的 bbox 已经加过窗口原点)。

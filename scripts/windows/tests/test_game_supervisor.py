@@ -456,3 +456,24 @@ def test_refused_close_point_logs_the_attempt_and_never_clicks(monkeypatch, tmp_
     attempt = next(e for e in events if e["event"] == "dismiss_attempt")
     assert attempt["method"] == "refused" and attempt["point"] == [914, 517]
     assert not any(e["event"] == "dismiss" for e in events)
+
+
+def test_parsed_dismiss_inset_flows_through_to_the_click(monkeypatch, tmp_path):
+    # End-to-end for the override: parse_command's inset must reach the actual
+    # click.  Each half was covered separately (the lexeme, the default wiring);
+    # without this the connection between them is untested.
+    sent = _input_stub(monkeypatch, tmp_path)
+    state = {"want": "paused", "console_open": None, "paused": "paused",
+             "last_bbox": [1000, 466, 1939, 840]}
+    gs._handle_command(gs.parse_command("dismiss 120 40"), 7, state)
+    assert ("click", 1939 - 120, 466 + 40) in sent
+    assert ("click", 1843, 517) not in sent      # the default inset was not used
+    attempt = next(e for e in _logged_events_full(tmp_path)
+                   if e["event"] == "dismiss_attempt")
+    assert attempt["inset"] == [120, 40] and attempt["method"] == "fixed_inset"
+
+
+def test_serve_loop_surfaces_the_refused_dismiss_as_its_own_note():
+    # Refused geometry must stay distinguishable from generic click failures
+    # in the serve loop; same source-fence style as the invalidation fences.
+    assert "dismiss_refused" in inspect.getsource(gs.serve)
