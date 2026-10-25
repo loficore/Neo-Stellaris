@@ -62,18 +62,34 @@ then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不�
   `bridge.zig:31-32` 按路径引入 gamestate/scope,而它们用命名模块 `@import("offsets")`,exports 根没有
   `addImport("offsets")` —— 若 bridge 真在闭包里,该根会编译失败而非绿。这 29 条**本计划没有填**,
   基线句不许把它们含混成「都跑起来了」。
+- **残留的 kernel32 引用点(守卫覆盖面之外,不是漏网)**:`hooking/windows.zig` 的 `moduleFunction`
+  (`GetModuleHandleW`)与 `allocNear`(`VirtualAlloc` ×2)**没有** comptime 守卫,宿主根仍然能链接,是因为
+  **调用方先折叠**:c2 与 scripted 那四个 `install()` 的第一行都是 `if (!is_windows) return
+  error.Unsupported;`,而 `detour.installHookArmed` 没有任何 test 触达 —— Zig 只对可达函数体发射,死支路
+  里的引用不进符号表。`extern "kernel32"` 的**声明**全部原样保留(`CreateThread` 从未被引用;
+  `ReadProcessMemory`/`VirtualAlloc`/`GetModuleHandleW` 同在声明块里却不在旧失败名单里,正是「引用而非声明」
+  这条判据的证据)。给这两个包装器补守卫属于第二道门,本计划不做;模块头注释已点名这个例外。
 - **`-Dtest-target` 已删除**(commit `78fd294`,`build.zig` +1/−6):删后 `zig build test
   -Dtest-target=x86_64-windows-gnu` 的表现是**明确报错,不是静默忽略** —— zig 0.16.0 打
   `error: invalid option: -Dtest-target`,退出码 **1**(对照探针 `-Dnonexistent-option-xyz=1` 同退出码 1)。
   cross-target 路线就此没有入口;`c2_diag_test.zig` 那个 `{d}` for `*anyopaque` 编译错误**不修** —— 它的
   入口随选项一起没了,记下来是为了下一个人别把它当新 bug。`evidence/analysis/build_pipeline_status.md`
   `:11`/`:36` 的旧运行方式记录按取证约定原样保留(追加不改写),现已过期。
-- **出货 DLL sha256 变了**:本 commit 现场实测 `652ee10bbd7b51450a28dd28489fc83057517b3b6b46143ae0d164357c51b895`
-  (2026-10-26,`zig build` 后 `sha256sum zig-out/bin/stellaris_quickjs.dll`)。差异归因:取证 §46 记的
-  `77c0c35e…c11ad0` 与本分支**未改代码前**的基线(`df50f3e1f34f38a90850febc49808c599b35ceebb0570edbbda7c25a11ecfcdd`)
-  就不一致 —— 那是**旧句过期,不是本计划造成的**;出货字节确因任务 2 的 `exports.zig` 生产代码改动而变
-  (comptime 守卫只剪宿主侧,Windows 那一支仍是真调用,pefile 验过 8 个 kernel32 符号全在 import 表)。
-  **下次实机读数按新 sha 认。**
+- **出货 DLL 的整文件 sha256 不是代码身份 —— 本计划实测推翻了旧句**:任务 5 现场量到
+  `652ee10bbd7b51450a28dd28489fc83057517b3b6b46143ae0d164357c51b895`,终审修复轮在**同一份源码**上(只把
+  `hooking/windows.zig` 的模块头注释改窄、行号因此整体下移)重链,得到 `c24efef06630cbfc90a82f95dcfc2f74ec5d9ec91098af78976452f15be83980`。
+  两个整文件逐字节 diff **只有 10 个字节**:PE 文件头 `TimeDateStamp`(offset `0x80`)1 字节 + `.buildid` 段
+  9 字节;`.text`/`.rdata`/`.data`/`.pdata` 四段**完全相同**。⇒ **每次重新链接都换整文件 sha,代码一个字节没动也换**;
+  `652ee10b…` 与 `c24efef0…` 是同一份出货代码的两个链接时刻,**不是两次代码变更**。
+  方向性:AGENTS.md 约束 8 那句「sha 不变」只在**一个方向**可用 —— sha 不变 ⇒ 可能命中缓存(实测 `touch` 源码后重建 sha 不变,缓存命中);
+  **sha 变了 ⇏ 代码变了**。要认出货代码用代码段 sha(本分支 HEAD 现量):
+  `.text 86ee85aa68ca9dba7d1d06417ef3622a11e3c343ba53ee52fe6ff6d826a68051`、
+  `.rdata 4b4a58ca4ca16c787666d7914fbaa340be423e63e56a3625da9b077a8c4165c0`、
+  `.data 4c79ac53e9af0e1130de74ddd5a6ba1f7dee95c0d1c769c0e35e4d7f113ba2e4`、
+  `.pdata 408b83f005efa2453c19c7ce2c76dbcc6d8a56c722ef85608ecdba1e79f33863`,外加 import 表 8 个 kernel32 符号齐全
+  (`MISSING: []`,复测于 `c24efef0…` 那次链接)。旧句里 §46 的 `77c0c35e…` 与分支基线 `df50f3e1…` 之差,
+  因此**不能再用整文件 sha 归因**(它们可能只是不同链接时刻);两个数保留为历史读数,追加不改写。
+  本计划对「守卫只剪宿主测试根、没剪出货代码」的证明**一直靠 import 表那一条**,不靠 sha —— 现在有了理由。
 
 ## 基础:PE + capstone,不需要 IDA
 

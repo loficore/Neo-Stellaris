@@ -4,11 +4,18 @@
 // trampoline detour hooking framework: memory protection changes,
 // memory allocation, and instruction-length analysis for x86_64.
 //
-// Guard convention (readProcessMemory was the precedent): this family of
-// wrappers cuts its kernel32 references on non-Windows targets via a
-// comptime early-return, so host test roots can link. It is a build-time
-// linkage accommodation, not a runtime defense. Sites below point here
-// instead of restating the rationale.
+// Guard convention (readProcessMemory was the precedent): the guarded members
+// of this family — readProcessMemory, ProtectGuard.change/restore, freeMem,
+// flushInstructionCache — cut their kernel32 references on non-Windows targets
+// via a comptime early-return, so host test roots can link. It is a build-time
+// linkage accommodation, not a runtime defense. Sites below point here instead
+// of restating the rationale.
+//
+// moduleFunction and allocNear are deliberately NOT guarded: every call site
+// is gated by its caller (`if (!is_windows) return error.Unsupported;` as the
+// first line of the four install()s in c2/ and scripted/, and no test reaches
+// installHookArmed), so Zig never emits their bodies into a host root. Adding
+// a guard here would be a second gate over already-dead code.
 
 const std = @import("std");
 const builtin = @import("builtin");
