@@ -4,10 +4,10 @@
 背景(§59.7):实机枪记录的是**返回 RVA**。旧产物把 `return_rva - 5` 当站点写进
 caller 行,于是 3 B 的 `call qword ptr [rax+8]`(每一次 vtable 槽派发都是这个形状)
 的站点被画进前一条指令中间,census join 落空,`func=-` 被误读成「没人调用」。
-Task 2 已把产物键改为返回 RVA、`-5` 降级为 `est_site=`;**精确站点由本工具离线反解**:
+`c2_scope_probe.py` 已把 caller 行键改为返回 RVA、`-5` 降级为 `est_site=`;**精确站点由本工具离线反解**:
 重读 exe 拷贝里返回 RVA 前面的字节,枚举真正能「恰好结束于返回点」的 call/jmp 编码边界。
 
-用法(默认路径就是 Step 5 的跑法):
+用法(下面就是默认路径的跑法,不传参即读同一组取证产物):
 
     python3 scripts/exec_frame_sites.py --probe evidence/logs/scope_probe_v4_4_4_4.tsv \
         [--census evidence/xrefs/exec_frame_callers_4_4_4.tsv] \
@@ -62,7 +62,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from disrva import CANDIDATES, resolve_exe   # 候选链 + NS_STELLARIS_EXE 的唯一出处(Task 1)
+from disrva import CANDIDATES, resolve_exe   # 候选链 + NS_STELLARIS_EXE 的唯一出处(不复制第二份路径表)
 
 SITE_WINDOW = 16                   # 回看字节数:一条 x64 指令最长 15 B,16 B 窗口必然罩住紧邻边界
 FORWARD_BYTES = 64                 # 返回点之后尽力多读:让错位解码有完整上下文(census/pdata 不依赖它)
@@ -192,7 +192,7 @@ def resolve_call_site(return_rva, read):
 def parse_probe_caller_rows(path):
     """shot 产物的 caller 行 → [{"ret": int, "count": int, "assumed": bool}]。
 
-    Task 2 起的行 detail 带 `ret=0x…`,直接用;v4 及更早键是 `ret-5` 估值,
+    新版 `c2_scope_probe.py` 的行 detail 带 `ret=0x…`,直接用;v4 及更早键是 `ret-5` 估值,
     `ret = key + 5` 且 `assumed=True`(站点最终由本工具反解,估值只用于对账)。
     """
     rows = []

@@ -92,7 +92,7 @@ rip-relative operand with the RVA it resolves to; this is what pinned the descri
 **`--end=<rva>` / `--len=<n>` 是自 §59.9 起才有的显式形式**(§59.9 那条「往上定帧构造点」的零枪路线要按真边界取区间),
 **取证卷里旧命令一律按旧语义复现** —— 上面那个 `>0xFF` 启发式没有被改写,只是搬进了可测的纯函数 `parse_range`;
 裸数字口径、头一行 `; <exe>  <sec> RVA 0x…  (N insns)` 的条数、rip 注解写法全部不变
-(`scripts/test_disrva.py` 钉语义;影子副本基准用**已冻结的改动前修订** `git show 02eb551:scripts/disrva.py`(本分支 base,即 `git merge-base main HEAD`)逐字节钉输出 —— 意图是「重跑旧实现,输出与改动前逐字节相同」;**基准不写 `HEAD`**,合并之后 `git show HEAD:scripts/disrva.py` 就是新实现自己,自比自恒等,这条钉会静默失效)。
+(`scripts/test_disrva.py` 钉语义;影子副本基准用**已冻结的改动前修订** `git show 02eb551:scripts/disrva.py`(= 本分支第一次动 `disrva.py` 之前的那个提交,`git log --oneline -1 488b1fc^` 与它相同)逐字节钉输出 —— 意图是「重跑旧实现,输出与改动前逐字节相同」;**基准不写 `HEAD`**,合并之后 `git show HEAD:scripts/disrva.py` 就是新实现自己,自比自恒等,这条钉会静默失效)。
 `--end=` 的第二段就是结束 RVA(不含),`--len=` 是字节长度;两者与裸数字一样**不猜**:结束 RVA 低于起始、
 非十六进制、负数、`--flag` 缺少数值、未知 flag —— **任何不可判 = 拒绝**,一行 `[disrva] …` 进 stderr 并退出 2。
 
