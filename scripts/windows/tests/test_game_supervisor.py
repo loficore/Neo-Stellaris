@@ -7,6 +7,7 @@ No Windows API, no PIL, no numpy.
 
 import inspect
 import json
+import os
 import random
 
 import pytest
@@ -476,4 +477,171 @@ def test_parsed_dismiss_inset_flows_through_to_the_click(monkeypatch, tmp_path):
 def test_serve_loop_surfaces_the_refused_dismiss_as_its_own_note():
     # Refused geometry must stay distinguishable from generic click failures
     # in the serve loop; same source-fence style as the invalidation fences.
-    assert "dismiss_refused" in inspect.getsource(gs.serve)
+    assert "dismiss_refused" in inspect.getsource(gs.apply_popup_decision)
+
+
+def test_popup_tick_runs_ocr_only_when_the_panel_shape_changes():
+    calls = []
+    def fake_ocr(path):
+        calls.append(path)
+        return ["news flash"], "ok", 12.0
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0}
+    for tick in range(3):                        # now 固定:时钟要可注入才谈得上测退避
+        gs.popup_tick(0, "C:/temp/live.png", [0, 0, 900, 400], 0, state,
+                      fake_ocr, now=1000.0 + tick)
+    assert len(calls) == 1                       # 几何没变且上次 ok ⇒ 不再问 OCR
+    assert state["popup_ocr_status"] == "ok"
+
+
+def test_a_failed_ocr_retries_on_the_backoff_interval_not_every_tick():
+    calls = []
+    gs.popup_tick(0, "p.png", [0, 0, 900, 400], 0,
+                  st := {"popup_id": None, "popup_attempts": 0,
+                         "popup_same_hits": 0, "popup_last_ocr_ts": 0.0},
+                  lambda p: calls.append(p) or ([], "error", 4.0), now=100.0)
+    gs.popup_tick(0, "p.png", [0, 0, 900, 400], 0, st,
+                  lambda p: calls.append(p) or ([], "error", 4.0), now=103.0)
+    gs.popup_tick(0, "p.png", [0, 0, 900, 400], 0, st,
+                  lambda p: calls.append(p) or ([], "error", 4.0), now=161.0)
+    assert len(calls) == 2                       # 100 首问、103 太近不问、161 过 60 s 重试
+
+
+def test_popup_tick_stops_asking_ocr_once_the_session_budget_is_spent():
+    calls = []
+    st = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+          "popup_last_ocr_ts": 0.0, "popup_ocr_ms": 0.0}
+    boxes = [[0, 0, 900, 400], [0, 0, 900, 500], [0, 0, 900, 600], [0, 0, 900, 700]]
+    for tick, box in enumerate(boxes):           # 四个几何互不相同的窗 = 四次边沿触发
+        got = gs.popup_tick(0, "p.png", box, 0, st,
+                            lambda p: calls.append(p) or (["x"], "ok", 9_000.0),
+                            now=1_000.0 + tick)
+    assert len(calls) == 3                       # 问第三次时累计 18 s 还在线内,第四次 27 s 已超
+    assert st["popup_ocr_ms"] == 27_000.0
+    assert got["ocr_status"] == "budget_spent" and got["ms"] == 0.0
+    assert got["ocr_ms_total"] == 27_000.0
+    assert got["popup_id"].startswith("geom:")   # 没文本就只能用几何 id,而几何 id 不在名单
+    assert got["action"] == "hold"
+
+
+def test_console_belief_true_holds_even_an_allowlisted_id(monkeypatch):
+    monkeypatch.setattr(gs, "load_allowlist",
+                        lambda path: ({"text:aaa": "dismiss"}, "ok"))
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0, "console_open": True}
+    got = gs.popup_tick(0, "p.png", [0, 0, 900, 400], 0, state,
+                        lambda p: (["Continue?"], "ok", 9.0), now=1000.0)
+    assert got["popup_id"].startswith("text:")
+    assert (got["action"], got["reason"]) == ("hold", "console_panel")
+
+
+def test_unknown_fingerprint_holds_and_comes_back_geometry_only():
+    got = gs.popup_tick(0, "p.png", [0, 0, 700, 300], 0,
+                        {"popup_id": None, "popup_attempts": 0,
+                         "popup_same_hits": 0, "popup_last_ocr_ts": 0.0},
+                        lambda p: ([], "model_missing", 3.0), now=1000.0)
+    assert (got["action"], got["reason"]) == ("hold", "unclassified_hold")
+    assert got["source"] == "geometry" and got["ocr_status"] == "model_missing"
+
+
+def test_hold_path_never_touches_the_clicker():
+    clicked, saved, logged = [], [], []
+    note = gs.apply_popup_decision(
+        0, [0, 0, 700, 300],
+        {"popup_id": "geom:700x300:r0", "action": "hold",
+         "reason": "unclassified_hold", "source": "geometry",
+         "ocr_status": "model_missing", "ms": 3.0, "attempts": 0,
+         "same_hits": 1, "texts_n": 0},
+        {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0},
+        clicker=lambda h, b: clicked.append(b),
+        saver=lambda h, b, png, pid: saved.append(pid) or "p.png",
+        logger=lambda rec: logged.append(rec))
+    assert clicked == [] and saved == ["geom:700x300:r0"]
+    assert note == "popup_hold_unclassified"
+    assert [r["event"] for r in logged] == ["popup_seen", "popup_evidence",
+                                            "popup_decision"]
+
+
+def test_dismiss_path_clicks_once_and_burns_one_attempt():
+    clicked = []
+    state = {"popup_id": "text:aaa", "popup_attempts": 0, "popup_same_hits": 1}
+    note = gs.apply_popup_decision(
+        0, [0, 0, 900, 400],
+        {"popup_id": "text:aaa", "action": "dismiss", "reason": "allowlisted",
+         "source": "text", "ocr_status": "ok", "ms": 9.0, "attempts": 0,
+         "same_hits": 1, "texts_n": 1},
+        state, clicker=lambda h, b: clicked.append(b),
+        saver=lambda h, b, png, pid: "p.png", logger=lambda rec: None)
+    assert clicked and state["popup_attempts"] == 1
+    assert note == "popup_dismissed"
+
+
+def test_a_refused_click_still_burns_the_budget():
+    def refuse(h, b):
+        raise gs.CloseRefused("close point outside dialog")
+    state = {"popup_id": "text:aaa", "popup_attempts": 0, "popup_same_hits": 1}
+    note = gs.apply_popup_decision(
+        0, [0, 0, 900, 400],
+        {"popup_id": "text:aaa", "action": "dismiss", "reason": "allowlisted",
+            "source": "text", "ocr_status": "ok", "ms": 9.0, "attempts": 0,
+            "same_hits": 1, "texts_n": 1},
+        state, clicker=refuse, saver=lambda h, b, png, pid: "p.png",
+        logger=lambda rec: None)
+    assert note == "dismiss_refused" and state["popup_attempts"] == 1
+
+
+def test_three_refusals_burn_the_same_budget_as_three_clicks():
+    state = {"popup_id": "text:aaa", "popup_attempts": 2, "popup_same_hits": 3,
+             "popup_last_ocr_ts": 0.0}
+    gs.count_attempt(state, "text:aaa")
+    assert gs.decide_action(popup_id="text:aaa", allow={"text:aaa": "dismiss"},
+                            attempts=state["popup_attempts"],
+                            same_id_hits=state["popup_same_hits"],
+                            console_open=False, has_bbox=True)[1] == \
+          "attempt_budget_spent"
+
+
+def test_prune_evidence_keeps_the_newest_n(tmp_path):
+    for i in range(5):
+        (tmp_path / f"popup_{i}.png").write_bytes(b"x")
+    removed = gs.prune_evidence(str(tmp_path), keep=3)
+    assert len(removed) == 2 and (tmp_path / "popup_4.png").exists()
+
+
+def test_no_ocr_flag_leaves_the_whole_identity_path_geometry_only():
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0}
+    got = gs.popup_tick(0, "p.png", [0, 0, 900, 400], 0, state,
+                        lambda p: ([], "disabled", 0.0), ocr_enabled=False)
+    assert got["source"] == "geometry" and got["ocr_status"] == "disabled"
+
+
+def test_evidence_filename_carries_no_colon_ntfs_reserves(tmp_path, monkeypatch):
+    monkeypatch.setattr(gs, "POPUP_DIR", str(tmp_path))
+    asked = []
+    gs.apply_popup_decision(
+        0, [0, 0, 700, 300],
+        {"popup_id": "geom:700x300:r0", "action": "hold",
+         "reason": "unclassified_hold", "source": "geometry",
+         "ocr_status": "model_missing", "ms": 3.0, "attempts": 0,
+         "same_hits": 1, "texts_n": 0},
+        {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0},
+        clicker=lambda h, b: None,
+        saver=lambda h, b, png, pid: asked.append(png),
+        logger=lambda rec: None)
+    assert asked == [os.path.join(str(tmp_path), "geom_700x300_r0.png")]
+
+
+def test_a_click_that_never_happened_does_not_burn_the_dismiss_budget():
+    def focus_refused(h, b):
+        raise OSError("focus refused before close click")
+    state = {"popup_id": "text:aaa", "popup_attempts": 0, "popup_same_hits": 1}
+    note = gs.apply_popup_decision(
+        0, [0, 0, 900, 400],
+        {"popup_id": "text:aaa", "action": "dismiss", "reason": "allowlisted",
+         "source": "text", "ocr_status": "ok", "ms": 9.0, "attempts": 0,
+         "same_hits": 1, "texts_n": 1},
+        state, clicker=focus_refused, saver=lambda h, b, png, pid: "p.png",
+        logger=lambda rec: None)
+    assert note.startswith("dialog_click_failed")
+    assert state["popup_attempts"] == 0

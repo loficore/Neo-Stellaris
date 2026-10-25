@@ -22,6 +22,9 @@ import subprocess
 import sys
 import time
 
+from popup_guard import bump, count_attempt, decide_action
+from popup_identity import fingerprint, geometry_signature, load_allowlist
+
 CMD_PATH = r"C:\temp\ns_game_cmd.txt"
 CMD_SEEN_PATH = r"C:\temp\ns_game_cmd.seen"
 STATUS_PATH = r"C:\temp\ns_game_status.json"
@@ -74,6 +77,33 @@ CONSOLE_BOX_FRACTIONS = (120 / 2160, 640 / 1440, 400 / 2160, 880 / 1440)
 CONSOLE_BRIGHT_MIN = 180
 CONSOLE_CLOSED_MAX = 120
 CONSOLE_OPEN_MIN = 600
+
+# Popup identity, evidence and OCR budget (plan 2026-10-25).  The allowlist is
+# DATA on the wire, not code: an absent or broken file means "hold everything",
+# which is the whole point of classify-then-release.
+POPUP_ALLOWLIST_PATH = r"C:\temp\ns_popup_allowlist.json"
+POPUP_DIR = r"C:\temp\ns_popup"
+# The live frame OCR reads lives OUTSIDE POPUP_DIR: prune_evidence() trims that
+# directory by filename order, and a per-tick overwrite must not be pruned --
+# nor may it be mistaken for one more piece of evidence.
+POPUP_LIVE_PATH = r"C:\temp\ns_popup_live.png"
+POPUP_EVIDENCE_KEEP = 40
+# Both OCR numbers are measured cost, not taste: one CPU read costs about
+# 1.5 s fixed plus 0.7 s per detected text line (2026-10-25), and serve is
+# single-threaded at 0.8 s per tick -- so every inline read is a stall we buy
+# with the heartbeat.  The budget is per daemon session; past it the identity
+# degrades to geometry-only, which the allowlist never matches.
+POPUP_OCR_MIN_INTERVAL_S = 60.0
+POPUP_OCR_BUDGET_MS = 24_000.0
+
+# ``decide_action``'s reason is the truth; this table is a total map onto the
+# note vocabulary, so the note never re-derives anything.
+POPUP_NOTES = {"allowlisted": "popup_dismissed",
+               "console_panel": "popup_hold_console_panel",
+               "attempt_budget_spent": "popup_hold_budget",
+               "id_stuck": "popup_stuck",
+               "unclassified_hold": "popup_hold_unclassified",
+               "no_bbox": "popup_hold_no_bbox"}
 
 
 def classify_console(bright_px: int):
@@ -805,6 +835,171 @@ def click_close(hwnd: int, bbox, inset=CLOSE_INSET) -> None:
           "bbox_after": bbox_after, "no_effect": bbox_after is not None})
 
 
+def prune_evidence(dir_path: str, keep: int) -> list[str]:
+    """Delete all but the newest ``keep`` PNGs, by filename order; list what went.
+
+    Bounded disk is a hard requirement for an unattended run — the host had
+    9.88 GB free on C: after the OCR weights were installed.
+    """
+    try:
+        names = sorted(n for n in os.listdir(dir_path) if n.endswith(".png"))
+    except OSError:
+        return []
+    removed = []
+    for name in names[:max(0, len(names) - keep)]:
+        path = os.path.join(dir_path, name)
+        try:
+            os.remove(path)
+        except OSError:
+            continue
+        removed.append(path)
+    return removed
+
+
+def crop_to_png(hwnd: int, bbox, out_path: str) -> bool:
+    """Save the dialog's own region to ``out_path``; ``False`` instead of raising.
+
+    ``hwnd`` is unused — the bbox is already screen coordinates — but the
+    signature matches ``click_close`` so the evidence layer takes one call shape.
+    """
+    try:
+        grab_box(tuple(bbox)).save(out_path)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def save_popup_evidence(hwnd: int, bbox, out_path: str, popup_id: str):
+    """One representative frame per identity: overwrite, then keep the dir bounded.
+
+    Returns the written path, or ``None`` when nothing could be written — the
+    caller still logs the decision, because "we could not keep the evidence"
+    must be visible in the record, not swallowed.
+    """
+    try:
+        os.makedirs(POPUP_DIR, exist_ok=True)
+    except OSError:
+        return None
+    if not crop_to_png(hwnd, bbox, out_path):
+        return None
+    removed = prune_evidence(POPUP_DIR, POPUP_EVIDENCE_KEEP)
+    if removed:
+        _log({"event": "popup_prune", "keep": POPUP_EVIDENCE_KEEP,
+              "removed": removed})
+    return out_path
+
+
+def popup_tick(hwnd: int, png_path: str, nbbox, row_count: int, state: dict,
+               ocr, ocr_enabled: bool = True, now: float | None = None,
+               allow_path: str | None = None) -> dict:
+    """Identify the dialog and decide on it — no mouse, no log, no disk.
+
+    ``nbbox``/``row_count`` are the *normalized* geometry (the same values
+    ``classify_window`` sees); ``png_path`` is the live frame ``serve`` rewrote
+    this tick.  ``ocr`` is injected so the whole judgement runs on Linux.
+
+    Edge triggering reads the geometry signature, never an OCR result: asking
+    "should I OCR?" can't require an OCR first.  A failed read retries on the
+    backoff interval, and both are capped by the session budget — past it the
+    status becomes ``budget_spent``, which is *not* last tick's reading, and the
+    fingerprint falls back to a geometry id the allowlist never matches.
+    ``disabled`` (our own ``--no-ocr``) and ``budget_spent`` are supervisor
+    statuses, deliberately outside ``popup_ocr.OCR_STATUSES``: "we chose not to
+    look", "we ran out of allotted stall" and "our eyes are broken" have to stay
+    distinguishable in the record, or "why didn't it click" is unanswerable.
+    """
+    if now is None:
+        now = time.time()
+    geom_id = geometry_signature(nbbox, row_count)
+    ms_total = state.get("popup_ocr_ms", 0.0)
+    budget_left = ms_total < POPUP_OCR_BUDGET_MS
+    retry_due = (state.get("popup_ocr_status") != "ok"
+                 and now - state.get("popup_last_ocr_ts", 0.0)
+                 > POPUP_OCR_MIN_INTERVAL_S)
+    if ocr_enabled and budget_left and (geom_id != state.get("popup_geom_id")
+                                        or retry_due):
+        texts, ocr_status, ms = ocr(png_path)
+        ms_total += ms
+        state["popup_texts"] = texts
+        state["popup_last_ocr_ts"] = now
+    elif not ocr_enabled:
+        texts, ocr_status, ms = [], "disabled", 0.0
+    elif not budget_left:
+        texts, ocr_status, ms = [], "budget_spent", 0.0
+    else:
+        # Shape unchanged and the last read was ok (or is still backing off):
+        # reuse it.  A status nothing ever wrote reads as "" = never asked.
+        texts = state.get("popup_texts", [])
+        ocr_status = state.get("popup_ocr_status", "")
+        ms = 0.0
+    ident = fingerprint(texts=texts, nbbox=nbbox, row_count=row_count,
+                        ocr_status=ocr_status)
+    popup_id = ident["popup_id"]
+    attempts, same_hits = bump(state, popup_id)
+    # Read at call time, not as a default argument: binding POPUP_ALLOWLIST_PATH
+    # in the signature would survive a monkeypatch of the module constant.
+    allow, allow_status = load_allowlist(allow_path or POPUP_ALLOWLIST_PATH)
+    action, reason = decide_action(
+        popup_id=popup_id, allow=allow, attempts=attempts,
+        same_id_hits=same_hits, console_open=state.get("console_open"),
+        has_bbox=nbbox is not None)
+    state["popup_geom_id"] = geom_id
+    state["popup_ocr_status"] = ocr_status
+    state["popup_last_ocr_ms"] = ms
+    state["popup_ocr_ms"] = ms_total
+    state["popup_source"] = ident["source"]
+    return {"popup_id": popup_id, "source": ident["source"],
+            "ocr_status": ocr_status, "ms": ms, "ocr_ms_total": ms_total,
+            "action": action, "reason": reason, "attempts": attempts,
+            "same_hits": same_hits, "texts_n": len(texts),
+            "allow_status": allow_status}
+
+
+def apply_popup_decision(hwnd: int, bbox, got: dict, state: dict, *,
+                         clicker, saver, logger) -> str:
+    """The one layer with side effects; returns the status note.
+
+    Evidence first, always — including for a dialog we were allowed to close,
+    so the allowlist can be audited afterwards.  ``bbox`` is a separate
+    argument because ``got`` carries the judgement and no geometry, and geometry
+    can change every tick.  No bbox means no crop to write (``reason`` is then
+    ``no_bbox`` and the event records ``path: null``).
+
+    A refused click still burns the dismiss budget: a window we keep declining
+    to click must not stay exempt forever.  Any *other* click failure means
+    nothing reached the game, so it costs no attempt — and it must not be able
+    to kill the daemon, whose heartbeat gates every later action.
+    """
+    popup_id = got["popup_id"]
+    logger({"event": "popup_seen", **got})
+    path = None
+    if bbox is not None:
+        # ':' is NTFS's stream separator; an id used verbatim as a filename
+        # would silently never be written on the only machine this runs on.
+        out_path = os.path.join(POPUP_DIR, popup_id.replace(":", "_") + ".png")
+        path = saver(hwnd, bbox, out_path, popup_id)
+    logger({"event": "popup_evidence", "popup_id": popup_id, "path": path})
+    note = POPUP_NOTES[got["reason"]]
+    if got["action"] == "dismiss":
+        try:
+            clicker(hwnd, bbox)
+            count_attempt(state, popup_id)
+        except CloseRefused:
+            count_attempt(state, popup_id)
+            note = "dismiss_refused"
+        except OSError as e:
+            note = f"dialog_click_failed: {e}"
+    logger({"event": "popup_decision", "popup_id": popup_id,
+            "action": got["action"], "reason": got["reason"], "note": note,
+            "attempts": state.get("popup_attempts", 0), "path": path})
+    return note
+
+
+def _ocr_unasked(png_path: str):
+    """Placeholder for ``--no-ocr``; ``popup_tick`` never reaches it."""
+    return [], "disabled", 0.0
+
+
 def speed_label_sha(hwnd: int) -> str:
     import hashlib
     left, top, right, _ = window_rect(hwnd)
@@ -970,7 +1165,18 @@ def serve(args) -> int:
     state = {"want": "playing", "policy": args.policy, "paused": "unknown",
              "resume": False, "last_bbox": None, "speed_sha": None,
              "shot": None, "console_open": False, "console_forced": False,
-             "console_px": None}
+             "console_px": None, "popup_id": None, "popup_source": None,
+             "popup_attempts": 0, "popup_same_hits": 0, "popup_geom_id": None,
+             "popup_texts": [], "popup_ocr_status": None,
+             "popup_last_ocr_ms": 0.0, "popup_last_ocr_ts": 0.0,
+             "popup_ocr_ms": 0.0}
+    if args.no_ocr:
+        ocr = _ocr_unasked
+    else:
+        # Deferred: a top-level import would break `import game_supervisor` on
+        # Linux, where the host tests run and surya is not installed.
+        import popup_ocr
+        ocr = popup_ocr.ocr_texts
     handled = 0
     last_cmd = None
     last_status = 0.0
@@ -1020,6 +1226,7 @@ def serve(args) -> int:
         apply_console_observation(state, seen, console_px)
         stats = {"bright": 0.0, "gold": 0, "rows": [], "bbox": None}
         window = "none"
+        nrows, nbbox, ngold = [], None, 0
         if paused == "paused":
             paused = reread_after_grace(paused, state["want"], args.grace_s,
                                         lambda: read_pause(hwnd), time.sleep)
@@ -1093,20 +1300,26 @@ def serve(args) -> int:
                 except OSError as e:
                     note = f"choice_click_failed: {e}"
         elif action == "handle_dialog":
-            if args.auto_dismiss and stats["bbox"]:
-                try:
-                    click_close(hwnd, stats["bbox"])
-                    state["console_open"] = None
-                    acted = True
-                    note = "dialog_dismissed"
-                    time.sleep(0.4)
-                    _restore(hwnd, extra.get("restore"))
-                except CloseRefused:
-                    note = "dismiss_refused"
-                except OSError as e:
-                    note = f"dialog_click_failed: {e}"
-            else:
-                note = "dialog_unknown"
+            if stats["bbox"]:
+                if not crop_to_png(hwnd, stats["bbox"], POPUP_LIVE_PATH):
+                    # A failed capture must not leave last tick's frame for OCR
+                    # to read: no file means no text means geometry-only means
+                    # hold.  Stale pixels can mean clicking the wrong dialog.
+                    try:
+                        os.remove(POPUP_LIVE_PATH)
+                    except OSError:
+                        pass
+            got = popup_tick(hwnd, POPUP_LIVE_PATH, nbbox, len(nrows), state,
+                              ocr, ocr_enabled=not args.no_ocr,
+                              allow_path=args.popup_allowlist)
+            note = apply_popup_decision(hwnd, stats["bbox"], got, state,
+                                        clicker=click_close,
+                                        saver=save_popup_evidence, logger=_log)
+            if note == "popup_dismissed":
+                state["console_open"] = None
+                acted = True
+                time.sleep(0.4)
+                _restore(hwnd, extra.get("restore"))
         elif action == "report_paused_no_window":
             note = "paused_no_window"
         elif action == "none" and extra.get("reason") == "unreadable":
@@ -1126,6 +1339,13 @@ def serve(args) -> int:
                 "console_open": state.get("console_open", False),
                 "console_px": state.get("console_px"),
                 "console_forced": state.get("console_forced", False),
+                "popup": {"popup_id": state.get("popup_id"),
+                          "source": state.get("popup_source"),
+                          "ocr": state.get("popup_ocr_status"),
+                          "ocr_ms": state.get("popup_last_ocr_ms", 0.0),
+                          "ocr_ms_total": state.get("popup_ocr_ms", 0.0),
+                          "attempts": state.get("popup_attempts", 0),
+                          "same_hits": state.get("popup_same_hits", 0)},
                 "last_cmd": last_cmd,
             })
         if acted:
@@ -1237,7 +1457,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--interval", type=float, default=0.8)
     s.add_argument("--grace-s", type=float, default=1.2)
     s.add_argument("--policy", default="first")
-    s.add_argument("--auto-dismiss", action="store_true")
+    s.add_argument("--no-ocr", action="store_true")
+    s.add_argument("--popup-allowlist", default=POPUP_ALLOWLIST_PATH)
     start = sub.add_parser("start")
     start.add_argument("--timeout-s", type=int, default=30)
     start.add_argument("--pythonw", default=None)

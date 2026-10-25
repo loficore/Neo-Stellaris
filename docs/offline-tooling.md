@@ -930,6 +930,8 @@ just deploy                  # scp game_supervisor.py + launch_stellaris.py 到 
 just launch                  # 经 Steam 拉起游戏(launcher 点击 + 30 s 观察窗,启动后仍是暂停)
 just game start              # schtasks 拉起守护进程,见到状态心跳才返回
 just game status             # 一行摘要:state/note/pid/hwnd/age/want/policy/handled/cmd/speed
+just game serve --no-ocr     # 直接前台跑:整条身份路线只留几何,一次 OCR 都不问
+just game serve --popup-allowlist PATH   # 换名单文件(默认 C:\temp\ns_popup_allowlist.json)
 just game pause | unpause | toggle
 just game want playing       # 持久目标,不是一次性动作
 just game policy first       # first | last | random | <1-based n>
@@ -941,7 +943,7 @@ just game console effect every_system = { log = "X" }   # 原样写进控制台(
                                              # just/ssh 转手会被远端 shell 改写,驱动直接写命令文件
 just game console_sync open | closed | auto   # 人工声明面板当前是否开着(auto 交还给像素观测)
 just game console_close                      # 只在标记为「开」时按一下开关键,把状态收回「关」
-just game dismiss            # 只在 paused 且有窗口 bbox 时生效(需 serve --auto-dismiss)
+just game dismiss            # 只在 paused 且有窗口 bbox 时生效(人工一次性动作,不走名单)
 just game close              # WM_CLOSE 优雅关窗口(游戏会话内 PostMessage;不是 kill)
 just game shot               # 存 C:\temp\ns_game_shot.png
 just game stop | quit
@@ -952,7 +954,18 @@ just game stop | quit
 它带一个只生效一次的 `resume` 覆盖。`want=paused` 时反过来:只保留它自己发起的暂停。默认策略 `first`。
 
 产物:`C:\temp\ns_game_status.json`(状态心跳,含 `epoch`)、`ns_game_log.jsonl`、`ns_game_shot.png`、
-`ns_game_supervisor.out`(pythonw 的 stdout/stderr)。`state` 取值 `playing|paused|unknown|no_game|stopped`。
+`ns_game_supervisor.out`(pythonw 的 stdout/stderr)、`C:\temp\ns_popup\`(弹窗证据,**有界 40 张**,
+一个身份一张代表帧,重复见到同一 id 是覆写不是堆积)、`ns_popup_live.png`(每 tick 覆写的 OCR 输入帧,
+故意放在 `ns_popup\` **外面** —— 它不是证据,也不许被裁剪)。`state` 取值
+`playing|paused|unknown|no_game|stopped`。
+
+状态心跳新增 `popup` 一格:`{popup_id, source, ocr, ocr_ms, ocr_ms_total, attempts, same_hits}`。
+读法是「**最后一次识别到的弹窗**」,不是「当前帧上有这个窗」—— 当前 tick 到底有没有窗,看 `window` 与
+`note`。`ocr_ms_total` 是这一场为身份花掉的累计毫秒(会话总额 `POPUP_OCR_BUDGET_MS = 24 s`),
+`ocr` 那一格同时是降级原因:`ok` / `disabled`(`--no-ocr`)/ `budget_spent`(问光了)/
+`unavailable`·`model_missing`·`error`(眼睛坏了)。jsonl 新增事件
+`popup_seen`(判据全量)、`popup_evidence`(存证路径,`no_bbox` 时为 `null`)、`popup_decision`、
+`popup_prune`。
 
 **判读陷阱:**
 1. **SSH 会杀子进程树**,守护进程不能直接挂在 ssh 会话下。`start` 写一个只含 ASCII 的 `.cmd` shim,
@@ -968,8 +981,11 @@ just game stop | quit
 4. **事件窗口自己会暂停游戏,关窗口又可能自己恢复**。所以每次动作后都重新读图标,不复用上一 tick 的
    判读;`_restore` 发现链式窗口(刚关掉一个又弹一个)时推迟 Space,留给下一 tick 处理。
 5. **choice 的判据是金色行,不是 bbox**:行需 `x0>=1150 && x1>=1450`、至少 2 行、gold>=8000。
-   新闻窗口右边界约 1420,因此不会被当成选项。`dialog`(有面板、无金色行)只配 `dismiss`;
-   `serve --auto-dismiss` 默认关,因为点 ✖ 的几何只在实测过的窗口类型上可信。
+   新闻窗口右边界约 1420,因此不会被当成选项。`dialog`(有面板、无金色行)走**弹窗身份路线**
+   (`popup_tick` + `apply_popup_decision`):认得出且**名单里写了 `dismiss`** 才点 ✖,认不出、OCR 坏了、
+   名单缺失/坏 JSON、连点 3 次没效果、同一 id 连见 6 拍 —— 全部**停手**并留证。旧的 `serve --auto-dismiss`
+   开关与 `dialog_unknown` note 已随之删除:点 ✖ 的几何只在实测过的窗口类型上可信,而「可信」现在由名单表达,
+   不再由一个总开关表达。
 6. **数字键不选选项**(实测),必须点行中心。同一组行签名连点 3 次后记 `choice_stuck` 并停手,
    防止在无响应窗口上打转。
 7. **`console <text>` 走剪贴板,不是逐字符打字**:`parse_command` 保留 `<text>` 的大小写、内部空白
