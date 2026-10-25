@@ -1681,8 +1681,11 @@ def desktop_gate_or_none(args: argparse.Namespace) -> int | None:
 
     Runs before the click phase, not after it: a locked screen that gets as far
     as launcher_click is recorded as EXIT_LAUNCHER_NO_FOCUS/NO_ADVANCE, which is
-    how exit 23 stayed undiagnosable. Placing it after the abandoned() check
-    would misreport a lock as a lost bridge.
+    how exit 23 stayed undiagnosable. It runs *after* the lease/do-no-harm
+    checks, and that priority is deliberate: later phases prekill or type into
+    other windows, so a vanished outer stops the chain before any of that,
+    outranking the lock verdict (pinned by
+    test_locked_desktop_with_vanished_lease_reports_the_bridge_first).
     """
     verdict = ka.desktop_gate(read_awake_status(args.keep_awake_status),
                               _time.time())

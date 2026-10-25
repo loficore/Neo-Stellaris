@@ -2705,6 +2705,26 @@ def test_phases_refuse_before_clicking_when_desktop_is_locked(
     click.assert_not_called()
 
 
+@patch("launch_stellaris.launcher_click")
+@patch("launch_stellaris.launcher_wait", return_value=(4321, 0x10))
+@patch("launch_stellaris.steam_ready", return_value=4242)
+@patch("launch_stellaris.steam_spawn", return_value=EXIT_OK)
+@patch("launch_stellaris.prekill", return_value=EXIT_OK)
+def test_locked_desktop_with_vanished_lease_reports_the_bridge_first(
+        _prekill, _spawn, _ready, _wait, click, tmp_path):
+    """对照 test_phases_refuse_before_clicking_when_desktop_is_locked(只有锁屏、
+    无消失 lease ⇒ 25):这里锁屏 + lease 已消失 ⇒ 45,因为 abandoned() 检查
+    (launch_stellaris.py:1742)先于 desktop gate(:1776)。上游阶段全部 mock 成功,
+    所以若 gate 真的先行,这里会拿到 25 —— 断言有判别力,不是空跑。
+    lease 用「从未创建的路径」,与 test_inner_aborts_before_prekill_when_the_lease_is_gone 同机制。"""
+    lease = str(tmp_path / "gone.lease")   # never created ⇒ abandoned() is True
+    args = build_arg_parser().parse_args(
+        ["--keep-awake-status", _status(tmp_path, "locked"), "--lease", lease])
+    assert _run_launch_chain_phases(args) == EXIT_BRIDGE_ABANDONED   # 45,不是 25
+    click.assert_not_called()
+    _prekill.assert_not_called()           # 短路发生在任何阶段之前
+
+
 @patch("launch_stellaris.game_observe", return_value=EXIT_OK)
 @patch("launch_stellaris.launcher_handoff", return_value=999)
 @patch("launch_stellaris.launcher_click", return_value=EXIT_OK)
