@@ -139,6 +139,47 @@ vtable 集合里(两张集都只扫 `.rdata`),所以「新集一条都没加」�
 **每一个** run 起点(下限集必须是它的子集,这是构造要求),所以一张已知表的**内部偏移**也会命中。
 `.data` 里的 vtable、以及中途偏移,都是「无法判定」而不是「新集看到的类」。
 
+## 站点离线反解(`scripts/exec_frame_sites.py`,读 artifact **也**读 exe 拷贝)
+
+### `scripts/exec_frame_sites.py --probe <tsv> [--census <tsv>] [--out <tsv>]`
+
+**重读 exe 字节、按字节反解 shot 记录的真实 call site —— 不是 `-5` 估值。** 背景在 §59.7 与下面
+`c2_scope_probe` 一节的 CALLERS 口径:枪记的是**返回 RVA**,`E8 rel32` 是 5 B,而每一次 vtable 槽
+派发(`call qword ptr [rax+8]`)只有 3 B;把 `ret-5` 当站点会把 mem 形状的点画进前一条指令中间,
+census join 落空,`func=-` 于是被误读成「没人调用」。Task 2 把产物键降回返回 RVA,本工具是「精确
+反解」的另一半。**exe 候选链 import `disrva.resolve_exe`**(同一份 `NS_STELLARIS_EXE` 口径,不复制
+第二份路径表,也不需要镜像基址 —— 全部地址运算在 RVA 空间对消)。
+
+**用法**:`python3 scripts/exec_frame_sites.py --probe evidence/logs/scope_probe_v4_4_4_4.tsv`
+(`--census` 默认 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`,`--out` 默认
+`evidence/xrefs/exec_frame_sites_4_4_4.tsv`)。caller 行两代形状都认:Task 2 起 detail 带 `ret=`
+直接用;v4 及更早键是估值,`ret = key + 5` 且计入汇总的 `assumed` 计数 —— **assumed 行读出的
+site/func/census 一律以反解结果为准,估值只是对账**。
+
+**候选边界怎么枚举**(这是判读的全部依据,不是「取最短/取最长」):回看窗 `[ret-16, ret)` 内对
+**每一个字节偏移**起解码 capstone 第一条指令,只保留「结束地址恰好落在返回点」且
+`mnemonic ∈ {call, jmp}` 的边界。候选 >1 ⇒ `form=ambiguous`、`site=None` —— 歧义是真实的字节重叠
+(例:REX 前缀让 `48 FF 50 08` 与 `FF 50 08` 都恰好结束于同一点),不替他选;候选 0 ⇒ `form=none`;
+唯一候选判 `form`:`E8`→`rel32`(若目标首字节是 `EB`/`E9` 跳板 →`thunk`),`FF /2`→`mem`(寄存器
+间接 `FF D0` 同档,`insn` 列给真实反汇编文本),唯一一条 `jmp` 边界 →`thunk`。
+
+**join**:`func_start`/`func_end` 来自 `.pdata`(延迟 import `pdata.func_of`;import/查找失败是**诊断
+退出**,不是静默 `func=-`),键是**反解出的真站点**;站点不可判(ambiguous/none)时退回用返回 RVA
+查函数边界 —— 返回地址与调用点同属一个 RUNTIME_FUNCTION,函数归属仍是 datum。
+`census_origin`/`site_in_census` **只认真站点**:没 join 上就写 0,不解释原因(解释留给取证卷)。
+
+**拒绝语义**:没有可读的 exe 拷贝 → 一行 `[exec_frame_sites] …` stderr + 退出码 2(无 traceback);
+回看窗缺任何一个字节 → `SiteDecodeError` → 同样诊断退出 —— **读不出来 ≠ 窗口里没有**,绝不把它
+写成 `form=none`。
+
+**判读陷阱(本节)**:
+- `site_in_census=0` **不是矛盾,是待办**:普查表是 §53 按当时判据切的,没覆盖的站点本就不在表里
+  (v4 的 `0x1c4369e → site 0x1c4369b`(`form=mem`)正是这种;§59.7 末句)。
+- `form=none` 的全局判读在文末 `c2_scope_probe` 一节的**判读陷阱 11**:它只说明返回 RVA 前 16 字节
+  内没有 call/jmp 边界,**不等于没人调用**。
+- 本工具读的是**磁盘拷贝**;游戏版本换了、而产物里的返回 RVA 来自别的版本字节,解出来的 form/site
+  不代表当时跑的进程 —— 换版本先对 `anchors_4_4_4.md` 重锚。
+
 ## 调用关系与引用扫描
 
 ### `scripts/fastcalls.py <rva> [--top N]`
@@ -615,7 +656,7 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 (`caller_site_estimate`)。虚调用 `call qword ptr [rax+8]` 只有 3 B,`-5` 会把站点画进前一条指令中间,
 census 于是 join 不上而报 `func=-` —— 那读法是「估值不是它的站点」,**不是**「没人调用」。join 仍走估值
 (这是估值的唯一用途);返回 RVA 不足 5 字节时不估值,写 `est_site=-`,绝不因一个被记录的值让 shot 死掉。
-**精确站点归 Task 3 的离线反解工具**:重读 exe 字节反解出真正的 call site(§59.7),本工具的产物不再声称它是站点。
+**精确站点归 `scripts/exec_frame_sites.py` 的离线反解**(见上文「站点离线反解」一节):重读 exe 字节反解出真正的 call site(§59.7),本工具的产物不再声称它是站点。
 完整结果写到 `--out`(长表 `kind/key/value/detail`,**meta** / caller / id / chain / object /
 root_unreadable / **region** 七类行)。
 `meta` 行在最前面,带 `exe_base`、`image_end`、`image_size`、`dll_sha256`、`vtable_map_count`、`layout`、
@@ -640,7 +681,7 @@ root_unreadable / **region** 七类行)。
 就补出了 `__alignment1`(offsets 0/8/16/24/32/36/40,`sizeof`=48);**把那个 padding 字段也写出来会多插
 4 字节,`State` 读到的其实是 `Protect` 的槽**。
 
-**十条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 / §59 实机与离线复算取到的,读 verdict 之前先看):**
+**十一条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 / §59 实机与离线复算取到的,读 verdict 之前先看):**
 
 1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
    仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
@@ -698,6 +739,11 @@ root_unreadable / **region** 七类行)。
     所以 `dismiss` 返回成功、日志没有 `click_refused`、窗口却原地不动 —— 这一条不能读成「点击没送达」。
     取代之:先 `shot` + 裁 `titlebar` 量 glyph 中心,再 `just game click <x> <y>`(坐标是**屏幕绝对**的,
     `window_metrics` 的 bbox 已经加过窗口原点)。
+11. **`form=none` 是窗口陈述,不是调用者陈述。** `exec_frame_sites.py` 报 `none` 只说明**返回 RVA 前
+    16 字节内没有任何恰好结束于返回点的 call/jmp 边界**,**不等于没人调用**:调用可能经过 thunk
+    (返回点不挨着任何紧邻边界),或样本记录的返回 RVA 本身就读错了(旧产物把估值当键的世代)。
+    `none` 是要带进取证卷的 datum,不是负结论;`ambiguous` 同理 —— 它是字节里真实存在的重叠,
+    照原样进卷,不替他选一个候选。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。

@@ -25,6 +25,7 @@
 | `cap.py` | 同样的反汇编，走 `.text` 手解 + capstone（`disrva.py` 的前身，仍在用） | — |
 | `pe_disrva.py` | 反汇编**任一份 PE**（路径必填；本仓库用它读自己的 `stellaris_quickjs.dll`，不是 `stellaris.exe`）的 RVA 区间，标注 call 目标与 rip 操作数解析到的 RVA，只解码可执行段；结束 RVA 不含，或传指令条数 | —（示例：§48 产物的 `js_rc` 97 字节 / 29 条；区间随重链移动，测试从 `quickjs.c:1494:12` 记录反查） |
 | `pdata.py` | x64 `.pdata`(RUNTIME_FUNCTION) → 精确函数边界，无需分析 | — |
+| `exec_frame_sites.py` | 把 shot 产物的 caller 行**按字节反解真实站点**（不是 `-5` 估值）：回看窗内枚举恰好结束于返回点的 call/jmp 边界并定 `form`（rel32/mem/thunk/ambiguous/none），join `.pdata` 函数边界与调用点普查 | `exec_frame_sites_4_4_4.tsv` |
 | `pestr.py` | 读某 RVA 的字节 / C 串 | — |
 | `strfind.py` | 按名字定位镜像里的精确 C 串 | — |
 | `strrefs.py` | 某 keyword 串的所有副本 + rip 引用这些副本的代码点（"还有谁注册了这名字？"） | — |

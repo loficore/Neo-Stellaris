@@ -1,0 +1,13 @@
+# ret_rva	count	site_rva	form	insn	func_start	func_end	census_origin	site_in_census
+0x1bcd192	3	0x1bcd18d	rel32	call 0x1d08520	0x1bcd120	0x1bcd227	incoming_arg	1
+0x1c4369e	2	0x1c4369b	mem	call qword ptr [rax + 8]	0x1c42fe0	0x1c43884	-	0
+# kind	key	value	detail
+meta	resolved	2	-
+meta	ambiguous	0	-
+meta	none	0	-
+meta	mem_form	1	-
+meta	assumed	2	-
+meta	probe	evidence/logs/scope_probe_v4_4_4_4.tsv	-
+meta	census	evidence/xrefs/exec_frame_callers_4_4_4.tsv	-
+meta	exe	/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe	-
+meta	rows	2	-
