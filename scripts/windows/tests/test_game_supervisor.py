@@ -13,6 +13,7 @@ import random
 import pytest
 
 import game_supervisor as gs
+import popup_guard as gs_popup_guard
 
 
 def test_pause_signature_from_spike():
@@ -738,6 +739,9 @@ def test_every_reason_the_guard_can_return_has_a_supervisor_note():
                             same_id_hits=hits, console_open=console,
                             has_bbox=bbox is not None)[1])
     assert reasons <= set(gs.POPUP_NOTES)
+    # 反向也要成立:HOLD_REASONS 是那份词汇表的声明处,漏一个 reason 就等于
+    # 写下一份会骗下一个读它的人(今天它没有读者,但它长得像规范)。
+    assert reasons - {"allowlisted"} == set(gs_popup_guard.HOLD_REASONS)
 
 
 def test_a_dismiss_listed_geometry_id_in_the_file_still_holds(tmp_path):

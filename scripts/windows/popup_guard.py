@@ -19,7 +19,7 @@ MAX_DISMISS_ATTEMPTS = 3
 SAME_ID_STUCK_LIMIT = 5
 
 HOLD_REASONS = ("unclassified_hold", "attempt_budget_spent", "id_stuck",
-                "console_panel", "no_bbox")
+                "console_panel", "console_state_unknown", "no_bbox")
 POPUP_ACTIONS = ("dismiss", "hold")
 
 
