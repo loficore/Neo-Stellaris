@@ -14,10 +14,12 @@
 // moduleFunction and allocNear are deliberately NOT guarded: Zig only emits
 // the bodies reachable from a root, and every path to these two is folded
 // before it gets here — the three c2 install()s open with
-// `if (!is_windows) return error.Unsupported;`, the scripted install()s are
-// called only from the LookupHookInstall/ExecHookInstall exports, which open
-// with `if (!is_windows) return -2;`, and no test touches installHookArmed.
-// A guard here would be a second gate over already-dead code.
+// `if (!is_windows) return error.Unsupported;`, and the scripted install()s
+// are reached only through the LookupHookInstall/ExecHookInstall exports,
+// which open with `if (!is_windows) return -2;` — plus, for
+// exec_hook.installWith, the two c2 probe install()s named first. No test
+// reaches installHookArmed. A guard here would be a second gate over
+// already-dead code.
 
 const std = @import("std");
 const builtin = @import("builtin");
