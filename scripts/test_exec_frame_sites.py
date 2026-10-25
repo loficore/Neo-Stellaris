@@ -123,6 +123,37 @@ def test_thunk_form_when_rel32_target_is_a_jump_stub():
     assert got["site"] == site and got["form"] == "rel32"
 
 
+def test_resolve_call_site_clean_window_is_form_none_dict():
+    # candidate_call_sites 层的 [] 由 test_all_nop_window_has_no_boundary 钉;
+    # 这里钉 resolve_call_site 层的公开契约:整窗 nop(无任何恰好结束边界)时
+    # 必须返回 {"site": None, "form": "none", "insn": None} 这个 dict 本身。
+    # body 放在 base+0x1010 起:回看窗 [ret-16, ret) 必须整个落在页内。
+    base = 0x1000
+    body = bytes([0x90] * 16)
+    page = bytes(0x1010) + body + bytes([0x90] * 64)
+    read = _page_read(page, base)
+    ret = base + 0x1010 + len(body)
+    win = read(ret - SITE_WINDOW, SITE_WINDOW + 64)
+    assert candidate_call_sites(win, SITE_WINDOW, MD) == []   # 实跑钉死,再走公开接口
+    assert resolve_call_site(ret, read) == {"site": None, "form": "none", "insn": None}
+
+
+def test_unique_jmp_boundary_resolves_as_thunk():
+    # resolve_call_site 的终点分支(唯一边界是 jmp):`nop*14; EB 90` 让唯一
+    # 「恰好结束于返回点」的 call/jmp 边界是偏移 14 的 jmp rel8 —— 候选表实跑打印后钉死。
+    # call 不会把返回点画在 jmp 之后,能记录到这种返回 RVA 的只能是被重打的跳板 ⇒ thunk。
+    base = 0x1000
+    body = bytes([0x90] * 14 + [0xEB, 0x90])
+    page = bytes(0x1010) + body + bytes([0x90] * 64)
+    read = _page_read(page, base)
+    ret = base + 0x1010 + len(body)
+    win = read(ret - SITE_WINDOW, SITE_WINDOW + 64)
+    assert candidate_call_sites(win, SITE_WINDOW, MD) == [(14, "jmp")]
+    got = resolve_call_site(ret, read)
+    assert got["site"] == ret - 2 and got["form"] == "thunk"
+    assert got["insn"].startswith("jmp")
+
+
 def test_unreadable_window_is_a_refusal_not_a_none_form():
     from exec_frame_sites import SiteDecodeError
     with pytest.raises(SiteDecodeError):
@@ -195,6 +226,54 @@ def test_frame_rows_ambiguous_falls_back_to_ret_for_func():
     got = frame_rows(rows, resolve, func_of, {0xFB: {"func": 0xF0, "origin": "x"}})[0]
     assert got["site"] is None and got["func_start"] == 0xF0
     assert got["census_origin"] == "-" and got["site_in_census"] == 0
+
+
+# ---------------------------------------------------------------------------
+# census 解析:共享 loader(c2_scope_probe.load_call_census)与本地回退的漂移钉
+# ---------------------------------------------------------------------------
+
+# 与 test_main_end_to_end_on_real_bytes 的 census 同款头(7 列 + `#` 头行),
+# 外加两份解析器都必须跳过的行:空行、注释行、<6 列短行、坏 hex 行。
+_CENSUS_FIXTURE = (
+    "# func_start\tfunc_end\tcaller_count\tsrc_files\tsite\trdx_origin\tevidence\n"
+    "\n"
+    "0x1bcd120\t0x1bcd227\t1\t-\t0x1bcd18d\tincoming_arg\t-\n"
+    "0x1c42fe0\t0x1c43884\t1\t-\t0x1c4369b\t-\t-\n"
+    "# comment mid-table\n"
+    "short\trow\n"
+    "0xzz\t0x1\t2\t3\t0x4\t5\n"
+    "0x10\t0x20\t1\t-\t0x30\torigin_x\t-\textra_col\n"
+)
+
+
+def test_local_census_fallback_matches_shared_loader(tmp_path):
+    # `_load_call_census_local` 是 plan-sanctioned 的逐字重复(brief Step 3:共享路径
+    # 可能因 c2_harness 缺席而 import 炸)。两份一旦漂移,缺 c2_harness 的机器会静默
+    # 拿到不同的 census join —— 这条用同一 fixture 钉两边输出**完全相等**。
+    p = tmp_path / "census.tsv"
+    p.write_text(_CENSUS_FIXTURE, encoding="utf-8")
+    local = exec_frame_sites._load_call_census_local(str(p))
+    assert local == {  # 非空且逐条钉语义,防「两边都返回 {} 也算相等」
+        0x1BCD18D: {"func": 0x1BCD120, "origin": "incoming_arg"},
+        0x1C4369B: {"func": 0x1C42FE0, "origin": "-"},
+        0x30: {"func": 0x10, "origin": "origin_x"},
+    }
+    try:
+        from c2_scope_probe import load_call_census
+    except Exception as exc:
+        pytest.skip(f"本机 import 不了共享 loader(c2_harness 侧依赖):{exc};"
+                    "漂移钉要两边都能跑才成立;本地回退的语义已由上面的断言钉住")
+    assert load_call_census(str(p)) == local
+
+
+def test_load_census_routes_to_local_fallback_when_shared_import_fails(tmp_path, monkeypatch):
+    # 钉 `_load_census` 的 fallback 分支本身:sys.modules 塞 None 使
+    # `from c2_scope_probe import ...` 抛 ImportError,join 必须原样落到本地解析。
+    p = tmp_path / "census.tsv"
+    p.write_text(_CENSUS_FIXTURE, encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "c2_scope_probe", None)
+    assert exec_frame_sites._load_census(str(p)) == \
+        exec_frame_sites._load_call_census_local(str(p))
 
 
 # ---------------------------------------------------------------------------
