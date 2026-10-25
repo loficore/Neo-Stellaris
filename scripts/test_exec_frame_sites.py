@@ -163,10 +163,10 @@ def test_unreadable_window_is_a_refusal_not_a_none_form():
 
 
 # ---------------------------------------------------------------------------
-# parse_probe_caller_rows:v4 键是估值(assumed),Task 2 起键是返回 RVA
+# parse_probe_caller_rows:两代 caller 行 —— v4 键是估值(assumed),新键是返回 RVA
 # ---------------------------------------------------------------------------
 
-def test_probe_rows_v4_assumed_and_task2_explicit(tmp_path):
+def test_probe_rows_v4_assumed_and_explicit_ret_key(tmp_path):
     p = tmp_path / "probe.tsv"
     p.write_text(
         "# kind\tkey\tvalue\tdetail\n"
@@ -180,7 +180,7 @@ def test_probe_rows_v4_assumed_and_task2_explicit(tmp_path):
     assert rows == [
         {"ret": 0x1BCD192, "count": 3, "assumed": True},    # v4:key+5
         {"ret": 0x1C4369E, "count": 2, "assumed": True},    # v4:key+5
-        {"ret": 0x1BCD192, "count": 3, "assumed": False},   # Task 2:用 ret=
+        {"ret": 0x1BCD192, "count": 3, "assumed": False},   # 新版键:直接用 ret=
     ]
 
 
