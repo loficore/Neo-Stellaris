@@ -168,6 +168,16 @@ def test_summarize_counts_callers_and_identities():
     assert summary["calls"] == 100
 
 
+def test_summarize_joins_census_onto_the_caller_row():
+    # The census join runs on the -5 estimate (est_site), keyed per return RVA;
+    # §60's evidence work reads func/origin off that row, so pin the join.
+    census = {0x24BD20: {"func": 0x24AB30, "origin": "incoming_arg"}}
+    summary = summarize([_entry()], {"calls": 1, "samples": 1}, {}, census, {})
+    row = summary["callers"][0]
+    assert row["return_rva"] == 0x24BD25 and row["est_site"] == 0x24BD20
+    assert row["func"] == 0x24AB30 and row["origin"] == "incoming_arg"
+
+
 def test_summarize_joins_token_ids_to_names():
     chains = {
         0x1000: {

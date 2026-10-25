@@ -39,7 +39,9 @@ PAUSE_BOX_OFFSETS = (243, 198, 5, 50)
 # correct for any other window: §59.2's one counter-sample (computed x=1843,
 # true X ~1343) says the bbox right edge can land on the sidebar.  Override
 # per command with `dismiss <dx> <dy>`; every attempt is logged by
-# click_close so "clicked but still there" is a detectable event.
+# click_close so "clicked but still there" is a detectable event -- but the
+# detector is `no_effect` on the panel bbox, not a glyph statement (it can
+# misreport both ways; see the click_close docstring and trap 10).
 CLOSE_INSET = (96, 51)
 
 # Paused: red 956..965, green 0 (2026-10-23 spike, bright icon) and 209, 0

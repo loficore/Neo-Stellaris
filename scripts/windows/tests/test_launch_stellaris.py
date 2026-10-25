@@ -2713,8 +2713,9 @@ def test_phases_refuse_before_clicking_when_desktop_is_locked(
 def test_locked_desktop_with_vanished_lease_reports_the_bridge_first(
         _prekill, _spawn, _ready, _wait, click, tmp_path):
     """对照 test_phases_refuse_before_clicking_when_desktop_is_locked(只有锁屏、
-    无消失 lease ⇒ 25):这里锁屏 + lease 已消失 ⇒ 45,因为 abandoned() 检查
-    (launch_stellaris.py:1742)先于 desktop gate(:1776)。上游阶段全部 mock 成功,
+    无消失 lease ⇒ 25):这里锁屏 + lease 已消失 ⇒ 45,因为 `_run_launch_chain_phases`
+    开头的 `if abandoned():` 短路先于 `desktop_gate_or_none(args)` 调用点(按符号名锚定,
+    不写行号 —— 行号会随 docstring 插入漂移,那是这个仓库认定的缺陷类)。上游阶段全部 mock 成功,
     所以若 gate 真的先行,这里会拿到 25 —— 断言有判别力,不是空跑。
     lease 用「从未创建的路径」,与 test_inner_aborts_before_prekill_when_the_lease_is_gone 同机制。"""
     lease = str(tmp_path / "gone.lease")   # never created ⇒ abandoned() is True
