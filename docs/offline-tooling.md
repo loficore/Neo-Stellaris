@@ -92,12 +92,29 @@ then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不�
   9 字节;`.text`/`.rdata`/`.data`/`.pdata` 四段**完全相同**。⇒ **每次重新链接都换整文件 sha,代码一个字节没动也换**;
   `652ee10b…` 与 `c24efef0…` 是同一份出货代码的两个链接时刻,**不是两次代码变更**。
   方向性:AGENTS.md 约束 8 那句「sha 不变」只在**一个方向**可用 —— sha 不变 ⇒ 可能命中缓存(实测 `touch` 源码后重建 sha 不变,缓存命中);
-  **sha 变了 ⇏ 代码变了**。要认出货代码用代码段 sha(本分支 HEAD 现量):
-  `.text 86ee85aa68ca9dba7d1d06417ef3622a11e3c343ba53ee52fe6ff6d826a68051`、
+  **sha 变了 ⇏ 代码变了**。上一句原本给的替代判据(「认出货代码用代码段 sha」)**在合并前被自己的实测推翻了一半,见下一条**;
+  这条里那四个数按当时的目录量,保留为读数:`.text 86ee85aa68ca9dba7d1d06417ef3622a11e3c343ba53ee52fe6ff6d826a68051`、
   `.rdata 4b4a58ca4ca16c787666d7914fbaa340be423e63e56a3625da9b077a8c4165c0`、
   `.data 4c79ac53e9af0e1130de74ddd5a6ba1f7dee95c0d1c769c0e35e4d7f113ba2e4`、
-  `.pdata 408b83f005efa2453c19c7ce2c76dbcc6d8a56c722ef85608ecdba1e79f33863`,外加 import 表 8 个 kernel32 符号齐全
-  (`MISSING: []`,复测于 `c24efef0…` 那次链接)。旧句里 §46 的 `77c0c35e…c11ad0`(全值留在 `evidence/analysis/runtime_444_c1_validation.md`
+  `.pdata 408b83f005efa2453c19c7ce2c76dbcc6d8a56c722ef85608ecdba1e79f33863`。
+- **代码段 sha 同样不是可移植的出货身份 —— 因为 DLL 把构建目录烧进了 `.rdata`**(2026-10-26 合并前实测,三个构建):
+  一个构建里 `ns-worktrees` 这段路径出现 **57 次,全部落在 `.rdata`**;目录名长度直接进入段布局 —— 长名
+  `fix-issue-18-win32-link` 那次 `.rdata` 的 `SizeOfRawData` = **817,152**,两个短名目录(`ln-a-2188219`、
+  `triage-merge-19`)都是 **816,640**;`.text` 里是 RIP-relative 位移,跟着一起变。⇒ **同一份 `src/` 换个目录构建,四段 sha 全不一样**:
+  `e900a1d` @ `fix-issue-18-win32-link` = `.text 86ee85aa…`(复现上一条)、`.rdata b539a18b08be9e1581a60cb3f68db0762d309da701479650ecb82b3ad063d5dc`、
+  `.data bacf833bda4d8e62791f8997c340fe18eb0d7575785a32e896b51016a1dd043c`、`.pdata ff48da43cf404b9676e35151c18d0624c1026fd48a0f9743955c74d709ef2e9f`;
+  同一棵 `src/`(与 main 合并,main 侧零 `src/` 改动)@ `triage-merge-19` = `.text 6464918300428bab4c8248ebec8453bbc3aa2b5e25cf8e5fb3ef832f28c959ec`、
+  `.rdata 4951e17cf5c2c8d7ae2349b3c58cebc262c1c557c5df42c7de6ad9f19e72ba71`、`.data 4cdbeffff58cc7af529e5ca054eeb88defe396aaaca6870963bae4d8413da5a4`、
+  `.pdata 023e9ecd3779e7228d245bd36d2fc266ec3988d62fb41d791b9c9834bac6d8df`。
+  ⇒ 上一条那四个数里 **`.rdata`/`.data`/`.pdata` 三个在 HEAD 的同目录构建下不复现**(`.text` 复现),按本条机制它们的出处是**另一个构建目录**
+  (当时未记目录,这正是本条要补的口径),三个数保留为历史读数、不再当判据。
+  **认出货代码用 import 表**(8 个 kernel32 符号齐全、`MISSING: []`;复测于 `c24efef0…` 那次链接,并在 `triage-merge-19` 这次合并态构建上
+  独立复现 8/8);段 sha 最多当**同一目录内**的链接指纹,且必须连目录名一起记。
+  同批一条对照把「改注释会不会挪段」这个问号关掉:**不会**。两份**目录名等长**的工作树(`ln-a-2188219`、`ln-b-db251df`,
+  源文件绝对路径同为 80 字符)分别 checkout `2188219` 与 `db251df`(两者只差 `windows.zig` 模块头注释、净 **+2 行**)做全新构建,
+  四段 sha 逐条相同(`.text b67221e1…`、`.rdata 560189c4…`、`.data 5473bbe0…`、`.pdata f95676e1…`),整文件 sha 才不同
+  (`76de1beec2ef080b3b9dc4a684ba5c87e29654308c739e09e21838fd4e513bbf` vs `a8815d2f2f5fb5bd601470d5a016f7022455cad6bbdf3cfee574fcd1ea2a9429`)。
+  对 AGENTS.md 约束 8 的完整方向:**sha 不变 ⇒ 缓存命中可用;sha 变 ⇏ 代码变;要按 sha 认码,必须先固定构建目录**。旧句里 §46 的 `77c0c35e…c11ad0`(全值留在 `evidence/analysis/runtime_444_c1_validation.md`
   原句,未动)与分支基线 `df50f3e1f34f38a90850febc49808c599b35ceebb0570edbbda7c25a11ecfcdd`(全值,自 commit `f541c2a`
   这同一条 bullet 的前身分留档于此)之差,
   因此**不能再用整文件 sha 归因**(它们可能只是不同链接时刻);三个数保留为历史读数,追加不改写。
