@@ -3,6 +3,12 @@
 // Provides thin wrappers around Win32 API functions needed by the
 // trampoline detour hooking framework: memory protection changes,
 // memory allocation, and instruction-length analysis for x86_64.
+//
+// Guard convention (readProcessMemory was the precedent): this family of
+// wrappers cuts its kernel32 references on non-Windows targets via a
+// comptime early-return, so host test roots can link. It is a build-time
+// linkage accommodation, not a runtime defense. Sites below point here
+// instead of restating the rationale.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -75,6 +81,8 @@ pub const ProtectGuard = struct {
     /// Change memory protection on [base, base + size).
     /// Returns error if VirtualProtect fails.
     pub fn change(base: *anyopaque, size: usize, new_protect: Protect) !ProtectGuard {
+        // Off-Windows kernel32 cut — see module header.
+        if (comptime builtin.os.tag != .windows) return error.VirtualProtectFailed;
         var old: DWORD = 0;
         const ok = VirtualProtect(
             base,
@@ -92,6 +100,8 @@ pub const ProtectGuard = struct {
 
     /// Restore the original protection. Called automatically on deinit.
     pub fn restore(self: *ProtectGuard) !void {
+        // Off-Windows kernel32 cut — see module header.
+        if (comptime builtin.os.tag != .windows) return error.VirtualProtectFailed;
         var dummy: DWORD = 0;
         const ok = VirtualProtect(self.base, self.size, self.old_protect, &dummy);
         if (ok == 0) return error.VirtualProtectFailed;
@@ -139,6 +149,8 @@ pub fn allocNear(target: *anyopaque, size: usize) !*anyopaque {
 
 /// Free memory previously allocated with allocNear.
 pub fn freeMem(addr: *anyopaque) !void {
+    // Off-Windows kernel32 cut — see module header.
+    if (comptime builtin.os.tag != .windows) return error.VirtualFreeFailed;
     const ok = VirtualFree(addr, 0, MEM_RELEASE);
     if (ok == 0) return error.VirtualFreeFailed;
 }
@@ -146,6 +158,8 @@ pub fn freeMem(addr: *anyopaque) !void {
 /// Flush the instruction cache for a region.
 /// Must be called after writing new instructions to ensure the CPU sees them.
 pub fn flushInstructionCache(base: *anyopaque, size: usize) void {
+    // Off-Windows kernel32 cut — see module header.
+    if (comptime builtin.os.tag != .windows) return;
     _ = FlushInstructionCache(GetCurrentProcess(), base, size);
 }
 
@@ -157,4 +171,13 @@ test "ProtectGuard enum values" {
     try std.testing.expectEqual(@as(DWORD, 0x20), Protect.execute_read.toRaw());
     try std.testing.expectEqual(@as(DWORD, 0x40), Protect.execute_readwrite.toRaw());
     try std.testing.expectEqual(@as(DWORD, 0x04), Protect.read_write.toRaw());
+}
+
+test "win32 wrappers are inert off Windows" {
+    if (comptime builtin.os.tag == .windows) return;
+    var dummy: usize = 0;
+    try std.testing.expectError(error.VirtualProtectFailed,
+        ProtectGuard.change(@ptrCast(&dummy), 4096, .execute_readwrite));
+    try std.testing.expectError(error.VirtualFreeFailed, freeMem(@ptrCast(&dummy)));
+    flushInstructionCache(@ptrCast(&dummy), 4096);
 }
