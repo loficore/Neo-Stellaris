@@ -221,3 +221,17 @@
 ---
 
 上面「本场达成的与没达成的」第 4 条那句「本场不会替用户点掉它 —— 请手动关闭」由 **Step 11 取代**:用户读完之后授权执行者自己关,窗已由手工 `click (1345, 483)` 关掉并复核(22:24:29 起)。追加不改写,所以两条都在。
+
+## Step 12 —— 清理(计划的 Task 6 Step 8),含 Step 11 之后现场已复原这件事
+
+    python C:/temp/game_supervisor.py stop   -> STATUS=stopped note=quit pid=0 hwnd=0 age=0.3s cmd=quit
+    python C:/temp/keep_awake.py stop        -> STATE=stopped DESKTOP=unlocked detail=Default age=0.5s pid=0
+
+之后远端 `powercfg /requests`(cp936 渲染,非 ASCII 段略):
+
+    DISPLAY:  [PROCESS] \Device\HarddiskVolume1\...\Stellaris\stellaris.exe
+    SYSTEM:   (空)      AWAYMODE: (空)
+
+⇒ 我们的两个 pythonw 不再持有任何电源请求,DISPLAY 那条是游戏自己的(它本来就持有)。
+「不改电源计划、进程一退 Windows 立刻恢复原行为」这条在批次 2 复现了一次。
+游戏本体留在 `playing`(Step 11 关掉事件窗后 `want=playing` 生效),没有替用户做任何游戏内选择。
