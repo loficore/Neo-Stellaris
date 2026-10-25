@@ -5517,3 +5517,90 @@ LE-qword、要求 8 对齐。第一次尝试把 SizeOfOptionalHeader 读在 nh+1
 节名全花、0 命中 —— 修正后 1 命中 / 365 命中如上;vtable 槽 dump 用同一张节表做 VA→raw 映射。
 承载函数帧写点的 grep 判据:`grep -n "rsp + 0x38" <disrva 输出>` 应得 6 行;0x1d11860 的无存储判据:
 `grep "mov     qword ptr \[rsi\|\[rcx\|\[rdi" <disrva 输出>` 为空(表左值)。
+
+## §61 零枪:普查表第 1 行的帧来源 = base Execute 的 arg2 透传,不是独立构造点(2026-10-25,离线)
+
+**问题**:`exec_frame_sites_4_4_4.tsv` 第 1 行(site `0x1bcd18d` / func `0x1bcd120` /
+`census_origin=incoming_arg`)在 §60.7 挂作第 5 条,判词是「构造点在这条路线之外,仍待上游判定」。
+本节把「上游」问到底:该行的 rdx 到底是谁造的。零枪、零 Windows 机时。
+
+### §61.1 那 365 个共享槽全在 slot[2],而游程启发式不可用
+
+§60.6 只数了「`0x1bcd120` 出现在 365 个 `.rdata` 槽」,没答槽位。普查路线要的是**调用形态**:
+`call [reg + off]` 的 `off` 必须是那个槽,否则找到的调用点与这条链无关。
+
+- 第一版做法(游程):从命中处向前后扩,只要 8 对齐 LE-qword 落进 `.text` 就继续,起点当 vtable 基址。
+  结果 **365 命中但游程长度分布出现 1401/1435/1564** ⇒ `.rdata` 里 vtable 是**紧挨着排的**,中间没有
+  非指针分隔,整片并成一条游程,偏移全是垃圾。**这条启发式在本 build 的 `.rdata` 上不可用**,
+  后面谁再拿「指针游程起点」当 vtable 基址,先读这段。
+- 改用仓里现成的基址集:`evidence/xrefs/ceffect_vtable_map_4_4_4.txt` 的 1,805 个 vtable RVA
+  (floor:只含 `+0x08` 仍是 base Execute 的那批),对每个基址按槽解引用比对目标 VA。
+- **读数**:`slot_index 分布 = {2: 365}`,`orphan = 0`。⇒ 365 张表里 `0x1bcd120` **一律落在 slot[2] = +0x10**,
+  也就是 §10 那条 `call [rax+0x10]` 派发槽;与 map 自己的列名 `ExecuteActual(slot2)` 同一件事。
+
+### §61.2 `0x1bcd120` 对帧是纯透传,它造的是 this 拷贝
+
+`disrva.py 0x1bcd120 100` 的关键 12 条(其余为对象头字段搬运):
+
+```
+01bcd131  mov rbx, rdx            ; 帧留底
+01bcd139  mov rdi, rcx            ; this 留底
+01bcd12a  lea rax,[rip+0xb03397]  ; -> 0x26d04c8
+01bcd134  mov [rsp+0x20], rax     ; 栈上新对象的 vptr
+01bcd13c..01bcd167  [rcx+8]/[rcx+0x12]/[rcx+0x14]/[rcx+0x16]/[rcx+0x18] -> [rsp+0x28..0x30]
+01bcd175  lea rcx,[rsp+0x20]      ; arg1 = 新造的拷贝
+01bcd17a  mov rdx, rbx            ; arg2 = 原帧,逐字不变
+01bcd17d  mov r8, [rax+8]         ; = [0x26d04c8+0x08]
+01bcd181  lea rax,[rip+0x13b398]  ; -> 0x1d08520
+01bcd188  cmp r8, rax
+01bcd18b  jne 0x141bcd194         ; 不是 base Execute 就走 slot 真值
+01bcd18d  call 0x1d08520
+```
+
+- 在 `0x1bcd131 → 0x1bcd18d` 这段里 `rbx` **只作源不作目的**(`grep` 全文得 `mov rbx, rdx` /
+  `mov rcx, rbx` / `mov rdx, rbx` 三条),即帧指针从入口到这条 call 没有任何改写。
+- 全函数对帧的**内容**写只有 `[rbx+8]` 两处(`mov [rbx+8], eax` @0x1bcd1e2、`dec [rbx+8]` @0x1bcd1f1),
+  都在那次派发**返回之后**,与 §53「+8 是调用深度计数、净为零」同一形态;`[rsp+0x20]` 那块是**新的 this**,
+  与帧无关。⇒ **`0x1bcd120` 不构造帧、不换位帧、只把帧传下去。**
+- `0x1bcd181..0x1bcd18b` 是 §53.1 那条 devirtualization guard 的同一个形状:先比 slot 真值与 base Execute,
+  相等才直调,不等就 `call r8`。
+
+### §61.3 被 devirt 的那张表与 base Execute 自己
+
+- wrapper vtable `0x26d04c8`(在 floor map 内)槽位:`slot0 0x158950` / `slot1 0x1d08520`(base Execute ✓,
+  guard 恒成立的来源)/ `slot2 0x1bccf30` / `slot3 0x535070`。⇒ 这次调用把 this 换成基类身份后再进 base Execute,
+  base Execute 的 `call [rax+0x10]` 于是落到 **`0x1bccf30`**(`0x1bcd120` 的兄弟实现),不是回到自身 —— 无递归。
+- base Execute 本体对帧同样是透传:`mov eax,[rdx+8]` @0x1d0852a 读深度 → `mov rbx,rdx` @0x1d0852d 留底 →
+  `mov rdx,rbx; mov rcx,rdi; mov rax,[rdi]; call [rax+0x10]` @0x1d0856b..0x1d08577。中间只有
+  `[rbx+8]` 的 `inc`/`dec` 与 `0x16fdc0`(edx=0x10/3/4)、`0x1d116a0` 的 rcx=帧 调用;
+  `0x16fdc0` 在 §60.4 已被判死为「写者」(其 `[rsp+0x38]` 是各自栈里的 string capacity 暂存),本节不推翻,
+  只补一句:**它在 base Execute 里以「拿帧当 rcx」的形态反复出现,是读/标记,不是重新赋值 rdx。**
+
+### §61.4 判定与边界
+
+**判定**:`exec_frame_sites_4_4_4.tsv` 第 1 行的 `incoming_arg` **没有独立的构造点**。它的 rdx 就是
+base Execute 收到的 arg2,而 base Execute 收到的 arg2 就是 §60 判决里承载函数
+`0x1c42fe0..0x1c43884` 在 `[rsp+0x38]` 内联构造的那个 0x20 B 执行深度帧。⇒ **§60.7 第 5 条折叠进第 1 条**:
+剩下的不是「第 1 行的帧从哪来」,而是「谁以帧为 arg2 调用 base Execute 的 slot[1]」(派发方集合),两行同源。
+
+**边界(不可越过的部分)**:
+1. 本节只判了第 1 行这一条链。§53.1 记的 17 个站点里 `incoming_arg` 有 12 个,每个都要**逐函数**读它自己
+   的 rdx 路径才能确认同源 —— 没读的不算已判。
+2. 「谁调 base Execute」仍离线不可分(§60.5:承载函数 0 直接调用 + 0 指令引用、寄存器间接派发),
+   本节没有新增杠杆。
+3. §60 的判决 `frame_ctor_found` **限于承载函数路线**,本节的结论是「第 1 行与该路线同源」,
+   不等于「全部帧都来自承载函数」;普查路线上仍有 §60.7-1 那条未决。
+4. 无递归那句是从 slot 表读出来的静态推论(`slot2` 已换实现),没有实机执行序列佐证。
+
+### §61.5 复现
+
+```
+python3 scripts/disrva.py 0x1bcd120 100      # 透传三处 + guard 12 条
+python3 scripts/disrva.py 0x1d08520 40       # base Execute 对帧:rbx 留底、rdx 原样、[rbx+8] 净零
+python3 scripts/scratch/2026-10_exec_frame_census/slot_offsets.py    # 游程版(展示为何不可用)
+python3 scripts/scratch/2026-10_exec_frame_census/slot_offsets2.py   # floor map 版:{2: 365} / orphan 0
+```
+
+两个探针都是一次性读数,不是维护接口:节表字段偏移照 `find_refs.py`,键 = `0x140000000+RVA` 的 8 对齐
+LE-qword;`slot_offsets2.py` 比的是**槽内容 == anchor VA**(第一版误比命中位置,得 365 全 orphan —— 记在这里,
+免得下一次再把 orphan 当结论读)。
