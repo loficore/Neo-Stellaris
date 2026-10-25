@@ -29,7 +29,7 @@ chokepoints-check:
 check: build test fence host-tests chokepoints-check
 
 deploy:
-    scp scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py scripts/windows/keep_awake.py {{WIN_HOST}}:{{WIN_TEMP}}/
+    scp scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py scripts/windows/keep_awake.py scripts/windows/popup_identity.py scripts/windows/popup_guard.py scripts/windows/popup_ocr.py {{WIN_HOST}}:{{WIN_TEMP}}/
 
 # Launch Stellaris through Steam (launcher clicks included; stays paused).
 launch *args:

@@ -139,3 +139,30 @@ def ocr_texts(png_path: str) -> tuple[list[str], str, float]:
 def is_available() -> bool:
     """``_LOAD_STATUS == "ok"``, the way drivers and docs read availability."""
     return _LOAD_STATUS == "ok"
+
+
+def main(argv=None) -> int:
+    """One-line cost probe: ``popup_ocr.py warm|<png>`` -> ``STATUS=… MS=… LINES=…``.
+
+    ``MS`` alone cannot answer "did this cost 8 s because the machine is slow
+    or because the window has many lines" — the measured cost model is
+    ≈ 1.5 s fixed + 0.7 s per detected line, so ``LINES`` rides along.
+    ``warm`` times the model load alone (``LINES=0``); a PNG path reads via
+    ``ocr_texts`` and reports that call's own ms.
+    """
+    target = "warm" if argv is None else list(argv)[0]
+    if target == "warm":
+        start = time.monotonic()
+        status = warm()
+        ms = (time.monotonic() - start) * 1000.0
+        lines = 0
+    else:
+        texts, status, ms = ocr_texts(target)
+        lines = len(texts)
+    print(f"STATUS={status} MS={int(round(ms))} LINES={lines}")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(main())

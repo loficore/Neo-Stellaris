@@ -1053,6 +1053,43 @@ just game stop | quit
     配一次 `C2ScopeProbeStatsInto` 双读(`calls` 两秒不涨 = 热路径已还原)就把「Uninstall 跑过、引擎
     字节完好」证完,不需要驱动那行输出(§56.3)。
 
+12. **OCR 状态不是弹窗身份。** `ocr=unavailable` 只说明我们的眼睛坏了,`geom:*` 那条 id 仍可能对应一个
+    完全无害的窗;它的作用是让 daemon 停手,不是判那个窗有害。
+13. **弹窗只在 `paused == "paused"` 时被扫**(本计划刻意**没**改成每 tick 无条件扫窗,所以不暂停游戏的
+    弹窗 —— 覆盖层、系统通知、驱动倒计时确认 —— 现在仍然看不见)。这是范围决定,不是缺陷;要扩到那一条
+    得另开计划,代价是每 tick 一次全窗口截图。
+14. **一次内联 OCR 就是把 daemon 停住那么久,而省钱的方式只有「少问」。** 实测成本 ≈ 固定 1.5 s +
+    每检出行 0.7 s(弹窗 5–8 行 ≈ 5–7 s,全图 73.7 s),supervisor 单线程 0.8 s 一拍 ⇒ 这段时间里命令
+    不读、心跳不写,`just game status` 会看到一条旧记录。**两条看着像省钱的路上当不得**:缩小裁片不省
+    时间也不省字(256 档反而 20.3 s 且逐行比对只剩 9/19 认对,surya 检测器自己会把输入放大到固定边长),
+    调 batch 也不省(CPU 默认已是检测 8/识别 32,单次 ≤20 行本来就在一批里)。所以看到「心跳怎么停了
+    7 秒」先查 `popup.ocr_ms_total` 有没有在涨、`ocr` 那一格是不是 `budget_spent`,而不是去改图片尺寸。
+
+### `scripts/windows/popup_*.py` —— 弹窗身份三件套
+
+名单是**数据,不是代码**:放行哪些弹窗改 `C:/temp/ns_popup_allowlist.json`,监督器不热加载,改完
+`just game stop` + `start`。格式与一条抄 id 的路径:
+
+```
+{"allow": [{"popup_id": "text:<8位hex>", "action": "dismiss"},
+           {"popup_id": "geom:<宽>x<高>:r<行数>", "action": "dismiss"}],
+ "confirmed_by": "人工看屏 2026-10-25"}
+```
+
+- `popup_id` 从**状态记录的 `popup.popup_id`** 或日志 `popup_seen` 事件里抄,别手算:文本 id 只对
+  「OCR 读到且规范化后非空」的窗存在,OCR 状态非 `ok` 时同一个窗的 id 是 `geom:*`(见陷阱 12)。
+- `action` 目前只有 `dismiss` 被识别;不认识的对象/键**静默丢弃**并计入 `dropped_entries` —— 拼错的条目
+  既不会放行也不会报错,只有状态记录的 `allow_status` 说它整份可不可解析。文件缺失/坏 JSON ⇒
+  `absent`/`malformed`,名单换成空表,处置一律退成 hold。模板在
+  `scripts/windows/popup_allowlist.example.json`。
+- 三个模块的分工:`popup_identity.py`(指纹与名单解析)、`popup_guard.py`(判据与熔断,阈值只在这定义)、
+  `popup_ocr.py`(引擎唯一出口)。前两个 stdlib-only,Linux 上就能 `import` 并跑测试;`popup_ocr` 只在
+  Windows 宿主上跑得动(surya + torch CPU 轮子),但它的**加载成本现在有了实机数字**:2026-10-25 首枪
+  `python C:\temp\popup_ocr.py warm` 量到 `STATUS=ok MS≈6.1 s`(两个 predictor 构造 + 权重读盘,torch 的
+  pynvml FutureWarning 也在其中)—— 计划里那个「≈1.0 s」是更早 spike 只量构造、权重已被另一进程暖过的
+  数,**不要**再拿它估无人值守的启动停摆。`warm|<png>` CLI 就是为这条测量存在的(Task 6 不开 daemon 也能
+  量),`LINES` 用来把「慢在机器」和「这窗字多」分开。
+
 ### `scripts/windows/keep_awake.py` —— 桌面可达性守护
 
 常驻在交互会话里,用 `SetThreadExecutionState` 顶住空闲,并**观测**当前输入桌面名以判定桌面可达性。

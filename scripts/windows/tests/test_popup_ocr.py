@@ -32,3 +32,12 @@ def test_model_missing_is_named_apart_from_a_crash(monkeypatch):
     monkeypatch.setattr(popup_ocr, "_predict",
                         lambda path: (_ for _ in ()).throw(FileNotFoundError("no snapshot")))
     assert popup_ocr.ocr_texts("x.png")[1] == "model_missing"
+
+
+def test_warm_cli_prints_one_status_line_with_zero_lines(capsys):
+    # The CLI exists so Task 6 can measure load cost without starting the
+    # daemon (same one-liner shape as `keep_awake.py check`).
+    assert popup_ocr.main(["warm"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("STATUS=")
+    assert "MS=" in out and out.endswith("LINES=0\n")
