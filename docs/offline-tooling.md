@@ -38,6 +38,88 @@ is the step that requires it — `zig build test` does not.
 历史计数:`293/293`,until `effects/id_mapper.zig` and its 21 tests were retired,
 then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不要拿这两个旧数当现在的门限。
 
+**当前基线(2026-10-26 issue #18 win32-link 计划实施,任务 5 复测于 commit `78fd294`)**:
+`zig build test --summary all` → `Build Summary: 29/29 steps succeeded; 599/599 tests passed`,退出码 **0** ——
+**failed 步归零**。上面 Host caveat 那句「1 个 failed 是环境事实」的判读**已被本次实施作废**:exports 根
+在宿主 target 上不再引用 kernel32(comptime 守卫,本计划四枪 `a48965e`/`92bfdf3`/`0b09863`/`78fd294`),
+现在真跑;裁定 **P15 那条「这一步记为绿」自此不再需要**(P15 文本住在不入库的私有归档,此处不复述)。
+上段的全部数字(`24/27; 314/314`、`22/25 … 296/296`、`293/293`/`272/272`、GLIBC 旧叙述)保留为历史读数,
+追加不改写。这条基线的完整判读:
+
+- **门的读法**:全绿时 `zig build test` **不打** Build Summary,`--summary all` 才看得见 `29/29` 那行。
+  判据是**退出码 0 + `29/29 steps succeeded`**;**单看 `tests passed` 总数会误读** —— 一个 import 文件的
+  test 在**每个**导入它的根里各计一次(实测:本计划往 `hooking/windows.zig` 加一条 test,总数
+  `445 → 447`,+2)。总数账:`599 = 445(基线 13 个绿根) + 2(Task 1 新增一条在两个根各计一次) + 152(exports 根首次链接进总数)`。
+- **exports 根现在收集并运行 152 条**,其中**净新跑 = 35** —— `src/dll/exports.zig` 11 +
+  `src/dll/c2/handler.zig` 6 + `src/dll/scripted/keyword_registry.zig` 18(这三族只被 exports 根收);
+  这 35 条里 **33 条的 test body 基线就写在文件里**(只是从没被执行),**2 条为本计划新写**(任务 2 的
+  `exports.zig` 「DLL entry points are inert off Windows」、任务 3 的 `DllMain: DLL_PROCESS_ATTACH leaves
+  engine_ptr untouched`)。其余 **116** 条基线就在别的根里跑、现被跨根重复计数,全部构成(从编出的
+  测试二进制逐行数,不是推的):`hooking.detour` 42 + `shared.offsets` 16 + `quickjs.runtime` 17 +
+  `quickjs.runtime.Runtime` 4 + `scripted.lookup_hook` 11 + `scripted.exec_hook` 9 + `c2.scope_probe` 7 +
+  `c2.predicate_hook` 5 + `c2.vtable` 4 + `hooking.windows.ProtectGuard` 1 = **116**;另 **1** 条是本计划任务 1
+  新写的(`152 = 35 + 116 + 1`)。**数 test 的口径陷阱**:`runtime.zig` 的 21 = 17 条文件级 + 4 条
+  `pub const Runtime` 结构体内的 decl 级,只 `grep '^test '` 会数到 17 —— 那 4 条是缩进的,别把这差当成对不上账。
+  旧失败符号 8 个是 `CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`/
+  `VirtualProtect`/`VirtualFree`/`GetCurrentProcess`/`FlushInstructionCache`(此前括号只列了 4 个,是旧句的
+  半份名单,现在只剩历史读法)。
+- **已知残留缺口 —— 至今零执行 29 条**(`src/dll/api/bridge.zig` 19 + `src/dll/effects/handler.zig` 5 +
+  `src/dll/triggers/handler.zig` 5):成因**不是链接,是可达性** —— `main.initializeQuickJS` 无调用点
+  (Zig 惰性分析不把 `bridge` 拉进 exports 根)、那两个 handler 在整个 `src/` 树零 importer;结构旁证:
+  `bridge.zig:31-32` 按路径引入 gamestate/scope,而它们用命名模块 `@import("offsets")`,exports 根没有
+  `addImport("offsets")` —— 若 bridge 真在闭包里,该根会编译失败而非绿。这 29 条**本计划没有填**,
+  基线句不许把它们含混成「都跑起来了」。
+- **残留的 kernel32 引用点(守卫覆盖面之外,不是漏网)**:`hooking/windows.zig` 的 `moduleFunction`
+  (`GetModuleHandleW`)与 `allocNear`(`VirtualAlloc` ×2)**没有** comptime 守卫,宿主根仍然能链接,是因为
+  **调用方先折叠**:c2 那三个 `install()`(`scope_probe:167`/`predicate_hook:164`/`live_probe:147`)第一行是
+  `if (!is_windows) return error.Unsupported;`;scripted 那两个(`lookup_hook.install:263`、`exec_hook.installWith:357`)
+  自己**不带**守卫,折叠发生在**上一层出口** `LookupHookInstall:305` / `ExecHookInstall:433` 的
+  `if (!is_windows) return -2;`;`detour.installHookArmed` 没有任何 test 触达 —— Zig 只对可达函数体发射,死支路
+  里的引用不进符号表。读这条时别去找「四个 install() 第一行都是 error.Unsupported」,那句话是错的(本行初稿就这么错过,
+  复审抓出来了):两族折叠的**层次**和**哨兵值**都不同。`extern "kernel32"` 的**声明**全部原样保留(`CreateThread` 从未被引用;
+  `ReadProcessMemory`/`VirtualAlloc`/`GetModuleHandleW` 同在声明块里却不在旧失败名单里,正是「引用而非声明」
+  这条判据的证据)。给这两个包装器补守卫属于第二道门,本计划不做;模块头注释已点名这个例外。
+- **`-Dtest-target` 已删除**(commit `78fd294`,`build.zig` +1/−6):删后 `zig build test
+  -Dtest-target=x86_64-windows-gnu` 的表现是**明确报错,不是静默忽略** —— zig 0.16.0 打
+  `error: invalid option: -Dtest-target`,退出码 **1**(对照探针 `-Dnonexistent-option-xyz=1` 同退出码 1)。
+  cross-target 路线就此没有入口;`c2_diag_test.zig` 那个 `{d}` for `*anyopaque` 编译错误**不修** —— 它的
+  入口随选项一起没了,记下来是为了下一个人别把它当新 bug。`evidence/analysis/build_pipeline_status.md`
+  `:11`/`:36` 的旧运行方式记录按取证约定原样保留(追加不改写),现已过期。
+- **出货 DLL 的整文件 sha256 不是代码身份 —— 本计划实测推翻了旧句**:任务 5 现场量到
+  `652ee10bbd7b51450a28dd28489fc83057517b3b6b46143ae0d164357c51b895`,终审修复轮在**同一份源码**上(只把
+  `hooking/windows.zig` 的模块头注释改窄、行号因此整体下移)重链,得到 `c24efef06630cbfc90a82f95dcfc2f74ec5d9ec91098af78976452f15be83980`。
+  两个整文件逐字节 diff **只有 10 个字节**:PE 文件头 `TimeDateStamp`(offset `0x80`)1 字节 + `.buildid` 段
+  9 字节;`.text`/`.rdata`/`.data`/`.pdata` 四段**完全相同**。⇒ **每次重新链接都换整文件 sha,代码一个字节没动也换**;
+  `652ee10b…` 与 `c24efef0…` 是同一份出货代码的两个链接时刻,**不是两次代码变更**。
+  方向性:AGENTS.md 约束 8 那句「sha 不变」只在**一个方向**可用 —— sha 不变 ⇒ 可能命中缓存(实测 `touch` 源码后重建 sha 不变,缓存命中);
+  **sha 变了 ⇏ 代码变了**。上一句原本给的替代判据(「认出货代码用代码段 sha」)**在合并前被自己的实测推翻了一半,见下一条**;
+  这条里那四个数按当时的目录量,保留为读数:`.text 86ee85aa68ca9dba7d1d06417ef3622a11e3c343ba53ee52fe6ff6d826a68051`、
+  `.rdata 4b4a58ca4ca16c787666d7914fbaa340be423e63e56a3625da9b077a8c4165c0`、
+  `.data 4c79ac53e9af0e1130de74ddd5a6ba1f7dee95c0d1c769c0e35e4d7f113ba2e4`、
+  `.pdata 408b83f005efa2453c19c7ce2c76dbcc6d8a56c722ef85608ecdba1e79f33863`。
+- **代码段 sha 同样不是可移植的出货身份 —— 因为 DLL 把构建目录烧进了 `.rdata`**(2026-10-26 合并前实测,三个构建):
+  一个构建里 `ns-worktrees` 这段路径出现 **57 次,全部落在 `.rdata`**;目录名长度直接进入段布局 —— 长名
+  `fix-issue-18-win32-link` 那次 `.rdata` 的 `SizeOfRawData` = **817,152**,两个短名目录(`ln-a-2188219`、
+  `triage-merge-19`)都是 **816,640**;`.text` 里是 RIP-relative 位移,跟着一起变。⇒ **同一份 `src/` 换个目录构建,四段 sha 全不一样**:
+  `e900a1d` @ `fix-issue-18-win32-link` = `.text 86ee85aa…`(复现上一条)、`.rdata b539a18b08be9e1581a60cb3f68db0762d309da701479650ecb82b3ad063d5dc`、
+  `.data bacf833bda4d8e62791f8997c340fe18eb0d7575785a32e896b51016a1dd043c`、`.pdata ff48da43cf404b9676e35151c18d0624c1026fd48a0f9743955c74d709ef2e9f`;
+  同一棵 `src/`(与 main 合并,main 侧零 `src/` 改动)@ `triage-merge-19` = `.text 6464918300428bab4c8248ebec8453bbc3aa2b5e25cf8e5fb3ef832f28c959ec`、
+  `.rdata 4951e17cf5c2c8d7ae2349b3c58cebc262c1c557c5df42c7de6ad9f19e72ba71`、`.data 4cdbeffff58cc7af529e5ca054eeb88defe396aaaca6870963bae4d8413da5a4`、
+  `.pdata 023e9ecd3779e7228d245bd36d2fc266ec3988d62fb41d791b9c9834bac6d8df`。
+  ⇒ 上一条那四个数里 **`.rdata`/`.data`/`.pdata` 三个在 HEAD 的同目录构建下不复现**(`.text` 复现),按本条机制它们的出处是**另一个构建目录**
+  (当时未记目录,这正是本条要补的口径),三个数保留为历史读数、不再当判据。
+  **认出货代码用 import 表**(8 个 kernel32 符号齐全、`MISSING: []`;复测于 `c24efef0…` 那次链接,并在 `triage-merge-19` 这次合并态构建上
+  独立复现 8/8);段 sha 最多当**同一目录内**的链接指纹,且必须连目录名一起记。
+  同批一条对照把「改注释会不会挪段」这个问号关掉:**不会**。两份**目录名等长**的工作树(`ln-a-2188219`、`ln-b-db251df`,
+  源文件绝对路径同为 80 字符)分别 checkout `2188219` 与 `db251df`(两者只差 `windows.zig` 模块头注释、净 **+2 行**)做全新构建,
+  四段 sha 逐条相同(`.text b67221e1…`、`.rdata 560189c4…`、`.data 5473bbe0…`、`.pdata f95676e1…`),整文件 sha 才不同
+  (`76de1beec2ef080b3b9dc4a684ba5c87e29654308c739e09e21838fd4e513bbf` vs `a8815d2f2f5fb5bd601470d5a016f7022455cad6bbdf3cfee574fcd1ea2a9429`)。
+  对 AGENTS.md 约束 8 的完整方向:**sha 不变 ⇒ 缓存命中可用;sha 变 ⇏ 代码变;要按 sha 认码,必须先固定构建目录**。旧句里 §46 的 `77c0c35e…c11ad0`(全值留在 `evidence/analysis/runtime_444_c1_validation.md`
+  原句,未动)与分支基线 `df50f3e1f34f38a90850febc49808c599b35ceebb0570edbbda7c25a11ecfcdd`(全值,自 commit `f541c2a`
+  这同一条 bullet 的前身分留档于此)之差,
+  因此**不能再用整文件 sha 归因**(它们可能只是不同链接时刻);三个数保留为历史读数,追加不改写。
+  本计划对「守卫只剪宿主测试根、没剪出货代码」的证明**一直靠 import 表那一条**,不靠 sha —— 现在有了理由。
+
 ## 基础:PE + capstone,不需要 IDA
 
 **Static RE runs offline here, no IDA**: `scripts/cap.py` (PE + capstone, rip operands) and `scripts/rttibatch.py`

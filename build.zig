@@ -45,12 +45,7 @@ pub fn build(b: *std.Build) void {
     // Tests run on the build machine. QuickJS's bundled allocator misbehaves
     // under Zig's musl static libc, so link the host glibc dynamically instead
     // (zig's glibc sysroot is newer than this host's, hence .dynamic).
-    const test_target_str = b.option([]const u8, "test-target", "target triple for unit tests");
-    const native = if (test_target_str) |t|
-        b.resolveTargetQuery(std.Target.Query.parse(.{ .arch_os_abi = t }) catch
-            @panic("invalid -Dtest-target"))
-    else
-        b.resolveTargetQuery(.{});
+    const native = b.resolveTargetQuery(.{});
 
     const optimize = b.standardOptimizeOption(.{});
 

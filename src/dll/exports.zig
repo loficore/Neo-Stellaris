@@ -5,6 +5,7 @@
 // use C calling convention by default and are visible to the linker.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const main = @import("main.zig");
 const keyword_registry = main.keyword_registry;
 
@@ -85,7 +86,20 @@ extern "kernel32" fn WriteFile(
 ) i32;
 extern "kernel32" fn CloseHandle(hObject: ?*anyopaque) i32;
 
+/// Resolve the game module base via GetModuleHandleA("stellaris.exe").
+/// Off Windows the comptime early-return cuts the kernel32 reference
+/// entirely (same shape as hooking/windows.zig's wrappers) so the host
+/// test root links; on Windows this is the original call, unchanged.
+fn gameModuleBase() usize {
+    // Off-Windows kernel32 cut — see hooking/windows.zig module header.
+    if (comptime builtin.os.tag != .windows) return 0;
+    return @intFromPtr(GetModuleHandleA("stellaris.exe"));
+}
+
 fn writeMarker() void {
+    // Off-Windows kernel32 cut — see hooking/windows.zig module header.
+    // No-op off Windows matches the existing tolerance for handle failures below.
+    if (comptime builtin.os.tag != .windows) return;
     const path = "C:\\temp\\dll_loaded.txt";
     const msg = "DLL loaded OK\n";
     const h = CreateFileA(path, 0x40000000, 0, null, 2, 0x80, null);
@@ -137,8 +151,7 @@ const INVALID_HANDLE_VALUE: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(i6
 /// (no collision in 9,863 descriptors + 1,610 keyword names, case-folded).
 /// Predicted token id: >= 18818 (larger if lazy accessors already minted during startup).
 export fn C1Run() callconv(.c) u32 {
-    const exe_name: [*:0]const u8 = "stellaris.exe";
-    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    const game_base = gameModuleBase();
     if (game_base == 0) {
         writeLogStatic("C:\\temp\\c1_result.log", "C1 FAIL: no game base\n");
         return 0;
@@ -368,8 +381,7 @@ export fn C2EvalStressOne() callconv(.c) i32 {
 export fn C2TestVtable() callconv(.c) i32 {
     writeLogStatic("C:\\temp\\c2_test.log", "C2Test: entry\n");
 
-    const exe_name: [*:0]const u8 = "stellaris.exe";
-    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    const game_base = gameModuleBase();
     if (game_base == 0) {
         writeLogStatic("C:\\temp\\c2_test.log", "C2Test FAIL: no game base\n");
         return -1;
@@ -400,8 +412,7 @@ export fn C2TestVtable() callconv(.c) i32 {
 /// One-shot arming of the whole chain, in dependency order:
 /// vtable → predicate token → predicate install → probe token → C bridge arm.
 export fn C2ExecInstall(token: u32) callconv(.c) i32 {
-    const exe_name: [*:0]const u8 = "stellaris.exe";
-    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    const game_base = gameModuleBase();
     if (token == 0 or game_base == 0) return -1;
     c2_vtable.buildFromGame(game_base) catch return -2;
     c2_predicate_hook.setToken(token) catch return -3;
@@ -458,8 +469,7 @@ export fn C2ExecProbeStatsInto(out: [*]u8) callconv(.c) i32 {
 /// setToken | -4 predicate install | -5 no JS ctx | -6 arm eval threw | -7 not a
 /// function | -8 bad args | -9 already armed | -10 lock busy.
 export fn C4WireInstall(token: u32) callconv(.c) i32 {
-    const exe_name: [*:0]const u8 = "stellaris.exe";
-    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    const game_base = gameModuleBase();
     if (token == 0 or game_base == 0) return -1;
     c2_vtable.buildFromGame(game_base) catch return -2;
     c2_predicate_hook.setToken(token) catch return -3;
@@ -585,8 +595,7 @@ export fn C2Diag() callconv(.c) i32 {
     var log_buf: [1024]u8 = undefined;
     var pos: usize = 0;
 
-    const exe_name: [*:0]const u8 = "stellaris.exe";
-    const game_base = @intFromPtr(GetModuleHandleA(exe_name));
+    const game_base = gameModuleBase();
 
     pos = appendFmt(&log_buf, pos, "C2Diag: game_base=0x{x}\n", .{game_base});
     if (game_base == 0) {
@@ -725,6 +734,9 @@ export fn C2RegisterTrigger(name_ptr: [*:0]const u8, js_code_ptr: [*:0]const u8)
 }
 
 fn writeLogStatic(path: [*:0]const u8, data: []const u8) void {
+    // Off-Windows kernel32 cut — see hooking/windows.zig module header.
+    // No-op off Windows matches the existing tolerance for handle failures below.
+    if (comptime builtin.os.tag != .windows) return;
     const h = CreateFileA(path, GENERIC_WRITE, 0, null, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, null);
     if (h == null or h == INVALID_HANDLE_VALUE) return;
     var written: u32 = 0;
@@ -771,12 +783,25 @@ test "PushCApplicationPtr stores pointer" {
 test "DllMain returns TRUE" {
     const result = DllMain(null, 1, null);
     try std.testing.expectEqual(@as(i32, 1), result);
-    // Cleanup
+    // The DETACH call below is an inert smoke call, not a cleanup: DllMain's
+    // DETACH arm mutates nothing (see the DETACH invariant test), and this test
+    // never touched engine_ptr, so there is no state to revert. It only proves
+    // reason=0 does not fault from this call site.
     _ = DllMain(null, 0, null);
 }
 
-test "DllMain: DLL_PROCESS_DETACH clears engine_ptr" {
-    // Set engine pointer
+test "DllMain: DLL_PROCESS_DETACH leaves engine_ptr untouched" {
+    // Awakened by issue #18 (this root first linked and ran on the Linux host
+    // in Task 2). The original assertion — DETACH clears engine_ptr — was true
+    // only of 12b8ad7's DllMain; d443986 dropped the clear when DllMain was
+    // simplified to writeMarker-on-ATTACH, and the test never ran afterwards
+    // because the exports root would not link. Task 3 adjudication: the
+    // assertion does not hold on the x86_64-windows shipping path, so the test
+    // is stale, not the code. What actually bears weight: engine_ptr changes
+    // ONLY through PushCApplicationPtr — DllMain mutates nothing for any reason
+    // code (consistent with the sibling tests below and with 永不 FreeLibrary:
+    // the engine holds state past this DLL's lifetime, so DETACH must not
+    // silently invalidate pointers the host still reads).
     var args = PushArgs{
         .appPtr = @ptrFromInt(0xDEAD),
         .base = 0x140000000,
@@ -784,9 +809,39 @@ test "DllMain: DLL_PROCESS_DETACH clears engine_ptr" {
     PushCApplicationPtr(&args);
     try std.testing.expect(getEnginePtr() != null);
 
-    // Detach should clear it
+    // DETACH must not clear (nor otherwise touch) it.
     _ = DllMain(null, 0, null);
-    try std.testing.expectEqual(@as(?*anyopaque, null), getEnginePtr());
+    try std.testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0xDEAD)), getEnginePtr());
+
+    // Cleanup
+    args.appPtr = null;
+    PushCApplicationPtr(&args);
+}
+
+test "DllMain: DLL_PROCESS_ATTACH leaves engine_ptr untouched" {
+    // Issue #18 review gap: the DETACH test above (and its comment) asserts that
+    // DllMain mutates nothing for ANY reason code, yet PROCESS_ATTACH (reason=1)
+    // — the one arm with real code (writeMarker) — had only a return-value check.
+    // writeMarker is a kernel32 no-op off Windows and a file write on Windows;
+    // neither path touches engine_ptr, so the shipping (x86_64-windows) DllMain
+    // leaves the pointer exactly as PushCApplicationPtr set it. This test closes
+    // the coverage hole so the set is as strong as its comment claims; it is a
+    // self-contained add (no ordering dependency), asserting bitwise equality
+    // like the DETACH sibling.
+    var args = PushArgs{
+        .appPtr = @ptrFromInt(0xFEED),
+        .base = 0x140000000,
+    };
+    PushCApplicationPtr(&args);
+    try std.testing.expect(getEnginePtr() != null);
+
+    // PROCESS_ATTACH must not clear (nor otherwise touch) it.
+    _ = DllMain(null, 1, null);
+    try std.testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0xFEED)), getEnginePtr());
+
+    // Cleanup
+    args.appPtr = null;
+    PushCApplicationPtr(&args);
 }
 
 test "DllMain: DLL_THREAD_ATTACH does not clear engine_ptr" {
@@ -912,4 +967,10 @@ test "engine_ptr: multiple PushCApplicationPtr calls" {
     };
     PushCApplicationPtr(&args3);
     try std.testing.expectEqual(@as(usize, 0x300), @intFromPtr(getEnginePtr().?));
+}
+
+test "DLL entry points are inert off Windows" {
+    if (comptime builtin.os.tag == .windows) return;
+    try std.testing.expectEqual(@as(usize, 0), gameModuleBase());
+    try std.testing.expectEqual(@as(u32, 0), C1Run());
 }
