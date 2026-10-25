@@ -1,0 +1,7 @@
+{
+  "allow": [
+    {"popup_id": "text:2f6a8c1d0e4b9a7f3c5d6e8f9a0b1c2d3e4f5a6b",
+     "action": "dismiss", "label": "示例:某已确认无害的纯提示窗", "confirmed_by": "人工看屏 2026-10-25"}
+  ],
+  "_说明": "名单是数据,不是代码:改这份文件即可放行或收手,监督器不热加载,改完 restart serve。popup_id 从状态记录的 popup.popup_id 或日志 popup_seen 事件里抄,文本 id 在 OCR 状态非 ok 时会退化成几何 id。action 目前只有 dismiss 被识别,其余条目静默丢弃并计入 dropped_entries。geom:* 一律进不了名单: parse_allowlist 拒掉它(那个 dropped 计数目前只在函数内部算完就丢,不落日志也不进状态记录),抄进去既不报错也不放行,只会一直看到 popup_hold_unclassified —— 要放行必须在 OCR 状态 ok 时抄 text: id。上面这一条是**形状示例,不是真样本**:2026-10-25 的第一批实机留证(evidence/xrefs/popup_fingerprints_4_4_4.tsv,23 个 distinct id)里没有一条够格进名单 —— 21 条是调试控制台文本面板被切成的亮块,2 条是主 UI 切片(星图+舰队列表,里面没有 ✖ glyph),判读结论全是「只留证」。放行名单为空是这批数据的必然,不是保守。另两条抄 id 前要知道的性质: 同一扇窗在会话总额用尽后会从 text:* 换成 geom:*(所以按 text id 写的条目可能永远不再命中);而几何 id 带的是面板检测器的形状,主 UI 也能拿到一个「像弹窗」的 geom id。"
+}

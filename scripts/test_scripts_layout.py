@@ -112,7 +112,7 @@ def violates_family_depth(root):
                        "(bare-name imports + C:/temp wire contract)")
     return out
 
-_SCRIPT_REF_RE = re.compile(r"(?:^|[\s`(])scripts/([A-Za-z0-9_./-]+\.(?:py|js|sh|bat))",
+_SCRIPT_REF_RE = re.compile(r"(?:^|[\s`(])scripts/([A-Za-z0-9_./-]+\.(?:py|js|sh|bat)\b)",
                             re.MULTILINE)
 
 # The living docs named by the convention (``AGENTS.md`` 「scripts/ 命名与目录约定」,
@@ -354,6 +354,14 @@ def test_dangling_rule_fires_on_a_moved_script(tmp_path):
     (tmp_path / "docs" / "a.md").write_text("run `python3 scripts/nowhere.py`\n")
     hits = dangling_script_refs([tmp_path / "docs" / "a.md"])
     assert len(hits) == 1 and hits[0].startswith("a.md:")
+
+def test_a_json_reference_is_not_read_as_a_js_script(tmp_path):
+    # The extension alternation used to match the ".js" inside ".json", so a
+    # living-doc pointer to scripts/windows/popup_allowlist.example.json was
+    # reported as a dangling "popup_allowlist.example.js".
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "a.md").write_text("template: `scripts/windows/x.example.json`\n")
+    assert dangling_script_refs([tmp_path / "docs" / "a.md"]) == []
 
 def test_hardcoded_rva_rule_flags_a_rvas_dict(tmp_path):
     bad = tmp_path / "some_tool.py"

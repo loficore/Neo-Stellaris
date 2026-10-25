@@ -746,6 +746,15 @@ root_unreadable / **region** 七类行)。
     `no_effect: false`(`bbox_after` 出自同一个当初把右界量到侧栏的检测器,§59.2 的原失效模式并未被这条事件根除)。
     留痕把问题从「无痕」降级为「待复核」,判定仍靠下面的手动量测(`shot` + `just game click`)。
     **但 §59.2 只有一个反样本,不足以推量测式 —— 第一版刻意不发明几何规则**;复核要等下一次有窗的实机机会。
+    **2026-10-25 复核做过一次,结论是「未证正确」并把理由变强了**(`evidence/logs/unattended_popup_4_4_4.log` Step 6):
+    对 bbox `[879,555,1939,872]` 的那一拍,算得的点仍是 `(1843, 606)`;把当拍的工具自己存下的裁片
+    `C:\temp\ns_popup\geom_1060x320_r11.png` 取回本地人眼复核 —— 里面**根本没有 ✖ glyph**:左半是星图与舰船立绘,
+    中上是带白色六边形工程/科研图标的舰队条(亮度剖面最强标记在 screen x≈1504),右半是舰队列表文字,
+    而算得的点落在舰队列表文字上。⇒ 比「偏移差 500 px」更硬的一条浮出: **这个 bbox 不是一扇窗,是面板检测器
+    在主 UI 上切出的一块**;在它上面点 close_point 等于误点舰队列表。`no_effect` 那第三个数本场取不到
+    (两因叠加: 那一拍之后分类器转向了别的几何形状,而 `dismiss` 分支的前置 `paused == "paused"` 在
+    控制台覆盖层把脉冲图标读成 `state=unknown` 时不满足)。陷阱 10 的标题句因此**不改**:偏移对任何窗的正确性
+    仍未被证明,且现在多了一条不依赖 §59.2 那一个反样本的理由。
     复核之前的临时取代:先 `shot` + 裁 `titlebar` 量 glyph 中心,再 `just game click <x> <y>`(坐标是**屏幕绝对**的,
     `window_metrics` 的 bbox 已经加过窗口原点)。
 11. **`form=none` 是窗口陈述,不是调用者陈述。** `exec_frame_sites.py` 报 `none` 只说明**返回 RVA 前
@@ -930,6 +939,8 @@ just deploy                  # scp game_supervisor.py + launch_stellaris.py 到 
 just launch                  # 经 Steam 拉起游戏(launcher 点击 + 30 s 观察窗,启动后仍是暂停)
 just game start              # schtasks 拉起守护进程,见到状态心跳才返回
 just game status             # 一行摘要:state/note/pid/hwnd/age/want/policy/handled/cmd/speed
+just game serve --no-ocr     # 直接前台跑:整条身份路线只留几何,一次 OCR 都不问
+just game serve --popup-allowlist PATH   # 换名单文件(默认 C:\temp\ns_popup_allowlist.json)
 just game pause | unpause | toggle
 just game want playing       # 持久目标,不是一次性动作
 just game policy first       # first | last | random | <1-based n>
@@ -941,7 +952,7 @@ just game console effect every_system = { log = "X" }   # 原样写进控制台(
                                              # just/ssh 转手会被远端 shell 改写,驱动直接写命令文件
 just game console_sync open | closed | auto   # 人工声明面板当前是否开着(auto 交还给像素观测)
 just game console_close                      # 只在标记为「开」时按一下开关键,把状态收回「关」
-just game dismiss            # 只在 paused 且有窗口 bbox 时生效(需 serve --auto-dismiss)
+just game dismiss            # 只在 paused 且有窗口 bbox 时生效(人工一次性动作,不走名单)
 just game close              # WM_CLOSE 优雅关窗口(游戏会话内 PostMessage;不是 kill)
 just game shot               # 存 C:\temp\ns_game_shot.png
 just game stop | quit
@@ -952,7 +963,18 @@ just game stop | quit
 它带一个只生效一次的 `resume` 覆盖。`want=paused` 时反过来:只保留它自己发起的暂停。默认策略 `first`。
 
 产物:`C:\temp\ns_game_status.json`(状态心跳,含 `epoch`)、`ns_game_log.jsonl`、`ns_game_shot.png`、
-`ns_game_supervisor.out`(pythonw 的 stdout/stderr)。`state` 取值 `playing|paused|unknown|no_game|stopped`。
+`ns_game_supervisor.out`(pythonw 的 stdout/stderr)、`C:\temp\ns_popup\`(弹窗证据,**有界 40 张**,
+一个身份一张代表帧,重复见到同一 id 是覆写不是堆积)、`ns_popup_live.png`(每 tick 覆写的 OCR 输入帧,
+故意放在 `ns_popup\` **外面** —— 它不是证据,也不许被裁剪)。`state` 取值
+`playing|paused|unknown|no_game|stopped`。
+
+状态心跳新增 `popup` 一格:`{popup_id, source, ocr, ocr_ms, ocr_ms_total, attempts, same_hits}`。
+读法是「**最后一次识别到的弹窗**」,不是「当前帧上有这个窗」—— 当前 tick 到底有没有窗,看 `window` 与
+`note`。`ocr_ms_total` 是这一场为身份花掉的累计毫秒(会话总额 `POPUP_OCR_BUDGET_MS = 24 s`),
+`ocr` 那一格同时是降级原因:`ok` / `disabled`(`--no-ocr`)/ `budget_spent`(问光了)/
+`unavailable`·`model_missing`·`error`(眼睛坏了)。jsonl 新增事件
+`popup_seen`(判据全量)、`popup_evidence`(存证路径,`no_bbox` 时为 `null`)、`popup_decision`、
+`popup_prune`。
 
 **判读陷阱:**
 1. **SSH 会杀子进程树**,守护进程不能直接挂在 ssh 会话下。`start` 写一个只含 ASCII 的 `.cmd` shim,
@@ -968,8 +990,11 @@ just game stop | quit
 4. **事件窗口自己会暂停游戏,关窗口又可能自己恢复**。所以每次动作后都重新读图标,不复用上一 tick 的
    判读;`_restore` 发现链式窗口(刚关掉一个又弹一个)时推迟 Space,留给下一 tick 处理。
 5. **choice 的判据是金色行,不是 bbox**:行需 `x0>=1150 && x1>=1450`、至少 2 行、gold>=8000。
-   新闻窗口右边界约 1420,因此不会被当成选项。`dialog`(有面板、无金色行)只配 `dismiss`;
-   `serve --auto-dismiss` 默认关,因为点 ✖ 的几何只在实测过的窗口类型上可信。
+   新闻窗口右边界约 1420,因此不会被当成选项。`dialog`(有面板、无金色行)走**弹窗身份路线**
+   (`popup_tick` + `apply_popup_decision`):认得出且**名单里写了 `dismiss`** 才点 ✖,认不出、OCR 坏了、
+   名单缺失/坏 JSON、连点 3 次没效果、同一 id 连见 6 拍 —— 全部**停手**并留证。旧的 `serve --auto-dismiss`
+   开关与 `dialog_unknown` note 已随之删除:点 ✖ 的几何只在实测过的窗口类型上可信,而「可信」现在由名单表达,
+   不再由一个总开关表达。
 6. **数字键不选选项**(实测),必须点行中心。同一组行签名连点 3 次后记 `choice_stuck` 并停手,
    防止在无响应窗口上打转。
 7. **`console <text>` 走剪贴板,不是逐字符打字**:`parse_command` 保留 `<text>` 的大小写、内部空白
@@ -1037,6 +1062,73 @@ just game stop | quit
     配一次 `C2ScopeProbeStatsInto` 双读(`calls` 两秒不涨 = 热路径已还原)就把「Uninstall 跑过、引擎
     字节完好」证完,不需要驱动那行输出(§56.3)。
 
+12. **OCR 状态不是弹窗身份。** `ocr=unavailable` 只说明我们的眼睛坏了,`geom:*` 那条 id 仍可能对应一个
+    完全无害的窗;它的作用是让 daemon 停手,不是判那个窗有害。
+    **2026-10-25 实机补一条同族的: 身份会随「我们还问不问得出字」而变。** 同一扇窗的第一拍读到 12 行
+    ⇒ `text:26f8c449`,那一次就烧掉 27.1 s 把会话总额 24 s 用完;从第二拍起同一扇窗只能记成
+    `geom:1060x320:r11`。后果不是「换了个名字」而已:`same_hits` 从 0 重计,`id_stuck` 全部累计在
+    几何 id 上(本场 344 次),而 `text:` 那条 id 的 `attempts` 永远停在 0 —— 读表的人若按 id 聚合,
+    会把一扇窗看成两扇(一扇有字、一扇卡住)。
+13. **弹窗只在 `paused == "paused"` 时被扫**(本计划刻意**没**改成每 tick 无条件扫窗,所以不暂停游戏的
+    弹窗 —— 覆盖层、系统通知、驱动倒计时确认 —— 现在仍然看不见)。这是范围决定,不是缺陷;要扩到那一条
+    得另开计划,代价是每 tick 一次全窗口截图。
+14. **一次内联 OCR 就是把 daemon 停住那么久,而省钱的方式只有「少问」。** 实测成本 ≈ 固定 1.5 s +
+    每检出行 0.7 s(弹窗 5–8 行 ≈ 5–7 s,全图 73.7 s),supervisor 单线程 0.8 s 一拍 ⇒ 这段时间里命令
+    不读、心跳不写,`just game status` 会看到一条旧记录。**两条看着像省钱的路上当不得**:缩小裁片不省
+    时间也不省字(256 档反而 20.3 s 且逐行比对只剩 9/19 认对,surya 检测器自己会把输入放大到固定边长),
+    调 batch 也不省(CPU 默认已是检测 8/识别 32,单次 ≤20 行本来就在一批里)。所以看到「心跳怎么停了
+    7 秒」先查 `popup.ocr_ms_total` 有没有在涨、`ocr` 那一格是不是 `budget_spent`,而不是去改图片尺寸。
+    **2026-10-25 实机读数把这条的成本抬高、节拍改口**:加载 `STATUS=ok MS=7494`(不是 1.5 s 那一档),
+    一次 12 行裁片在 tick 内共 27,134.9 ms(扣加载 ⇒ 预测量 ≈ 19.6 s ≈ 基准线的 1.98 倍,刚好没到「两倍算异常」),
+    一扇窗的首次真识别就把 `POPUP_OCR_BUDGET_MS = 24 s` 用光。节拍: 有窗时相邻 popup 三元组实测
+    **≈ 2.2–2.5 s 一组**(不是这里写的 0.8 s),所以一次询问 ≈ 丢 11–12 拍。另外「用前后两行日志的时间差
+    量停摆」这个设想在**边沿触发的第一枪**上用不了 —— 它前面没有 popup 行可比,只能读 `ms` 字段。
+
+### `scripts/windows/popup_*.py` —— 弹窗身份三件套
+
+名单是**数据,不是代码**:放行哪些弹窗改 `C:/temp/ns_popup_allowlist.json`,监督器不热加载,改完
+`just game stop` + `start`。格式与一条抄 id 的路径:
+
+```
+{"allow": [{"popup_id": "text:<8位hex>", "action": "dismiss"},
+           {"popup_id": "geom:<宽>x<高>:r<行数>", "action": "dismiss"}],
+ "confirmed_by": "人工看屏 2026-10-25"}
+```
+
+- `popup_id` 从**状态记录的 `popup.popup_id`** 或日志 `popup_seen` 事件里抄,别手算:文本 id 只对
+  「OCR 读到且规范化后非空」的窗存在,OCR 状态非 `ok` 时同一个窗的 id 是 `geom:*`(见陷阱 12)。
+- `action` 目前只有 `dismiss` 被识别;不认识的对象/键**静默丢弃**并计入 `dropped_entries` —— 拼错的条目
+  既不会放行也不会报错,只有状态记录的 `allow_status` 说它整份可不可解析。文件缺失/坏 JSON ⇒
+  `absent`/`malformed`,名单换成空表,处置一律退成 hold。模板在
+  `scripts/windows/popup_allowlist.example.json`。
+- **`geom:*` 进不了名单(2026-10-25 收尾审查后加的,代码层,不是提醒)。** 上面那个格式块里
+  `geom:<宽>x<高>:r<行数>` 那行**照抄无效** —— `parse_allowlist` 现在拒掉任何以 `geom:` 开头的
+  `popup_id`。**那个 dropped 计数目前不落任何盘面**(`load_allowlist` 只把名单和状态返回给
+  `popup_tick`,`dropped_entries` 在 `parse_allowlist` 里算完就被丢掉),所以实际效果就是**静默
+  不放行**:抄进去既不报错也不放行,只会一直看到 `popup_hold_unclassified`。理由: 一个 10 px
+  的几何桶不是一次人工确认,而 OCR 不可用时**同一个窗的 id 恰恰就是 `geom:*`**(陷阱 12);留着它
+  等于把「读不到 ⇒ hold」换成「读不到 ⇒ 形状对上就点」。一期取证还给了两条实证: 2 个 `geom:` id
+  是主 UI 切片(屏上没有 ✖),同一扇控制台面板的 bbox 一场之内从 `340x970` 漂到 `1500x1000`。
+  要放行就必须在 OCR 状态 `ok` 时抄 `text:` id。
+  同一次审查还钉了 `load_allowlist`: 记事本存成 UTF-16 的名单现在算 `malformed`(整个 `read()`
+  都包在 `ValueError` 里,以前 `UnicodeDecodeError` 会逃进 serve 循环把守护打死)。
+  另: `console_open` 现在是**正向**判据 —— 只有 `is False`(看清了控制台关着)才允许点,`None`
+  (看不清)一律 hold,note `popup_hold_console_unknown`。本场 `console_panel` 只命中 18/385 个边缘,
+  所以这条在检测器重新标定之前实际把「放行」能力停在一边;名单本来是空的,没损失任何已验证的行为。
+- **抄 id 之前先确认那块亮的是不是一扇窗。** 第一批实机留证给了比例:一场 385 次边缘、23 个 distinct
+  `popup_id`,其中 **21 个是调试控制台的文本面板**被亮度剖面切成的一块块(形状从 `340x970` 一路漂到
+  `1500x1000`,所以每换一次形状就是一个新 id),**2 个是主 UI 切片**(星图 + 舰船立绘 + 舰队侧栏,
+  里面根本没有 ✖ glyph)。`console_panel` 这条 reason 在那一场只认出 **18/385** 次边缘,其余全部以
+  `unclassified_hold` / `id_stuck` 停手 —— 停手是对的方向,但**别把这些 id 当弹窗抄进名单**。
+  逐条判读在 `evidence/xrefs/popup_fingerprints_4_4_4.tsv`。
+- 三个模块的分工:`popup_identity.py`(指纹与名单解析)、`popup_guard.py`(判据与熔断,阈值只在这定义)、
+  `popup_ocr.py`(引擎唯一出口)。前两个 stdlib-only,Linux 上就能 `import` 并跑测试;`popup_ocr` 只在
+  Windows 宿主上跑得动(surya + torch CPU 轮子),但它的**加载成本现在有了实机数字**:2026-10-25 首枪
+  `python C:\temp\popup_ocr.py warm` 量到 `STATUS=ok MS≈6.1 s`(两个 predictor 构造 + 权重读盘,torch 的
+  pynvml FutureWarning 也在其中)—— 计划里那个「≈1.0 s」是更早 spike 只量构造、权重已被另一进程暖过的
+  数,**不要**再拿它估无人值守的启动停摆。`warm|<png>` CLI 就是为这条测量存在的(Task 6 不开 daemon 也能
+  量),`LINES` 用来把「慢在机器」和「这窗字多」分开。
+
 ### `scripts/windows/keep_awake.py` —— 桌面可达性守护
 
 常驻在交互会话里,用 `SetThreadExecutionState` 顶住空闲,并**观测**当前输入桌面名以判定桌面可达性。
@@ -1089,8 +1181,15 @@ just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
 5. **`assert_rc` 是日志字段,不是判据**。`SetThreadExecutionState` 返回 `0`(断言压根没挂上)时 `check`
    与 `keep_awake_gate` 照旧放行 —— 两处的判决只看 `state`/`epoch`/`desktop`。断言真的挂没挂,证人只有
    `powercfg /requests`(第 3 条)。
-6. **`locked` 那一格实机未取**。2026-10-24 的验收全程无人按 `Win+L`,所以锁屏分支只有离线测试钉着;
+6. **`locked` 那一格实机取到了,但不是 `locked`**。2026-10-24 的验收全程无人按 `Win+L`,所以锁屏分支只有离线测试钉着;
    日志 §8 留了补它的命令与 Expected(`DESKTOP=locked`、`RC=1`、`desktop_detail` 含 `Winlogon`)。
+   **2026-10-25 有人按了**(`evidence/logs/unattended_popup_4_4_4.log` Step 3):实际读数是
+   `DESKTOP=unreadable_denied` —— 守护进程的 `OpenInputDesktop` 被拒(err=5),我们**连桌面名字都问不到**,
+   所以期望里的 `Winlogon` 永远进不到 `desktop_detail`。两条后果:①「锁着」与「这台机不让我看桌面」在状态串
+   里是同一个形状,任何按 `locked` 字面量写的判据在这台机上永不触发;②`just awake check` 的 rc 仍按
+   「非 reachable ⇒ 1」判,但那是 `check_exit_code` 的纯函数推论,**实机 rc 本场未回显,待复测**。
+   同场拿到的关键正面读数:**锁屏期间 daemon 心跳继续更新**(`STATE=serving`、`age<2 s`、`epoch` 递增)
+   —— 「daemon 活着但动不了手」与「daemon 死了」靠心跳可分,靠 desktop 字段不可分。
 
 **与开枪的关系:**`c4_wiring_probe._flow` 的**第一道门**读 `ns_awake_status.json`,
 `keep_awake_gate` 的六个 verdict —— `keep_awake_absent|keep_awake_stopped|keep_awake_stale|

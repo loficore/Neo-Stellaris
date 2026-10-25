@@ -1,0 +1,24 @@
+popup_id	source	样本数	bbox	ocr_状态	文本头行	有无选项行	首见	reason_分布	人眼内容	判读结论	是否进名单
+geom:1060x320:r11	geometry	349	1060x320:r11	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T18:50:47	id_stuck=344 unclassified_hold=5	主 UI 切片: 星图 + 舰船立绘 + 舰队侧栏,无 ✖ glyph	只留证	否
+geom:530x1000:r3	geometry	4	530x1000:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:05:55	unclassified_hold=4	调试控制台文本面板	只留证	否
+geom:350x970:r13	geometry	4	350x970:r13	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:06:57	console_panel=4	调试控制台文本面板	只留证	否
+geom:340x970:r10	geometry	3	340x970:r10	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:06:49	console_panel=3	调试控制台文本面板	只留证	否
+geom:1510x990:r3	geometry	3	1510x990:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:07:25	console_panel=2 unclassified_hold=1	调试控制台文本面板	只留证	否
+geom:680x990:r3	geometry	2	680x990:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:05:34	unclassified_hold=2	调试控制台文本面板	只留证	否
+geom:650x980:r3	geometry	2	650x980:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:05:36	unclassified_hold=2	调试控制台文本面板	只留证	否
+geom:1440x950:r4	geometry	2	1440x950:r4	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:05:45	unclassified_hold=2	调试控制台文本面板	只留证	否
+geom:530x980:r3	geometry	2	530x980:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:07:11	unclassified_hold=2	调试控制台文本面板	只留证	否
+text:26f8c449	text	1	1060x317(与 geom:1060x320:r11 同 bbox)	ok	未存原文(日志只记 texts_n=12);人眼: 舰队列表舰名与「工程/科研」标签	无	2026-10-25T18:50:44	unclassified_hold=1	主 UI 切片: 星图 + 舰船立绘 + 舰队侧栏,无 ✖ glyph	只留证	否
+geom:880x950:r3	geometry	1	880x950:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:05:50	console_panel=1	调试控制台文本面板	只留证	否
+geom:670x910:r3	geometry	1	670x910:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:05:53	unclassified_hold=1	调试控制台文本面板	只留证	否
+geom:350x970:r11	geometry	1	350x970:r11	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:06:43	console_panel=1	调试控制台文本面板	只留证	否
+geom:340x970:r11	geometry	1	340x970:r11	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:06:46	console_panel=1	调试控制台文本面板	只留证	否
+geom:350x970:r14	geometry	1	350x970:r14	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:07:06	console_panel=1	调试控制台文本面板	只留证	否
+geom:510x920:r4	geometry	1	510x920:r4	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:07:09	console_panel=1	调试控制台文本面板	只留证	否
+geom:870x970:r3	geometry	1	870x970:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:07:21	unclassified_hold=1	调试控制台文本面板	只留证	否
+geom:1500x990:r3	geometry	1	1500x990:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:07:33	console_panel=1	调试控制台文本面板	只留证	否
+geom:620x910:r2	geometry	1	620x910:r2	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:07:37	console_panel=1	调试控制台文本面板	只留证	否
+geom:770x980:r2	geometry	1	770x980:r2	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:08:38	unclassified_hold=1	调试控制台文本面板	只留证	否
+geom:770x1000:r2	geometry	1	770x1000:r2	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:08:40	unclassified_hold=1	调试控制台文本面板	只留证	否
+geom:1500x1000:r3	geometry	1	1500x1000:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:08:47	console_panel=1	调试控制台文本面板	只留证	否
+geom:420x990:r3	geometry	1	420x990:r3	budget_spent	not_asked(会话总额已用尽)	无	2026-10-25T19:08:50	console_panel=1	调试控制台文本面板	只留证	否

@@ -37,7 +37,7 @@
 
 第五条旧事实「静态输入已在本地」不在这里重复:exe 路径、sha256、`NS_STELLARIS_EXE` 覆盖见 `docs/offline-tooling.md`「前置条件」。
 
-**实机枪可用的前提是 Windows 机时与 SSH 隧道在 —— 这是环境约束,不是门。**
+**实机枪可用的前提是 Windows 机时与 SSH 隧道在 —— 这是环境约束,不是门。** 无人值守弹窗处置这条线**能力已上线、放行名单为空 ⇒ 当前全部停手留证**:2026-10-25 第一批实机留证的 23 个 distinct `popup_id` 全部判「只留证」(21 条是调试控制台文本面板被切成的亮块、2 条是主 UI 切片),证人 `evidence/xrefs/popup_fingerprints_4_4_4.tsv`。
 
 | 阶段 | 状态 | 证据 | 计划 | 第一前置 |
 |---|---|---|---|---|
@@ -90,7 +90,7 @@ host 存活;**§50 压测**让另 7 条 `container_of` 路径在实机跑满(`C2
 - **C6 验收**：判据 = 日志 + 可复现行为，且官方 scripted_effects 路径不受影响。
   前置 = C4/C5 至少一条落地；授权级 = 点名(实机只读观测,不新增门)；不能成计划 = 验收对象的形状还没定。
 - **launcher `LAUNCHER_CLICK` exit-23**(`EXIT_LAUNCHER_NO_ADVANCE`：三轮点击 + settle 后窗口不推进)：判据 = 缺陷定位到具体那一步。
-  前置 = Windows 机时 + SSH 隧道（环境约束,非门）；授权级 = 一枪(定位缺陷要远程实跑 launcher 观测,每次跑都占该机时枪数)；不能成计划 = 连「点击没送达」还是「窗口判断错」都还不知道(`scripts/windows/launch_stellaris.py`)。
+  前置 = Windows 机时 + SSH 隧道（环境约束,非门）；授权级 = 一枪(定位缺陷要远程实跑 launcher 观测,每次跑都占该机时枪数)；不能成计划 = 2026-10-25 实机批次里 `just launch` **RC=0**,本场未复现 exit 23 ⇒ 三档诊断「点击没送达 / 窗口判断错 / 别的」一个样本都没有(不是已排除某一档)(`scripts/windows/launch_stellaris.py`)。
 - **真正的 `CEventScope` 是哪个对象**：判据 = 拿到一个真的 `arg2` 并逐字段读通。
   前置 = §56 那一枪的负结论被 §56.8 撤回,仪器**已修正**(按源分预算、判据进 TSV meta 行、加 `VirtualQueryEx` 区域判读,PR #13 / merge `534116d`),并按修正流程重打成功 = **§59**(pid 22220,`calls=3061 samples=5`;四根全跟到 `self=4/helper=2/arg3=1/arg4=1`、`capped`/`withheld`/`unreadable_roots` 全 0 ⇒ `no_scope_candidate` 这次是问完了的负结论)。§56.8 末段的低地址未决项**已答** = 绝对地址,7 个根同在一个 `MEM_PRIVATE` RW 8 KB 区(`base=0x7fe000`,分配起于 `0x400000`);§56.5 第 4 问**已答** = `arg3`/`arg4` 载的是代码(`arg3` 指回 `0x1D08520` 本身、`arg4` 是三点复制 thunk),候选只剩 `self`/`helper`;唯一可判的 vptr `0x247a358` 已降级(其 Execute 槽是计数访问器)。**仍未收口**:哪个对象是 scope。§58 的因果句(控制台⇒暂停)由 §59.1 证伪,开枪前置改为单条「紧邻开枪读 `state=playing`」(判读陷阱 9)。授权级 = 离线 **无**、重打 = 点名(pid 22220 额度已用尽,清理已验 `installed=0 verified=0`);不能成计划 = §26.2 明写仍未定,且同形状再打没有信息增量 —— 要的是 self/helper 上**更深的跟读形状**,或先从 §53 普查表 `origin=incoming_arg` 那条往上定帧构造点(零枪,应先做)。**§60 已判承载函数路线(判决 `frame_ctor_found`,仅限该路线;`incoming_arg` 那条零枪普查路线未做完)**:执行帧就在承载函数 `0x1c42fe0..0x1c43884` 内构造(2 处 vptr 写 + 4 处字段写,逐条字节在案),`0x16fdc0`/`0x1d129a0` 两条线索判死为写者(其 `[rsp+0x38]` 是各自栈里的 string capacity 暂存),共享 sink `0x1d11860` 零帧存储、写全停在 helper 一侧;承载函数无直接调用者,唯一静态持有者是 vtable `0x26d4dd0` 槽 +0x28(异步 effect 队列类,ctor `0x1c42d30` 由 'Default Game'/'Game' 两处静态构造);**普查路线的 `incoming_arg` 行未做完** —— 普查表第 1 行 `0x1bcd120` 的帧来源仍待上游判定(§60.6 末条/§60.7-5),谁经队列派发(`[0x26d4dd0+0x28]` 形态的派发方集合)同为 §60.7 未决项,与 `AGENTS.md` 两条口径一致 —— scope 一问未动,§59 的 `no_scope_candidate` 原样保持。
 - **`0x24F9910` 的槽号归属**：判据 = 那个数组的偏移各对应哪个虚槽。

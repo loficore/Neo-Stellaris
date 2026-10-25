@@ -115,6 +115,9 @@
 | `launch_stellaris.py` | 从无人值守的 SSH 会话经 Steam 拉起游戏，点过 launcher 的对话框，可选 `--unpause` |
 | `game_supervisor.py` | 长驻监督器：读暂停图标与事件窗口，按 `want`/`policy` 维持运行态、选事件选项、改速度、截图；文件命令通道 + schtasks 生命周期 |
 | `keep_awake.py` | 顶住空闲 + 观测桌面可达性，产出 `C:\temp\ns_awake_status.json`（Windows 侧；`just awake check` 的退出码） |
+| `popup_identity.py` | 弹窗身份的纯核：文本/几何指纹与名单解析（stdlib-only，Linux 可 import） |
+| `popup_guard.py` | 处置判据与熔断：名单/预算/同 id 连见的 `decide_action`，阈值只在这里定义 |
+| `popup_ocr.py` | OCR 单一出口：`ocr_texts()` 永不 raise，返回 `(texts, status, ms)`；`warm\|<png>` CLI 量加载与每帧成本 |
 
 ## 一次性探针：`scratch/`
 
