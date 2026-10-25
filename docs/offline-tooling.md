@@ -4,8 +4,8 @@
 它编码的 capstone/PE 陷阱、以及曾经导致错误结论的度量口径。`AGENTS.md` 只保留一行一条的索引,
 用到哪个脚本时再来读这里。
 
-结论本身(§17–§30)在三卷取证日志 `evidence/analysis/runtime_444_*.md`——§16–§23 在
-`runtime_444_keyword_pipeline.md`,§24–§30 在 `runtime_444_c1_validation.md`;本文件只讲**怎么量**。
+结论本身(§17–§60)在三卷取证日志 `evidence/analysis/runtime_444_*.md`——§16–§23 在
+`runtime_444_keyword_pipeline.md`,§24–§60 在 `runtime_444_c1_validation.md`;本文件只讲**怎么量**。
 
 ## 前置条件
 
