@@ -889,6 +889,19 @@ def save_popup_evidence(hwnd: int, bbox, out_path: str, popup_id: str):
     return out_path
 
 
+def forget_popup_reading(state: dict) -> None:
+    """Drop the geometry memo and the text it was paired with.
+
+    Edge triggering exists so one dialog is OCR'd once, not so the *last*
+    dialog's words describe the next one: two panels in the same screen slot
+    bucket to the same 10 px geometry, and a reused reading would let an
+    allowlisted identity dismiss a window the allowlist never named.  Serve
+    calls this whenever a tick reads no dialog.
+    """
+    state["popup_geom_id"] = None
+    state["popup_texts"] = []
+
+
 def popup_tick(hwnd: int, png_path: str, nbbox, row_count: int, state: dict,
                ocr, ocr_enabled: bool = True, now: float | None = None,
                allow_path: str | None = None) -> dict:
@@ -1249,6 +1262,8 @@ def serve(args) -> int:
         if window != "choice":
             state["last_sig"] = None
             state["same_hits"] = 0
+        if window != "dialog":
+            forget_popup_reading(state)
         if paused == "playing":
             state["resume"] = False
         action, extra = plan_step(state["want"], paused, window,

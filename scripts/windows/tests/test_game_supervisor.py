@@ -326,13 +326,24 @@ def test_serve_loop_invalidates_the_belief_after_every_auto_click():
     # The auto window handlers click in the game area, which can close the
     # console panel.  The serve loop itself is not reachable from a host test,
     # so this fence pins the invalidation right next to each click it makes.
+    # Two sites since the popup path landed: the choice click is inline, and
+    # the dialog click moved into apply_popup_decision, so what serve shows is
+    # the popup_dismissed verdict that the click produced.
     src = inspect.getsource(gs.serve).splitlines()
     clicks = [i for i, line in enumerate(src)
-              if "click_row(hwnd" in line or "click_close(hwnd" in line]
-    assert clicks, "the serve loop no longer clicks; update this fence"
+              if "click_row(hwnd" in line or 'note == "popup_dismissed"' in line]
+    assert len(clicks) == 2, "serve no longer has both auto-click sites"
     for i in clicks:
         assert any('state["console_open"] = None' in line
                    for line in src[i:i + 4]), src[i]
+
+
+def test_serve_forgets_the_popup_reading_while_no_dialog_is_up():
+    # Same source-fence style as the two above: the wiring that makes a new
+    # dialog a fresh OCR edge is in the loop, not in popup_tick.
+    src = inspect.getsource(gs.serve)
+    assert 'forget_popup_reading(state)' in src
+    assert 'window != "dialog"' in src
 
 
 # --- console panel OBSERVATION (calibrated live 2026-10-23, evidence §54.10) ---
@@ -645,3 +656,66 @@ def test_a_click_that_never_happened_does_not_burn_the_dismiss_budget():
         logger=lambda rec: None)
     assert note.startswith("dialog_click_failed")
     assert state["popup_attempts"] == 0
+
+
+def test_forgetting_the_reading_makes_the_next_dialog_an_edge_again():
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0, "popup_ocr_ms": 0.0}
+    calls = []
+    box = [0, 0, 900, 400]
+
+    def ocr(path):
+        calls.append(path)
+        return (["first dialog"] if len(calls) == 1 else ["second dialog"],
+                "ok", 10.0)
+    gs.popup_tick(0, "p.png", box, 0, state, ocr, now=1_000.0)
+    gs.popup_tick(0, "p.png", box, 0, state, ocr, now=1_001.0)
+    assert len(calls) == 1                       # 同一扇窗:几何没变就不再问
+    first_id = state["popup_id"]
+    gs.forget_popup_reading(state)
+    got = gs.popup_tick(0, "p.png", box, 0, state, ocr, now=1_002.0)
+    assert len(calls) == 2                       # 换了窗、几何一模一样,也得重看
+    assert got["source"] == "text" and got["popup_id"] != first_id
+
+
+def test_a_second_dialog_of_the_same_shape_is_not_dismissed_as_the_first(monkeypatch):
+    # The failure this pins: inheriting an allowlisted identity across two
+    # different dialogs that bucket to the same 10 px geometry, and clicking a
+    # window the allowlist never named.
+    allow = {}
+    monkeypatch.setattr(gs, "load_allowlist", lambda path: (dict(allow), "ok"))
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0, "popup_ocr_ms": 0.0}
+    box = [0, 0, 900, 400]
+    lines = iter([["proceed?"], ["something else"]])
+
+    def ocr(path):
+        return next(lines), "ok", 10.0
+    first = gs.popup_tick(0, "p.png", box, 0, state, ocr, now=1_000.0)
+    allow[first["popup_id"]] = "dismiss"
+    again = gs.popup_tick(0, "p.png", box, 0, state, ocr, now=1_001.0)
+    assert again["action"] == "dismiss"           # 同一扇窗:读数就用
+    gs.forget_popup_reading(state)                # 窗下了,读数作废
+    fresh = gs.popup_tick(0, "p.png", box, 0, state, ocr, now=1_002.0)
+    assert fresh["popup_id"] != first["popup_id"]
+    assert fresh["action"] == "hold"
+
+
+def test_a_dialog_without_geometry_holds_and_records_no_evidence_path():
+    # Ruling R11: no geometry means nothing to crop, so the saver must not be
+    # called -- but the decision still has to leave an evidence event behind.
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0}
+    clicked, saved, logged = [], [], []
+    got = gs.popup_tick(0, "p.png", None, 0, state,
+                        lambda p: (["some text"], "ok", 5.0), now=1_000.0)
+    assert (got["action"], got["reason"]) == ("hold", "no_bbox")
+    note = gs.apply_popup_decision(
+        0, None, got, state, clicker=lambda h, b: clicked.append(b),
+        saver=lambda h, b, png, pid: saved.append(pid),
+        logger=lambda rec: logged.append(rec))
+    assert note == "popup_hold_no_bbox"
+    assert clicked == [] and saved == []
+    assert [r["event"] for r in logged] == ["popup_seen", "popup_evidence",
+                                            "popup_decision"]
+    assert logged[1]["path"] is None
