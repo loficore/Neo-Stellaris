@@ -70,7 +70,7 @@ PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 
 **判读陷阱:`--who-tables` 那张「命中 N 张表」的表,不能拿来证明「引擎复制了表」。** 两个独立原因,
 每一个都足以让这条推断作废(§57 就是在核这一条):
-① **候选集对同一段指针数组产出多个重叠起点**(Task 3 为了让下限集成为子集必须这样构造),所以行数永远
+① **候选集对同一段指针数组产出多个重叠起点**(`rttibatch.py --all-vtables` 的候选枚举为了让下限集成为子集必须这样构造),所以行数永远
 大于物理槽地址数 —— 4.4.4 上实测 **7,867 行 / 7,832 个表首 / 992 个物理槽**;
 ② **靶子若是共用实现,命中数就正比于「继承它的兄弟类个数」,与复制无关** —— `0x3AFD30`(donor 表 slot[1]
 的 Execute 覆写)在镜像里以静态 qword 出现 **538** 次,`0x3B01A0` **454** 次。
@@ -92,7 +92,7 @@ rip-relative operand with the RVA it resolves to; this is what pinned the descri
 **`--end=<rva>` / `--len=<n>` 是自 §59.9 起才有的显式形式**(§59.9 那条「往上定帧构造点」的零枪路线要按真边界取区间),
 **取证卷里旧命令一律按旧语义复现** —— 上面那个 `>0xFF` 启发式没有被改写,只是搬进了可测的纯函数 `parse_range`;
 裸数字口径、头一行 `; <exe>  <sec> RVA 0x…  (N insns)` 的条数、rip 注解写法全部不变
-(`scripts/test_disrva.py` 钉语义,影子副本 `git show HEAD:scripts/disrva.py` 逐字节钉输出)。
+(`scripts/test_disrva.py` 钉语义;影子副本基准用**已冻结的改动前修订** `git show 02eb551:scripts/disrva.py`(本分支 base,即 `git merge-base main HEAD`)逐字节钉输出 —— 意图是「重跑旧实现,输出与改动前逐字节相同」;**基准不写 `HEAD`**,合并之后 `git show HEAD:scripts/disrva.py` 就是新实现自己,自比自恒等,这条钉会静默失效)。
 `--end=` 的第二段就是结束 RVA(不含),`--len=` 是字节长度;两者与裸数字一样**不猜**:结束 RVA 低于起始、
 非十六进制、负数、`--flag` 缺少数值、未知 flag —— **任何不可判 = 拒绝**,一行 `[disrva] …` 进 stderr 并退出 2。
 
@@ -146,13 +146,13 @@ vtable 集合里(两张集都只扫 `.rdata`),所以「新集一条都没加」�
 **重读 exe 字节、按字节反解 shot 记录的真实 call site —— 不是 `-5` 估值。** 背景在 §59.7 与下面
 `c2_scope_probe` 一节的 CALLERS 口径:枪记的是**返回 RVA**,`E8 rel32` 是 5 B,而每一次 vtable 槽
 派发(`call qword ptr [rax+8]`)只有 3 B;把 `ret-5` 当站点会把 mem 形状的点画进前一条指令中间,
-census join 落空,`func=-` 于是被误读成「没人调用」。Task 2 把产物键降回返回 RVA,本工具是「精确
+census join 落空,`func=-` 于是被误读成「没人调用」。`c2_scope_probe.py` 的 caller 行键已降回返回 RVA,本工具是「精确
 反解」的另一半。**exe 候选链 import `disrva.resolve_exe`**(同一份 `NS_STELLARIS_EXE` 口径,不复制
 第二份路径表,也不需要镜像基址 —— 全部地址运算在 RVA 空间对消)。
 
 **用法**:`python3 scripts/exec_frame_sites.py --probe evidence/logs/scope_probe_v4_4_4_4.tsv`
 (`--census` 默认 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`,`--out` 默认
-`evidence/xrefs/exec_frame_sites_4_4_4.tsv`)。caller 行两代形状都认:Task 2 起 detail 带 `ret=`
+`evidence/xrefs/exec_frame_sites_4_4_4.tsv`)。caller 行两代形状都认:新版 `c2_scope_probe.py` 起 detail 带 `ret=`
 直接用;v4 及更早键是估值,`ret = key + 5` 且计入汇总的 `assumed` 计数 —— **assumed 行读出的
 site/func/census 一律以反解结果为准,估值只是对账**。
 

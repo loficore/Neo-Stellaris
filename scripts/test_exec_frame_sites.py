@@ -3,7 +3,7 @@
 合成字节不碰 exe;只有带 ``read_real_exe`` fixture 的那两条需要本机有 exe 拷贝
 (``resolve_exe()`` 为 None 时整条 skip,这台机器上它是可选的 —— 但本机确实有)。
 
-歧义那条的候选是**实跑打印后钉死**的(计划简报明令不许靠注释猜):REX 重叠
+歧义那条的候选是**实跑打印后钉死**的(本工具的判读卡明令不许靠注释猜):REX 重叠
 ``48 FF 50 08`` 与 ``FF 50 08`` 都恰好结束于返回点,这是真实的反汇编边界歧义。
 """
 import pathlib
@@ -247,8 +247,8 @@ _CENSUS_FIXTURE = (
 
 
 def test_local_census_fallback_matches_shared_loader(tmp_path):
-    # `_load_call_census_local` 是 plan-sanctioned 的逐字重复(brief Step 3:共享路径
-    # 可能因 c2_harness 缺席而 import 炸)。两份一旦漂移,缺 c2_harness 的机器会静默
+    # `_load_call_census_local` 是刻意保留的逐字重复:共享 loader 的 import 链可能因
+    # 缺 `c2_harness` 而炸,本地回退必须不依赖它。两份一旦漂移,缺 c2_harness 的机器会静默
     # 拿到不同的 census join —— 这条用同一 fixture 钉两边输出**完全相等**。
     p = tmp_path / "census.tsv"
     p.write_text(_CENSUS_FIXTURE, encoding="utf-8")
