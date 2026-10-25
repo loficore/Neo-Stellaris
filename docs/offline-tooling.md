@@ -38,6 +38,43 @@ is the step that requires it — `zig build test` does not.
 历史计数:`293/293`,until `effects/id_mapper.zig` and its 21 tests were retired,
 then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不要拿这两个旧数当现在的门限。
 
+**当前基线(2026-10-26 issue #18 win32-link 计划实施,任务 5 复测于 commit `78fd294`)**:
+`zig build test --summary all` → `Build Summary: 29/29 steps succeeded; 599/599 tests passed`,退出码 **0** ——
+**failed 步归零**。上面 Host caveat 那句「1 个 failed 是环境事实」的判读**已被本次实施作废**:exports 根
+在宿主 target 上不再引用 kernel32(comptime 守卫,本计划四枪 `a48965e`/`92bfdf3`/`0b09863`/`78fd294`),
+现在真跑;裁定 **P15 那条「这一步记为绿」自此不再需要**(P15 文本住在不入库的私有归档,此处不复述)。
+上段的全部数字(`24/27; 314/314`、`22/25 … 296/296`、`293/293`/`272/272`、GLIBC 旧叙述)保留为历史读数,
+追加不改写。这条基线的完整判读:
+
+- **门的读法**:全绿时 `zig build test` **不打** Build Summary,`--summary all` 才看得见 `29/29` 那行。
+  判据是**退出码 0 + `29/29 steps succeeded`**;**单看 `tests passed` 总数会误读** —— 一个 import 文件的
+  test 在**每个**导入它的根里各计一次(实测:本计划往 `hooking/windows.zig` 加一条 test,总数
+  `445 → 447`,+2)。总数账:`599 = 445(基线 13 个绿根) + 2(Task 1 新增一条在两个根各计一次) + 152(exports 根首次链接进总数)`。
+- **exports 根现在收集并运行 152 条**,其中**净新跑 = 35** —— `src/dll/exports.zig` 11 +
+  `src/dll/c2/handler.zig` 6 + `src/dll/scripted/keyword_registry.zig` 18(这三族只被 exports 根收);
+  其余 **116** 条基线就在别的根里跑、现被跨根重复计数,另 **1** 条是本计划任务 1 新写的
+  (`152 = 35 + 116 + 1`)。旧失败符号 8 个是 `CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`/
+  `VirtualProtect`/`VirtualFree`/`GetCurrentProcess`/`FlushInstructionCache`(此前括号只列了 4 个,是旧句的
+  半份名单,现在只剩历史读法)。
+- **已知残留缺口 —— 至今零执行 29 条**(`src/dll/api/bridge.zig` 19 + `src/dll/effects/handler.zig` 5 +
+  `src/dll/triggers/handler.zig` 5):成因**不是链接,是可达性** —— `main.initializeQuickJS` 无调用点
+  (Zig 惰性分析不把 `bridge` 拉进 exports 根)、那两个 handler 在整个 `src/` 树零 importer;结构旁证:
+  `bridge.zig:31-32` 按路径引入 gamestate/scope,而它们用命名模块 `@import("offsets")`,exports 根没有
+  `addImport("offsets")` —— 若 bridge 真在闭包里,该根会编译失败而非绿。这 29 条**本计划没有填**,
+  基线句不许把它们含混成「都跑起来了」。
+- **`-Dtest-target` 已删除**(commit `78fd294`,`build.zig` +1/−6):删后 `zig build test
+  -Dtest-target=x86_64-windows-gnu` 的表现是**明确报错,不是静默忽略** —— zig 0.16.0 打
+  `error: invalid option: -Dtest-target`,退出码 **1**(对照探针 `-Dnonexistent-option-xyz=1` 同退出码 1)。
+  cross-target 路线就此没有入口;`c2_diag_test.zig` 那个 `{d}` for `*anyopaque` 编译错误**不修** —— 它的
+  入口随选项一起没了,记下来是为了下一个人别把它当新 bug。`evidence/analysis/build_pipeline_status.md`
+  `:11`/`:36` 的旧运行方式记录按取证约定原样保留(追加不改写),现已过期。
+- **出货 DLL sha256 变了**:本 commit 现场实测 `652ee10bbd7b51450a28dd28489fc83057517b3b6b46143ae0d164357c51b895`
+  (2026-10-26,`zig build` 后 `sha256sum zig-out/bin/stellaris_quickjs.dll`)。差异归因:取证 §46 记的
+  `77c0c35e…c11ad0` 与本分支**未改代码前**的基线(`df50f3e1f34f38a90850febc49808c599b35ceebb0570edbbda7c25a11ecfcdd`)
+  就不一致 —— 那是**旧句过期,不是本计划造成的**;出货字节确因任务 2 的 `exports.zig` 生产代码改动而变
+  (comptime 守卫只剪宿主侧,Windows 那一支仍是真调用,pefile 验过 8 个 kernel32 符号全在 import 表)。
+  **下次实机读数按新 sha 认。**
+
 ## 基础:PE + capstone,不需要 IDA
 
 **Static RE runs offline here, no IDA**: `scripts/cap.py` (PE + capstone, rip operands) and `scripts/rttibatch.py`
