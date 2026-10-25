@@ -64,9 +64,12 @@ then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不�
   基线句不许把它们含混成「都跑起来了」。
 - **残留的 kernel32 引用点(守卫覆盖面之外,不是漏网)**:`hooking/windows.zig` 的 `moduleFunction`
   (`GetModuleHandleW`)与 `allocNear`(`VirtualAlloc` ×2)**没有** comptime 守卫,宿主根仍然能链接,是因为
-  **调用方先折叠**:c2 与 scripted 那四个 `install()` 的第一行都是 `if (!is_windows) return
-  error.Unsupported;`,而 `detour.installHookArmed` 没有任何 test 触达 —— Zig 只对可达函数体发射,死支路
-  里的引用不进符号表。`extern "kernel32"` 的**声明**全部原样保留(`CreateThread` 从未被引用;
+  **调用方先折叠**:c2 那三个 `install()`(`scope_probe:167`/`predicate_hook:164`/`live_probe:147`)第一行是
+  `if (!is_windows) return error.Unsupported;`;scripted 那两个(`lookup_hook.install:263`、`exec_hook.installWith:357`)
+  自己**不带**守卫,折叠发生在**上一层出口** `LookupHookInstall:305` / `ExecHookInstall:433` 的
+  `if (!is_windows) return -2;`;`detour.installHookArmed` 没有任何 test 触达 —— Zig 只对可达函数体发射,死支路
+  里的引用不进符号表。读这条时别去找「四个 install() 第一行都是 error.Unsupported」,那句话是错的(本行初稿就这么错过,
+  复审抓出来了):两族折叠的**层次**和**哨兵值**都不同。`extern "kernel32"` 的**声明**全部原样保留(`CreateThread` 从未被引用;
   `ReadProcessMemory`/`VirtualAlloc`/`GetModuleHandleW` 同在声明块里却不在旧失败名单里,正是「引用而非声明」
   这条判据的证据)。给这两个包装器补守卫属于第二道门,本计划不做;模块头注释已点名这个例外。
 - **`-Dtest-target` 已删除**(commit `78fd294`,`build.zig` +1/−6):删后 `zig build test
@@ -87,8 +90,10 @@ then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不�
   `.rdata 4b4a58ca4ca16c787666d7914fbaa340be423e63e56a3625da9b077a8c4165c0`、
   `.data 4c79ac53e9af0e1130de74ddd5a6ba1f7dee95c0d1c769c0e35e4d7f113ba2e4`、
   `.pdata 408b83f005efa2453c19c7ce2c76dbcc6d8a56c722ef85608ecdba1e79f33863`,外加 import 表 8 个 kernel32 符号齐全
-  (`MISSING: []`,复测于 `c24efef0…` 那次链接)。旧句里 §46 的 `77c0c35e…` 与分支基线 `df50f3e1…` 之差,
-  因此**不能再用整文件 sha 归因**(它们可能只是不同链接时刻);两个数保留为历史读数,追加不改写。
+  (`MISSING: []`,复测于 `c24efef0…` 那次链接)。旧句里 §46 的 `77c0c35e…c11ad0`(全值留在 `evidence/analysis/runtime_444_c1_validation.md`
+  原句,未动)与分支基线 `df50f3e1f34f38a90850febc49808c599b35ceebb0570edbbda7c25a11ecfcdd`(全值,自 commit `f541c2a`
+  这同一条 bullet 的前身分留档于此)之差,
+  因此**不能再用整文件 sha 归因**(它们可能只是不同链接时刻);三个数保留为历史读数,追加不改写。
   本计划对「守卫只剪宿主测试根、没剪出货代码」的证明**一直靠 import 表那一条**,不靠 sha —— 现在有了理由。
 
 ## 基础:PE + capstone,不需要 IDA

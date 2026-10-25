@@ -11,11 +11,13 @@
 // linkage accommodation, not a runtime defense. Sites below point here instead
 // of restating the rationale.
 //
-// moduleFunction and allocNear are deliberately NOT guarded: every call site
-// is gated by its caller (`if (!is_windows) return error.Unsupported;` as the
-// first line of the four install()s in c2/ and scripted/, and no test reaches
-// installHookArmed), so Zig never emits their bodies into a host root. Adding
-// a guard here would be a second gate over already-dead code.
+// moduleFunction and allocNear are deliberately NOT guarded: Zig only emits
+// the bodies reachable from a root, and every path to these two is folded
+// before it gets here — the three c2 install()s open with
+// `if (!is_windows) return error.Unsupported;`, the scripted install()s are
+// called only from the LookupHookInstall/ExecHookInstall exports, which open
+// with `if (!is_windows) return -2;`, and no test touches installHookArmed.
+// A guard here would be a second gate over already-dead code.
 
 const std = @import("std");
 const builtin = @import("builtin");
