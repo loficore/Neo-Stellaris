@@ -34,6 +34,14 @@ TASK_SHIM = r"C:\temp\ns_game_supervisor_task.cmd"
 # (left margin from window right, right margin, y0, y1) -> box 45 px wide.
 PAUSE_BOX_OFFSETS = (243, 198, 5, 50)
 
+# Dialog close glyph, measured off the same 2160x1440 news window as
+# (dx from the bbox right edge, dy from the bbox top edge).  NOT proven
+# correct for any other window: §59.2's one counter-sample (computed x=1843,
+# true X ~1343) says the bbox right edge can land on the sidebar.  Override
+# per command with `dismiss <dx> <dy>`; every attempt is logged by
+# click_close so "clicked but still there" is a detectable event.
+CLOSE_INSET = (96, 51)
+
 # Paused: red 956..965, green 0 (2026-10-23 spike, bright icon) and 209, 0
 # (same day, live 4.4.4 salmon icon).  Playing: red 0, green 200..207.
 # 80 keeps both pause looks while the top-bar browns (r<140) stay out.
@@ -203,8 +211,17 @@ def parse_command(line: str):
     parts = line.split()
     args = parts[1:]
     if verb in ("pause", "unpause", "toggle", "shot", "status", "quit",
-                "dismiss", "close", "console_close"):
+                "close", "console_close"):
         return {"verb": verb}
+    if verb == "dismiss":
+        if not args:
+            return {"verb": "dismiss"}
+        if len(args) == 2:
+            try:
+                return {"verb": "dismiss", "inset": [int(args[0]), int(args[1])]}
+            except ValueError:
+                return None
+        return None
     if verb == "want":
         if len(args) == 1 and args[0].lower() in ("playing", "paused"):
             return {"verb": "want", "want": args[0].lower()}
@@ -734,16 +751,50 @@ def click_row(hwnd: int, row) -> None:
     _launch()._click_at(x, y)
 
 
-def click_close(hwnd: int, bbox) -> None:
-    """Click the dialog's top-right glyph: measured offset (96, 51)."""
-    rect = window_rect(hwnd)
-    x, y = bbox[2] - 96, bbox[1] + 51
-    if not (_inside(rect, x, y) and bbox[0] <= x <= bbox[2]
-            and bbox[1] <= y <= bbox[3]):
-        raise OSError(f"close point {(x, y)} outside dialog {bbox}")
+def close_point(bbox, inset=CLOSE_INSET):
+    """The dialog close glyph as ``(x, y, method)``, ``method`` in
+    {"fixed_inset", "refused"} — a pure function of the bbox and the inset.
+
+    A computed point outside the bbox is still returned, tagged ``refused``:
+    the log has to record where we *would* have clicked, or the next
+    "dismissed but still there" is as undiagnosable as §59.2's was.  First
+    version is fixed-offset only — one counter-sample is not enough data to
+    derive a measurement rule, so no geometry is invented here.
+    """
+    dx, dy = inset
+    x, y = bbox[2] - dx, bbox[1] + dy
+    if bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]:
+        return (x, y, "fixed_inset")
+    return (x, y, "refused")
+
+
+class CloseRefused(OSError):
+    """``click_close`` found its close point outside the dialog; nothing was clicked."""
+
+
+def click_close(hwnd: int, bbox, inset=CLOSE_INSET) -> None:
+    """Click the dialog's top-right close glyph; every attempt leaves a trace.
+
+    The attempt (would-be point + method + inset + bbox) is logged before
+    anything is clicked; on ``refused`` that is the whole record and we raise.
+    After a real click the window is re-read so "clicked but the dialog is
+    still there" surfaces as ``dismiss`` with ``no_effect: true``.  This
+    makes the fixed offset observable and overridable — it does not prove it
+    correct for any window (§59.2).
+    """
+    x, y, method = close_point(bbox, inset)
+    if not _inside(window_rect(hwnd), x, y):
+        method = "refused"
+    _log({"event": "dismiss_attempt", "point": [x, y], "method": method,
+          "inset": list(inset), "bbox": list(bbox)})
+    if method == "refused":
+        raise CloseRefused(f"close point {(x, y)} outside dialog {bbox}")
     if not focus(hwnd):
         raise OSError("focus refused before close click")
     _launch()._click_at(x, y)
+    bbox_after = read_window(hwnd)["bbox"]
+    _log({"event": "dismiss", "bbox_before": list(bbox),
+          "bbox_after": bbox_after, "no_effect": bbox_after is not None})
 
 
 def speed_label_sha(hwnd: int) -> str:
@@ -895,7 +946,7 @@ def _handle_command(cmd, hwnd, state):
             _log({"event": "close_posted", "hwnd": hwnd})
     elif verb == "dismiss" and hwnd and state.get("last_bbox") \
             and state.get("paused") == "paused":
-        click_close(hwnd, state["last_bbox"])
+        click_close(hwnd, state["last_bbox"], cmd.get("inset", CLOSE_INSET))
         state["console_open"] = None
     elif verb == "shot" and hwnd:
         save_shot(hwnd)
@@ -1042,6 +1093,8 @@ def serve(args) -> int:
                     note = "dialog_dismissed"
                     time.sleep(0.4)
                     _restore(hwnd, extra.get("restore"))
+                except CloseRefused:
+                    note = "dismiss_refused"
                 except OSError as e:
                     note = f"dialog_click_failed: {e}"
             else:

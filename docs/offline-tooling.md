@@ -733,11 +733,16 @@ root_unreadable / **region** 七类行)。
    **恒真**,零行时它不证明任何事 —— **有行的时候它也不该被当成验收**:v4 的 16 条 object 行里 15 条
    `vptr` 根本不在镜像内(那是 `0x0`/`0x102`/`0x4000000040` 这种值),界外留 `-` 正是 bounds 修复要显示的
    事,不是要消灭的事(§59.8)。
-10. **`dismiss` 的关闭点是一个写死的偏移,遇到「面板 + 右侧栏」一起亮的窗口必然点错。**
-    `click_close` 走 `bbox[2]-96, bbox[1]+51`(2160x1440 上量来的),而 `bbox` 来自金色像素的 panel 检测:
+10. **`dismiss` 的关闭点仍是写死偏移 —— 工具缺陷已修(可覆盖 + 每次尝试留痕),偏移本身对任何窗的正确性待实机复核。**
+    历史(§59.2 唯一反样本):`click_close` 走 `bbox[2]-96, bbox[1]+51`(2160x1440 上量来的),而 `bbox` 来自金色像素的 panel 检测:
     §59 那个事件窗的 `bbox` 右界 1939 落在**右侧栏**上,算出的点 1843 不在 X glyph 上(真 X 在 1343,480)。
-    所以 `dismiss` 返回成功、日志没有 `click_refused`、窗口却原地不动 —— 这一条不能读成「点击没送达」。
-    取代之:先 `shot` + 裁 `titlebar` 量 glyph 中心,再 `just game click <x> <y>`(坐标是**屏幕绝对**的,
+    当时 `dismiss` 返回成功、日志无痕、窗口原地不动 —— 「点击没送达」与「框判错」无法区分。
+    现在:偏移提出为 `CLOSE_INSET`,由纯函数 `close_point(bbox, inset)` 算点;`dismiss <dx> <dy>` 可逐命令覆盖
+    (屏幕绝对点仍走 `just game click`)。每次尝试**先**写 `dismiss_attempt`(本来会点的坐标、
+    `method ∈ {fixed_inset, refused}`、inset、bbox),真点击后重读窗写 `dismiss`(`no_effect` 即「点后窗还在」);
+    判 `refused` 则不点击、raise,状态 note 为 `dismiss_refused`。「dismiss 成功但窗还在」由此变成**可检出的事件**。
+    **但 §59.2 只有一个反样本,不足以推量测式 —— 第一版刻意不发明几何规则**;复核要等下一次有窗的实机机会。
+    复核之前的临时取代:先 `shot` + 裁 `titlebar` 量 glyph 中心,再 `just game click <x> <y>`(坐标是**屏幕绝对**的,
     `window_metrics` 的 bbox 已经加过窗口原点)。
 11. **`form=none` 是窗口陈述,不是调用者陈述。** `exec_frame_sites.py` 报 `none` 只说明**返回 RVA 前
     16 字节内没有任何恰好结束于返回点的 call/jmp 边界**,**不等于没人调用**:调用可能经过 thunk
