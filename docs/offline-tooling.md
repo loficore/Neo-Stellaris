@@ -52,8 +52,15 @@ then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不�
   `445 → 447`,+2)。总数账:`599 = 445(基线 13 个绿根) + 2(Task 1 新增一条在两个根各计一次) + 152(exports 根首次链接进总数)`。
 - **exports 根现在收集并运行 152 条**,其中**净新跑 = 35** —— `src/dll/exports.zig` 11 +
   `src/dll/c2/handler.zig` 6 + `src/dll/scripted/keyword_registry.zig` 18(这三族只被 exports 根收);
-  其余 **116** 条基线就在别的根里跑、现被跨根重复计数,另 **1** 条是本计划任务 1 新写的
-  (`152 = 35 + 116 + 1`)。旧失败符号 8 个是 `CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`/
+  这 35 条里 **33 条的 test body 基线就写在文件里**(只是从没被执行),**2 条为本计划新写**(任务 2 的
+  `exports.zig` 「DLL entry points are inert off Windows」、任务 3 的 `DllMain: DLL_PROCESS_ATTACH leaves
+  engine_ptr untouched`)。其余 **116** 条基线就在别的根里跑、现被跨根重复计数,全部构成(从编出的
+  测试二进制逐行数,不是推的):`hooking.detour` 42 + `shared.offsets` 16 + `quickjs.runtime` 17 +
+  `quickjs.runtime.Runtime` 4 + `scripted.lookup_hook` 11 + `scripted.exec_hook` 9 + `c2.scope_probe` 7 +
+  `c2.predicate_hook` 5 + `c2.vtable` 4 + `hooking.windows.ProtectGuard` 1 = **116**;另 **1** 条是本计划任务 1
+  新写的(`152 = 35 + 116 + 1`)。**数 test 的口径陷阱**:`runtime.zig` 的 21 = 17 条文件级 + 4 条
+  `pub const Runtime` 结构体内的 decl 级,只 `grep '^test '` 会数到 17 —— 那 4 条是缩进的,别把这差当成对不上账。
+  旧失败符号 8 个是 `CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`/
   `VirtualProtect`/`VirtualFree`/`GetCurrentProcess`/`FlushInstructionCache`(此前括号只列了 4 个,是旧句的
   半份名单,现在只剩历史读法)。
 - **已知残留缺口 —— 至今零执行 29 条**(`src/dll/api/bridge.zig` 19 + `src/dll/effects/handler.zig` 5 +
