@@ -1,0 +1,25 @@
+# kind	key	value	detail
+meta	exe_base	0x7ff6abbf0000	-
+meta	image_end	0x7ff6af517000	-
+meta	image_size	0x3927000	-
+meta	dll	sqjs_c4_scope_v2.dll	-
+meta	dll_sha256	373ab26ba87310f0acaffe941b9007bf0807b2a83872a5d27e2740c5d3e30471	-
+meta	vtable_map_count	1805	-
+meta	layout	entry=120 stats=56 ring=256 mask=511 version=2	-
+meta	stats	calls=0 samples=0 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=0 patch_size=16 installed=1 verified=-1	-
+meta	per_source_follow	8	-
+meta	followed_by_source	self=0/helper=0/arg3=0/arg4=0	-
+meta	implausible_by_source	self=0/helper=0/arg3=0/arg4=0	-
+meta	capped_by_source	self=0/helper=0/arg3=0/arg4=0	-
+meta	withheld_by_source	self=0/helper=0/arg3=0/arg4=0	-
+meta	calls	0	-
+meta	samples	0	-
+meta	valid	0	-
+meta	lexer	0	-
+meta	known_vtable_hits	0	-
+meta	member_vtable_hits	0	-
+meta	unknown_ptr_hits	0	-
+meta	unreadable_roots	0	-
+meta	regions_queried	0	-
+meta	region_verdicts		-
+meta	verdict	no_calls	-

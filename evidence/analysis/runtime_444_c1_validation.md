@@ -5049,3 +5049,286 @@ python3 scripts/disrva.py 0x3afb40 0xd5                                         
 
 观测 3 与「静态持有者 = 0」那两条是段内全扫(`Image.secs` + `struct`),目前**没有 CLI flag**,
 一次性脚本没入库 —— 要复核它们就照 §57.5 第 3 条的口径自己扫,别拿 `--who-lea` 的输出去对。
+
+## §58 修正仪器重打:第一枪是环境空值,成因有名(2026-10-25,点名)
+
+**授权级别**:点名授权下的实机段。人对本段的原话是「**授权:我退进程 + 新 launch + 按修正流程重打**」;
+现场弹窗另给一句「**你可以用现成的命令来关闭,如果还是不行,那就截图加自己点**」。本段没有新的 C1 注册、
+没有引擎写入、没有 `FreeLibrary`。计划 = `2026-10-24-scope-reinterpret-and-desktop-gate` 的 Task 7,
+PR #13(merge `534116d`)之后。
+
+### §58.1 开枪前的四条(D 组),以及第四条错在哪
+
+| # | 前置 | 实测 |
+|---|---|---|
+| 1 | 注入体字节不变 | 远端 `C:/temp/sqjs_c4_scope_v2.dll` 与本地 `zig-out/bin/stellaris_quickjs.dll` 同为 `373ab26b…30471`,与 §56 记下的逐字一致;部署的 7 个 host 文件与 repo HEAD 全部 hash 相同 |
+| 2 | 预检刻度 | `ns_scope_pre.py` → `MARKERS 783 EXPECTED 783` |
+| 3 | 新进程 | pid **13132**(§56.6 那台 12796 的额度早已用尽) |
+| 4 | 战役已载入**且已解除暂停** | 载入 ✓;「暂停」这一半**在预检之后没有重读** ⇒ 见 §58.3 |
+
+第四条是这一枪唯一的实质损失,而且它不是「忘了看」:预检这个动作本身就会把状态打回暂停(§58.3)。
+所以这条前置的正确读法是**紧邻开枪读**,不是流程更早时的某一次读数 —— 已写进
+`docs/offline-tooling.md` 判读陷阱 9。
+
+### §58.2 读数:装上了,一次都没穿过
+
+artifact = `evidence/logs/scope_probe_v3_4_4_4.tsv`(25 行,全量拉回)。
+
+- `meta exe_base 0x7ff6abbf0000`(新 ASLR 基址)、`layout … version=2`、`per_source_follow 8` —— 仪器侧全部就位;
+- `calls=0 samples=0 valid=0`;四根 `followed/implausible/capped/withheld` **全为 0**,
+  即 Task 5 那笔账(§56.8 的「三个源恒 0」)在这一枪**没有得到任何检验**;
+- `regions_queried=0`、`region_verdicts` 空 ⇒ §56.8 末段那条低地址未决项**仍未测**;
+- `known_vtable_hits / member_vtable_hits / unknown_ptr_hits / unreadable_roots` 全 0;
+- `verdict no_calls`。
+
+`scope_reclassify.py` 重问同一份 artifact:`object rows 0`,四桶全 0。⇒ **计划 Task 7 Step 4 那条
+`undecidable_no_rva == 0` 的验收在零行 artifact 上恒真**,它这一刻不证明任何事;要有意义必须先有行。
+
+### §58.3 成因:控制台开着 ⇒ 引擎暂停 ⇒ 热路径没有调用
+
+开枪前后的监督器记录读的是 `{'state': 'paused', 'note': 'dialog_unknown', 'red': 167→132, 'green': 0,
+'console_open': True}`。`ns_scope_pre.py` 的通道就是调试控制台(剪贴板粘贴 + 回车),而 **Stellaris 在控制台
+打开期间暂停**。链条因此是:`MARKERS 783` 成功 ⇒ 控制台仍开 ⇒ 游戏暂停 ⇒ `0x1D08520` 一次不被调用 ⇒
+采样器 `install=1` 但计数为零。
+
+这条 `no_calls` 是**环境结论,不是代码结论**,与 §56.2 那条「看到 `no_calls` 先核是否真在跑」同型,
+只是这次的原因具体到控件。它也不推翻 Task 5 的仪器改动 —— 四个源各自预算的改动只在有 entry 时才起作用。
+
+### §58.4 ssh 重置、清理、以及那行 `installed=1 verified=-1` 该怎么读
+
+ssh 长连接在驱动跑完之前被重置(§56.3 的重复,判读陷阱 11)。**没有重开枪**;走事后读回。
+
+- artifact 里 `stats … installed=1 verified=-1` **不是遗留安装**:驱动在 `finally` 之前写 TSV
+  (`scripts/c2_scope_probe.py:1210` 写,`:1222` 才 `_cleanup`),所以那一行是**写 artifact 时刻**的快照。
+- 事后实时读回:手工那一遍跑之前就是 `installed=0 verified=0` ⇒ 驱动自己的 Uninstall/Verify 已跑完;
+  `scripts/scratch/2026-10_scope_shot/ns_scope_finish_cleanup.py` 再幂等复核一次:
+  `C2ScopeProbeUninstall rc=0`、`C2ScopeProbeVerify rc=0`(引擎字节完好)、host 存活、`RESTORE_OK`。
+- 不 `FreeLibrary`(约束 5),DLL 仍映射。
+- 预防措施:`scripts/scratch/2026-10_scope_shot/c4_scope_run_v4.cmd` —— 把驱动装在 host 上 detached 跑,
+  stdout 与 `EXIT:%ERRORLEVEL%` 落 `C:\temp\c4_scope_run_v4.txt`,这样一次 ssh 重置不可能再把安装 orphan 在
+  Uninstall 之前。**这是预防,不是 §58.4 上面那条的替代解释。**
+
+### §58.5 重打被什么挡住
+
+pid 13132 的「一进程一次安装」额度已用尽 ⇒ 按授权 `taskkill /F /PID 13132`,新 `just launch` 起 pid **22220**
+(`hwnd=330684`,进战役)。第二遍预检再次 `MARKERS 783 EXPECTED 783`;但随后现场卡在
+`state=paused, note=dialog_unknown, console_open=True, console_px 2313→2307` —— `console_close` 两次没落地,
+`dismiss` 的读数被 ssh 争用打断(`JSONDecodeError`)。截图路线(人已授权)拉回 `ns_shot_small.jpg` 时
+**主机整体不可达**:2026-10-25 `10.66.0.7` 走 `wg0`,ping 100% 丢包,ssh 三次 `Connection timed out`。
+⇒ **修正流程的那一枪(v4)没有打**,`evidence/logs/scope_probe_v4_4_4_4.tsv` 不存在。§56.5 那个问题
+(真正的 `CEventScope` 是哪个对象)在本段之后**仍未收口**,状态与 §56.8 相同。
+
+本地一侧不受影响。merge 后的树上:`just check` 在 `build` 之后停在 `test`(exit 1),那一条是基线形状
+(`26/29 steps; 445/445 tests passed` + 16 个 kernel32 `undefined symbol`,依 ruling P15 记为绿);
+因此 `fence`/`host-tests`/`chokepoints-check` 三个门单独跑,分别 27 passed、262 passed、exit 0;
+计划 Task 9 Step 2 点名的五个 Python 文件 160 passed、0 failed。
+
+### §58.6 附带实机观测:桌面门上线后的第一次 `just launch --verbose`
+
+计划 Task 8 Step 1。两次 `just launch --verbose` 都退 **0**,时间线里各有 `step=trace` 行,attempt 1 为
+`owns_foreground=True cursor_at=(1064,339) launcher_alive=True`,但交接要到 attempt 2 才成 —— 这正是被记为
+deferred minor M3 的「点击落了但被吞掉」在实机上的一次重现,读数本身入档,修复不在本段范围。
+
+**两条计划期望与实现的差,当场判掉(是判读,不是改代码):**
+
+1. Task 8 Step 1 的 Expected 要求时间线里出现 `DESKTOP_GATE` 行。实现
+   (`scripts/windows/launch_stellaris.py:1679-1692`)在 `verdict == "ok"` 时**先 return 再 log**,即桌面门
+   **只在拒绝时留痕**。所以 exit 0 的那两轮根本没有 `DESKTOP_GATE` 行可看,这条 Expected 恒不满足。
+   桌面门在实机上的正面 datum 只能来自退出码 **25**,而那需要 Task 8 Step 2(人当场按 `Win+L`)—— 未取。
+2. Expected 里的 `step=diagnosis` 只在点击失败路径上打印(`:895-896`),成功交接的轮次**不可能**有这一行。
+   同一次运行的 `cursor_at=(1064,339)` 但交接失败,已经证明「三档诊断」这条路径值得拿到实机读数 —— 它要的是
+   失败轮,不是成功轮。
+
+`desktop=locked` 那一格仍然只有离线测试钉着(§8 判读陷阱 6 的原话未过期)。
+
+## §59 v4 正枪:四根全跟到、区域仪器有读数,仍无 scope 候选(2026-10-25,点名)
+
+产物 = `evidence/logs/scope_probe_v4_4_4_4.tsv`(4,845 B,pid 22220)。这是 §58 撤回空值之后按修正流程
+重打的那一枪,**装上了、验了字节、计数不为零**。本节逐条对 §56.8 的欠账还账,并更正 §58.3 的因果句。
+
+### §59.1 更正 §58.3:控制台不是暂停者,弹窗才是
+
+§58.3 把 v3 的 `no_calls` 归因于「预检打开调试控制台 ⇒ 引擎暂停」。这条因果句**错了**,本枪开枪前的
+读数直接证伪它:
+
+- 预检后现场读数 = `console_open=true`,而分类器 `red=0 / green=200` ⇒ `state=playing`。
+  控制台开着**并没有**暂停引擎。
+- 真正暂停游戏的是预检期间弹出来的**事件窗**(`dialog_unknown`)。事件窗自己会暂停游戏,
+  这是监督器早就记下的判读陷阱 4;§58 那一枪撞上的是它,不是控制台。
+
+⇒ 前置读数只有一条是必需的:**紧邻开枪读 `state=playing`**。`console_open=false` 不是判据,
+把它写进流程只会让人去关一个无关的窗(§58 里 `console_close` 两次没落地,本来就不该落地)。
+`docs/offline-tooling.md` 判读陷阱 9 已按这条改写。
+**这不是新错**:§54.9 早就把控制台的问题限定成「daemon 的 `console_open` 标记与面板实际状态脱钩」
+(通道可靠性),从来没有「开着 ⇒ 暂停」这条;§58.3 是把两件事并成了一件。同类判读下次先查 §54.9 的措辞。
+
+清窗走的是人已授权的点击路线,顺带暴露监督器的一处缺陷(见 §59.2),窗清掉后读数立刻回 `playing`。
+
+### §59.2 打成功的流程,以及 `click_close` 的固定偏移
+
+1. 按授权 `taskkill /F /PID 13132`(§58 把该进程的一次安装额度烧掉了)→ 新 `just launch` → pid **22220**、
+   `hwnd=330684`、进战役。
+2. 预检 `MARKERS 783 EXPECTED 783`(与 §58 同一读数)。
+3. 事件窗挡路 → 需要点掉。监督器的 `click_close`
+   (`scripts/windows/game_supervisor.py:737-746`)算出的点是 `(bbox[2]-96, bbox[1]+51)` = **(1843, 517)**,
+   量出来的真 X 在 **(1343, 480)** —— 差 500 px。原因是 `click_close` 假定关闭按钮离 bbox 右缘 96 px,
+   这个事件窗不满足。第一次点 (1343, 470) 差 10 px 没命中,第二次 (1343, 480) 命中,窗关,`state=playing`。
+   **坐标是屏幕绝对的**(`window_metrics` 的 bbox 已加过 `x0/y0`,`_click_at` 用 `SetCursorPos`),
+   这一点在拉截图量 X 之前值得先确认。缺陷入档,修 `click_close` 不在本段范围。
+   回 `playing` 那一步**不能读成我们解除了暂停**:监督器判读陷阱 4 写的是「事件窗口自己会暂停游戏,
+   关窗口又可能自己恢复」,这一枪没发过 `unpause`,是窗口消失后引擎自己走的 ⇒ 清窗之后必须重取一次读数,
+   清窗前的 tick 不能当开枪前置。
+4. 紧邻开枪读 `state=playing` → 开枪。
+
+**两次后台启动都失败**:launcher 是普通子进程,sshd 会连子进程树一起收掉;而脱离作业对象的两种写法
+(`start /min ""` 静默 no-op;`Start-Process` 经 ssh 的嵌套引号被 PowerShell 拆坏)都没把枪放出去
+(`scripts/scratch/2026-10_scope_shot/c4_scope_run_v4.cmd` 留在原地,别再试第三种写法)。最终**前台跑 +
+ssh keepalive**,驱动完整走完并自己做完清理。判读:陷阱 11(ssh stdout 中途丢失)防的是「装了没卸」,
+这条靠 `--out` 落盘的 TSV 与事后 `ns_scope_finish_cleanup.py` 的读回双重兜住,本枪两者都验过。
+
+### §59.3 §56.8 的账:四根确实全跟到了,负结论这次有内容
+
+| 键 | 读数 |
+|---|---|
+| `stats` | `calls=3061 samples=5 valid=5 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=5 patch_size=16 installed=1 verified=-1` |
+| `followed_by_source` | `self=4/helper=2/arg3=1/arg4=1`(合计 8 = `per_source_follow`) |
+| `capped_by_source` / `withheld_by_source` | 四源全 0 |
+| `implausible_by_source` | `self=0/helper=0/arg3=2/arg4=0` |
+| 四桶 | `known_vtable_hits=0 member_vtable_hits=0 unknown_ptr_hits=16 unreadable_roots=0` |
+| 区域 | `regions_queried=10`;`arg3/image=1/arg4/image=1/ctx/private_committed=2/helper/private_committed=2/self/private_committed=4` |
+| verdict | `no_scope_candidate` |
+
+按源分预算这条修对了:没有任何一根被 `capped` 或 `withheld`,四根各至少读到一次,`unreadable_roots=0`。
+所以 §56.8 撤回复判的依据(「`arg3`/`arg4` 一根没读、`helper` 撞预算」)在本枪**不成立**,
+`no_scope_candidate` 这次是「仪器真的问完了」的负结论。
+
+离线复算(`scripts/scope_reclassify.py --tsv 本产物`):`floor set 1805 / shape set 172,296 /
+object rows 16 / floor_hits 0 / new_only_hits 1 / still_no 0 / undecidable 15`。
+**`still_no=0`** —— §56.8 说的「99 行里那些没判读的站点」这一枪没有再出现,16 个 qword 全部要么在图像内、
+要么被明确判成图像外/零。
+
+### §59.4 §56.8 末段的未决项有了答案:低地址是绝对地址
+
+10 次区域查询里 **7 次落在同一个区域**:`base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000
+alloc_base=0x400000`。五个 32 位量级的根(`0x7fe4f0`/`0x7fe960`/`0x7fe768`/`0x7feb00`/`0x7fed78`,
+来源含 self、helper、ctx)全在这个区里,另外三根(self)落在两个正常的私有堆区
+(`base=0x1fdf4a000 size=0x2000 alloc_base=0x1fd0d0000`;`base=0x10384d000 size=0x73000 alloc_base=0x103780000`)。
+
+⇒ **它们是绝对地址,不是相对指针,也不是 arena 内偏移**:`type=0x20000` 是 `MEM_PRIVATE`(不是
+`MEM_IMAGE`),`protect=0x4` 是 `PAGE_READWRITE`,状态 `0x1000` = `MEM_COMMIT`,而整个区被一次
+起始于 `0x400000` 的分配持有。§56.8 提的两种猜想都被这一条否掉。
+**这一枪没判、也不该判的**:这个 8 KB 私有区是谁给的(哪个分配器、干什么用的)。
+它低地址、私有、可读可写,和「一堆执行深度帧 + 它们的暂存」相容,但相容不是证据。
+
+### §59.5 §56.5 第 4 问有正面答案:`arg3`/`arg4` 承载的是代码,不是对象
+
+| 根 | 区域判读 | 换算 |
+|---|---|---|
+| `arg3` | `image base=0x7ff6ad8f8000 protect=0x20 type=0x1000000 alloc_base=0x7ff6abbf0000` | 目标地址 `0x7ff6ad8f8520` = exe_base + **`0x1D08520`** = base Execute 自己 |
+| `arg4` | `image … target 0x7ff6add77b28` | = exe_base + **`0x2187b28`** |
+
+`arg3` 指回被 detour 的函数本身,`arg4` 那三点离线一拆就是复制 thunk:
+
+```
+02187b28  movzx ecx, word ptr [rdx]
+02187b2b  mov   word ptr [rax], cx
+02187b2e  ret
+```
+
+两个都在 `MEM_IMAGE` 且 `protect=0x20`(`PAGE_EXECUTE_READ`)。⇒ **这两根不是对象载体,是代码地址**;
+`implausible_by_source arg3=2` 是仪器对它们的正确反应(判成不可信)。§56.5 第 4 问就此关掉:
+四根里承载 scope 的候选只剩 `self` 与 `helper`,而 §59.6 把它们各自唯一能判的线索也降掉了。
+
+### §59.6 唯一可判的 vptr,和它为什么不算 scope 证据
+
+16 个 qword 里只有 **1** 个的 vptr 落在图像内(`vptr_rva=-` 的 15 个里:7 个非零但在图像外、5 个为 0、3 个读不到):
+
+```
+object 0x7fe960 source=helper off=0x10 ptr=0x2ddc2c90 vptr=0x7ff6ae06a358 vptr_rva=0x247a358
+```
+
+它**不在** 1,805 的 floor map(所以 `known_vtable_hits=0`),但在不过滤的形状集里 ⇒ 就是
+`new_only_hits=1` 那一条。离线拆它的 Execute 槽:
+
+```
+00156cc0  push rbx / sub rsp,0x20 / mov eax,[rcx+0x14] / mov rbx,rcx /
+00156ccc  cmp eax,[rcx+0x10] / je …  / test eax,eax / jne …
+```
+
+开头比较 `[rcx+0x10]` 与 `[rcx+0x14]` 两个计数 —— 访问器/容量检查的形状,**不是 CEffect 家族的
+Execute 覆写**。⇒ 这条线索降级:`0x247a358` 是「形状像 vtable、槽内容不像 effect 派发」的表,
+拿它当 scope 证据是读过头。
+
+顺带记一个跨根的连线,它没被本枪判读但下次值得看:`self` 根 `0x7feb00+0x28` 读到 `0x7febd0`,其首 qword
+是 `0x2ddc2c90`;而 `helper` 根 `0x7fe960+0x10` 直接读到 `0x2ddc2c90`。两根碰到**同一个**格子,
+说明它们至少在这一层是同源数据,不是四个独立对象巧合。
+
+### §59.7 §56.5 第 5 问:caller 对普查表,一对一不中
+
+```
+caller 0x1bcd18d 3 func=0x1bcd120 origin=incoming_arg
+caller 0x1c43699 2 func=- origin=-
+```
+
+`0x1bcd18d` 在 §53 的调用点普查里(`evidence/xrefs/exec_frame_callers_4_4_4.tsv:63`,
+`mov rdx,rbx @0x1bcd17a; rbx <- rdx @0x1bcd131 (single write)`),`origin=incoming_arg` 意味着
+`0x1bcd120` 只是把它**收到的**那个 0x20 B 帧转手递给 base Execute —— 真正的构造点在更上层,本枪没到。
+`0x1c43699` **不在**普查表里:普查是 §53 按当时的判据切的,不覆盖它 ⇒ 这是一条待办,不是矛盾。
+
+### §59.8 Task 7 Step 4 那条验收写反了
+
+计划里 `undecidable_no_rva == 0` 当验收。本枪 **`undecidable=15`**,而那 15 个正是「vptr 不在图像内所以
+没有 RVA」—— 这**就是** bounds 修复之后应该显示的样子(修之前它们会被误算成合法 RVA)。
+⇒ 这条验收 mis-specified:零行 artifact 上它恒真(判读陷阱 9),有行 artifact 上它把正确行为判成失败。
+它不该当验收,该当读数。
+
+### §59.9 仍未收口的部分
+
+`verdict=no_scope_candidate` 的有界含义照旧(判读陷阱 1):**四个根下没有任何 qword 的 vptr 落进那 1,805 个
+已知 vtable**。本枪把它从「仪器没问完」升级成了「仪器问完了,答案是零」,但**没有**确立真正的 `CEventScope`
+是哪个对象 —— §26.2 那句仍然有效,§56 那一条在 roadmap 里仍不开口。
+
+下一枪的前置,本枪读出来两条具体的:
+1. 唯一还在的候选是 `self`/`helper` 两根,而它们的样本全在 §59.4 那个 8 KB 私有区里 ⇒ 要的是**更深的
+   跟读形状**(同一根上第二层解引用,或按 §59.6 那条同源连线追),不是同形状再打一次。
+2. `origin=incoming_arg` 说帧来自更上层 ⇒ 从 §53 普查表的调用方**往上**定帧构造点,是一条零枪路线,
+   应当先于任何再开枪。
+
+### §59.10 清理与本机状态
+
+驱动的 `verified=-1` 是**清理前的快照**(`c2_scope_probe.py:1210` 先写 TSV,`:1222` 才 `_cleanup`)。
+事后单独跑 `scripts/scratch/2026-10_scope_shot/ns_scope_finish_cleanup.py 22220 <dll>` 复核,顺序按授权要求:
+
+```
+[scope] C2ScopeProbeUninstall rc=0
+        C2ScopeProbeVerify rc=0 (engine bytes intact)
+        host alive
+AFTER calls=3061 samples=5 … installed=0 verified=0
+RESTORE_OK
+```
+
+进程 `Responding=True`,**没有** `FreeLibrary`(约束 5)。pid 22220 的「一进程一次安装」额度已用尽 ——
+再来一枪需要新进程,前置同 §59.2 第 1–3 步(尤其:清掉事件窗,再紧邻开枪读 `state=playing`)。
+
+### §59.11 复现
+
+驱动那一行 argv 钉在 `scripts/scratch/2026-10_scope_shot/c4_scope_run_v4.cmd` 里(它同时是把脚本
+scp 到 `C:\temp\` 后的落地形态):
+
+```
+python C:\temp\c2_scope_probe.py C:\temp\sqjs_c4_scope_v2.dll --poll-s 120 --settle-s 2 \
+  --out C:\temp\c4_scope_probe_v4.tsv --vtables C:\temp\ceffect_vtable_map_4_4_4.txt \
+  --census C:\temp\exec_frame_callers_4_4_4.tsv --id-names C:\temp\descriptor_oracle_4_4_4.tsv
+```
+
+本枪是**前台经 ssh 跑这一行 + keepalive**(§59.2:两种脱离作业对象的写法都没放出去,不要再试第三种)。
+清理复核单独跑 `python3 scripts/scratch/2026-10_scope_shot/ns_scope_finish_cleanup.py 22220 <dll>`
+(位置参数**先 pid 后 dll**)。产物拉回走 slice 通道(判读陷阱 8):
+
+```
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_scope_probe_v4.tsv evidence/logs/scope_probe_v4_4_4_4.tsv
+python3 scripts/scope_reclassify.py --tsv evidence/logs/scope_probe_v4_4_4_4.tsv
+python3 scripts/disrva.py 0x2187b28 6 && python3 scripts/disrva.py 0x156cc0 8
+```
+
+DLL sha `373ab26b…30471` 与 §58 同一份,merge `534116d` 没有改动它。
