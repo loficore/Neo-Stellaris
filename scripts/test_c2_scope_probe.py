@@ -9,11 +9,12 @@ import struct
 import pytest
 
 from c2_scope_probe import (
-    _entry_roots, _region_verdicts, caller_site, classify, classify_region,
-    decode_entry, decode_layout, decode_stats, exit_code_for, follow_chain,
-    follow_object, follow_roots, image_end_from_header, install_decision,
-    load_call_census, load_vtable_map, plausible_user_ptr, poll_done,
-    region_rows, summarize, write_tsv,
+    _entry_roots, _region_verdicts, caller_site_estimate, classify,
+    classify_region, decode_entry, decode_layout, decode_stats,
+    exit_code_for, follow_chain, follow_object, follow_roots,
+    image_end_from_header, install_decision, load_call_census,
+    load_vtable_map, plausible_user_ptr, poll_done, region_rows, summarize,
+    write_tsv,
 )
 
 BEGIN_REGION_ROW_LITERAL = "region" + "\t"
@@ -95,8 +96,19 @@ def test_decode_stats_parses_every_key():
     }
 
 
-def test_caller_site_is_return_rva_minus_five():
-    assert caller_site(0x24BD25) == 0x24BD20
+def test_caller_row_key_is_return_rva_and_estimate_is_detail(tmp_path):
+    entries = [_entry(caller_rva=0x1C4369E), _entry(caller_rva=0x1C4369E)]
+    path = str(tmp_path / "probe.tsv")
+    write_tsv(path, summarize(entries, {}, {}, {}, {}), meta={})
+    line = next(l for l in open(path, encoding="utf-8") if l.startswith("caller"))
+    cols = line.rstrip("\n").split("\t")
+    assert cols[1] == "0x1c4369e"                              # 键 = 返回 RVA
+    assert "ret=0x1c4369e" in cols[3] and "est_site=0x1c43699" in cols[3]
+
+
+def test_estimate_is_five_bytes_only_for_the_rel32_form():
+    assert caller_site_estimate(0x1C4369E) == 0x1C43699
+    assert caller_site_estimate(0x4) is None      # 不够长就不估值(原来是 raise ValueError)
 
 
 def test_load_call_census_indexes_every_site(tmp_path):
@@ -154,6 +166,16 @@ def test_summarize_counts_callers_and_identities():
     assert summary["distinct_vtables"] == 2
     assert summary["valid"] == 3
     assert summary["calls"] == 100
+
+
+def test_summarize_joins_census_onto_the_caller_row():
+    # The census join runs on the -5 estimate (est_site), keyed per return RVA;
+    # §60's evidence work reads func/origin off that row, so pin the join.
+    census = {0x24BD20: {"func": 0x24AB30, "origin": "incoming_arg"}}
+    summary = summarize([_entry()], {"calls": 1, "samples": 1}, {}, census, {})
+    row = summary["callers"][0]
+    assert row["return_rva"] == 0x24BD25 and row["est_site"] == 0x24BD20
+    assert row["func"] == 0x24AB30 and row["origin"] == "incoming_arg"
 
 
 def test_summarize_joins_token_ids_to_names():

@@ -4,8 +4,8 @@
 它编码的 capstone/PE 陷阱、以及曾经导致错误结论的度量口径。`AGENTS.md` 只保留一行一条的索引,
 用到哪个脚本时再来读这里。
 
-结论本身(§17–§30)在三卷取证日志 `evidence/analysis/runtime_444_*.md`——§16–§23 在
-`runtime_444_keyword_pipeline.md`,§24–§30 在 `runtime_444_c1_validation.md`;本文件只讲**怎么量**。
+结论本身(§17–§60)在三卷取证日志 `evidence/analysis/runtime_444_*.md`——§16–§23 在
+`runtime_444_keyword_pipeline.md`,§24–§60 在 `runtime_444_c1_validation.md`;本文件只讲**怎么量**。
 
 ## 前置条件
 
@@ -70,7 +70,7 @@ PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 
 **判读陷阱:`--who-tables` 那张「命中 N 张表」的表,不能拿来证明「引擎复制了表」。** 两个独立原因,
 每一个都足以让这条推断作废(§57 就是在核这一条):
-① **候选集对同一段指针数组产出多个重叠起点**(Task 3 为了让下限集成为子集必须这样构造),所以行数永远
+① **候选集对同一段指针数组产出多个重叠起点**(`rttibatch.py --all-vtables` 的候选枚举为了让下限集成为子集必须这样构造),所以行数永远
 大于物理槽地址数 —— 4.4.4 上实测 **7,867 行 / 7,832 个表首 / 992 个物理槽**;
 ② **靶子若是共用实现,命中数就正比于「继承它的兄弟类个数」,与复制无关** —— `0x3AFD30`(donor 表 slot[1]
 的 Execute 覆写)在镜像里以静态 qword 出现 **538** 次,`0x3B01A0` **454** 次。
@@ -79,15 +79,27 @@ PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 `--who-lea` 另有两条边界:它只认 `48/4C 8D|8B mod=00 rm=101` 这一种编码(不认绝对立即数寻址,也不认
 `.rdata` 里的静态持有),而**站点数 0 不等于没人用** —— `0x3B01A0` 就是 0 站点,因为它只以静态槽值存在。
 
-### `scripts/disrva.py <start_rva> [end_rva|count]`
+### `scripts/disrva.py <start_rva> [<count>|<length>|--end=<rva>|--len=<n>]`
 
 **Any RVA range, disassembled offline** — annotates every
 rip-relative operand with the RVA it resolves to; this is what pinned the descriptor ctors' store order (§20).
 
-**第二个参数的口径（§30 现场踩过）**:它**不是**结束 RVA —— `a > 0xFF` 时脚本算的是 `end = start + a`,
+**第二个参数的口径（§30 现场踩过）**:裸数字**不是**结束 RVA —— `a > 0xFF` 时脚本算的是 `end = start + a`,
 所以 `disrva.py 0x1D092C0 0x1D09330` 会去反汇编 `0x1D092C0..0x3A125F0`(约 30 MB `.text`)。
 要按函数边界读,先 `pdata.py <rva>` 取区间,再传**指令条数**(`a <= 0xFF`)或传**长度** `end-start`。
 本函数边界一律以 `.pdata` 为准,不要靠 `int3` 填充猜结尾。
+
+**`--end=<rva>` / `--len=<n>` 是自 §59.9 起才有的显式形式**(§59.9 那条「往上定帧构造点」的零枪路线要按真边界取区间),
+**取证卷里旧命令一律按旧语义复现** —— 上面那个 `>0xFF` 启发式没有被改写,只是搬进了可测的纯函数 `parse_range`;
+裸数字口径、头一行 `; <exe>  <sec> RVA 0x…  (N insns)` 的条数、rip 注解写法全部不变
+(`scripts/test_disrva.py` 钉语义;影子副本基准用**已冻结的改动前修订** `git show 02eb551:scripts/disrva.py`(= 本分支第一次动 `disrva.py` 之前的那个提交,`git log --oneline -1 488b1fc^` 与它相同)逐字节钉输出 —— 意图是「重跑旧实现,输出与改动前逐字节相同」;**基准不写 `HEAD`**,合并之后 `git show HEAD:scripts/disrva.py` 就是新实现自己,自比自恒等,这条钉会静默失效)。
+`--end=` 的第二段就是结束 RVA(不含),`--len=` 是字节长度;两者与裸数字一样**不猜**:结束 RVA 低于起始、
+非十六进制、负数、`--flag` 缺少数值、未知 flag —— **任何不可判 = 拒绝**,一行 `[disrva] …` 进 stderr 并退出 2。
+
+**`import disrva` 没有副作用**:旧版本在导入时就读 46 MB 镜像、候选链全不存在就 `sys.exit`,现在读镜像是懒加载,
+`resolve_exe()` 返回 `str | None` 而不是退出 —— 所以别的离线工具可以直接 import
+`parse_range`/`resolve_exe` 而不必先有 game data。只有 CLI 在候选链全落空时才报
+`[disrva] 没有可读的 stellaris.exe 拷贝(设 NS_STELLARIS_EXE);候选链 <列表>` 并退出 2。
 
 ### `scripts/emu_desc.py` — the oracle
 
@@ -126,6 +138,47 @@ vtable 集合里(两张集都只扫 `.rdata`),所以「新集一条都没加」�
 **判读陷阱 2**:「不过滤」只指**不按 `slot[1]` 过滤**,新集仍然只扫 `.rdata`,而且它按形状产出
 **每一个** run 起点(下限集必须是它的子集,这是构造要求),所以一张已知表的**内部偏移**也会命中。
 `.data` 里的 vtable、以及中途偏移,都是「无法判定」而不是「新集看到的类」。
+
+## 站点离线反解(`scripts/exec_frame_sites.py`,读 artifact **也**读 exe 拷贝)
+
+### `scripts/exec_frame_sites.py --probe <tsv> [--census <tsv>] [--out <tsv>]`
+
+**重读 exe 字节、按字节反解 shot 记录的真实 call site —— 不是 `-5` 估值。** 背景在 §59.7 与下面
+`c2_scope_probe` 一节的 CALLERS 口径:枪记的是**返回 RVA**,`E8 rel32` 是 5 B,而每一次 vtable 槽
+派发(`call qword ptr [rax+8]`)只有 3 B;把 `ret-5` 当站点会把 mem 形状的点画进前一条指令中间,
+census join 落空,`func=-` 于是被误读成「没人调用」。`c2_scope_probe.py` 的 caller 行键已降回返回 RVA,本工具是「精确
+反解」的另一半。**exe 候选链 import `disrva.resolve_exe`**(同一份 `NS_STELLARIS_EXE` 口径,不复制
+第二份路径表,也不需要镜像基址 —— 全部地址运算在 RVA 空间对消)。
+
+**用法**:`python3 scripts/exec_frame_sites.py --probe evidence/logs/scope_probe_v4_4_4_4.tsv`
+(`--census` 默认 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`,`--out` 默认
+`evidence/xrefs/exec_frame_sites_4_4_4.tsv`)。caller 行两代形状都认:新版 `c2_scope_probe.py` 起 detail 带 `ret=`
+直接用;v4 及更早键是估值,`ret = key + 5` 且计入汇总的 `assumed` 计数 —— **assumed 行读出的
+site/func/census 一律以反解结果为准,估值只是对账**。
+
+**候选边界怎么枚举**(这是判读的全部依据,不是「取最短/取最长」):回看窗 `[ret-16, ret)` 内对
+**每一个字节偏移**起解码 capstone 第一条指令,只保留「结束地址恰好落在返回点」且
+`mnemonic ∈ {call, jmp}` 的边界。候选 >1 ⇒ `form=ambiguous`、`site=None` —— 歧义是真实的字节重叠
+(例:REX 前缀让 `48 FF 50 08` 与 `FF 50 08` 都恰好结束于同一点),不替他选;候选 0 ⇒ `form=none`;
+唯一候选判 `form`:`E8`→`rel32`(若目标首字节是 `EB`/`E9` 跳板 →`thunk`),`FF /2`→`mem`(寄存器
+间接 `FF D0` 同档,`insn` 列给真实反汇编文本),唯一一条 `jmp` 边界 →`thunk`。
+
+**join**:`func_start`/`func_end` 来自 `.pdata`(延迟 import `pdata.func_of`;import/查找失败是**诊断
+退出**,不是静默 `func=-`),键是**反解出的真站点**;站点不可判(ambiguous/none)时退回用返回 RVA
+查函数边界 —— 返回地址与调用点同属一个 RUNTIME_FUNCTION,函数归属仍是 datum。
+`census_origin`/`site_in_census` **只认真站点**:没 join 上就写 0,不解释原因(解释留给取证卷)。
+
+**拒绝语义**:没有可读的 exe 拷贝 → 一行 `[exec_frame_sites] …` stderr + 退出码 2(无 traceback);
+回看窗缺任何一个字节 → `SiteDecodeError` → 同样诊断退出 —— **读不出来 ≠ 窗口里没有**,绝不把它
+写成 `form=none`。
+
+**判读陷阱(本节)**:
+- `site_in_census=0` **不是矛盾,是待办**:普查表是 §53 按当时判据切的,没覆盖的站点本就不在表里
+  (v4 的 `0x1c4369e → site 0x1c4369b`(`form=mem`)正是这种;§59.7 末句)。
+- `form=none` 的全局判读在文末 `c2_scope_probe` 一节的**判读陷阱 11**:它只说明返回 RVA 前 16 字节
+  内没有 call/jmp 边界,**不等于没人调用**。
+- 本工具读的是**磁盘拷贝**;游戏版本换了、而产物里的返回 RVA 来自别的版本字节,解出来的 form/site
+  不代表当时跑的进程 —— 换版本先对 `anchors_4_4_4.md` 重锚。
 
 ## 调用关系与引用扫描
 
@@ -530,7 +583,8 @@ pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔�
 
 `src/dll/c2/scope_probe.zig` 在 base Execute `0x1D08520` 上挂**只读** detour:每 512 次调用采样一次
 (`calls & 511 == 0`),记录真实 `arg2`(执行帧)的 8 个 qword、`[self+0]` 的 vtable RVA、`[self+8]` 的
-token id、`@returnAddress()` 反推的静态调用点(`caller_rva - 5`),以及派发点上的 `r8`/`r9` 两个 scratch
+token id、`@returnAddress()` 的**返回 RVA**(记的是调用指令的下一条,不是调用点本身 —— 读法见下面 CALLERS
+一段的口径),以及派发点上的 `r8`/`r9` 两个 scratch
 槽(布局 v2 起,`Entry` = 120 字节)。**函数体一律转发原函数**,不改寄存器、不改内存、不改控制流。
 `r8`/`r9` 记的是**值**,不是它们指向的内存 —— 一切解引用都发生在驱动侧的 `ReadProcessMemory`,采样器本身
 不解引用任何二级指针。
@@ -597,6 +651,12 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 永远不是 system id;名字只在 `--id-names`(默认 `evidence/xrefs/descriptor_oracle_4_4_4.tsv`)里查得到时填,
 查不到就留 `-`,不猜。`CALLERS` 的 `func`/`origin` 来自 Task 1 的调用点普查(`--census`,默认
 `evidence/xrefs/exec_frame_callers_4_4_4.tsv`);Windows 侧没有这两份表时两列退化为 `-`,离线再 join。
+**CALLERS 行的口径:返回 RVA ≠ 站点**(§59 读圈子的根源,这次修的是产物的声称):行键与 `ret=` 就是
+返回 RVA 本身,`est_site=` 是按「这条 call 是 `E8 rel32`(5 B)」给出的**估值** `caller_rva - 5`
+(`caller_site_estimate`)。虚调用 `call qword ptr [rax+8]` 只有 3 B,`-5` 会把站点画进前一条指令中间,
+census 于是 join 不上而报 `func=-` —— 那读法是「估值不是它的站点」,**不是**「没人调用」。join 仍走估值
+(这是估值的唯一用途);返回 RVA 不足 5 字节时不估值,写 `est_site=-`,绝不因一个被记录的值让 shot 死掉。
+**精确站点归 `scripts/exec_frame_sites.py` 的离线反解**(见上文「站点离线反解」一节):重读 exe 字节反解出真正的 call site(§59.7),本工具的产物不再声称它是站点。
 完整结果写到 `--out`(长表 `kind/key/value/detail`,**meta** / caller / id / chain / object /
 root_unreadable / **region** 七类行)。
 `meta` 行在最前面,带 `exe_base`、`image_end`、`image_size`、`dll_sha256`、`vtable_map_count`、`layout`、
@@ -621,7 +681,7 @@ root_unreadable / **region** 七类行)。
 就补出了 `__alignment1`(offsets 0/8/16/24/32/36/40,`sizeof`=48);**把那个 padding 字段也写出来会多插
 4 字节,`State` 读到的其实是 `Protect` 的槽**。
 
-**十条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 / §59 实机与离线复算取到的,读 verdict 之前先看):**
+**十一条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 / §59 实机与离线复算取到的,读 verdict 之前先看):**
 
 1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
    仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
@@ -673,12 +733,26 @@ root_unreadable / **region** 七类行)。
    **恒真**,零行时它不证明任何事 —— **有行的时候它也不该被当成验收**:v4 的 16 条 object 行里 15 条
    `vptr` 根本不在镜像内(那是 `0x0`/`0x102`/`0x4000000040` 这种值),界外留 `-` 正是 bounds 修复要显示的
    事,不是要消灭的事(§59.8)。
-10. **`dismiss` 的关闭点是一个写死的偏移,遇到「面板 + 右侧栏」一起亮的窗口必然点错。**
-    `click_close` 走 `bbox[2]-96, bbox[1]+51`(2160x1440 上量来的),而 `bbox` 来自金色像素的 panel 检测:
+10. **`dismiss` 的关闭点仍是写死偏移 —— 工具缺陷已修(可覆盖 + 每次尝试留痕),偏移本身对任何窗的正确性待实机复核。**
+    历史(§59.2 唯一反样本):`click_close` 走 `bbox[2]-96, bbox[1]+51`(2160x1440 上量来的),而 `bbox` 来自金色像素的 panel 检测:
     §59 那个事件窗的 `bbox` 右界 1939 落在**右侧栏**上,算出的点 1843 不在 X glyph 上(真 X 在 1343,480)。
-    所以 `dismiss` 返回成功、日志没有 `click_refused`、窗口却原地不动 —— 这一条不能读成「点击没送达」。
-    取代之:先 `shot` + 裁 `titlebar` 量 glyph 中心,再 `just game click <x> <y>`(坐标是**屏幕绝对**的,
+    当时 `dismiss` 返回成功、日志无痕、窗口原地不动 —— 「点击没送达」与「框判错」无法区分。
+    现在:偏移提出为 `CLOSE_INSET`,由纯函数 `close_point(bbox, inset)` 算点;`dismiss <dx> <dy>` 可逐命令覆盖
+    (屏幕绝对点仍走 `just game click`)。每次尝试**先**写 `dismiss_attempt`(本来会点的坐标、
+    `method ∈ {fixed_inset, refused}`、inset、bbox),真点击后重读窗写 `dismiss`(`no_effect` 即「点后窗还在」);
+    判 `refused` 则不点击、raise,状态 note 为 `dismiss_refused`。「dismiss 成功但窗还在」由此变成**可检出的事件**。
+    「检出」的边界要写明:`no_effect` 是 **panel 检测器的陈述,不是 glyph 的陈述**,两个方向都可能误报 ——
+    重读若锁上*另一块*亮面板,窗真没了也报 `no_effect: true`;漏点后检测器若丢掉金色锁定,窗还在也只报
+    `no_effect: false`(`bbox_after` 出自同一个当初把右界量到侧栏的检测器,§59.2 的原失效模式并未被这条事件根除)。
+    留痕把问题从「无痕」降级为「待复核」,判定仍靠下面的手动量测(`shot` + `just game click`)。
+    **但 §59.2 只有一个反样本,不足以推量测式 —— 第一版刻意不发明几何规则**;复核要等下一次有窗的实机机会。
+    复核之前的临时取代:先 `shot` + 裁 `titlebar` 量 glyph 中心,再 `just game click <x> <y>`(坐标是**屏幕绝对**的,
     `window_metrics` 的 bbox 已经加过窗口原点)。
+11. **`form=none` 是窗口陈述,不是调用者陈述。** `exec_frame_sites.py` 报 `none` 只说明**返回 RVA 前
+    16 字节内没有任何恰好结束于返回点的 call/jmp 边界**,**不等于没人调用**:调用可能经过 thunk
+    (返回点不挨着任何紧邻边界),或样本记录的返回 RVA 本身就读错了(旧产物把估值当键的世代)。
+    `none` 是要带进取证卷的 datum,不是负结论;`ambiguous` 同理 —— 它是字节里真实存在的重叠,
+    照原样进卷,不替他选一个候选。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。

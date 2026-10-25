@@ -1,0 +1,3 @@
+# caller_count	func_start	func_end	src_files	sites	ref_strings
+1	0x1ba6d20	0x1ba7126		0x1ba708e	
+1	0x1ba72a0	0x1ba77f4		0x1ba7685	0x26ce430:Default Game | 0x26ce438:Game

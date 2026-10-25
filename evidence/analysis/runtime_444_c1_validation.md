@@ -5332,3 +5332,188 @@ python3 scripts/disrva.py 0x2187b28 6 && python3 scripts/disrva.py 0x156cc0 8
 ```
 
 DLL sha `373ab26b…30471` 与 §58 同一份,merge `534116d` 没有改动它。
+
+## §60 零枪:承载函数 0x1c42fe0 自己构造执行帧;两条已知线索判死为「写者」(2026-10-25,离线)
+
+授权级 = 离线 **零枪**:无 launch/inject/install/Frida/process,只静态读默认本地 exe 拷贝(sha `9242c40a…b1a56`,
+`docs/offline-tooling.md` 前置条件)。不走 IDA license 门:本节所有引用判读来自 `scripts/find_refs.py` 与
+`scripts/riprefs.py`(离线完整解码),未用任何 IDA MCP xref。生产者脚本逐个标注在每个读数旁。
+本节回答的是 §59.9 第 2 条的零枪路线(「从普查表往上定帧构造点」),问的是**谁写 `[rsp+0x38]`**,
+不是 §59 的 scope 问题 —— **§59 的 `no_scope_candidate` 原样不动**,两问不同。
+
+### §60.1 承载函数边界与入口契约(`pdata.py` / `disrva.py`)
+
+`python3 scripts/pdata.py 1c4369b` → **0x1c42fe0..0x1c43884**,与 `evidence/xrefs/exec_frame_sites_4_4_4.tsv`
+第 2 行的 func 列一致。函数体 = `python3 scripts/disrva.py 0x1c42fe0 --end=0x1c43884`(476 条)。
+
+入口(`disrva.py` 同上,0x1c42fe0 起):`test rdx,rdx; je 0x1c43844` ⇒ arg2==0 直接 `ret`;
+`mov [rsp+8],rcx; mov [rsp+0x10],rdx` 把两个寄存器参数落进影子槽 —— 7 个 push + `sub rsp,0x3e0` 之后
+`[rsp+0x428]` 正是 arg2 的落槽,尾声 0x1c43628 `mov rdi,[rsp+0x428]` 取回的就是它。于是:
+
+- **arg1(rcx→r13,0x1c43010)= 队列对象**:`[[arg1+0x88]+0x6c]` 是计数(0x1c43013/0x1c4301a,`disrva.py`),
+  `[arg1+0x120]` 忙位由 `lock xadd` 取旧值(0x1c43037),旧值写进 arg2+0x18(0x1c4303f)。
+- **arg2(rdx→rdi,0x1c4300d)= 被执行的 item**:`[item+0x12] ← min(0x7fff, 队列计数)`(0x1c43028),
+  item 的虚表槽 +0x50 返回 token id(0x1c430b0,见 §60.3)。
+- 同表 +0x30 槽 `0x1c42ee0`(`pdata.py` 0x1c42ee0..0x1c42fdc;`disrva.py 0x1c42ee0 60`)是成对的排空循环:
+  锁 `[rip+0x74f601]→0x23925c0`、环 `[rbx+0x100]/[rbx+0x118]`、`call [rax+0x60]`、拷 `[rdi+0x18]→[rax+0x18]`、
+  `call [rax]` edx=1 析构、`inc [[rbx+0x88]+0x6c]` —— 字段用法与本函数一致 ⇒ **0x26d4dd0 这类是异步
+  effect 执行队列**(datum:类内两方法字段互证),承载函数是它的虚槽 +0x28「执行一条」。
+
+### §60.2 `[rsp+0x38]` 写点逐条表(生产者:`disrva.py 0x1c42fe0 --end=0x1c43884`)
+
+grep 全函数,涉 `[rsp+0x38]` 的指令**恰好 6 条**,帧内部字段写另有 4 条:
+
+| RVA | 指令 | 帧字段(基 = rsp+0x38) | 说明 |
+|---|---|---|---|
+| 0x1c43081 | `mov [rsp+0x38], r14` | +0x00 vptr | r14 = `lea [rip+0xaa1f27]→0x26e4fa8` @0x1c4307a |
+| 0x1c43086 | `mov dword [rsp+0x40], r15d` | +0x08 depth = 0 | r15d 于 0x1c4304e `xor` 清零 |
+| 0x1c4308b | `mov byte [rsp+0x51], r15b` | +0x19 所有权 = 0 | |
+| 0x1c43098 | `sete byte [rsp+0x50]` | +0x18 = (helper+0x14==0) | 前置 `cmp dword [rsp+0x244], r15d` @0x1c43090 |
+| 0x1c430a5 | `mov [rsp+0x48], rax` | +0x10 helper 指针 | rax = `lea [rsp+0x230]` @0x1c4309d |
+| 0x1c430b5 | `mov dword [rsp+0x58], eax` | **帧外**(帧 = 0x38..0x57) | token id spill,来自 §60.3 的 `[rax+0x50]` |
+| 0x1c43669 | `lea rcx, [rsp+0x38]` | 帧地址第一次离开本函数 | → 0x1c4366e `call 0x1d129a0` |
+| 0x1c43677 | `lea rcx, [rsp+0x38]` | | → 0x1c4367c `call 0x16fdc0`(edx=esi=id) |
+| 0x1c43686 | `lea rcx, [rsp+0x38]` | 任务点名的 **edx=1 线索** | → 0x1c4368b `call 0x16fdc0` |
+| 0x1c43693 | `lea rdx, [rsp+0x38]` | 帧作为 arg2 | → 0x1c4369b `call [rax+8]`(§60.6) |
+| 0x1c4369f | `mov [rsp+0x38], r14` | +0x00 vptr 复写 | r14 = `lea [rip+0xaa196d]→0x26e4fa8` @0x1c43634 |
+
+字面写 `[rsp+0x38]` = **2 条**(0x1c43081 初置、0x1c4369f 派发后复写),帧内其它字段写 = **4 条**
+(0x1c43086/0x1c4308b/0x1c43098 `sete`/0x1c430a5)。骨架前文:规格对象 `0x247b098`(`lea [rip+0x83804f]`
+@0x1c43042)落 `[rsp+0x68]` @0x1c43049,helper 就地构造 `call 0x1ca5880`(rcx=&[rsp+0x230], rdx=&[rsp+0x68],
+r8=0, r9=1;0x1c43060..0x1c43074)。逐字段与 §53.3/§53.4 的帧表**字节一致**(vptr 0x26e4fa8 单槽表、
++0x8 depth、+0x10 helper、+0x18 flag、+0x19 ownership,字段止于 +0x19)。
+vptr 来源 `python3 scripts/riprefs.py 0x26e4fa8` → 44 refs(`--verify` 后 43),列出的 25 个函数桶含
+`2 func 1c42fe0..1c43884`(即本函数 0x1c4307a/0x1c43634 两处)。本轮 44 与 §53.4 记录的 33 不一致,
+按 append-only 各记现值,不追溯改旧读数。
+
+### §60.3 `[rax+0x50]` 不可能别名到帧(静态可证)
+
+`call qword ptr [rax+0x50]` @0x1c430b0(rcx=item,返回 `mov esi,eax; mov [rsp+0x58],eax` = token id)。
+§60.2 的 grep 计数说明:在 0x1c430b0 之前,`[rsp+0x38]` 只以**存储目标**出现过(0x1c43081),帧地址从未
+进入任何寄存器实参或可读内存 ⇒ 该被调方拿不到帧地址。随后 `mov r12d,[rsp+0x40]; test; jle 0x1c43642`
+@0x1c430c4/0x1c430c9:depth 刚被写成 0 ⇒ 遍历体(0x1c430d2..0x1c43628,含 `call 0x1d12c60`、
+`call [rax+0x30]`×若干)整段跳过,直达 token-DB 尾段(§60.6)。
+
+### §60.4 两条已知线索:字节级验证 = 「帧传递者」存活,「写者」判死
+
+调用点在承载函数内(§60.2 表);函数体边界来自 `python3 scripts/pdata.py 16fdc0 1d129a0 1d11860`:
+0x16fdc0..0x16feda、0x1d129a0..0x1d12a88、0x1d11860..0x1d11b83。
+
+- 两个函数体内部的 `[rsp+0x38]` 写各只有 1 条,且都是 `mov qword ptr [rsp+0x38], 0x100`
+  (0x16fe1a / 0x1d129c6,`disrva.py 0x16fdc0 120` / `disrva.py 0x1d129a0 80`)。它们各自 prologue 刚做完
+  `sub rsp,0x140`(0x16fdda/0x1d129b4),同一偏移 0x28..0x3f 刚被 `movups xmmword ptr [rsp+0x28], xmm0`
+  (0x16fe15/0x1d129c1)灌入 ⇒ 那是**自己栈帧里 std::string 暂存对象的 capacity 字**,与承载帧的 rsp 无关。
+  ⇒ **两条线索作为「写 [rsp+0x38] 者」同判死**。
+- 它们对帧做的事只剩把帧指针递下去:`0x16fe8c` 与 `0x1d12a3f` 各 `call 0x1d11860`(rcx=帧,
+  rdx=&{id|string 暂存})。`disrva.py 0x1d11860 --end=0x1d11b83` 的 grep 判读:入口 `cmp byte [rcx+0x18],0`
+  @0x1d1186f 是**读**,`mov rsi,rcx` @0x1d11878 起帧指针归 rsi;全函数**没有一条经 rcx/rsi/rdi 的存储**,
+  也没有 `mov rcx,rsi` ⇒ 帧指针从不出现在任何 call 的 rcx 实参位;名字是经由 helper
+  (`mov rcx,[rsi+0x10]` @0x1d118fa → `call [rax+0x30]`/`call [rax+0x48]`)挂到 helper 侧的。
+  ⇒ **线索链(0x16fdc0 / 0x1d129a0 / 0x1d11860)整体不改写 0x20 B 帧字节,写全部停在 helper 一侧**。
+  保留一处未判:0x1d11860 内 `cmovne r9,rcx` @0x1d118e8 —— 函数内可读路径上该 rcx 已在 0x1d1188d
+  重载为 `[rdx+0x10]` 串指针,但 `0x1ca3980` 的写域没逐槽拆(§60.7 第 4 条)。
+
+### §60.5 谁调用承载函数:0 直接调用 + 0 指令引用,唯一静态持有者 = vtable 槽 +0x28
+
+- `python3 scripts/fastcalls.py 0x1c42fe0` → **caller_count=0**;产物
+  `evidence/xrefs/callers_0x1c42fe0_buckets.tsv` 只有表头行。
+- `python3 scripts/find_refs.py 0x1c42fe0 0x1bcd120`(.text 0x2390800 字节全解码)→ **两条都 0 references**。
+  这是窗口陈述不是调用者陈述(offline-tooling 判读陷阱 11)。
+- 静态持有者扫描(one-shot inline python;PE 布局镜像 `find_refs.py`:nsec@nh+6、SizeOfOptionalHeader@nh+20、
+  节表 vsize@o+8、va/rawsz/praw `<III`@o+12、chars@o+36;过滤 `chars & 0x40` = CNT_INITIALIZED_DATA;
+  键 = `0x140000000+RVA` 的 LE-qword,要求命中偏移 %8==0):`0x1c42fe0` → **恰好 1 个对齐命中**
+  `.rdata:0x26d4df8`。邻域按 qword 读(one-shot):0x26d4cc8..0x26d5100 是连续代码指针区(136 槽),
+  vtable 起点 **0x26d4dd0**,承载函数是槽 **+0x28**:
+  `+0x00 0x1c42de0 | +0x08 0x15db30(`disrva.py 0x15db30 8` = `ret 0` 空桩)| +0x10 0x1c37ec0 |
+  +0x18 0x1c37f20 | +0x20 0x1c38940 | +0x28 0x1c42fe0 | +0x30 0x1c42ee0 | +0x38 0x15db30 |
+  +0x40 0x1b4c00 | +0x48 0x1c43890(`pdata.py 1c43890` → 不在任何函数,未决项 §60.7-2)`。
+- 谁引用表 0x26d4dd0:`python3 scripts/riprefs.py 0x26d4dd0` → 恰好 2 处 —— **0x1c42d30..0x1c42ddc**
+  (构造器:`lea rax→0x26d4dd0` @0x1c42d4d、`mov [rdi],rax` @0x1c42d54、`xchg [rdi+0x120],1` @0x1c42da6、
+  `call 0x1c44390` @0x1c42dc3,edx=[0x2a01b24]、r8=&[rsp+0x40] 存 self ⇒ 把 self 注册进全局数组
+  [0x2a01b18]/计数 [0x2a01b24])与 **0x1c42de0**(槽+0x00 析构:`lea rax→0x26d4dd0` @0x1c42def、
+  `mov [rcx],rax` @0x1c42df9 复挂 vptr,随后遍历 [0x2a01b18] 比对摘除自注册)。对整区 137 个槽地址批量
+  `riprefs.py`(输出留 /tmp)确认 0x26d4dd0 仅这两处,而邻接 0x26d4cc8/0x26d50e8/0x26d5108 各有自己的引用者
+  ⇒ MSVC 背靠背 vtable,形状判读按 §57 那族陷阱,不放大成「同一大表」。
+- 谁调构造器:`python3 scripts/fastcalls.py 0x1c42d30 --top 25` → 2 桶
+  (`evidence/xrefs/callers_0x1c42d30_buckets.tsv`):站点 0x1ba708e @0x1ba6d20..0x1ba7126 与
+  0x1ba7685 @0x1ba72a0..0x1ba77f4,后者 ref_strings `0x26ce430:Default Game | 0x26ce438:Game`
+  ⇒ 两个静态构造点,按 PDS 文件头属 'Default Game'/'Game' 两条初始化。两站点字节同形
+  (`disrva.py 0x1ba7070 8` / `disrva.py 0x1ba7660 16`):`mov ecx,0x128; call 0x2185218` → ctor
+  `0x1c42d30`;第二处还把 self 存进 `[rbx+0x60]`(0x1ba768b)。对象大小 0x128 与 ctor/承载函数用到的
+  字段上限 +0x120 相容。
+- ⇒ **结论(本路线可答的部分)**:承载函数没有直接调用者,只被 `call [obj_vtbl+0x28]` 形态的动态派发调用;
+  该形态的站点集合离线不可按类分(寄存器间接、目标类取决于运行时对象)。「谁调用承载函数」在这条路线上
+  答到**类身份**为止(异步队列 0x26d4dd0,静态构造 ×2、运行时 self-注册进 [0x2a01b18] 数组),
+  派发方集合进未决项。
+
+### §60.6 与 §59 四根和普查表第 1 行的接线(`disrva.py` / one-shot 扫描)
+
+- 几何:帧 = `[rsp+0x38]`,helper = `[rsp+0x230]` ⇒ Δ = **0x1f8**,与 §53.3 采样两对
+  0x7fe768→0x7fe960、0x7fed78→0x7fef70 的间距逐位相符(0x7fe960 即 §59.4 的 helper 根)。
+  相容不是证据(§59.4 原话保留):本函数运行在 §59.4 那个 8 KB 私有区上**没有**被本节判读。
+- 尾段派发链:`call 0x1d12c60` @0x1c43642(token DB 单例)→ 容量检查 `[db+0x7c] vs [db+0x80]` →
+  必要时 `call 0x1d12cd0` @0x1c43655 → holder = `[db+0x70] + id*0x30`(`movsxd rcx,esi; lea rdx,[rcx+rcx*2];
+  shl rdx,4; add rdx,[rbx+0x70]` @0x1c4365a..0x1c43665 —— §53 的 stride 算术逐字节在此复现)→
+  `call 0x1d129a0` / `call 0x16fdc0`(§60.4)。随后 0x1c43690 `mov rax,[rdi]`、0x1c43693 `lea rdx,[rsp+0x38]`、
+  0x1c43698 `mov rcx,rdi`、0x1c4369b **`call [rax+8]`** —— 返回点 0x1c4369e 就是
+  `exec_frame_sites_4_4_4.tsv` 第 2 行(form=mem,site_in_census=0 是待办不是矛盾,该工具判读卡原话)。
+  帧作为 arg2 进 slot[1](Execute 槽)的形态与 §53.3 定义一致;接收类取决于 item 自己的 vtable,
+  离线不能钉死为 `0x1D08520`(datum 止于形态)。
+- r8/r9:函数体内写 r8/r9 的只有 0x1c43060/0x1c43064(给 helper ctor)与遍历体(0x1c4317d/0x1c43213/
+  0x1c4322a/0x1c432b6…,depth=0 路径整段跳过);尾段 0x1c43628..0x1c4369b 无任何 r8/r9 写(grep)⇒
+  派发点 arg3/arg4 = 上一调用者残留,判读陷阱 2 生效,与 §59.5「arg3 指回 0x1D08520 本身」读法相容。
+- 普查表第 1 行(0x1bcd192 / func 0x1bcd120 / origin=incoming_arg):`find_refs.py 0x1bcd120` = 0 指令引用;
+  one-shot 对齐 qword 扫描(同上布局)→ **365 个 .rdata 槽**,band 0x24b0400..0x2701d40 ⇒ 0x1bcd120 是被
+  365 张表槽共享的虚实现(对照 §57 的 0x3AFD30×538 / 0x3B01A0×454),它的帧来自 incoming_arg,构造点在这条
+  动态派发链更上游 —— **该行在普查路线上仍未决**,不在 §60 判决覆盖内(§60 只判承载函数路线)。
+
+### §60.7 未决项
+
+1. `[0x26d4dd0+0x28]` 形态的派发方集合:离线不可分(0 直接调用 + 0 指令引用 + 寄存器间接),要更深类型
+   分析或实机采样。
+2. `pdata.py 1c43890` 无命中(槽 +0x48 的值不在任何 RUNTIME_FUNCTION)——数据还是分析缺口,未判。
+3. §59.4 的 8 KB 私有区是否就是承载函数运行所在的(纤程?)栈:几何相容,未取证(§59.4 措辞保留)。
+4. `0x1ca3980`(被 0x1d11860 于 0x1d118f5 调用,rcx=[rbp-0x20] 局部、edx=0x20、r8=0x26e4f98)的写域未拆;
+   `cmovne r9,rcx` @0x1d118e8 在函数内可读路径上 rcx 已非帧指针,但没证到所有进入路径。
+5. 普查表第 1 行 0x1bcd120 的构造点(§60.6 末条)在这条路线之外,仍待上游判定。
+6. vptr 0x26e4fa8 的引用总数本轮 44(`--verify` 43)vs §53.4 记录 33:append-only,两处各按当时口径读。
+7. §53/§54 的长寿命堆 ctx(0xee7fd00)是否由 ctor 0x1c42d30 构造:本路线只证到构造器存在与 self-注册进
+   [0x2a01b18],运行时返回值落点离线不可读。
+
+### §60.8 判决梯与判决(继承 §59.9 的阶梯第 2 条)
+
+对**承载函数路线**(0x1c42fe0..0x1c43884)三档:
+
+- `frame_ctor_found` —— 帧的全部字面与字段写点在函数内定位且有字节证据;vptr 来源具名;帧指针下游的
+  已知线索要么证实不写帧、要么被具名到「写停在 helper 一侧」。
+- `frame_ctor_partial` —— 写点定位,但仍有帧写穿过未读透的被调方,无法排除。
+- `no_frame_ctor_this_route` —— 承载函数根本不写 `[rsp+0x38]`(纯转发,构造点在上游)。
+
+**判决 = `frame_ctor_found`**。依据:§60.2 的 6+4 条写点全表(逐条 RVA + `disrva.py`)、vptr 0x26e4fa8 由
+`riprefs.py` 具名且本函数内仅 2 处引用、§60.4 把 `0x16fdc0`(edx=1)与 `0x1d129a0` 两条线索判死为写者并
+证到共享 sink `0x1d11860` 零帧存储、§60.3 排除 `[rax+0x50]` 别名帧。§59 的 `no_scope_candidate` **不变**
+——§60 问「谁构造帧」,§59 问「谁是 scope」;本轮也没有开任何新枪,§59.9 第 2 条(零枪先行)兑现。
+
+### §60.9 复现
+
+```
+python3 scripts/pdata.py 1c4369b
+python3 scripts/disrva.py 0x1c42fe0 --end=0x1c43884
+python3 scripts/pdata.py 16fdc0 1d129a0 1d11860 1c42d30 1c42ee0 1c42de0
+python3 scripts/disrva.py 0x16fdc0 120 && python3 scripts/disrva.py 0x1d129a0 80
+python3 scripts/disrva.py 0x1d11860 --end=0x1d11b83
+python3 scripts/disrva.py 0x15db30 8
+python3 scripts/fastcalls.py 0x1c42fe0            # 0 桶 -> callers_0x1c42fe0_buckets.tsv(表头行)
+python3 scripts/fastcalls.py 0x1c42d30 --top 25   # 2 桶 -> callers_0x1c42d30_buckets.tsv
+python3 scripts/find_refs.py 0x1c42fe0 0x1bcd120  # 双 0 引用(.text 全解码)
+python3 scripts/riprefs.py 0x26e4fa8              # 44 refs;桶含 2 func 1c42fe0..1c43884
+python3 scripts/riprefs.py 0x26d4dd0              # 恰好 2 refs: 1c42d30 / 1c42de0
+```
+
+两个 one-shot inline-python 读数(§60.5 持有者扫描 + §60.6 的 0x1bcd120 计数)不是常驻工具,命令要素已
+在原文写死:PE 节表按 `find_refs.py` 的字段偏移(nsec@nh+6、SizeOfOptionalHeader@nh+20、节表
+vsize@o+8 / va,rawsz,praw@o+12.. / chars@o+36,过滤 `chars & 0x40`),键 = `0x140000000+RVA` 的
+LE-qword、要求 8 对齐。第一次尝试把 SizeOfOptionalHeader 读在 nh+16(那是 NumberOfSymbols)导致
+节名全花、0 命中 —— 修正后 1 命中 / 365 命中如上;vtable 槽 dump 用同一张节表做 VA→raw 映射。
+承载函数帧写点的 grep 判据:`grep -n "rsp + 0x38" <disrva 输出>` 应得 6 行;0x1d11860 的无存储判据:
+`grep "mov     qword ptr \[rsi\|\[rcx\|\[rdi" <disrva 输出>` 为空(表左值)。

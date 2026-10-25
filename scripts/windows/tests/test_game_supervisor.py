@@ -9,6 +9,8 @@ import inspect
 import json
 import random
 
+import pytest
+
 import game_supervisor as gs
 
 
@@ -237,6 +239,11 @@ def _input_stub(monkeypatch, tmp_path):
     monkeypatch.setattr(gs, "press_space", lambda hwnd: sent.append(("space",)))
     monkeypatch.setattr(gs, "speed_label_sha", lambda hwnd: "0" * 16)
     monkeypatch.setattr(gs, "window_rect", lambda hwnd: (0, 0, 2000, 1000))
+    # click_close re-reads the window after the click; without this stub the
+    # re-read would drag every _input_stub test into the real screenshot path.
+    monkeypatch.setattr(gs, "read_window",
+                        lambda hwnd: {"bright": 0.0, "gold": 0, "rows": [],
+                                      "bbox": None})
     class _Launcher:
         def _click_at(self, x, y):
             sent.append(("click", x, y))
@@ -249,6 +256,11 @@ def _input_stub(monkeypatch, tmp_path):
 def _logged_events(tmp_path):
     with open(tmp_path / "supervisor.jsonl", encoding="utf-8") as f:
         return [json.loads(line)["event"] for line in f]
+
+
+def _logged_events_full(tmp_path):
+    with open(tmp_path / "supervisor.jsonl", encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
 
 
 def test_console_command_refuses_instead_of_guessing_when_state_is_unknown(
@@ -379,3 +391,89 @@ def test_serve_loop_observes_the_panel_before_it_plans_an_action():
     src = inspect.getsource(gs.serve)
     assert "apply_console_observation(" in src
     assert src.index("apply_console_observation(") < src.index("plan_step(")
+
+
+# --- dialog close point (Task 5: pure close_point + observable dismiss) ---
+# §59.2: the hardcoded offset landed on the wrong pixel on the one counter-
+# sample we have (computed x=1843, true X glyph ~1343) and a "successful"
+# dismiss with the window still up was undiagnosable.  The first version is
+# pure fixed-offset only — no geometric rule is invented from one sample.
+
+def test_close_point_uses_the_measured_inset_from_bbox():
+    assert gs.close_point([1000, 466, 1939, 840]) == (1939 - 96, 466 + 51, "fixed_inset")
+
+
+def test_close_point_refuses_a_point_outside_the_bbox():
+    # 框太小时仍把「本来会点的点」交出去,但标 refused —— 日志要能还原那次尝试
+    assert gs.close_point([1000, 466, 1010, 480]) == (1010 - 96, 466 + 51, "refused")
+
+
+def test_dismiss_logs_the_point_and_whether_the_window_survived(monkeypatch, tmp_path):
+    sent = _input_stub(monkeypatch, tmp_path)
+    monkeypatch.setattr(gs, "read_window",
+                        lambda hwnd: {"bright": 0.4, "gold": 10, "rows": [], "bbox": None})
+    state = {"want": "paused", "console_open": None, "paused": "paused",
+             "last_bbox": [1000, 466, 1939, 840]}
+    gs._handle_command({"verb": "dismiss"}, 7, state)
+    assert ("click", 1843, 517) in sent
+    events = _logged_events_full(tmp_path)      # 同 _logged_events,但返回整个 dict 而非 event 名
+    attempt = next(e for e in events if e["event"] == "dismiss_attempt")
+    assert attempt["point"] == [1843, 517] and attempt["method"] == "fixed_inset"
+    done = next(e for e in events if e["event"] == "dismiss")
+    assert done["no_effect"] is False and done["bbox_after"] is None
+
+
+def test_dismiss_reports_no_effect_when_the_window_is_still_there(monkeypatch, tmp_path):
+    sent = _input_stub(monkeypatch, tmp_path)
+    monkeypatch.setattr(gs, "read_window",
+                        lambda hwnd: {"bright": 0.4, "gold": 10, "rows": [],
+                                      "bbox": [1000, 466, 1939, 840]})
+    gs._handle_command({"verb": "dismiss"}, 7,
+                       {"want": "paused", "console_open": None, "paused": "paused",
+                        "last_bbox": [1000, 466, 1939, 840]})
+    assert any(e["event"] == "dismiss" and e["no_effect"] is True
+               for e in _logged_events_full(tmp_path))
+
+
+def test_dismiss_verb_accepts_an_inset_override():
+    assert gs.parse_command("dismiss") == {"verb": "dismiss"}
+    assert gs.parse_command("dismiss 120 40") == {"verb": "dismiss",
+                                                  "inset": [120, 40]}
+    assert gs.parse_command("dismiss 120") is None
+    assert gs.parse_command("dismiss a b") is None
+
+
+def test_refused_close_point_logs_the_attempt_and_never_clicks(monkeypatch, tmp_path):
+    # refused must still record the would-be point — that is the whole
+    # diagnostic value — but must not click and must not write a dismiss event.
+    sent = _input_stub(monkeypatch, tmp_path)
+    state = {"want": "paused", "console_open": True, "paused": "paused",
+             "last_bbox": [1000, 466, 1010, 480]}
+    with pytest.raises(OSError):
+        gs._handle_command({"verb": "dismiss"}, 7, state)
+    assert not any(s[0] == "click" for s in sent)
+    events = _logged_events_full(tmp_path)
+    attempt = next(e for e in events if e["event"] == "dismiss_attempt")
+    assert attempt["method"] == "refused" and attempt["point"] == [914, 517]
+    assert not any(e["event"] == "dismiss" for e in events)
+
+
+def test_parsed_dismiss_inset_flows_through_to_the_click(monkeypatch, tmp_path):
+    # End-to-end for the override: parse_command's inset must reach the actual
+    # click.  Each half was covered separately (the lexeme, the default wiring);
+    # without this the connection between them is untested.
+    sent = _input_stub(monkeypatch, tmp_path)
+    state = {"want": "paused", "console_open": None, "paused": "paused",
+             "last_bbox": [1000, 466, 1939, 840]}
+    gs._handle_command(gs.parse_command("dismiss 120 40"), 7, state)
+    assert ("click", 1939 - 120, 466 + 40) in sent
+    assert ("click", 1843, 517) not in sent      # the default inset was not used
+    attempt = next(e for e in _logged_events_full(tmp_path)
+                   if e["event"] == "dismiss_attempt")
+    assert attempt["inset"] == [120, 40] and attempt["method"] == "fixed_inset"
+
+
+def test_serve_loop_surfaces_the_refused_dismiss_as_its_own_note():
+    # Refused geometry must stay distinguishable from generic click failures
+    # in the serve loop; same source-fence style as the invalidation fences.
+    assert "dismiss_refused" in inspect.getsource(gs.serve)

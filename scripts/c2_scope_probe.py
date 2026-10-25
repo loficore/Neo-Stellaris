@@ -201,10 +201,20 @@ def poll_done(now, deadline):
     return now >= deadline
 
 
-def caller_site(return_rva):
-    """The static call site: the engine's ``call rel32`` is 5 bytes."""
+def caller_site_estimate(return_rva):
+    """The ``-5`` site estimate: valid only for the ``E8 rel32`` (5 B) form.
+
+    This is an assumption about the encoding, not an observed site. A direct
+    ``call rel32`` is exactly 5 bytes, but ``call qword ptr [reg+disp]`` — every
+    dispatch through a vtable slot — is 3 to 5 bytes, so for a virtual caller
+    the estimate lands mid-previous-instruction and the census join misses
+    (§59: ``func=-`` was then misread as "nobody calls this"). The exact site is
+    recovered offline by re-decoding the exe bytes: ``scripts/exec_frame_sites.py``
+    (§59.7). A too-short return RVA yields ``None`` instead of raising — a shot
+    must never die on a recorded value; the refusal reads as ``est_site=-``.
+    """
     if return_rva < 5:
-        raise ValueError(f"return RVA 0x{return_rva:x} cannot precede a call")
+        return None
     return return_rva - 5
 
 
@@ -392,18 +402,25 @@ def follow_object(reader, exe_base, image_end, vtables, root_addr, *,
 def summarize(entries, stats, chains, census, id_names, objects=None):
     """Aggregate sampled entries, followed chains and the Task 1 census.
 
-    ``census`` maps a call site to its function/origin; ``id_names`` maps the
-    chain's token id to a keyword name. The id is a keyword token id, never a
-    system id: an unknown id stays ``-`` instead of being guessed. ``objects``
-    carries the four-root dereference results and is what the verdict reads.
+    ``census`` maps a call site to its function/origin; the join runs on the
+    ``caller_site_estimate`` of each recorded return RVA — an estimate, not an
+    observed site (the exact site is recovered offline by exec_frame_sites,
+    §59.7). Caller rows are keyed by the raw return RVA and say so.
+    ``id_names`` maps the chain's token id to a keyword name. The id is a
+    keyword token id, never a system id: an unknown id stays ``-`` instead of
+    being guessed. ``objects`` carries the four-root dereference results and is
+    what the verdict reads.
     """
+    by_return = {}
     by_caller = {}
     vtables = set()
     valid = 0
     lexer = 0
     for e in entries:
-        site = caller_site(e["caller_rva"]) if e["caller_rva"] >= 5 else None
-        by_caller[site] = by_caller.get(site, 0) + 1
+        return_rva = e["caller_rva"]
+        est = caller_site_estimate(return_rva)
+        by_return[return_rva] = by_return.get(return_rva, 0) + 1
+        by_caller[est] = by_caller.get(est, 0) + 1
         if e["valid"]:
             valid += 1
             vtables.add(e["self_vtable_rva"])
@@ -433,13 +450,13 @@ def summarize(entries, stats, chains, census, id_names, objects=None):
         })
 
     callers = []
-    for site, count in sorted(
-        by_caller.items(),
-        key=lambda kv: (-kv[1], -1 if kv[0] is None else kv[0]),
-    ):
-        meta = census.get(site, {}) if site is not None else {}
+    for return_rva, count in sorted(by_return.items(),
+                                    key=lambda kv: (-kv[1], kv[0])):
+        est = caller_site_estimate(return_rva)
+        meta = census.get(est, {}) if est is not None else {}
         callers.append({
-            "site": site,
+            "return_rva": return_rva,
+            "est_site": est,
             "count": count,
             "func": meta.get("func"),
             "origin": meta.get("origin", "-"),
@@ -643,10 +660,11 @@ def write_tsv(path, summary, meta=None):
             f.write(f"meta\t{key}\t{value}\t-\n")
             rows += 1
         for row in summary.get("callers", []):
-            site = "-" if row["site"] is None else f"0x{row['site']:x}"
+            ret = row["return_rva"]
             func = "-" if row["func"] is None else f"0x{row['func']:x}"
             f.write(
-                f"caller\t{site}\t{row['count']}\t"
+                f"caller\t0x{ret:x}\t{row['count']}\t"
+                f"ret=0x{ret:x} est_site={_hex_or_dash(row['est_site'])} "
                 f"func={func} origin={row['origin']}\n"
             )
             rows += 1
@@ -1109,10 +1127,11 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                 print(f"STATS: {stats_text.strip()}")
                 print("CALLERS:")
                 for row in summary["callers"]:
-                    site = "-" if row["site"] is None else f"0x{row['site']:x}"
                     func = "-" if row["func"] is None else f"0x{row['func']:x}"
                     print(
-                        f"  site={site} count={row['count']} "
+                        f"  ret=0x{row['return_rva']:x} "
+                        f"est_site={_hex_or_dash(row['est_site'])} "
+                        f"count={row['count']} "
                         f"func={func} origin={row['origin']}"
                     )
                 print("CHAIN:")
