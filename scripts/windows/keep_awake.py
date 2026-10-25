@@ -3,7 +3,11 @@
 常驻在交互会话里,用 `SetThreadExecutionState` 的进程级断言(`ES_CONTINUOUS |
 ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED`)掐掉「空闲 → 关屏 → 唤醒要求登录」这条链;
 进程一退出 Windows 自动恢复原电源行为,所以不写注册表、不改电源计划。同时读**当前输入桌面名**
-(`Winsta0\\Default` = 已解锁,`Winlogon` = 锁着),把判决写进 `STATUS_PATH`。
+(名字到判决的映射见 `classify_desktop`:`Default` → `unlocked`、`Winlogon` → `locked`、
+`ScreenSaver` → `screensaver`),把判决写进 `STATUS_PATH`。**实测更正(2026-10-25 两批次,
+`evidence/logs/unattended_popup_batch2_4_4_4.log` Step 1–3):人工 `Win+L` 之后这台机上的探针
+读到的仍是 `Default`,`Winlogon` 一次都没出现 ⇒ `locked` 那一格在这台机上没有实机证人,
+`desktop_gate` 对真锁无感(判读陷阱见 `docs/offline-tooling.md` keep_awake 一节陷阱 6)。**
 
 本文件是两半结构:`# pure core` 小节在任何 OS 上 import 得到(判决、时钟、记录形状),
 `# Windows edge` 与 `# serve / CLI` 小节只在实机跑。纯核里的数字来自 2026-10-24 对主机的

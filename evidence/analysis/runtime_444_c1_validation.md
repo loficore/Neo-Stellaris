@@ -5517,3 +5517,190 @@ LE-qword、要求 8 对齐。第一次尝试把 SizeOfOptionalHeader 读在 nh+1
 节名全花、0 命中 —— 修正后 1 命中 / 365 命中如上;vtable 槽 dump 用同一张节表做 VA→raw 映射。
 承载函数帧写点的 grep 判据:`grep -n "rsp + 0x38" <disrva 输出>` 应得 6 行;0x1d11860 的无存储判据:
 `grep "mov     qword ptr \[rsi\|\[rcx\|\[rdi" <disrva 输出>` 为空(表左值)。
+
+## §61 零枪:普查表第 1 行的帧来源 = base Execute 的 arg2 透传,不是独立构造点(2026-10-25,离线)
+
+**问题**:`exec_frame_sites_4_4_4.tsv` 第 1 行(site `0x1bcd18d` / func `0x1bcd120` /
+`census_origin=incoming_arg`)在 §60.7 挂作第 5 条,判词是「构造点在这条路线之外,仍待上游判定」。
+本节把「上游」问到底:该行的 rdx 到底是谁造的。零枪、零 Windows 机时。
+
+### §61.1 那 365 个共享槽全在 slot[2],而游程启发式不可用
+
+§60.6 只数了「`0x1bcd120` 出现在 365 个 `.rdata` 槽」,没答槽位。普查路线要的是**调用形态**:
+`call [reg + off]` 的 `off` 必须是那个槽,否则找到的调用点与这条链无关。
+
+- 第一版做法(游程):从命中处向前后扩,只要 8 对齐 LE-qword 落进 `.text` 就继续,起点当 vtable 基址。
+  结果 **365 命中但游程长度分布出现 1401/1435/1564** ⇒ `.rdata` 里 vtable 是**紧挨着排的**,中间没有
+  非指针分隔,整片并成一条游程,偏移全是垃圾。**这条启发式在本 build 的 `.rdata` 上不可用**,
+  后面谁再拿「指针游程起点」当 vtable 基址,先读这段。
+- 改用仓里现成的基址集:`evidence/xrefs/ceffect_vtable_map_4_4_4.txt` 的 1,805 个 vtable RVA
+  (floor:只含 `+0x08` 仍是 base Execute 的那批),对每个基址按槽解引用比对目标 VA。
+- **读数**:`slot_index 分布 = {2: 365}`,`orphan = 0`。⇒ 365 张表里 `0x1bcd120` **一律落在 slot[2] = +0x10**,
+  也就是 §10 那条 `call [rax+0x10]` 派发槽;与 map 自己的列名 `ExecuteActual(slot2)` 同一件事。
+
+### §61.2 `0x1bcd120` 对帧是纯透传,它造的是 this 拷贝
+
+`disrva.py 0x1bcd120 100` 的关键 12 条(其余为对象头字段搬运):
+
+```
+01bcd131  mov rbx, rdx            ; 帧留底
+01bcd139  mov rdi, rcx            ; this 留底
+01bcd12a  lea rax,[rip+0xb03397]  ; -> 0x26d04c8
+01bcd134  mov [rsp+0x20], rax     ; 栈上新对象的 vptr
+01bcd13c..01bcd167  [rcx+8]/[rcx+0x12]/[rcx+0x14]/[rcx+0x16]/[rcx+0x18] -> [rsp+0x28..0x30]
+01bcd175  lea rcx,[rsp+0x20]      ; arg1 = 新造的拷贝
+01bcd17a  mov rdx, rbx            ; arg2 = 原帧,逐字不变
+01bcd17d  mov r8, [rax+8]         ; = [0x26d04c8+0x08]
+01bcd181  lea rax,[rip+0x13b398]  ; -> 0x1d08520
+01bcd188  cmp r8, rax
+01bcd18b  jne 0x141bcd194         ; 不是 base Execute 就走 slot 真值
+01bcd18d  call 0x1d08520
+```
+
+- 在 `0x1bcd131 → 0x1bcd18d` 这段里 `rbx` **只作源不作目的**(`grep` 全文得 `mov rbx, rdx` /
+  `mov rcx, rbx` / `mov rdx, rbx` 三条),即帧指针从入口到这条 call 没有任何改写。
+- 全函数对帧的**内容**写只有 `[rbx+8]` 两处(`mov [rbx+8], eax` @0x1bcd1e2、`dec [rbx+8]` @0x1bcd1f1),
+  都在那次派发**返回之后**,与 §53「+8 是调用深度计数、净为零」同一形态;`[rsp+0x20]` 那块是**新的 this**,
+  与帧无关。⇒ **`0x1bcd120` 不构造帧、不换位帧、只把帧传下去。**
+- `0x1bcd181..0x1bcd18b` 是 §53.1 那条 devirtualization guard 的同一个形状:先比 slot 真值与 base Execute,
+  相等才直调,不等就 `call r8`。
+
+### §61.3 被 devirt 的那张表与 base Execute 自己
+
+- wrapper vtable `0x26d04c8`(在 floor map 内)槽位:`slot0 0x158950` / `slot1 0x1d08520`(base Execute ✓,
+  guard 恒成立的来源)/ `slot2 0x1bccf30` / `slot3 0x535070`。⇒ 这次调用把 this 换成基类身份后再进 base Execute,
+  base Execute 的 `call [rax+0x10]` 于是落到 **`0x1bccf30`**(`0x1bcd120` 的兄弟实现),不是回到自身 —— 无递归。
+- base Execute 本体对帧同样是透传:`mov eax,[rdx+8]` @0x1d0852a 读深度 → `mov rbx,rdx` @0x1d0852d 留底 →
+  `mov rdx,rbx; mov rcx,rdi; mov rax,[rdi]; call [rax+0x10]` @0x1d0856b..0x1d08577。中间只有
+  `[rbx+8]` 的 `inc`/`dec` 与 `0x16fdc0`(edx=0x10/3/4)、`0x1d116a0` 的 rcx=帧 调用;
+  `0x16fdc0` 在 §60.4 已被判死为「写者」(其 `[rsp+0x38]` 是各自栈里的 string capacity 暂存),本节不推翻,
+  只补一句:**它在 base Execute 里以「拿帧当 rcx」的形态反复出现,是读/标记,不是重新赋值 rdx。**
+
+### §61.4 判定与边界
+
+**判定**:`exec_frame_sites_4_4_4.tsv` 第 1 行的 `incoming_arg` **没有独立的构造点**。它的 rdx 就是
+base Execute 收到的 arg2,而 base Execute 收到的 arg2 就是 §60 判决里承载函数
+`0x1c42fe0..0x1c43884` 在 `[rsp+0x38]` 内联构造的那个 0x20 B 执行深度帧。⇒ **§60.7 第 5 条折叠进第 1 条**:
+剩下的不是「第 1 行的帧从哪来」,而是「谁以帧为 arg2 调用 base Execute 的 slot[1]」(派发方集合),两行同源。
+
+**边界(不可越过的部分)**:
+1. 本节只判了第 1 行这一条链。§53.1 记的 17 个站点里 `incoming_arg` 有 12 个,每个都要**逐函数**读它自己
+   的 rdx 路径才能确认同源 —— 没读的不算已判。
+2. 「谁调 base Execute」仍离线不可分(§60.5:承载函数 0 直接调用 + 0 指令引用、寄存器间接派发),
+   本节没有新增杠杆。
+3. §60 的判决 `frame_ctor_found` **限于承载函数路线**,本节的结论是「第 1 行与该路线同源」,
+   不等于「全部帧都来自承载函数」;普查路线上仍有 §60.7-1 那条未决。
+4. 无递归那句是从 slot 表读出来的静态推论(`slot2` 已换实现),没有实机执行序列佐证。
+
+### §61.5 复现
+
+```
+python3 scripts/disrva.py 0x1bcd120 100      # 透传三处 + guard 12 条
+python3 scripts/disrva.py 0x1d08520 40       # base Execute 对帧:rbx 留底、rdx 原样、[rbx+8] 净零
+python3 scripts/scratch/2026-10_exec_frame_census/slot_offsets.py    # 游程版(展示为何不可用)
+python3 scripts/scratch/2026-10_exec_frame_census/slot_offsets2.py   # floor map 版:{2: 365} / orphan 0
+```
+
+两个探针都是一次性读数,不是维护接口:节表字段偏移照 `find_refs.py`,键 = `0x140000000+RVA` 的 8 对齐
+LE-qword;`slot_offsets2.py` 比的是**槽内容 == anchor VA**(第一版误比命中位置,得 365 全 orphan —— 记在这里,
+免得下一次再把 orphan 当结论读)。
+
+## §62 零枪:普查表 12 个 `incoming_arg` 站点逐函数读完 —— 全部是 slot[2] ExecuteActual 覆写的帧透传(2026-10-25,离线)
+
+**问题**:§61.4 边界第 1 条挂着「§53.1 记的 17 个站点里 `incoming_arg` 有 12 个,每个都要**逐函数**读它自己
+的 rdx 路径才能确认同源 —— 没读的不算已判」。本节把那 12 行(9 个函数)全部读完,并把每行的**槽位身份**
+定死。零枪、零 Windows 机时、零 IDA license。
+
+**口径**:数据源是 `evidence/xrefs/exec_frame_callers_4_4_4.tsv` 的 `rdx_origin=incoming_arg` 行
+(`exec_frame_sites_4_4_4.tsv` 第 1 行是它的 join 结果)。探针
+`scripts/scratch/2026-10_exec_frame_census/forwarding_wrappers.py` 每函数回答四件事:站点 `call` 的目标、
+承载寄存器(把帧交回 rdx 的那个)在函数体内的全部写点、有没有 `mov [rdx+..]` / `mov [承载+..]` 这类
+**对帧的写**、rdx 有没有从 `lea rdx,[rsp/rbp+..]` 取得(那就是 §60.7-1 要的栈上构造点)。
+**自校验**:第 1 行函数 `0x1bcd120` 必须复现 §61.2 的 `mov rbx, rdx @0x1bcd131` —— 复现了。
+
+### §62.1 逐函数读数:12/12 直调 base Execute,0 构造点
+
+`留底` = 承载寄存器从入参 rdx 抄一次的那条;`站点前额外写` = 在「留底 → 站点」之间承载寄存器又被写的次数。
+
+| 函数 | 站点 | 目标 | 承载 | 留底 | 站点前额外写 | `[<frame>+8]` 写(承载基) | 其他帧偏移写(承载基) | `lea rdx,[rsp..]` |
+|---|---|---|---|---|---|---|---|---|
+| `0x69e100..0x69e70c` | `0x69e1e9`, `0x69e289` | `0x1d08520` | rbx | `0x69e124` | 0 | 4 | 0 | 无 |
+| `0x6c32e0..0x6c38e7` | `0x6c3837`, `0x6c38c3` | `0x1d08520` | rbx | `0x6c32f8` | 0 | 1 | 0 | 无 |
+| `0x7ebe60..0x7ec22a` | `0x7ec137`, `0x7ec1d7` | `0x1d08520` | rbx | `0x7ebe78` | 0 | 2 | 0 | 无 |
+| `0x7f67f0..0x7f6c0f` | `0x7f68d7` | `0x1d08520` | rbx | `0x7f6808` | 0 | 3 | 0 | 无 |
+| `0x7ff6c0..0x7ffb09` | `0x7ff827` | `0x1d08520` | rbx | `0x7ff6d8` | 0 | 3 | 0 | 无 |
+| `0xb34360..0xb345c0` | `0xb343cb` | `0x1d08520` | rbx | `0xb3437c` | 0 | 2 | 0 | 无 |
+| `0xdcdca0..0xdce3a0` | `0xdcdea7` | `0x1d08520` | rbx | `0xdcdcb8` | 0 | 3 | 0 | 无 |
+| `0xdef440..0xdf06a8` | `0xdef633` | `0x1d08520` | r14 | `0xdef46f` | 0 | 7 | 0 | 无 |
+| `0x1bcd120..0x1bcd227` | `0x1bcd18d` | `0x1d08520` | rbx | `0x1bcd131` | 0 | 2 | 0 | 无 |
+
+- **12 个站点全是 `call rel32` 直接打到 base Execute `0x1d08520`**,不是 `call [reg+off]` 间接派发。
+- 承载寄存器每函数**在站点之前只有一次写**(函数头的 `mov <c>, rdx` 留底);之后的写都是**出口复位**,
+  形态不一:7 个函数是 `mov <c>, [rsp+0x50..0x70]`,`0x69e100` 是 `mov rbx, [r11+0x38]`@`0x69e6d4`
+  (仍在两个站点之后),`0xdef440` 是 `pop r14`@`0xdf05ac`。
+  `0xdef440` 的 r14 在函数中段还有两次写(`0xdefa5f lea r14,[rip-0xbd5eb6]`、`0xdefc53 mov r14,[rbp+0x10c8]`),
+  也都**在站点 `0xdef633` 之后**,所以该站点交回的仍是原帧 —— 这就是「站点前额外写」这一列存在的理由。
+- `rdx` 自身在这些函数里被大量复用(`mov edx, 0x4184` 之类是日志/错误码入参),**这不影响透传结论**:
+  留底的意义正是为了在每次调用前 `mov rdx, <c>` 把原帧交回去。
+- **这 9 个函数动帧,但只动 `+8`**:承载寄存器基址的 `[<c>+8]` 写合计 **27 处**(探针末行
+  `SUM carrier 基 [<frame>+8] 写 = 27 (inc/dec 21, 赋值 6)`),`+0x00/+0x10/+0x18` **一处都没有**。第 1 行的两处在
+  `0x1bcd1e2 mov dword [rbx+8], eax` 与 `0x1bcd1f1 dec dword [rbx+8]`,中间夹着 `call [rax+0xa0]`@`0x1bcd1eb`
+  —— 与 §61.2「帧内容只有 `[rbx+8]` 净零」同一件事,现在逐函数复现了。
+  `0xdef440` 的 `0xdef527 inc dword [r14+8]` 在站点**之前**,即该覆写自己也在进 base Execute 前把深度加一格。
+- **`+8` 这一列不是同一种写**:27 处里 **21 处是 `inc`/`dec`**(§53 的净零形状),**6 处是
+  `mov dword [<c>+8], eax|ecx` 的赋值**(`0x69e539`、`0xb34445`、`0xb34538`、`0xdefdb0`、`0xdf00b8`、
+  `0x1bcd1e2`)。赋值那 6 处**是否净零本节没有判** —— 要判得先追被赋的 `eax` 从哪来,而 `0x1bcd1e2`
+  那条正是 §61.2 读过的「mov 完就去 `call [rax+0xa0]`、回来 `dec`」形状。§61.2 的「净零」措辞
+  覆盖的是 inc/dec 那一半,不要把 27 这个数读成 27 个净零对。
+- **假阳性已排除**:`0xdef440` 另有 `mov qword [rdx], rax`@`0xdefba8/0xdefbdc/0xdefc16` 与
+  `mov qword [rdx+8], rax`@`0xdefbb6/0xdefbea/0xdefc24`,形状上是「rdx 基写」,但那里 rdx 是**交换循环的游标**
+  (`mov rdx, rsi`@`0xdefb9b` → `mov [rdx], rax`@`0xdefba8` → `mov [r9], rcx`),且整段在 r14 被
+  `0xdefa5f` 改写之后,帧已不在 rdx/r14 里 ⇒ **不算帧写**。这条是 §62.4 坑清单的第一条。
+
+### §62.2 槽位身份:三方一致,9 个函数全是 floor map 的 slot[2]
+
+`forwarding_wrappers.py` 只答「这一行是不是透传」。§61.4 边界第 1 条还要求说清**这些行与第 1 行是不是同一条链**,
+所以补了槽位读数,三条独立口径对上:
+
+1. **裸扫 `.rdata`**:每个函数名的 8 对齐 LE-qword 命中数 = `2, 2, 1, 2, 2, 1, 2, 2, 365`(共 379 槽)。
+2. **前一个槽的内容**:每个命中的 `slot[-1]` 值**恰好是 `0x1d08520`**(379/379,无一例外)。
+3. **floor map 对齐**:把命中地址回退 0x10 当 vtable 基址,该基址**全都在** `ceffect_vtable_map_4_4_4.txt`
+   的 1,805 个基址里(379/379);并且 map 自己的 `ExecuteActual(slot2)` 列等于该函数的行数,与口径 1 的
+   命中数**逐个相等**(`agree=True` × 9)。
+
+⇒ 这 9 个函数(含 §61 判过的 `0x1bcd120`)**一律是 floor map 那批 vtable 的 slot[2] = ExecuteActual 覆写**,
+而 slot[1] = base Execute。形态与 §61.2/§61.3 完全同一条:`base Execute` 进 → `[vptr+0x10]` 派发到这层覆写 →
+覆写造一个 this 拷贝、把**原帧**交回 `base Execute`。
+
+### §62.3 判定与边界
+
+**判定**:§61.4 边界第 1 条**关闭**。普查路线上 `origin=incoming_arg` 的 12 行**全部同源**:帧不是在这 9 个函数
+里造的(0 处 `lea rdx,[rsp..]`、0 处非 `+8` 帧字段写),它们是 ExecuteActual 覆写把 base Execute 的 arg2
+原样透传回来,途中只按 §53 的规则动 `+8` 深度计数。⇒ §60.7 第 5 条的折叠不是只对第 1 行
+成立,而是对整个 `incoming_arg` 集合成立。
+
+**边界(不可越过的部分)**:
+1. 本节判的是「这些行没有构造点」。**没有**新增「谁造帧」的杠杆:这 9 个函数自己也是**被** slot[1] 派发进来的
+   (`base Execute` 调 `[vptr+0x10]`),帧的来源仍在上游 —— §60.7-1(派发方集合)原样未决。
+2. `not_examined` 的那些站点(普查表里占多数)**不在本节范围内**,本节没读它们,不能拿本节的结论覆盖它们。
+3. 口径 2/3 的「回退 0x10 即 vtable 基址」依赖 floor map 自己的列定义(slot[1]=base Execute、slot[2]=ExecuteActual),
+   它仍是**下限**样本(§17 NOTE:覆写 Execute 的类不进这张表)。
+4. 「`0xdef440` 站点的 r14 未被中途改写」是**区间判断**,不是数据流分析:函数体内 `0xdef46f..0xdef633` 之间无 r14 写点。
+5. 直调 `0x1d08520` 是静态读数,**没有实机执行序列佐证**(与本卷其它零枪结论同一级别)。
+
+### §62.4 复现
+
+```
+python3 scripts/scratch/2026-10_exec_frame_census/forwarding_wrappers.py      # §62.1 表 + 自校验
+```
+
+**坑(记在这里,免得下一次把假阴性读成结论)**:
+1. 第一版探针用 capstone 的 `insn.regs_write` 判寄存器读写,本环境的 capstone 对 x86 **该属性恒空**,
+   于是 `frame_writes` 与 `承载写点` 全读成 0 —— 那正是 §61.2 已经手工读出的 `mov rbx, rdx` 应当出现的地方。
+   **0 个写点这种「太干净」的读数,先怀疑检测器,再怀疑二进制。**
+2. 第二版只把 `mov` 当写,漏掉 `inc`/`dec`/`add [c+8]`,于是 §62.1 的「对帧的写」一度读成 0/0/0…,
+   与 §61.2 自己记下的 `dec dword [rbx+8]` 直接矛盾。现版把 `MEM_WRITE` 整族纳入,并把 `+8` 单列。
+3. 承载寄存器基址的 `+8` 写是**深度计数**,不是构造;但 `rdx` 基的写**必须回上下文核**(§62.1 的
+   `0xdef440` 三处 `mov [rdx], rax` 就是交换循环游标)。
+
+现版口径是「操作符字符串 + x86 别名表」(见脚本 docstring),并以第 1 行的已知读数做自校验。
