@@ -1101,6 +1101,12 @@ just game stop | quit
   既不会放行也不会报错,只有状态记录的 `allow_status` 说它整份可不可解析。文件缺失/坏 JSON ⇒
   `absent`/`malformed`,名单换成空表,处置一律退成 hold。模板在
   `scripts/windows/popup_allowlist.example.json`。
+- **抄 id 之前先确认那块亮的是不是一扇窗。** 第一批实机留证给了比例:一场 385 次边缘、23 个 distinct
+  `popup_id`,其中 **21 个是调试控制台的文本面板**被亮度剖面切成的一块块(形状从 `340x970` 一路漂到
+  `1500x1000`,所以每换一次形状就是一个新 id),**2 个是主 UI 切片**(星图 + 舰船立绘 + 舰队侧栏,
+  里面根本没有 ✖ glyph)。`console_panel` 这条 reason 在那一场只认出 **18/385** 次边缘,其余全部以
+  `unclassified_hold` / `id_stuck` 停手 —— 停手是对的方向,但**别把这些 id 当弹窗抄进名单**。
+  逐条判读在 `evidence/xrefs/popup_fingerprints_4_4_4.tsv`。
 - 三个模块的分工:`popup_identity.py`(指纹与名单解析)、`popup_guard.py`(判据与熔断,阈值只在这定义)、
   `popup_ocr.py`(引擎唯一出口)。前两个 stdlib-only,Linux 上就能 `import` 并跑测试;`popup_ocr` 只在
   Windows 宿主上跑得动(surya + torch CPU 轮子),但它的**加载成本现在有了实机数字**:2026-10-25 首枪
