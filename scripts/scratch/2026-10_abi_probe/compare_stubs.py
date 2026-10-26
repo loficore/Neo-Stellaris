@@ -55,7 +55,6 @@ def load(path):
     for e in pe.DIRECTORY_ENTRY_EXPORT.symbols:
         if e.name:
             exports[e.address] = e.name.decode()
-    by_name = {v: k for k, v in exports.items()}
     pdata = None
     for s in pe.sections:
         nm = s.Name.rstrip(b"\0").decode()
@@ -68,7 +67,7 @@ def load(path):
             b, e, _u = st.unpack_from("<III", pdata, i)
             funcs.append((b, e))
         funcs.sort()
-    return exports, by_name, funcs, int(pe.OPTIONAL_HEADER.ImageBase)
+    return exports, funcs
 
 
 def func_of(funcs, rva):
@@ -120,7 +119,7 @@ def norm(insns, upto):
     return out
 
 
-def analyze(dll, exports, by_name, funcs, base):
+def analyze(dll, exports, funcs):
     """{symbol_under_probe: [(call_rva, window)]} with self-check.
 
     The vendored quickjs.c symbols are NOT in the probe DLLs' export tables,
@@ -165,11 +164,11 @@ def main(argv=None):
     tables, any_fail = {}, []
     for side, path in (("zig", a.dll_a), ("c", a.dll_b)):
         full = path if os.path.isabs(path) else os.path.join(REPO, path)
-        exports, by_name, funcs, base = load(full)
+        exports, funcs = load(full)
         if not funcs:
             print(f"[{side}] no .pdata in {os.path.basename(full)} — "
                   f"fallback: 96 insns from each export")
-        res, fails = analyze(full, exports, by_name, funcs, base)
+        res, fails = analyze(full, exports, funcs)
         for f in fails:
             any_fail.append((side,) + f)
         tables[side] = res
