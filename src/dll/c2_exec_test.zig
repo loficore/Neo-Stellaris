@@ -8,12 +8,14 @@ const predicate_hook = @import("c2/predicate_hook.zig");
 const exec_hook = @import("scripted/exec_hook.zig");
 const live_probe = @import("c2/live_probe.zig");
 const scope_probe = @import("c2/scope_probe.zig");
+const donor_probe = @import("c2/donor_exec_probe.zig");
 const wire = @import("c2/wire.zig");
 const windows = @import("hooking/windows.zig");
 const chokepoint_table = @import("c2/chokepoint_table.zig");
 
 comptime {
     _ = scope_probe;
+    _ = donor_probe;
 }
 
 extern fn C2DiagQuickJS(out_diag: [*]u8, diag_size: c_int) c_int;
