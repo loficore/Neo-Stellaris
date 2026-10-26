@@ -1008,6 +1008,81 @@ benign,`0`/`-1` 都算清理成功)→ `assert_game_alive`。**绝不 `FreeLibra
 `column_sequences`/`find_scope_column`、`classify_capture`/`classify_apply` 等)由
 `python3 -m pytest scripts/test_c4_wiring_probe.py -q` 覆盖,无游戏、无 Windows API。
 
+### `scripts/c2_donor_probe.py [dll] [--mask 0] [--poll-s 120] [--settle-s 2] [--out C:/temp/c4_donor_probe.tsv]`
+
+donor 一族的只读采样枪(§57.4 点名的那个靶子),一枪一进程。**本计划只把它写好并静态验证,从未运行** ——
+它是实机工具,运行需要本次会话内点名(`docs/roadmap.md` 的授权表)。默认 DLL `C:\temp\sqjs_c4.dll`。
+
+**它读谁的字节**:DLL 侧 detour 挂在 `0x3AFD30`(`offsets.keyword_reg.RVA_EFFECT_DONOR_EXECUTE`,
+不是 base Execute `0x1D08520`,也不是我们那份 25 槽副本)。**唯一一次引擎内存读是 `[self+0]`**,
+拿它的 RVA 去 join `FAMILY_VTABLES` 那五张表;`rdx`/`r8`/`r9`(`ctx`/`a3`/`a4`)只按**值**记录,
+本探针一个都不解引用(§53.5 已证伪 `[ctx+0x30]` 那条链,不在这里复活)。函数体恒转发原函数、
+不改寄存器、不改控制流。引擎字节只在三处被写:install 的 JMP、`removeHook` 的还原、`restoreTarget`
+把自存的原前序拷回去。前置指纹是 `0x3AFD30` 的 24 字节原前序,逐字节不符即 `-5` 拒装
+(围栏 `scripts/test_c2_donor_probe.py` 把那 24 字节和五张表都钉回它们的权威:exe 与取证卷 §57.2 观测 4)。
+
+**门序**:`resolve_pid → resolve_base_address → sha 门 → gate_module(NEEDED_EXPORTS) → Layout →
+Reset → SetMask → Install → 轮询 Stats → Drain → write_tsv → finally: Uninstall → Verify → settle →
+assert_game_alive`。每根箭头是真依赖:`resolve_base_address` 在注入**前**取的是 `stellaris.exe` 的基址
+(#meta 里那句「RVA 相对于哪个界」的出处);`gate_module` 用 `list_exports` 从**文件**里核
+`NEEDED_EXPORTS`,缺一个就不注入 —— 晚一步发现昨天那份 DLL,进程里就多一份永远卸不掉的映射。
+`Reset` 清计数/环/mask 但**不卸载 hook**,所以必须排在 `Install` 之前(带着活补丁清 `calls`
+等于悄悄把采样分母调回 0)。`sha 门`比的是「这一枪要注入的是哪个文件」:整文件 sha **不是代码身份**
+(上面实测过每次重链都换、`.text` 一字节没动),所以这道门是**打印并记进 #meta + 读不到就拒**,
+不是拿钉死的常数做相等断言 —— 后者会在每次重建后杀掉每一发合法的枪。
+
+**依赖码**:`C4DonorProbeInstall` `0` / `-2`(本进程已装好,**或 predicate detour 还 armed**)/
+`-3` stellaris.exe 未找到 / `-4` 目标已被 hook / `-5` 指纹不符 / `-6` patch 过宽 / `-1` 其余。
+`-2` **不重试**:一进程只有一次 install 额度,唯一杠杆是新进程。
+`C4DonorProbeUninstall` `0` / `-7`(引擎字节没回来 ⇒ 驱动打印
+`RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`,放弃该进程)/ 其它错误 `-1`。
+`C4DonorProbeSetMask` 恒 `0`:任何 u64 都是合法掩码,**没有非法值档**(`mask=0` 是「每条都落环」的有语义取值)。
+`C4DonorProbeVerify` 原样透传,不重新折叠 —— 非零三档含义互不相同:`-1` 装着但 hook 从 detour 表里丢了、
+`-2` 已卸但引擎字节与指纹不符、`-3` 本进程从未解析到目标(install 从没在这儿跑过)。
+清理段之后**绝不 `FreeLibrary`**。
+
+**verdict 值域**(`VERDICTS` 是唯一权威,`verdict_for` 只能返回它的成员;退出码 0 只给前两档证据结果):
+
+| verdict | 读数 | 这是什么 |
+|---|---|---|
+| `donor_family_hit_named` | 某个 `hN>0` | 经虚派发成立,且**指名哪一张表**(`table_rvas()[N]`;index 2 = `0x25F4440`) |
+| `donor_family_hit_unknown_table` | `calls>0`、五个 `h` 全 0、`unmatched>0` | 「另一份表」成立且形态是**运行时生成的表** |
+| `no_calls_inconclusive` | `calls==0` | **ENVIRONMENT**,不是代码结论 |
+| `instrument_broken` | `invalid_self>=calls` 且其余计数全 0 | 探针读不出 `[self+0]`,对本次观测没有陈述能力 |
+| `counter_desync` | `calls>0` 但没有一个计数器对上 | 记账坏了(典型:带活补丁跑了 `Reset`),不是引擎行为 |
+
+**三条判读陷阱**:
+
+1. **值域里没有第三档,`no_calls` 不许读成「不经这一族」。** §57.4 的第三档要的是
+   「**哨兵 body 等齐(执行确实发生)而 `calls==0`**」—— 它的前半句是一桩独立的证据,本探针既没有哨兵 body
+   也证明不了「执行确实发生」。运行中的战役里一个安静的窗口只可能是「没观测到」,所以这一档在这台仪器上
+   **不可达**,`verdict_for` 也不返回它(测试用一条 `assert set(VERDICTS) == {…}` 把「没有
+   `no_donor_family_execution`」钉死)。读成负结论就是把仪器的一次沉默当成了引擎的一次陈述。
+2. **`[self+0]` 命中我们 DLL 的 vtable,说明 predicate 在跑,不是命中家族。** predicate detour 把实例化对象的
+   `[child+0]` 指向我们在 DLL 里的 vtable 副本,那种状态下每个读数都落在五表之外,会被记成 `unmatched` ——
+   一个**假的 tier 2**。所以模块在 `preflightChecks` 里直接拒绝该状态(这就是 `-2` 的第二种成因),
+   驱动对此不重试、只要新进程。这也是为什么这条枪与 predicate/slot2 那把**不能同进程共跑**。
+3. **`mask != 0` 时 ring 与 counters 不同源,比例只能从 counters 取。** 五个 `hN`/`unmatched`/`invalid_self`
+   是**每次调用都计**、且在采样门**之前**计,只有环的写入被 `calls & mask` 筛过(§57.4 的恒计设计 ⇒ 三档判据
+   不需要分母)。默认 `--mask 0` 每条落环;**先跑一次 20 s 窗口读 `calls` 增量定频率,再决定下一次点名要不要带
+   mask** —— 这是 §57.4「不要照搬 base Execute 的 1/512」在本工具上的落地口径。带 mask 时拿 256 条环去数比例,
+   数出来的是证人的样本量,不是发生过的调用数。
+
+**它替代了 `0x1D08520` 那一族采样面的哪一段**:§57 观测 6 确立「这一族**一张都不从 base Execute 进**」
+(`0x1D08520` 只是没覆写 slot[1] 的那些类的默认体),于是 §54–§56 三把挂在 `0x1D08520` 上的枪
+(`c2_scope_probe.py` 的 `calls`/`delta`/`valid`)对 donor-shaped 这一族**没有覆盖**:既不能证明这一族被执行,
+也不能证明没被执行。本工具接的就是那一段覆盖缺口 —— **「这一族到底进不进虚 Execute」这个问题从此归它问**,
+`c2_scope_probe.py` 继续只回答「base Execute 的调用者是谁」(§59)。两张枪的读数不同源,不能互相引用
+(§55.4 未排除第 1 条:base Execute 派发点的 `r8`/`r9` 是上一调用者的 scratch,而这里 `r8` **是**第三个参数)。
+
+TSV 首行是 `#meta`,带 `exe_base`、`image_size`、注入那份 DLL 的 `sha256`、`mask`、`calls`、
+`tiers=h0=/…/unmatched=/invalid_self=` 逐档读数、`verdict` 与 `named_table` —— artifact 是 stdout 丢了
+之后还能活下来的那份(§56 那一枪整段 stdout 被一次 ssh reset 吃掉,判据依赖的数跟着没了)。
+
+判读纯函数(`decode_layout` / `decode_entry` / `decode_stats` / `verdict_for` / `table_rvas` /
+`write_tsv`,常量 `VERDICTS` / `NEEDED_EXPORTS`)由 `python3 -m pytest scripts/test_c2_donor_probe.py -q`
+覆盖(8 条:本任务 6 + Task 2 的两条权威围栏),无游戏、无 Windows API、零枪。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
