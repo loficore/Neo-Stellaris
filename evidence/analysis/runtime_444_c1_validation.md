@@ -6216,3 +6216,153 @@ per-system 执行在发生」,而不是「第二次点名把 mask 调大」。
 ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\\temp; python c2_donor_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 120 --settle-s 2 --out C:/temp/c4_donor_probe.tsv"
 scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_donor_probe.tsv evidence/logs/donor_probe_4_4_4.tsv
 ```
+
+## §68 scope 深跟读第二枪:这台仪器第一次 `scope_candidate`,而 `lineage_edge_found` 的两条边都不是血缘(2026-10-26,点名)
+
+**授权级别**:点名。人对这一发的原话是「**donor 后我先写 Task 3,再打第二枪**」—— 那是一条顺序裁定,
+同时也是本发的授权:Task 3 落地之后打这一发。前置读数、argv、清理复核逐字记在本节末。
+
+**这一发问的是 §59.9 的前置 1** ——「要的是 `self`/`helper` 上**更深的跟读形状**」。形状由 Task 3 做进
+`scripts/c2_scope_probe.py`(`plan_depth2` / `follow_depth2` / `find_shared_cells` / `classify_depth2`,
+提交 `fcaff71`),**DLL 一个字节没动**:本发的 `#meta` 里 `dll=sqjs_c4.dll`、
+`dll_sha256=7d3e45c4b25974324e48b0e952b44a8895c643779e3bc24ce97e41981f6ac0d3`,与 §67 那发同值 ——
+「两发之间没重编 DLL」这句话的证据就是这一行,不是我的记忆。
+
+**环境与前置**:新进程 pid **20220**(hwnd 329928)。`just launch` 头两次都以 `code=23 /
+diagnosis=handoff_never_fired` 收场(三次点击都拿到焦点、光标都落在算得的点上,启动器原地不动),
+第三次在 attempt 3 命中 handoff ⇒ 进程起来。**这一次游戏自动进了战役**(存档 2270.10.10),
+停在一个事件窗「克伯利安恒星国同盟的末日」上;监督器 `policy=first` 的 `handle_choice` 对同一签名
+连点 >3 次后自锁,状态报 `note=choice_stuck`,`just game choose 1` 与 `just game unpause` 都不动它。
+按 §59.2 的手工路线先 `just game shot` 取回裁片人眼量出「确认」按钮的屏幕坐标,再
+`just game click 1077 890` —— 事件关掉后游戏自己恢复,状态行回到
+`STATUS=playing note=ok pid=20220 hwnd=329928 age=2.3s want=playing cmd=click 1077 890`。
+**紧邻开枪的前置读数就是这一行**(§59.1:判据是 `state=playing`,`console_open` 不是)。
+这一发因此也是 §59 那一枪之后**第一次在「战役真的在跑」的条件下**打 base Execute。
+
+### §68.1 与 §59.3 基线的逐键差分(同一仪器、同一 DLL 字节、不同深度)
+
+| 键 | §59.3(depth-1 基线) | 本发(depth-1 + depth-2) |
+|---|---|---|
+| `calls` | 3061 | **1046773**(120 s 窗口 ≈ 8723 calls/s,与 §10 的 ~5300/s 同量级) |
+| `samples` | 5 | 2044 |
+| `valid` | — | 256(环满,最老在前) |
+| `followed_by_source` | self=4/helper=2/arg3=1/arg4=1 | self=8/helper=2/arg3=0/arg4=1 |
+| `implausible_by_source` | — | self=0/helper=0/**arg3=256**/arg4=255 |
+| `capped_by_source` | — | **self=245**/helper=0/arg3=0/arg4=0 |
+| 四桶 known/member/unknown/unreadable | 0/0/16/0 | **2**/13/37/**0** |
+| `regions_queried` | 0(那一发没问出来) | 26 |
+| `verdict` | `no_scope_candidate` | **`scope_candidate`** |
+| `verdict_d2` | 该档当时不存在 | **`lineage_edge_found`** |
+| `shared_cells` | — | `n=2`(两条,见 §68.3) |
+
+`arg3` 全 256 条 `implausible`、`arg4` 255 条:派发点上这两个寄存器是上一调用者的 scratch
+(判读陷阱 2),这次连形状都不像指针,所以 depth-2 在 `arg3`/`arg4` 两支**必然是 0 计划**
+(`d2_planned_by_source arg3=0/arg4=0`)—— 这是「没问出东西」,不是「问出没有」。
+
+**预算没问完的那一支要按预算读**:`d2_capped_by_source self=19`(helper=0),另有
+`deduped` self=5/helper=1。所以 `self` 这一支的深跟读**只问了 8 个地址就撞到每源预算**,
+剩下 19 个不同的候选值一个都没被 derefence。这一行不许读成「那 19 个槽里没有 scope」,
+它读作「预算在这里截断」(与 §56.4 那次同一个形状,只是这次有键记着)。
+
+### §68.2 第一次 `known=1`:两条 floor 命中指名到根 + 偏移 + slot2
+
+```
+object  root=0x1f6d6ecd8  source=self  off=0x30  ptr=0x1f6d6e510  vptr_rva=0x2545e40  slot2_rva=0xcc8bd0
+object  root=0x1f6db2dc8  source=self  off=0x10  ptr=0x1f6db2d10  vptr_rva=0x254fa18  slot2_rva=0xde40c0
+```
+
+§56 与 §59 两发的四桶里 `known` 都是 0,这一发是 2,且都在 `self` 根上。`member_vtable` 那 13 个
+(artifact 里 14 行)**仍不进判词**(判读陷阱 7:它说的是 root 自己的类)。
+离线复算(`scripts/scope_reclassify.py`)对同一份 TSV:`floor set 1805 / shape set 172296 /
+object rows 106 / floor_hits 2 / new_only_hits 3 / still_no 33 / undecidable 68`。
+三条 `new` 全挂在 `root=0x7fef70 source=helper` 的 `+0x10/+0x20/+0x38`,`vptr_rva` 是
+`0x247a488`(两次)与 `0x25e54c8` —— **读数是读数,不是验收**(§59.8 把那条 mis-specified 的
+验收降成了读数);`undecidable 68` 里含 depth-2 那些界外 `vptr`。
+`caller` 44 行里 42 行 `func=-`:census join 走的是 `ret-5` 估值,虚调用 `call qword ptr [rax+8]`
+只有 3 B,估值不挨着真站点 ⇒ 这读作「估值不是它的站点」,不读作「没人调用」(§59.7 口径)。
+`chain` 一行 `ok=0 x=0x0`、`ids=[]`:那条 X→S 链早已 §53.3 证伪,本发不重提。
+
+### §68.3 `lineage_edge_found` 的两条边,一条是标量、一条是静态表
+
+`shared_cells` 全文:
+
+```
+n=2  0x100000000(rva=-)[helper@0x18fb29e20+0x10,self@0x1f6d85660+0x20,self@0x1f6d6e510+0x20]
+     0x7ff6a095a488(rva=0x247a488)[self@0x1f6db2dc8+0x30,helper@0x170790bc0+0x0,helper@0x170790bc0+0x18,helper@0x170790bc0+0x30,helper@0x170790b40+0x38]
+```
+
+- 第一条 `0x100000000`:三个槽同值,但 `1<<32` 是**标量形状**,不是指针(界外 ⇒ `rva=-`,
+  bounds 纪律在这里正好显出它的用处)。`find_shared_cells` 按候选值分组且**不筛
+  `plausible_user_ptr`**,所以标量也能连成边 —— 这一条**不是**血缘证据,它是「同一份计数在
+  多处出现」。
+- 第二条 `0x7ff6a095a488`(`rva=0x247a488`,界内):`self` 的 `+0x30` 与两个 `helper` 根的
+  四个槽共用这一个值。而**同一个 RVA 在 §68.2 的 `new` 行里是以 vptr 的身份出现的** ——
+  ⇒ 它是一个**模块内静态 vtable 形状的格子**被多处引用,不是两个活对象共享一个堆成员。
+- **§59.6 那条 `0x2ddc2c90` 在本发没有重现**(全文 `grep -c 2ddc2c90` = 0)。它仍是一条
+  未复现的单点读数,本发既不证实也不证伪它。
+
+**深跟读这一层的根有一半不在堆上**:`self.d2` 的 8 个根按 region 判为
+`image=6 / private_committed=1 / reserved=1`,`helper.d2` 的 6 个根判为
+`image=1 / private_committed=3 / free=2`。落在镜像里的那些「对象」是数据段的结构,
+它们的「成员指针」是静态初始化值 —— 这一层的 `known`/`member_vtable` 读数在解释时要先过这一条。
+另有 3 行 `root_unreadable`(`helper.d2` 两条 `0x45f00000000`/`0xe2100000000`、`self.d2` 一条
+`0x29c55c0`),而 meta 的 `unreadable_roots=0`:**那个计数只算 depth-1**(它在 `summarize` 里定,
+深跟读之后才并入 `summary["objects"]`),两个口径不同义。
+
+### §68.4 `VERDICT_D2` 的有界含义 + §59.9 前置 1 的当前判定
+
+`lineage_edge_found` 是五档梯子(`no_depth2_planned → depth2_unreadable → depth2_known_vtable_hit
+→ lineage_edge_found → no_depth2_lead`)里的**两档证据之一**,它的有界含义只到
+「**再下一层交出的候选值里,有一个值同时出现在两个不同基源的槽里**」。它不说:那个值是对象、
+两个源共享同一个 scope、或者血缘方向。本发更进一步 —— 两条边一条是标量、一条是静态表
+(§68.3),所以这一档**成立但没有把 scope 载体往前推一格**。
+
+前置 1 的判定因此是**分支的,不是一句「问完了」**:
+`helper` 支问完(`planned=6 / followed=6 / capped=0`),`self` 支**没问完**
+(`planned=8 / followed=8 / capped=19`)。按 §57.4 那三档的读法,这里既不是「拿到新候选」
+(`depth2_known_vtable_hit` 没有命中:depth-2 的 8+6 个根里没有一个候选的 `[ptr]` 落进 1,805),
+也不是「这一层问完了、答案仍空」。**下一前置不是「再深一层」**,而是两件仪器侧的事:
+① `find_shared_cells` 要先把候选值按 `plausible_user_ptr` 与界内/界外分档,再谈连线;
+② `self` 支的 depth-2 预算要么抬高、要么把 `capped` 的 19 个地址点名留给下一发。
+`verdict` 那侧的下一前置仍是 §67 那句:让这一族真的在执行时重打,与 depth-2 无关。
+
+### §68.5 清理复核(一枪一进程、永不 `FreeLibrary`)
+
+驱动自己的收尾打了 `C2ScopeProbeUninstall rc=0` / `C2ScopeProbeVerify rc=0 (engine bytes intact)`
+/ `host alive`。artifact 的 `stats` 行停在 `installed=1 verified=-1` —— 那是轮询结束时的快照
+(§59.10 那个坑的形状),不是残留状态,所以按流程补跑一次复核:
+
+```
+BEFORE calls=1046777 samples=2044 invalid_self=2 invalid_ctx=0 lexer=0 x_nonzero=21 patch_size=16 installed=0 verified=0
+[scope] C2ScopeProbeUninstall rc=0
+[scope] C2ScopeProbeVerify rc=0 (engine bytes intact)
+[scope] host alive
+AFTER  calls=1046777 samples=2044 invalid_self=2 invalid_ctx=0 lexer=0 x_nonzero=21 patch_size=16 installed=0 verified=0
+RESTORE_OK
+```
+
+`calls` 在 BEFORE/AFTER 之间不再增长(1046773 → 1046777 后停住)⇒ 采样器确实已摘。
+全程没有 `FreeLibrary`,pid 20220 保持存活。
+
+### §68.6 措辞门与出处边界
+
+本节**不引用 §67 的任何 `[self+0]` 读数当证据**:那一发读的是 `0x3AFD30` 入口的 `[self+0]`,
+本发根本没读那个槽(本发是 `0x1D08520` 的 base Execute 采样 + 驱动侧 dereference)。两节各引各的
+argv,见下面两组命令行。同样地,本发的 `calls=1046773` 只说明 base Execute 在跑,**不**说明
+donor-shaped 那一族在跑(§57.4 末段那条覆盖范围结论原样适用)。
+
+### §68.7 复现命令行
+
+```bash
+# 前置读数(紧邻开枪)
+just game click 1077 890 && just game shot      # -> STATUS=playing note=ok age=2.3s
+# 开枪(前台经 ssh,§59.2;argv 逐字照 scripts/scratch/2026-10_live_window_donor_scope/scope_shot.cmd)
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\temp; python C:\temp\c2_scope_probe.py C:\temp\sqjs_c4.dll --poll-s 120 --settle-s 2 --out C:\temp\c4_scope_d2.tsv --vtables C:\temp\ceffect_vtable_map_4_4_4.txt --census C:\temp\exec_frame_callers_4_4_4.tsv --id-names C:\temp\descriptor_oracle_4_4_4.tsv"
+# 拉回 + 离线复算
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_scope_d2.tsv evidence/logs/scope_probe_d2_4_4_4.tsv
+python3 scripts/scope_reclassify.py --tsv evidence/logs/scope_probe_d2_4_4_4.tsv
+# 清理复核
+ssh Windows_Jiaolong "cd C:\temp; python C:\temp\ns_scope_finish_cleanup.py 20220 C:\temp\sqjs_c4.dll"
+```
+
+产物:`evidence/logs/scope_probe_d2_4_4_4.tsv`(211 行,`#meta` 带 depth-2 的六个键)。

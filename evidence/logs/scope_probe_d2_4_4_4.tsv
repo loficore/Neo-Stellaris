@@ -1,0 +1,211 @@
+# kind	key	value	detail
+meta	exe_base	0x7ff69e4e0000	-
+meta	image_end	0x7ff6a1e07000	-
+meta	image_size	0x3927000	-
+meta	dll	sqjs_c4.dll	-
+meta	dll_sha256	7d3e45c4b25974324e48b0e952b44a8895c643779e3bc24ce97e41981f6ac0d3	-
+meta	vtable_map_count	1805	-
+meta	layout	entry=120 stats=56 ring=256 mask=511 version=2	-
+meta	stats	calls=1046773 samples=2044 invalid_self=2 invalid_ctx=0 lexer=0 x_nonzero=21 patch_size=16 installed=1 verified=-1	-
+meta	per_source_follow	8	-
+meta	followed_by_source	self=8/helper=2/arg3=0/arg4=1	-
+meta	implausible_by_source	self=0/helper=0/arg3=256/arg4=255	-
+meta	capped_by_source	self=245/helper=0/arg3=0/arg4=0	-
+meta	withheld_by_source	self=0/helper=0/arg3=0/arg4=0	-
+meta	calls	1046773	-
+meta	samples	2044	-
+meta	valid	256	-
+meta	lexer	0	-
+meta	known_vtable_hits	2	-
+meta	member_vtable_hits	13	-
+meta	unknown_ptr_hits	37	-
+meta	unreadable_roots	0	-
+meta	regions_queried	26	-
+meta	region_verdicts	arg4/image=1/ctx/private_committed=1/helper.d2/free=2/helper.d2/image=1/helper.d2/private_committed=3/helper/private_committed=2/self.d2/image=6/self.d2/private_committed=1/self.d2/reserved=1/self/private_committed=8	-
+meta	verdict	scope_candidate	-
+meta	depth2_per_source	8	-
+meta	d2_planned_by_source	self=8/helper=6/arg3=0/arg4=0	-
+meta	d2_followed_by_source	self=8/helper=6/arg3=0/arg4=0	-
+meta	d2_capped_by_source	self=19/helper=0/arg3=0/arg4=0	-
+meta	verdict_d2	lineage_edge_found	-
+meta	shared_cells	n=2 0x100000000(rva=-)[helper@0x18fb29e20+0x10,self@0x1f6d85660+0x20,self@0x1f6d6e510+0x20];0x7ff6a095a488(rva=0x247a488)[self@0x1f6db2dc8+0x30,helper@0x170790bc0+0x0,helper@0x170790bc0+0x18,helper@0x170790bc0+0x30,helper@0x170790b40+0x38]	-
+caller	0xde053e	45	ret=0xde053e est_site=0xde0539 func=- origin=-
+caller	0x6ec782	40	ret=0x6ec782 est_site=0x6ec77d func=- origin=-
+caller	0x33d4cc	24	ret=0x33d4cc est_site=0x33d4c7 func=- origin=-
+caller	0x33ca65	16	ret=0x33ca65 est_site=0x33ca60 func=- origin=-
+caller	0xe9b5d7	10	ret=0xe9b5d7 est_site=0xe9b5d2 func=- origin=-
+caller	0xddcf29	8	ret=0xddcf29 est_site=0xddcf24 func=- origin=-
+caller	0x1d0857a	8	ret=0x1d0857a est_site=0x1d08575 func=- origin=-
+caller	0xcc9cb3	6	ret=0xcc9cb3 est_site=0xcc9cae func=- origin=-
+caller	0xde41d4	6	ret=0xde41d4 est_site=0xde41cf func=- origin=-
+caller	0x299468	5	ret=0x299468 est_site=0x299463 func=- origin=-
+caller	0x30c038	5	ret=0x30c038 est_site=0x30c033 func=- origin=-
+caller	0xcc8c5f	5	ret=0xcc8c5f est_site=0xcc8c5a func=- origin=-
+caller	0xe58db6	5	ret=0xe58db6 est_site=0xe58db1 func=- origin=-
+caller	0xe96ec0	5	ret=0xe96ec0 est_site=0xe96ebb func=- origin=-
+caller	0xe9b5bc	5	ret=0xe9b5bc est_site=0xe9b5b7 func=- origin=-
+caller	0xe9b60d	5	ret=0xe9b60d est_site=0xe9b608 func=- origin=-
+caller	0x29a918	4	ret=0x29a918 est_site=0x29a913 func=- origin=-
+caller	0xcc9405	4	ret=0xcc9405 est_site=0xcc9400 func=- origin=-
+caller	0xcc9639	4	ret=0xcc9639 est_site=0xcc9634 func=- origin=-
+caller	0xcca27d	4	ret=0xcca27d est_site=0xcca278 func=- origin=-
+caller	0xe8414b	4	ret=0xe8414b est_site=0xe84146 func=- origin=-
+caller	0xe845ac	4	ret=0xe845ac est_site=0xe845a7 func=0xe84100 origin=not_examined
+caller	0xe9b7b6	4	ret=0xe9b7b6 est_site=0xe9b7b1 func=- origin=-
+caller	0xde41ef	3	ret=0xde41ef est_site=0xde41ea func=- origin=-
+caller	0xe9b724	3	ret=0xe9b724 est_site=0xe9b71f func=- origin=-
+caller	0x28c8d4	2	ret=0x28c8d4 est_site=0x28c8cf func=- origin=-
+caller	0x396579	2	ret=0x396579 est_site=0x396574 func=- origin=-
+caller	0xcc9d66	2	ret=0xcc9d66 est_site=0xcc9d61 func=- origin=-
+caller	0xde4192	2	ret=0xde4192 est_site=0xde418d func=- origin=-
+caller	0xe9b5f2	2	ret=0xe9b5f2 est_site=0xe9b5ed func=- origin=-
+caller	0x28b474	1	ret=0x28b474 est_site=0x28b46f func=- origin=-
+caller	0x291014	1	ret=0x291014 est_site=0x29100f func=- origin=-
+caller	0x29b354	1	ret=0x29b354 est_site=0x29b34f func=- origin=-
+caller	0x396557	1	ret=0x396557 est_site=0x396552 func=- origin=-
+caller	0x6659dc	1	ret=0x6659dc est_site=0x6659d7 func=0x665810 origin=not_examined
+caller	0x92e1bc	1	ret=0x92e1bc est_site=0x92e1b7 func=- origin=-
+caller	0x92f95a	1	ret=0x92f95a est_site=0x92f955 func=- origin=-
+caller	0x95905c	1	ret=0x95905c est_site=0x959057 func=- origin=-
+caller	0x96f94c	1	ret=0x96f94c est_site=0x96f947 func=- origin=-
+caller	0xd49f70	1	ret=0xd49f70 est_site=0xd49f6b func=- origin=-
+caller	0xdd631c	1	ret=0xdd631c est_site=0xdd6317 func=- origin=-
+caller	0xe8ab3c	1	ret=0xe8ab3c est_site=0xe8ab37 func=- origin=-
+caller	0xe9888f	1	ret=0xe9888f est_site=0xe9888a func=- origin=-
+caller	0x1c4369e	1	ret=0x1c4369e est_site=0x1c43699 func=- origin=-
+chain	0x7fed78	0	x=0x0 s=- vptr=- id=- name=- object=-
+object	0x1f6d578c8	0	source=self off=0x0 ptr=0x7ff6a0a2a190 ptr_rva=0x254a190 member_vtable=1 member_slot2_rva=0xe99c10 vptr=0x7ff69f071c20 vptr_rva=0xb91c20 slot2_rva=-
+object	0x1f6d578c8	0	source=self off=0x8 ptr=0x7ff6a0993690 ptr_rva=0x24b3690 member_vtable=1 member_slot2_rva=0x34dad0 vptr=0x7ff69e641000 vptr_rva=0x161000 slot2_rva=-
+object	0x1f6d578c8	0	source=self off=0x30 ptr=0x7ff6a0991c88 ptr_rva=0x24b1c88 member_vtable=1 member_slot2_rva=0x230990 vptr=0x7ff69e63ccc0 vptr_rva=0x15ccc0 slot2_rva=-
+object	0x18fb29e20	0	source=helper off=0x0 ptr=0x7ff6a0bbc2d0 ptr_rva=0x26dc2d0 member_vtable=0 member_slot2_rva=- vptr=0x7ff69eecc250 vptr_rva=0x9ec250 slot2_rva=-
+object	0x18fb29e20	0	source=helper off=0x10 ptr=0x100000000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x18fb29e20	0	source=helper off=0x18 ptr=0x45f00000000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=- vptr_rva=- slot2_rva=-
+object	0x18fb29e20	0	source=helper off=0x20 ptr=0xe2100000000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=- vptr_rva=- slot2_rva=-
+object	0x1f6d6ecd8	0	source=self off=0x0 ptr=0x7ff6a0993690 ptr_rva=0x24b3690 member_vtable=1 member_slot2_rva=0x34dad0 vptr=0x7ff69e641000 vptr_rva=0x161000 slot2_rva=-
+object	0x1f6d6ecd8	0	source=self off=0x28 ptr=0x29c55c0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=- vptr_rva=- slot2_rva=-
+object	0x1f6d6ecd8	1	source=self off=0x30 ptr=0x1f6d6e510 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x7ff6a0a25e40 vptr_rva=0x2545e40 slot2_rva=0xcc8bd0
+object	0x1f6d6ecd8	0	source=self off=0x38 ptr=0x7ff6a09f7180 ptr_rva=0x2517180 member_vtable=1 member_slot2_rva=0xb62130 vptr=0x7ff69e70a4f0 vptr_rva=0x22a4f0 slot2_rva=-
+object	0x1f6d85660	0	source=self off=0x0 ptr=0x7ff6a0a25e40 ptr_rva=0x2545e40 member_vtable=1 member_slot2_rva=0xcc8bd0 vptr=0x7ff69f1a8940 vptr_rva=0xcc8940 slot2_rva=-
+object	0x1f6d85660	0	source=self off=0x8 ptr=0x7ff6a0a25e38 ptr_rva=0x2545e38 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1e41a4 vptr_rva=0xd041a4 slot2_rva=-
+object	0x1f6d85660	0	source=self off=0x18 ptr=0x7ff6a0a25e08 ptr_rva=0x2545e08 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1ab430 vptr_rva=0xccb430 slot2_rva=-
+object	0x1f6d85660	0	source=self off=0x20 ptr=0x100000000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x1f6d85660	0	source=self off=0x28 ptr=0x7ff6a0a25df0 ptr_rva=0x2545df0 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1e41b0 vptr_rva=0xd041b0 slot2_rva=-
+object	0x1f6d85660	0	source=self off=0x38 ptr=0x7ff6a0a25dc0 ptr_rva=0x2545dc0 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1e41e0 vptr_rva=0xd041e0 slot2_rva=-
+object	0x1f6d9c498	0	source=self off=0x0 ptr=0x7ff6a0993690 ptr_rva=0x24b3690 member_vtable=1 member_slot2_rva=0x34dad0 vptr=0x7ff69e641000 vptr_rva=0x161000 slot2_rva=-
+object	0x1f6d9c498	0	source=self off=0x28 ptr=0xa221b0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x7ff6a0eef450 vptr_rva=0x2a0f450 slot2_rva=-
+object	0x1f6d9c498	0	source=self off=0x30 ptr=0x9c000107058 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=- vptr_rva=- slot2_rva=-
+object	0x1f6d9c498	0	source=self off=0x38 ptr=0x7ff6a0a25b20 ptr_rva=0x2545b20 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1e2480 vptr_rva=0xd02480 slot2_rva=-
+object	0x1f6db2dc8	0	source=self off=0x0 ptr=0x7ff6a0a2fa58 ptr_rva=0x254fa58 member_vtable=1 member_slot2_rva=0xdec280 vptr=0x7ff69f2cb4c0 vptr_rva=0xdeb4c0 slot2_rva=-
+object	0x1f6db2dc8	1	source=self off=0x10 ptr=0x1f6db2d10 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x7ff6a0a2fa18 vptr_rva=0x254fa18 slot2_rva=0xde40c0
+object	0x1f6db2dc8	0	source=self off=0x18 ptr=0x7ff6a095a530 ptr_rva=0x247a530 member_vtable=0 member_slot2_rva=- vptr=0x7ff69e62f0a0 vptr_rva=0x14f0a0 slot2_rva=-
+object	0x1f6db2dc8	0	source=self off=0x30 ptr=0x7ff6a095a488 ptr_rva=0x247a488 member_vtable=0 member_slot2_rva=- vptr=0x7ff69e635770 vptr_rva=0x155770 slot2_rva=-
+object	0x1f6dc9cf0	0	source=self off=0x0 ptr=0x7ff6a0a331b0 ptr_rva=0x25531b0 member_vtable=1 member_slot2_rva=0xe99c60 vptr=0x7ff69e694640 vptr_rva=0x1b4640 slot2_rva=-
+object	0x1f6dc9cf0	0	source=self off=0x10 ptr=0x186a0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x1f6dc9cf0	0	source=self off=0x20 ptr=0x7ff6a095a358 ptr_rva=0x247a358 member_vtable=0 member_slot2_rva=- vptr=0x7ff69e635e90 vptr_rva=0x155e90 slot2_rva=-
+object	0x1f6de0da0	0	source=self off=0x0 ptr=0x7ff6a0993690 ptr_rva=0x24b3690 member_vtable=1 member_slot2_rva=0x34dad0 vptr=0x7ff69e641000 vptr_rva=0x161000 slot2_rva=-
+object	0x1f6de0da0	0	source=self off=0x28 ptr=0x7ff6a0a33140 ptr_rva=0x2553140 member_vtable=1 member_slot2_rva=0xe96e90 vptr=0x7ff69e80b9c0 vptr_rva=0x32b9c0 slot2_rva=-
+object	0x1f6de0da0	0	source=self off=0x30 ptr=0x7ff6a0993690 ptr_rva=0x24b3690 member_vtable=1 member_slot2_rva=0x34dad0 vptr=0x7ff69e641000 vptr_rva=0x161000 slot2_rva=-
+object	0x1f6df8bb8	0	source=self off=0x0 ptr=0x7ff6a0a260f0 ptr_rva=0x25460f0 member_vtable=1 member_slot2_rva=0xcc4220 vptr=0x7ff69e63ccc0 vptr_rva=0x15ccc0 slot2_rva=-
+object	0x1f6df8bb8	0	source=self off=0x18 ptr=0x186a0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x1f6df8bb8	0	source=self off=0x20 ptr=0x186a0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x1f6df8bb8	0	source=self off=0x28 ptr=0x186a0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x1f6df8bb8	0	source=self off=0x30 ptr=0x3e80000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x7fef70	0	source=helper off=0x10 ptr=0x170790bc0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x7ff6a095a488 vptr_rva=0x247a488 slot2_rva=-
+object	0x7fef70	0	source=helper off=0x20 ptr=0x170790b40 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x7ff6a0ac54c8 vptr_rva=0x25e54c8 slot2_rva=-
+object	0x7fef70	0	source=helper off=0x38 ptr=0x170790bc0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x7ff6a095a488 vptr_rva=0x247a488 slot2_rva=-
+object	0x7ff6a0a2a190	0	source=self.d2 off=0x0 ptr=0x7ff69f071c20 ptr_rva=0xb91c20 member_vtable=0 member_slot2_rva=- vptr=0x8b4820ec83485340 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a2a190	0	source=self.d2 off=0x8 ptr=0x7ff6a01e8520 ptr_rva=0x1d08520 member_vtable=0 member_slot2_rva=- vptr=0xe1300000000025ff vptr_rva=- slot2_rva=-
+object	0x7ff6a0a2a190	0	source=self.d2 off=0x10 ptr=0x7ff69f379c10 ptr_rva=0xe99c10 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a2a190	0	source=self.d2 off=0x18 ptr=0x7ff69ea15070 ptr_rva=0x535070 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a2a190	0	source=self.d2 off=0x20 ptr=0x7ff69f379be0 ptr_rva=0xe99be0 member_vtable=0 member_slot2_rva=- vptr=0x81411d746bf88341 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a2a190	0	source=self.d2 off=0x28 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a2a190	0	source=self.d2 off=0x30 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a2a190	0	source=self.d2 off=0x38 ptr=0x7ff69f226160 ptr_rva=0xd46160 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0993690	0	source=self.d2 off=0x0 ptr=0x7ff69e641000 ptr_rva=0x161000 member_vtable=0 member_slot2_rva=- vptr=0x8b4820ec83485340 vptr_rva=- slot2_rva=-
+object	0x7ff6a0993690	0	source=self.d2 off=0x8 ptr=0x7ff6a01e8520 ptr_rva=0x1d08520 member_vtable=0 member_slot2_rva=- vptr=0xe1300000000025ff vptr_rva=- slot2_rva=-
+object	0x7ff6a0993690	0	source=self.d2 off=0x10 ptr=0x7ff69e82dad0 ptr_rva=0x34dad0 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0993690	0	source=self.d2 off=0x18 ptr=0x7ff69ea15070 ptr_rva=0x535070 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0993690	0	source=self.d2 off=0x20 ptr=0x7ff69e82db90 ptr_rva=0x34db90 member_vtable=0 member_slot2_rva=- vptr=0x8b4820ec83485340 vptr_rva=- slot2_rva=-
+object	0x7ff6a0993690	0	source=self.d2 off=0x28 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a0993690	0	source=self.d2 off=0x30 ptr=0x7ff69e82dcb0 ptr_rva=0x34dcb0 member_vtable=0 member_slot2_rva=- vptr=0xcccccc00000adbe9 vptr_rva=- slot2_rva=-
+object	0x7ff6a0993690	0	source=self.d2 off=0x38 ptr=0x7ff69e692fe0 ptr_rva=0x1b2fe0 member_vtable=0 member_slot2_rva=- vptr=0x8d4820ec83485740 vptr_rva=- slot2_rva=-
+object	0x7ff6a0991c88	0	source=self.d2 off=0x0 ptr=0x7ff69e63ccc0 ptr_rva=0x15ccc0 member_vtable=0 member_slot2_rva=- vptr=0x8b4820ec83485340 vptr_rva=- slot2_rva=-
+object	0x7ff6a0991c88	0	source=self.d2 off=0x8 ptr=0x7ff6a01e8520 ptr_rva=0x1d08520 member_vtable=0 member_slot2_rva=- vptr=0xe1300000000025ff vptr_rva=- slot2_rva=-
+object	0x7ff6a0991c88	0	source=self.d2 off=0x10 ptr=0x7ff69e710990 ptr_rva=0x230990 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0991c88	0	source=self.d2 off=0x18 ptr=0x7ff69ea15070 ptr_rva=0x535070 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0991c88	0	source=self.d2 off=0x20 ptr=0x7ff69e710a10 ptr_rva=0x230a10 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0991c88	0	source=self.d2 off=0x28 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a0991c88	0	source=self.d2 off=0x30 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a0991c88	0	source=self.d2 off=0x38 ptr=0x7ff69e694ce0 ptr_rva=0x1b4ce0 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0bbc2d0	0	source=helper.d2 off=0x0 ptr=0x7ff69eecc250 ptr_rva=0x9ec250 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0bbc2d0	0	source=helper.d2 off=0x8 ptr=0x7ff6a0185ae0 ptr_rva=0x1ca5ae0 member_vtable=0 member_slot2_rva=- vptr=0xb60f20ec83485340 vptr_rva=- slot2_rva=-
+object	0x7ff6a0bbc2d0	0	source=helper.d2 off=0x10 ptr=0x7ff6a0185c90 ptr_rva=0x1ca5c90 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0bbc2d0	0	source=helper.d2 off=0x18 ptr=0x7ff6a0185a40 ptr_rva=0x1ca5a40 member_vtable=0 member_slot2_rva=- vptr=0x518920ec83485340 vptr_rva=- slot2_rva=-
+object	0x7ff6a0bbc2d0	0	source=helper.d2 off=0x20 ptr=0x7ff6a0185b60 ptr_rva=0x1ca5b60 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0bbc2d0	0	source=helper.d2 off=0x28 ptr=0x7ff69e692f30 ptr_rva=0x1b2f30 member_vtable=0 member_slot2_rva=- vptr=0xccccccccccc301b0 vptr_rva=- slot2_rva=-
+object	0x7ff6a0bbc2d0	0	source=helper.d2 off=0x30 ptr=0x7ff6a0185cf0 ptr_rva=0x1ca5cf0 member_vtable=0 member_slot2_rva=- vptr=0xffffc0c749018b48 vptr_rva=- slot2_rva=-
+object	0x7ff6a0bbc2d0	0	source=helper.d2 off=0x38 ptr=0x7ff6a0185d10 ptr_rva=0x1ca5d10 member_vtable=0 member_slot2_rva=- vptr=0x28ec834810245489 vptr_rva=- slot2_rva=-
+root_unreadable	0x45f00000000	1	source=helper.d2
+root_unreadable	0xe2100000000	1	source=helper.d2
+root_unreadable	0x29c55c0	1	source=self.d2
+object	0x1f6d6e510	0	source=self.d2 off=0x0 ptr=0x7ff6a0a25e40 ptr_rva=0x2545e40 member_vtable=1 member_slot2_rva=0xcc8bd0 vptr=0x7ff69f1a8940 vptr_rva=0xcc8940 slot2_rva=-
+object	0x1f6d6e510	0	source=self.d2 off=0x8 ptr=0x7ff6a0a25e38 ptr_rva=0x2545e38 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1e41a4 vptr_rva=0xd041a4 slot2_rva=-
+object	0x1f6d6e510	0	source=self.d2 off=0x18 ptr=0x7ff6a0a25e08 ptr_rva=0x2545e08 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1ab430 vptr_rva=0xccb430 slot2_rva=-
+object	0x1f6d6e510	0	source=self.d2 off=0x20 ptr=0x100000000 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x0 vptr_rva=- slot2_rva=-
+object	0x1f6d6e510	0	source=self.d2 off=0x28 ptr=0x7ff6a0a25df0 ptr_rva=0x2545df0 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1e41b0 vptr_rva=0xd041b0 slot2_rva=-
+object	0x1f6d6e510	0	source=self.d2 off=0x38 ptr=0x7ff6a0a25dc0 ptr_rva=0x2545dc0 member_vtable=0 member_slot2_rva=- vptr=0x7ff69f1e41e0 vptr_rva=0xd041e0 slot2_rva=-
+object	0x7ff6a09f7180	0	source=self.d2 off=0x0 ptr=0x7ff69e70a4f0 ptr_rva=0x22a4f0 member_vtable=0 member_slot2_rva=- vptr=0x8b4820ec83485340 vptr_rva=- slot2_rva=-
+object	0x7ff6a09f7180	0	source=self.d2 off=0x8 ptr=0x7ff6a01e8520 ptr_rva=0x1d08520 member_vtable=0 member_slot2_rva=- vptr=0xe1300000000025ff vptr_rva=- slot2_rva=-
+object	0x7ff6a09f7180	0	source=self.d2 off=0x10 ptr=0x7ff69f042130 ptr_rva=0xb62130 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a09f7180	0	source=self.d2 off=0x18 ptr=0x7ff69ea15070 ptr_rva=0x535070 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a09f7180	0	source=self.d2 off=0x20 ptr=0x7ff69f0421b0 ptr_rva=0xb621b0 member_vtable=0 member_slot2_rva=- vptr=0x156f88141ca8b4c vptr_rva=- slot2_rva=-
+object	0x7ff6a09f7180	0	source=self.d2 off=0x28 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a09f7180	0	source=self.d2 off=0x30 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e40	0	source=self.d2 off=0x0 ptr=0x7ff69f1a8940 ptr_rva=0xcc8940 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e40	0	source=self.d2 off=0x8 ptr=0x7ff6a01e8520 ptr_rva=0x1d08520 member_vtable=0 member_slot2_rva=- vptr=0xe1300000000025ff vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e40	0	source=self.d2 off=0x10 ptr=0x7ff69f1a8bd0 ptr_rva=0xcc8bd0 member_vtable=0 member_slot2_rva=- vptr=0x54894818245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e40	0	source=self.d2 off=0x18 ptr=0x7ff69ea15070 ptr_rva=0x535070 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e40	0	source=self.d2 off=0x20 ptr=0x7ff69f1aa760 ptr_rva=0xcca760 member_vtable=0 member_slot2_rva=- vptr=0x74894810245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e40	0	source=self.d2 off=0x28 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e40	0	source=self.d2 off=0x30 ptr=0x7ff69f1ab2d0 ptr_rva=0xccb2d0 member_vtable=0 member_slot2_rva=- vptr=0x6c894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e40	0	source=self.d2 off=0x38 ptr=0x7ff69f1e41c8 ptr_rva=0xd041c8 member_vtable=0 member_slot2_rva=- vptr=0xfc476fe950e98348 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e38	0	source=self.d2 off=0x8 ptr=0x7ff69f1a8940 ptr_rva=0xcc8940 member_vtable=0 member_slot2_rva=- vptr=0x83485708245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e38	0	source=self.d2 off=0x10 ptr=0x7ff6a01e8520 ptr_rva=0x1d08520 member_vtable=0 member_slot2_rva=- vptr=0xe1300000000025ff vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e38	0	source=self.d2 off=0x18 ptr=0x7ff69f1a8bd0 ptr_rva=0xcc8bd0 member_vtable=0 member_slot2_rva=- vptr=0x54894818245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e38	0	source=self.d2 off=0x20 ptr=0x7ff69ea15070 ptr_rva=0x535070 member_vtable=0 member_slot2_rva=- vptr=0x74894808245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e38	0	source=self.d2 off=0x28 ptr=0x7ff69f1aa760 ptr_rva=0xcca760 member_vtable=0 member_slot2_rva=- vptr=0x74894810245c8948 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e38	0	source=self.d2 off=0x30 ptr=0x7ff69e63db30 ptr_rva=0x15db30 member_vtable=0 member_slot2_rva=- vptr=0xcccccccccc0000c2 vptr_rva=- slot2_rva=-
+object	0x7ff6a0a25e38	0	source=self.d2 off=0x38 ptr=0x7ff69f1ab2d0 ptr_rva=0xccb2d0 member_vtable=0 member_slot2_rva=- vptr=0x6c894808245c8948 vptr_rva=- slot2_rva=-
+object	0x170790bc0	0	source=helper.d2 off=0x0 ptr=0x7ff6a095a488 ptr_rva=0x247a488 member_vtable=0 member_slot2_rva=- vptr=0x7ff69e635770 vptr_rva=0x155770 slot2_rva=-
+object	0x170790bc0	0	source=helper.d2 off=0x8 ptr=0x1eed207b0 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x201993190 vptr_rva=- slot2_rva=-
+object	0x170790bc0	0	source=helper.d2 off=0x18 ptr=0x7ff6a095a488 ptr_rva=0x247a488 member_vtable=0 member_slot2_rva=- vptr=0x7ff69e635770 vptr_rva=0x155770 slot2_rva=-
+object	0x170790bc0	0	source=helper.d2 off=0x30 ptr=0x7ff6a095a488 ptr_rva=0x247a488 member_vtable=0 member_slot2_rva=- vptr=0x7ff69e635770 vptr_rva=0x155770 slot2_rva=-
+object	0x170790b40	0	source=helper.d2 off=0x0 ptr=0x7ff6a0ac54c8 ptr_rva=0x25e54c8 member_vtable=0 member_slot2_rva=- vptr=0x7ff69fbf3d80 vptr_rva=0x1713d80 slot2_rva=-
+object	0x170790b40	0	source=helper.d2 off=0x18 ptr=0x1dc3e4b70 ptr_rva=- member_vtable=0 member_slot2_rva=- vptr=0x6361667265746e69 vptr_rva=- slot2_rva=-
+object	0x170790b40	0	source=helper.d2 off=0x38 ptr=0x7ff6a095a488 ptr_rva=0x247a488 member_vtable=0 member_slot2_rva=- vptr=0x7ff69e635770 vptr_rva=0x155770 slot2_rva=-
+region	0x1f6d578c8	private_committed	source=self base=0x1f6d57000 size=0x301000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x18fb29e20	private_committed	source=helper base=0x18fb29000 size=0x42000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x18f560000
+region	0x1f6d6ecd8	private_committed	source=self base=0x1f6d6e000 size=0x2ea000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x1f6d85660	private_committed	source=self base=0x1f6d85000 size=0x2d3000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x1f6d9c498	private_committed	source=self base=0x1f6d9c000 size=0x2bc000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x1f6db2dc8	private_committed	source=self base=0x1f6db2000 size=0x2a6000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x1f6dc9cf0	private_committed	source=self base=0x1f6dc9000 size=0x28f000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x1f6de0da0	private_committed	source=self base=0x1f6de0000 size=0x278000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x1f6df8bb8	private_committed	source=self base=0x1f6df8000 size=0x260000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x7fef70	private_committed	source=helper base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x400000
+region	0x7ff6a0667b28	image	source=arg4 base=0x7ff6a0667000 size=0x20b000 state=0x1000 protect=0x20 type=0x1000000 alloc_base=0x7ff69e4e0000
+region	0x7ff6a0a2a190	image	source=self.d2 base=0x7ff6a0a2a000 size=0x40a000 state=0x1000 protect=0x2 type=0x1000000 alloc_base=0x7ff69e4e0000
+region	0x7ff6a0993690	image	source=self.d2 base=0x7ff6a0993000 size=0x4a1000 state=0x1000 protect=0x2 type=0x1000000 alloc_base=0x7ff69e4e0000
+region	0x7ff6a0991c88	image	source=self.d2 base=0x7ff6a0991000 size=0x4a3000 state=0x1000 protect=0x2 type=0x1000000 alloc_base=0x7ff69e4e0000
+region	0x7ff6a0bbc2d0	image	source=helper.d2 base=0x7ff6a0bbc000 size=0x278000 state=0x1000 protect=0x2 type=0x1000000 alloc_base=0x7ff69e4e0000
+region	0x100000000	private_committed	source=helper.d2 base=0x100000000 size=0xb40000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0xfeb40000
+region	0x45f00000000	free	source=helper.d2 base=0x45f00000000 size=0x7b95fdc90000 state=0x10000 protect=0x1 type=0x0 alloc_base=0x0
+region	0xe2100000000	free	source=helper.d2 base=0xe2100000000 size=0x71d3fdc90000 state=0x10000 protect=0x1 type=0x0 alloc_base=0x0
+region	0x29c55c0	reserved	source=self.d2 base=0x29c5000 size=0x46c000 state=0x2000 protect=0x0 type=0x40000 alloc_base=0x1a30000
+region	0x1f6d6e510	private_committed	source=self.d2 base=0x1f6d6e000 size=0x2ea000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x1f6b70000
+region	0x7ff6a09f7180	image	source=self.d2 base=0x7ff6a09f7000 size=0x43d000 state=0x1000 protect=0x2 type=0x1000000 alloc_base=0x7ff69e4e0000
+region	0x7ff6a0a25e40	image	source=self.d2 base=0x7ff6a0a25000 size=0x40f000 state=0x1000 protect=0x2 type=0x1000000 alloc_base=0x7ff69e4e0000
+region	0x7ff6a0a25e38	image	source=self.d2 base=0x7ff6a0a25000 size=0x40f000 state=0x1000 protect=0x2 type=0x1000000 alloc_base=0x7ff69e4e0000
+region	0x170790bc0	private_committed	source=helper.d2 base=0x170790000 size=0x29000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x16f960000
+region	0x170790b40	private_committed	source=helper.d2 base=0x170790000 size=0x29000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x16f960000
+region	0x7fed78	private_committed	source=ctx base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000 alloc_base=0x400000
