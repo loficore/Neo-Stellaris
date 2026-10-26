@@ -15,7 +15,7 @@ registration pipeline and identify extension points for new effects/triggers.
 |---|---|
 | 取证 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
 | 取证 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证 §24–§66(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两枪 §58–§59、零枪帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 取证 §24–§68(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两枪 §58–§59、零枪帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 首枪只读采样=静默窗口 §67、scope 深跟读第二枪=第一次 `scope_candidate` 且两条边非血缘 §68) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
 | 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
 | 阶段状态、前置、授权级别 | `docs/roadmap.md` |
@@ -152,7 +152,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x1D08520` arg2 | **调用方内联构造的 0x20 B 执行深度帧**:`+8` 是调用深度计数,`+0x10` 是 helper;**不是** scope 对象 | §26 §53 |
 | `0x3B1330` | effect `[vptr+0x70]` base impl = 递归 parse(子向量在 `[obj+0x10]`/`[obj+0x1c]*8`) | §24.4.2 |
 | `0x3B1420` | effect `[vptr+0x98]` base impl = **bool 谓词**,不是 parse(§52 的 detour 点) | §23.1 §52 |
-| `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写;实机保持 OFF | §52 |
+| `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写;**首枪只读采样已打 = §67**:`calls=0`/120 s 静默,verdict `no_calls_inconclusive`(该档不含 §57.4 第三档资格,安静只读作「没观测到」) | §52 §67 |
 | `0x2606FE0` | donor effect vtable,25 槽可复制(slot[1]=Execute、slot[2]=instantiate、slot[19]=谓词) | §52 |
 | `0x89F960` / `0x8A0450` | `GetScriptedEffect` / `GetScriptedTrigger` — **不是 getter**;唯一副作用是重复定义告警 | §27 |
 | `0x1C91C30` | 上述重复告警走的 logger | §27 |

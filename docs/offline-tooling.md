@@ -634,6 +634,18 @@ python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码
    `VERDICT: inconclusive`,它对"这份产物会不会自杀"**什么都没证明**,不要当成阴性结果读
    (判据是纯函数 `child_loaded_the_dll`,120 s 超时也走同一条 `inconclusive` 形状)。
 
+### 实机点名枪的上线前置（两条，§67 踩过；对 `c2_exec_probe.py` / `c2_scope_probe.py` / `c2_donor_probe.py` 三把枪通用）
+
+1. **上线证明 = 覆盖 + 哈希对账，不是「远端有这个文件」**。`ren`(以及 `Copy-Item` 不带 `-Force`)在
+   目标已存在时**静默失败**，长度照样非 0 ⇒ 「远端有文件且有长度」证明不了上线的是本场字节。正确动作：
+   `Copy-Item -Force` 之后 `Get-FileHash`(或 `certutil -hashfile`)取远端 sha，与本地 `zig-out/bin/`
+   产物的 sha256 逐字对上，才允许开枪；对不上一律停手，因为 #meta 里那个 `dll_sha256=` 只是出处、
+   不做相等断言(每次重链都换)。整文件 sha 相同也不代表代码身份相同，反过来也一样 —— 这道门防的是
+   「把上一场那份旧 DLL 注入进去」。
+2. **argv 里的 DLL 必须是绝对路径**。ssh argv 写相对名(`sqjs_c4.dll`)时，目标进程 `LoadLibraryA`
+   按**游戏自己的 cwd** 解析，返回 NULL，驱动在任何注入之前拒掉(退出码 1、`nothing was injected`)，
+   install 额度未耗但读数全无。`.cmd` 与手写命令都要钉成 `C:\temp\sqjs_c4.dll`。
+
 ### `scripts/c2_exec_probe.py [dll]` — C4 执行路径实机一枪
 
 把 C1 注册的 effect token 走完 C4 执行链:谓词 detour 把实例的 `[obj+0]` 换成 DLL vtable,
@@ -1131,7 +1143,7 @@ Task 3 的 6 条判读 + 终修的 5 条 + 1 条写序保护),无游戏、无 Wi
 宿主侧经根目录 `justfile` 调用(`NS_WIN_HOST` 可覆盖主机名):
 
 ```
-just deploy                  # scp game_supervisor.py + launch_stellaris.py 到 C:/temp/
+just deploy                  # scp scripts/windows/ 的 7 个维护中脚本到 C:/temp/(含 popup_geometry.py:game_supervisor.py 第 25 行 import 它,漏了就 ModuleNotFoundError)
 just launch                  # 经 Steam 拉起游戏(launcher 点击 + 30 s 观察窗,启动后仍是暂停)
 just game start              # schtasks 拉起守护进程,见到状态心跳才返回
 just game status             # 一行摘要:state/note/pid/hwnd/age/want/policy/handled/cmd/speed
