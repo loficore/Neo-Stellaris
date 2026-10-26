@@ -9,11 +9,15 @@ import struct
 import pytest
 
 from c2_scope_probe import (
+    D2_VERDICTS, DEPTH2_PER_SOURCE, EVIDENCE_D2_VERDICTS,
     _entry_roots, _region_verdicts, caller_site_estimate, classify,
-    classify_region, decode_entry, decode_layout, decode_stats,
-    exit_code_for, follow_chain, follow_object, follow_roots,
+    classify_depth2, classify_region, collect_region_addrs, d2_meta_rows,
+    decode_entry, decode_layout, decode_stats,
+    exit_code_for, find_shared_cells, follow_chain, follow_depth2,
+    follow_object, follow_roots,
     image_end_from_header, install_decision, load_call_census,
-    load_vtable_map, plausible_user_ptr, poll_done, region_rows, summarize,
+    load_vtable_map, plan_depth2, plausible_user_ptr, poll_done, region_rows,
+    summarize,
     write_tsv,
 )
 
@@ -715,3 +719,209 @@ def test_region_verdict_census_is_one_sorted_line_per_source_and_verdict():
         "ctx/free=1/ctx/unreadable=1/helper/private_committed=2/self/image=1"
     )
     assert _region_verdicts([]) == ""
+
+
+# ---------------------------------------------------------------- depth-2 follow
+
+def _cand(off, ptr, *, ptr_rva=None, known=False, member_vtable=False,
+          vptr=0, vptr_rva=None):
+    return {
+        "offset": off, "ptr": ptr, "ptr_rva": ptr_rva, "vptr": vptr,
+        "vptr_rva": vptr_rva, "known": known,
+        "slot2_rva": 0x1D08520 if known else None,
+        "member_vtable": member_vtable,
+        "member_slot2_rva": 0x1D08520 if member_vtable else None,
+    }
+
+
+def _obj(source, root, candidates, unreadable=False):
+    return {
+        "source": source, "root": root, "unreadable": unreadable,
+        "words": [0] * 8, "candidates": candidates,
+    }
+
+
+D2_EXE_BASE = 0x140000000
+D2_IMAGE_END = D2_EXE_BASE + 0x3927000
+
+
+def test_plan_depth2_skips_roots_already_read_at_depth1():
+    """A candidate that points back at a root already read is not a lead.
+
+    Re-planning it would spend the per-source budget on a read whose datum is
+    already in the artifact, and the cap would then hide the slots never reached.
+    """
+    root = 0x2000_0000
+    lead = 0x2000_1000
+    objects = [_obj("self", root, [_cand(0x0, root), _cand(0x8, lead)])]
+    assert plan_depth2(objects) == [(lead, "self")]
+    assert plan_depth2(objects, already={root, lead}) == []
+
+
+def test_plan_depth2_caps_per_source_not_shared():
+    """The §56.4 fence: self filling its budget must not starve helper.
+
+    One shared cap reads in the artifact exactly like helper's slots held
+    nothing, which is the misreading §56.4 produced.
+    """
+    self_row = _obj(
+        "self", 0x2000_0000,
+        [_cand(i * 8, 0x3000_0000 + i * 8)
+         for i in range(DEPTH2_PER_SOURCE + 8)])
+    helper_row = _obj(
+        "helper", 0x2000_4000,
+        [_cand(i * 8, 0x4000_0000 + i * 8)
+         for i in range(DEPTH2_PER_SOURCE)])
+    plan = plan_depth2([self_row, helper_row])
+    by_source = {}
+    for addr, source in plan:
+        by_source.setdefault(source, []).append(addr)
+    assert len(by_source["self"]) == DEPTH2_PER_SOURCE
+    assert len(by_source["helper"]) == DEPTH2_PER_SOURCE
+
+
+def test_plan_depth2_skips_unreadable_rows():
+    """An unreadable depth-1 root carries no candidates; planning must not raise."""
+    objects = [
+        _obj("arg3", 0x2000_0000, [], unreadable=True),
+        _obj("arg4", 0x2000_2000, [_cand(0x10, 0x5000_0000)]),
+    ]
+    assert plan_depth2(objects) == [(0x5000_0000, "arg4")]
+
+
+def test_follow_depth2_labels_source_with_d2_suffix():
+    """Each depth-2 read carries its base source plus the d2 suffix."""
+    seen_sources = []
+
+    def spy(source):
+        seen_sources.append(source)
+        return _obj(source, 0x0, [], unreadable=True)
+
+    import c2_scope_probe as mod
+    original = mod.follow_object
+    mod.follow_object = lambda r, b, e, v, addr, *, source="": spy(source)
+    try:
+        objects = [
+            _obj("self", 0x2000_0000, [_cand(0x0, 0x3000_0000)]),
+            _obj("helper", 0x2000_4000,
+                 [_cand(0x0, 0x4000_0000), _cand(0x8, 0x4000_0008)]),
+        ]
+        d2_objects, d2_stats = follow_depth2(
+            lambda addr, size: b"\x00" * size,
+            D2_EXE_BASE, D2_IMAGE_END, {}, objects)
+    finally:
+        mod.follow_object = original
+    assert [o["source"] for o in d2_objects] == ["self.d2", "helper.d2",
+                                                  "helper.d2"]
+    assert seen_sources == ["self.d2", "helper.d2", "helper.d2"]
+    assert d2_stats["followed_by_source"] == {"self": 1, "helper": 2,
+                                              "arg3": 0, "arg4": 0}
+    assert d2_stats["planned_by_source"] == {"self": 1, "helper": 2,
+                                             "arg3": 0, "arg4": 0}
+
+
+def test_find_shared_cells_requires_two_distinct_sources():
+    """A value two slots of the SAME root hold is not a cross-root lineage edge."""
+    shared_value = 0x2ddc_2c90
+    two_sources = [
+        _obj("self", 0x7fe_b00, [_cand(0x28, shared_value)]),
+        _obj("helper", 0x7fe_960, [_cand(0x10, shared_value)]),
+    ]
+    rows = find_shared_cells(two_sources)
+    assert len(rows) == 1
+    assert rows[0]["value"] == shared_value
+
+    one_source = [
+        _obj("self", 0x7fe_b00,
+             [_cand(0x28, shared_value), _cand(0x30, shared_value)]),
+    ]
+    assert find_shared_cells(one_source) == []
+
+
+def test_find_shared_cells_folds_d2_suffix_into_base_source():
+    """self.d2 and helper sharing a value is a cross-source edge."""
+    shared_value = 0x2ddc_2c90
+    objects = [
+        _obj("self.d2", 0x7fe_bd0, [_cand(0x0, shared_value)]),
+        _obj("helper", 0x7fe_960, [_cand(0x10, shared_value)]),
+    ]
+    rows = find_shared_cells(objects)
+    assert len(rows) == 1
+    assert {site[0] for site in rows[0]["sites"]} == {"self", "helper"}
+
+
+def test_classify_depth2_ladder_order():
+    """Five rungs, each hit once; planned==0 outranks unreadable."""
+    empty = _obj("self.d2", 0x1000, [], unreadable=True)
+    assert classify_depth2([empty], [], 0) == "no_depth2_planned"
+    assert classify_depth2([empty], [], 8) == "depth2_unreadable"
+
+    hit = _obj("self.d2", 0x1000,
+               [_cand(0x0, 0x2000, ptr_rva=0x1000, known=True)])
+    shared_value = 0x2ddc_2c90
+    shared = find_shared_cells([
+        _obj("self.d2", 0x1000, [_cand(0x0, shared_value)]),
+        _obj("helper", 0x2000, [_cand(0x10, shared_value)]),
+    ])
+    assert classify_depth2([hit], shared, 8) == "depth2_known_vtable_hit"
+    assert classify_depth2(
+        [_obj("self.d2", 0x1000, [_cand(0x0, shared_value)])], shared,
+        8) == "lineage_edge_found"
+    assert classify_depth2(
+        [_obj("self.d2", 0x1000, [_cand(0x0, 0x9000)])], [],
+        8) == "no_depth2_lead"
+
+
+def test_verdict_d2_domain_has_no_negative_tier():
+    """There is no deeper-layer-holds-nothing rung: silence is not a verdict."""
+    assert set(D2_VERDICTS) == {
+        "depth2_known_vtable_hit", "lineage_edge_found", "depth2_unreadable",
+        "no_depth2_planned", "no_depth2_lead",
+    }
+    assert set(EVIDENCE_D2_VERDICTS) == {
+        "depth2_known_vtable_hit", "lineage_edge_found",
+    }
+
+
+def test_d2_meta_rows_carries_six_keys():
+    """Six keys, exactly: the budget rungs, the cap, the verdict, the edges."""
+    stats = {
+        "planned_by_source": {"self": 1, "helper": 0, "arg3": 0, "arg4": 0},
+        "followed_by_source": {"self": 1, "helper": 0, "arg3": 0, "arg4": 0},
+        "capped_by_source": {"self": 3, "helper": 0, "arg3": 0, "arg4": 0},
+        "deduped_by_source": {"self": 0, "helper": 0, "arg3": 0, "arg4": 0},
+    }
+    rows = d2_meta_rows(stats, "no_depth2_lead", [])
+    assert set(rows) == {
+        "depth2_per_source", "d2_planned_by_source", "d2_followed_by_source",
+        "d2_capped_by_source", "verdict_d2", "shared_cells",
+    }
+    assert rows["depth2_per_source"] == DEPTH2_PER_SOURCE
+    assert rows["verdict_d2"] == "no_depth2_lead"
+
+
+def test_find_shared_cells_calibrates_on_the_59_6_pair():
+    """The detector must read the one lineage edge already in evidence.
+
+    §59.6 recorded self root 0x7feb00+0x28 -> 0x7febd0 whose first qword is
+    0x2ddc2c90, and helper root 0x7fe960+0x10 -> 0x2ddc2c90. A finder that
+    returns nothing here cannot be trusted to report a zero for the shot.
+    """
+    objects = [
+        _obj("helper", 0x7fe_960, [_cand(0x10, 0x2ddc_2c90)]),
+        _obj("self.d2", 0x7fe_bd0, [_cand(0x0, 0x2ddc_2c90)]),
+    ]
+    rows = find_shared_cells(objects)
+    assert len(rows) == 1
+    assert rows[0]["value"] == 0x2ddc_2c90
+    assert {site[0] for site in rows[0]["sites"]} == {"helper", "self"}
+    assert len(rows[0]["sites"]) == 2
+
+
+def test_collect_region_addrs_carries_both_layers():
+    """region_rows must see depth-2 roots too, each labelled with its own source."""
+    objects = [_obj("self", 0x7fe_b00, [])]
+    d2_objects = [_obj("self.d2", 0x7fe_bd0, [])]
+    assert collect_region_addrs(objects, d2_objects) == [
+        (0x7fe_b00, "self"), (0x7fe_bd0, "self.d2"),
+    ]

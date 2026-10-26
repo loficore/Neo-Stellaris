@@ -763,7 +763,28 @@ root_unreadable / **region** 七类行)。
 就补出了 `__alignment1`(offsets 0/8/16/24/32/36/40,`sizeof`=48);**把那个 padding 字段也写出来会多插
 4 字节,`State` 读到的其实是 `Protect` 的槽**。
 
-**十一条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 / §59 实机与离线复算取到的,读 verdict 之前先看):**
+**深跟读口径(`plan_depth2` / `follow_depth2` / `find_shared_cells` / `classify_depth2`)**:
+depth-1 每行的 `candidates[*]["ptr"]` 当作**再下一层的根**,再走一遍同一个 `follow_object`(深跟读里不新写任何
+一次 `read_memory`,失败读照旧是 `unreadable` 而不是 0 —— 陷阱 5),行标签是 `"<基源>.d2"`,两层永不相认。
+**预算仍按源给**(`DEPTH2_PER_SOURCE = 8`,把 `.d2` 折回基源计源,四源各 8),而且**depth-1 已经读过的地址不算
+线索**:每个根的 `self_ptr` 与 `ctx_words[1]` 本来就在 `objects` 的 `root` 字段里,计划阶段直接跳过(`already`),
+同一个地址也只计划一次。**预算的三种花费分开记账** —— `planned_by_source` / `followed_by_source` /
+`capped_by_source`(+ `deduped_by_source`),全部进 `#meta` 的 `d2_planned_by_source` /
+`d2_followed_by_source` / `d2_capped_by_source` 与 `depth2_per_source`。缺这几个键,产物里一条短的深度 2
+列表就退化成「那些槽没东西」的误读,这正是 §56.4 那次把预算耗尽读成负结论的同一形状。
+区域仪器(`region` 行)现在吃**两层的根**(`collect_region_addrs`),`source=` 保留各层自己的标签。
+**跨源共享(`find_shared_cells`)**按**候选值**分组,只保留出现在 **≥2 个不同基源**的值,行是
+`{"value","value_rva","sites":[(source, root, off)]}`,汇总进 meta 的 `shared_cells`
+(`n=0`,或 `n=<条数> 0x<值>(rva=<hex|->)[源@0x根+0x偏移,…];…`)。这就是把 §59.6 那对
+(`helper` 的 `+0x10` 与 `self` 的 `+0x28` 都给出 `0x2ddc2c90`)的问法机械化;**同源两个槽同值不算共享**,
+它只说那个对象里有两个字段相等。`value_rva` 只在值落在镜像内才给,界外保留绝对值(与本节开头
+「RVA 一律界在 `[exe_base, image_end)`」同一条:把堆地址压成 `rva=0` 会伪造一次镜像命中)。
+`VERDICT_D2` 是另一条固定阶梯:`no_depth2_planned` → `depth2_unreadable` → `depth2_known_vtable_hit`
+→ `lineage_edge_found` → `no_depth2_lead`,其中**只有后两档是证据**(`EVIDENCE_D2_VERDICTS`)。
+**它与 `classify()` 的六档不同义、不合并**:后者回答「depth-1 的根有没有交出已知类」并决定退出码,一字未改;
+前者只回答「再下一层有没有线索」,不进退出码,也不参与任何旧判据。
+
+**十二条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 / §59 实机与离线复算取到的,读 verdict 之前先看):**
 
 1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
    仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
@@ -844,6 +865,14 @@ root_unreadable / **region** 七类行)。
     (返回点不挨着任何紧邻边界),或样本记录的返回 RVA 本身就读错了(旧产物把估值当键的世代)。
     `none` 是要带进取证卷的 datum,不是负结论;`ambiguous` 同理 —— 它是字节里真实存在的重叠,
     照原样进卷,不替他选一个候选。
+
+12. **`no_depth2_lead` 与 `depth2_unreadable` 都不说「更深一层没有对象」。** 前者只说「这一层交出的候选值,
+    没有一个落进那 1,805 个已知 vtable,也没有一个值跨两个基源共享」;而那张表**是下限不是类数**
+    (structures §14:覆写了 Execute 的类一个都不在里面),所以「不在集合内」永远推不出「不是对象」。
+    后者更弱,它是**仪器的陈述**(`reader` 对这一批地址一个 qword 都没拿到),对内存里有什么不说话。
+    同一形状也管 `no_depth2_planned`:那一档是「depth-1 没交出任何新地址」,不是「对象里没有成员指针」。
+    五档里只有 `depth2_known_vtable_hit` 与 `lineage_edge_found` 有取证资格(`EVIDENCE_D2_VERDICTS`),
+    其余三档写进卷里时只能作为「本次这一发问到什么程度」的说明句。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
