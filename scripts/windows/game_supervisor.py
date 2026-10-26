@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 
+from popup_geometry import panel_bbox, window_enum_record
 from popup_guard import bump, count_attempt, decide_action
 from popup_identity import fingerprint, geometry_signature, load_allowlist
 
@@ -471,11 +472,17 @@ def _be_dpi_aware() -> None:
         pass
 
 
-def find_window(pid: int) -> int:
+def window_candidates(pid: int) -> list:
+    """Every visible, titled window of ``pid`` as ``[(hwnd, rect_or_None)]``.
+
+    Thin Windows-side wrapper: a candidate whose rect cannot be read is kept
+    with ``rect: None`` -- the record's whole value is "who else was on
+    screen", so one bad candidate must not void the list.
+    """
     import ctypes
     import ctypes.wintypes as wt
     user32 = _user32()
-    found = []
+    cands = []
 
     @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
     def cb(hwnd, _):
@@ -483,12 +490,19 @@ def find_window(pid: int) -> int:
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
         if wpid.value == pid and user32.IsWindowVisible(hwnd):
             if user32.GetWindowTextLengthW(hwnd):
-                found.append(hwnd)
-                return False
+                try:
+                    cands.append((int(hwnd), window_rect(hwnd)))
+                except OSError:
+                    cands.append((int(hwnd), None))
         return True
 
     user32.EnumWindows(cb, 0)
-    return found[0] if found else 0
+    return cands
+
+
+def find_window(pid: int) -> int:
+    cands = window_candidates(pid)
+    return cands[0][0] if cands else 0
 
 
 def find_game():
@@ -713,18 +727,12 @@ def _panel_bbox(luma):
     Row/column profiles of a high-luma mask; a panel has long, dense runs.
     The choice window is a dark panel, so this is used only to anchor an
     explicit ``dismiss`` and never to decide that a choice window exists.
+    The three gates live in ``popup_geometry.panel_bbox``.
     """
     import numpy as np
-    h, w = luma.shape
     mask = luma > 120
-    rows = np.nonzero(mask.sum(axis=1) > max(60, int(w * 0.08)))[0]
-    cols = np.nonzero(mask.sum(axis=0) > max(40, int(h * 0.08)))[0]
-    if rows.size < 100 or cols.size < 100:
-        return None
-    bbox = [int(cols[0]), int(rows[0]), int(cols[-1]), int(rows[-1])]
-    if bbox[2] - bbox[0] < 300 or bbox[3] - bbox[1] < 250:
-        return None
-    return bbox
+    return panel_bbox([int(n) for n in mask.sum(axis=1)],
+                      [int(n) for n in mask.sum(axis=0)])
 
 
 def read_window(hwnd: int):
@@ -985,7 +993,10 @@ def apply_popup_decision(hwnd: int, bbox, got: dict, state: dict, *,
     to kill the daemon, whose heartbeat gates every later action.
     """
     popup_id = got["popup_id"]
-    logger({"event": "popup_seen", **got})
+    logger({"event": "popup_seen", **got,
+            "bbox": list(bbox) if bbox is not None else None,
+            "window_rect": state.get("window_rect"),
+            "candidates_n": state.get("window_candidates_n")})
     path = None
     if bbox is not None:
         # ':' is NTFS's stream separator; an id used verbatim as a filename
@@ -1252,6 +1263,13 @@ def serve(args) -> int:
                 except OSError:
                     stats = {"bright": 0.0, "gold": 0, "rows": [], "bbox": None}
                     rect = None
+                state["window_rect"] = list(rect) if rect is not None else None
+                if rect is not None:
+                    cands = window_candidates(pid)
+                    state["window_candidates_n"] = len(cands)
+                    _log(window_enum_record(pid, cands, hwnd))
+                else:
+                    state["window_candidates_n"] = None
                 if rect is not None:
                     if stats["bbox"]:
                         state["last_bbox"] = stats["bbox"]

@@ -5704,3 +5704,290 @@ python3 scripts/scratch/2026-10_exec_frame_census/forwarding_wrappers.py      # 
    `0xdef440` 三处 `mov [rdx], rax` 就是交换循环游标)。
 
 现版口径是「操作符字符串 + x86 别名表」(见脚本 docstring),并以第 1 行的已知读数做自校验。
+
+## §63 零枪:§60.7-1 队列派发方集合 —— 三条口径互证(2026-10-26,离线)
+
+授权级 = 离线 **零枪**:无 launch/inject/install/Frida/process,只静态读默认本地 exe 拷贝(sha 同 §60 前置,
+`docs/offline-tooling.md`)。生产者 = `scripts/scratch/2026-10_exec_frame_census/queue_dispatchers.py`
+(一条命令跑全三口径,A/B 自校验 + C 校准全绿才写 `evidence/xrefs/queue_dispatchers_4_4_4.tsv`;任一不过 ⇒
+退出码 1、不写 artifact、不出负结论)。探针内部:口径 A = §60.5 one-shot 的同一条判据(节表字段偏移照
+`find_refs.py`,键 = `BASE+RVA` 的 LE-qword、8 对齐、`chars & 0x40` 段);口径 B 的 rip 引用直接 import
+`riprefs.refs_for`(§60.5 `riprefs.py --verify` 的同一实现);口径 C = 「候选字节形态 + 从 `.pdata` 函数首
+对齐解码复核」,与 riprefs 同一族做法,只是操作数从 rip 换成 `[reg+disp]`。本节答 **§60.7-1(谁经 `+0x28`
+槽派发)**;**§59 的 `no_scope_candidate` 原样不动**,本轮没开任何新枪。
+
+### §63.1 口径 A —— 对齐 qword 扫描,自校验恰好 1
+
+`python3 scripts/scratch/2026-10_exec_frame_census/queue_dispatchers.py --only A` → 逐字读数:
+
+```
+channel A: aligned_hits=1 self_check=ok @ 0x26d4df8
+```
+
+`0x26d4df8 = 0x26d4dd0 + 0x28`(§60.5 的 vtable 槽)。判据是「恰好 1」:读到 0 或 ≥2 ⇒ 探针自己停
+(exit 1)。⇒ 全镜像的初始化数据段里,承载函数 `0x1c42fe0` 的**静态持有者只有一个**,就是队列表 `+0x28` 槽。
+
+### §63.2 口径 B —— 引用者集合(riprefs 同实现 + E8 直调扫描)
+
+`python3 ... queue_dispatchers.py --only B` → 逐字读数:
+
+```
+channel B vtable-ref  0x1c42d4d  func 1c42d30..1c42ddc
+channel B vtable-ref  0x1c42def  func 1c42de0..1c42ede
+channel B ctor-call   0x1ba708e
+channel B ctor-call   0x1ba7685
+channel B build-site  0x1ba7076  mov ecx,0x128; call new 0x2185218
+channel B build-site  0x1ba766e  mov ecx,0x128; call new 0x2185218
+channel B: self_check=ok vtable_refs=2 ctor_callers=2 build_sites=['0x1ba7076', '0x1ba766e'] size=0x128
+```
+
+- vtable `0x26d4dd0` 的 RIP 引用**恰好 2 处**,桶 = ctor `0x1c42d30..0x1c42ddc` 与析构 `0x1c42de0..` ——
+  与 §60.5 `riprefs.py 0x26d4dd0` 的两处逐位相符(0x1c42d4d/0x1c42def)。
+- ctor 的调用点是 `E8 rel32` 直调,**riprefs 的形态覆盖不到它**(它只管 rip 操作数)—— §60.5 那两个站点
+  (0x1ba708e/0x1ba7685)本来是 `fastcalls.py` 拿的;本探针用同口径「候选算术 + 函数首对齐复核」自扫
+  `E8` 复现,两桶与 §60.5 完全一致。
+- 构造站点字节抽查(`python3 scripts/disrva.py 0x1ba7048 16`):`0x1ba7076 mov ecx, 0x128` →
+  `0x1ba707b call 0x2185218` → `0x1ba7080 mov [rsp+0x88], rax` → `0x1ba708e call 0x1c42d30`;
+  第二处同形(`disrva.py 0x1ba7658 8`:`0x1ba766e mov ecx, 0x128` → `0x1ba7673 call 0x2185218`)。
+  **一处修正**:§60.5 写的 0x1ba7070/0x1ba7660 是那次 `disrva.py` 命令的**窗口参数**,不是这对字节的首地址;
+  按 §60.5 自己的命令重跑,`mov ecx,0x128` 首地址落在 **0x1ba7076/0x1ba766e**,datum 以字节为准。
+- ⇒ B 把「谁能造出这个队列对象」钉死为**恰好两个静态构造点**(对象大小 0x128,§60.5 的 'Default Game'/'Game'
+  两桶),与「谁引用这张 vtable」钉死为 ctor+析构 恰好两处。
+
+### §63.3 口径 C —— `call [reg+0x28]` 站点集合;检测器先行
+
+**校准**(§62.4 坑 1/2 同族:先证明机器能读出已知读数,再让它报未知):同一台机器、同一套形态扫描,位移
+换成 `0x60` —— §60.5 记量排空循环 `0x1c42ee0..0x1c42fdc` 里有一条 `call [rax+0x60]`
+(`disrva.py 0x1c42ee0 60` 实测 `01c42f74 call qword ptr [rax + 0x60]`)。探针必须找到它才允许出 `+0x28`
+的数;首轮它 FAIL,抓到的是**扫描器自己的键空间 bug**(候选按 blob 内偏移、复核按 RVA 比对,两边没对消)
+—— 修正后校准恰好命中 0x1c42f74。这一条本身就是「负结论先怀疑检测器」的活样本。
+
+`python3 ... queue_dispatchers.py --only C` → 逐字读数:
+
+```
+channel C: calib call[reg+0x60] @0x1c42ee0..0x1c42fdc -> ['0x1c42f74'] self_check=ok; call[reg+0x28] sites=1214 with_ab_object_ref=0 []
+```
+
+全量跑 `python3 ... queue_dispatchers.py` 写 artifact(`#verdict dispatchers_partial …`;1214 条 C 行 +
+A/B 行,列 `channel, site_rva, func_rva, func_begin, form, slot, object_ref, note`)。形态覆盖:
+`call qword ptr [reg+disp8/disp32]`(含 SIB),`.text` 全量候选 + `.pdata` 函数首对齐复核;disp8 上限 0x7f,
+0x28 两种编码都可表 ⇒ 该形态**无形态漏**。
+
+补充 one-shot(inline python,`riprefs.refs_for` 同一实现问 `0x2a01b18`/`0x2a01b24`,再与 1214 站点所在
+函数取交):`0x2a01b18: referrer_fns=5 with_0x28_site=[]`、`0x2a01b24: referrer_fns=4 with_0x28_site=[]`
+—— 连「引用 self-注册数组的函数」里也没有一条 `call [reg+0x28]`。
+
+### §63.4 判决与边界
+
+**判决 = `dispatchers_partial`**(三档 `dispatchers_found | dispatchers_partial | no_dispatcher_static`)。
+为什么是中间档:口径 C 的站点集合**非空**(1214 条,拒绝 `no_dispatcher_static`),但没有一条所在函数引用
+A/B 集合里的对象(vtable `0x26d4dd0` / ctor `0x1c42d30` / 直调 ctor;连注册数组都是负的),派发方**无法具名**
+(拒绝 `dispatchers_found`)。这不是「没人派发」—— §60.5 已证承载函数 0 直接调用、只被 `call [obj_vtbl+0x28]`
+形态动态调用 —— 而是**静态归因在 `+0x28` 这个位移上到不了运行时对象**:1214 条站点的目标类取决于寄存器里
+运行时装的是谁,离线不可按类分(判读陷阱 11 的窗口陈述反面:这次集合是读全了的)。
+
+边界(不越过的部分):
+1. 本节判的是「`call [reg+0x28]` **直接形态**的静态持有者与站点集合」;`mov reg,[obj+0x28]; call reg` 这类
+   两段形态不在口径 C 内,本节**不宣称**它不存在,只把它留给后续。
+2. 本节**没有**回答「谁是 scope」—— §59 的 `no_scope_candidate` 原样保持。
+3. §60.7 其余未决项(−2…−7)不在本节覆盖内;−1 由本节**在口径 C 的形态边界内**作答。
+4. 零枪:无 launch/inject/install/Frida/process;C1 授权位未动。
+
+`python3 scripts/scratch/2026-10_exec_frame_census/queue_dispatchers.py` 一条命令复现全部三口径与判决
+(`--only A|B|C` 单跑;任一自校验/校准不过 ⇒ 退出码 1、artifact 不落盘)。
+
+## §64 零枪:孤儿 handler 的案卷 —— 前提「命名消费者 = C3」已被离线证伪,裁定仍归人(2026-10-26,离线)
+
+授权级 = 离线零枪(不 launch/inject/install/进程),且**本节只出材料,不做裁定**。对象 =
+`src/dll/effects/handler.zig` + `src/dll/triggers/handler.zig`(§29 判「kept as orphans」留待 C3 的那两个)。
+§29 原文(:707-711 逐字):「**kept as orphans.** … these two are the intended JS-routing layer for C3, so
+they are a *placeholder with a named consumer* … If C3 ends up routing through QuickJS differently, they
+are deleted then, not now.」本节把「等的那个消费者」在 2026-10-26 仓库里的真实状态读全。
+
+### §64.1 三条离线事实(git grep 实跑,输出原样;超长行截到 120 字符并标注)
+
+**事实 1 —— 零 importer。** 三条命令的第一条:
+
+```
+git grep -n "effects/handler\|triggers/handler" -- '*.zig' '*.py' '*.md' \
+  | grep -v '^src/dll/effects/handler.zig:\|^src/dll/triggers/handler.zig:'
+```
+
+命中只剩**文档与旧读数**:`docs/offline-tooling.md:66-67`(29 条缺口构成 19+5+5)、`docs/roadmap.md:98`、
+`docs/scope-read-points.md:57`(超长行,截断;含「effects/handler.zig 5 + triggers/handler.zig 5 … 零 importer」)、
+`evidence/analysis/runtime_444_c1_validation.md:460/:707`(§29 自己)、`evidence/analysis/zig_test_coverage.md:26/27/64/65`
+—— `src/**.zig` 与 `build.zig` 对该路径串**零命中**。**两处 brief 未料到的形状**:brief 的 Expected 说这条会露出
+`build.zig:186-190` 与 `README.md:30/:32` —— 实跑不命中,因为那两处写的是「Effects handler」/「handler.zig」
+而不是路径串;补跑 `grep -n "handler" build.zig` → :186/:187/:190 =
+「`// Effects handler tests — SKIPPED: std.Thread.Mutex unavailable for x86_64-windows target.`」等原文,
+`grep -n handler README.md` → :7/:8/:30/:32/:145/:146/:245(:30/:32 = 「`handler.zig — JS callback routing
+(orphan: its hook was removed, see §26.3)`」)。再按符号问一遍全仓库:
+`git grep -n "effects/handler\|triggers/handler\|effects_handler\|triggers_handler" -- 'src/**.zig' 'build.zig'`
+(排除文件自身)→ **No matches found** —— import/build 面确实为零。
+
+**事实 2 —— 孤儿函数的名字在仓库里不出现在别处。** 第二条命令:
+
+```
+git grep -n "handleCustomEffect\|handleCustomTrigger\|getHandlerCount" -- '*.zig' '*.py' '*.md'
+```
+
+`handleCustomEffect` 只在 `effects/handler.zig`(:190 定义 + 测试内引用),`handleCustomTrigger` 只在
+`triggers/handler.zig`(:190)。**一处必须具名的出入**:`getHandlerCount` 有三个文件各自**定义** —— 孤儿两份
+之外还有 `src/dll/c2/handler.zig:131`;那是 C2 现役 handler 的**同名函数**,不是对孤儿的引用(三处定义互不相干,
+git grep 的命中全是定义/测试行,没有跨文件调用)⇒ 「名字不出现在别处」对 `handleCustom*` 严格成立,对
+`getHandlerCount` 要按「族」读。
+
+**事实 3 —— 现役 C4/C2 路线不经过它们。** 链路 = `0x1D08520` → slot[2] →
+`src/dll/c2/vtable.zig:40` 的 `extern fn C2ExecCall(token: u32, ctx_word: u64) c_int;` →
+`src/dll/quickjs/quickjs_wrapper.c:1097` 起的 `C2ExecCall`(**brief 写的 :1097 是 `C2ExecCall` 定义行,
+`JS_Call` 实际调用在 :1121/:1265**,文件也在 `src/dll/quickjs/` 不是 `src/dll/c2/`)。
+`src/dll/c2/handler.zig` 的 `dispatchEffect`/`dispatchTrigger`/`setContext` 按符号问外部引用
+(`git grep -n … -- 'src/**.zig'` 排除 c2/handler.zig 自身)→ **零命中**;被 exports 引用的只有
+`registerHandler`:`exports.zig:675/:712`,签名 `registerHandler(name, js_func: c.JSValue, kind)`
+(c2/handler.zig:73),**与孤儿的 `registerHandler(effect_name, js_function_name)` 不是同一个函数**。
+且 `C2RegisterEffect` 的返回值由 `main.js_runtime` 门控(有 runtime 成功返回 1/失败返回 0;runtime 从未建立
+⇒ 走空分支返回 0)—— runtime 永不建立的出处 = `docs/offline-tooling.md:66-71`(`main.initializeQuickJS`
+无调用点,「29 条零执行 = 可达性不是链接」)。§49.3(:3186 逐字)「The keyword→JS routing layer (C3) and
+a visible new effect (C4) are untouched.」与 §50(:3261)「remain untouched, and caller-supplied JS text
+stays deferred (P21)」记的是**当时**两枪都没碰 C3 —— 与现役路线不经过孤儿一致。
+
+### §64.2 正面结论:前提没了
+
+`docs/roadmap.md:116` 段 5 逐字:「**C3 不再是待办,降为设计依据**:注册只需要两个前置 —— 目标 db 已拉起,
+且我们的插入早于任何*求值*引用该 keyword;」。§29 决定「留」的唯一理由是「placeholder with a *named consumer*
+(C3)」;C3 已不是待办 ⇒ **这个命名消费者不存在了**——§29 那句的条件句「If C3 ends up routing through
+QuickJS differently, they are deleted then, not now」里等的触发条件**永远不会再被经过**。这是本节读全的
+离线事实,不是删除建议。
+
+### §64.3 边界声明(Review Focus 5)
+
+**本节不判「该不该删」。** §29 的「留」是用户裁定,不是分析结论;离线只证到「等的那个消费者不存在了」。
+案卷到此为止,删除需要新的裁定(见 §64.4 落点表)。本节同样不动 C1 授权位、不开枪、不改 `src/`。
+
+### §64.4 移交清单(只写不执行)
+
+若裁定为「删」,确切落点:
+1. 删文件:`src/dll/effects/handler.zig`、`src/dll/triggers/handler.zig`。
+2. `build.zig:186-190`:两段 SKIPPED 注释一并删。
+3. `README.md`:行 7/8(特性清单里 Custom Effects/Triggers 两行)、30/32(目录树 handler 两行)、
+   145/146(`registerEffect`/`registerTrigger` 表两行)、245(ID>4081 路由段)。
+4. `docs/offline-tooling.md:66-71`:「29 条」构成 `19 + 5 + 5` → **19 条**(两个 handler 的 10 条随文件消失;
+   但 `api/bridge.zig` 的 19 条仍在,`main.initializeQuickJS` 无调用点没被本删除修复)。
+5. `docs/roadmap.md:98`:整条孤儿候选移除(该文件行数上限 140,删行允许)。
+6. `docs/scope-read-points.md:57` 与 `evidence/analysis/*`(§29 :460/:707、zig_test_coverage 26/27/64/65)
+   里的旧读数是**历史数,不改写**(append-only);删除后的新基线句(`599/599` 是否变、29→19)另记新节。
+7. 预期门禁效应:两个文件**没有被任何构建根 import**(事实 1),其 10 条 test 本就在零执行缺口里 ⇒
+   Zig 门禁计数与 DLL 字节**不应有任何变化**;真变了就是删坏了,回滚重查。
+
+## §65 零枪:Zig `extern fn` 绑 QuickJS 的布局契约双侧钉死(2026-10-26,离线)
+
+授权级 = **无**(全部是离线构建 + 反汇编自己的产物;探针 DLL 从不执行)。本节只收
+「布局 + 调用桩」这一半:**§36 那次 rc=3 的机制已由 §47/§48 重分类成 UBSan 报
+`offsetof` 编译期常量 0,与 extern ABI 无关**,本节不复盘它。
+
+**关键前提(先钉住再谈契约)**:`quickjs_wrapper.c` **不 include** `quickjs.h` ——
+它在 :43-53 手抄 `JSValueUnion`/`JSValue`;`bindings.zig:97-176` 是第三份定义。
+所以「双侧契约」不是一句注释,而是**各份定义自己的编译期断言**。
+
+### §65.0 出货基线(改 build.zig 之前记录)
+
+```
+f397a6ba25193ff659142f032d70ef1f93a11d7134f05778938684ba70fa7b6b  zig-out/bin/stellaris_quickjs.dll
+构建目录: /var/lofibass_ssd/code/zig/Neo-Stellaris/.zig-cache
+```
+构建目录路径会烧进 `.rdata` —— 段 sha 只在**同一个 build 目录内**可比(commit `2dbe245`)。
+Step 6 复核:`just build && sha256sum -c` ⇒ `stellaris_quickjs.dll: 成功`,**出货字节不变**;
+`abi-probe` 不在默认 `install` 依赖图里(判据即此 sha)。
+
+### §65.1 布局断言读数(`src/dll/quickjs/abi_probe.c`)
+
+`#include "quickjs.h"`(带 `-DCONFIG_VERSION="2025-09-13"`,同 `quickjs_c_flags`),
+真实定义与**手抄孪生**(`ProbeJSValueUnion`/`ProbeJSValue`,按 `bindings.zig:82-89`+`:97-99` 同形)各断言一遍:
+
+| 断言 | 真实定义 | 手抄孪生 | 读数 |
+|---|---|---|---|
+| `sizeof(JSValue)` | 16 | 16 | 通过 |
+| `offsetof(JSValue, u)` | 0 | 0 | 通过 |
+| `offsetof(JSValue, tag)` | 8 | 8 | 通过 |
+| `sizeof(JSValueUnion)` | **8** | **8** | 通过 |
+| `_Alignof(JSValue)` | 8 | 8 | 通过 |
+
+**union 是 8 不是 16** —— 全部成员 ≤8 B(`uint64/float64/ptr/short_big_int`),
+`JSValue` 的 16 = `u(8) + tag(8)`。这条是负向验证抓出来的:初稿把 union 也断成 16,
+编译即红。Zig 侧同形断言在 `abi_probe.zig` 的 `comptime`(`@sizeOf==16`、
+`@offsetOf("u")==0`、`@offsetOf("tag")==8`),两侧都过 ⇒ 三份定义(quickjs.h /
+wrapper 手抄 / bindings.zig)在尺寸与偏移上**互相一致**。
+
+### §65.2 负向验证(本任务的失败测试步)
+
+把 `_Static_assert(sizeof(JSValue) == 16, …)` 临时改成 `== 17`,
+`zig build abi-probe` ⇒ **编译失败**(摘原文):
+
+```
+src/dll/quickjs/abi_probe.c:21:16: error: static assertion failed due to requirement 'sizeof(struct JSValue) == 17': real JSValue size
+src/dll/quickjs/abi_probe.c:24:16: error: static assertion failed due to requirement 'sizeof(union JSValueUnion) == 16': real JSValueUnion size
+src/dll/quickjs/abi_probe.c:42:16: error: static assertion failed due to requirement 'sizeof(union ProbeJSValueUnion) == 16': twin JSValueUnion size
+error: 3 compilation errors
+```
+改回(`JSValue==16`,两个 union 断言按实测改成 `==8`)⇒ 通过,两个探针 DLL 产出。
+断言确实在跑,且抓到两处真实读数错误 —— 顺序未颠倒(先红后绿)。
+
+### §65.3 强制引用与桩发射(`abi_probe.zig` + `abi_probe.c`)
+
+Zig 只对**可达**函数体发射(死支路里的引用不进符号表),取函数地址不生成 call 桩 ⇒
+每个点名符号各写一个 `export fn probe_<符号>`,体内**实际调用一次**并把结果 sink 进
+全局。三条执行口径(都记在 SDD 台账):
+- zig 0.16 已删 `volatile T`(实测 `error: expected type expression`),sink 用
+  `export var`(外部可见 ⇒ 存储不被消除,机制等价);
+- 强制集合 = brief 点名 7 条(JS_NewRuntime、JS_NewRuntime2、JS_UpdateStackTop、
+  JS_Eval、JS_ToInt32、JS_Call、`__JS_FreeValue`);变参 `JS_Throw*Error` 族两侧都排除;
+- `__JS_FreeValue` 在 `bindings.zig:623` 是**文件私有** extern,探针里按同签名重 declare
+  (桩字节口径与 bindings 自己发射的无异);
+- 两个探针 module 固定 **ReleaseFast**(Debug 码型把 JSValue ctor outline 成函数、
+  外加 panic wrapper,把「一个桩恰好一次调用」的自校验淹掉;优化形也才是诚实的参数装配),
+  C module 加 `-fno-stack-protector`(否则 clang 在 `JS_MKVAL` 的 16 B 局部上插
+  `__stack_chk_fail`,多出的那条 call 会撞检测器)。
+
+### §65.4 调用桩对照表(`scripts/scratch/2026-10_abi_probe/compare_stubs.py`)
+
+对每个 `probe_*` 导出:pefile 读导出表拿 RVA → 该 DLL **自己的 `.pdata`** 取函数区间
+(`scripts/pdata.py` 在 import 时就打开 stellaris.exe,读不了探针,故自解析)→
+`scripts/pe_disrva.py <dll> <begin> <end>` 反汇编 → 自校验「函数区间内恰好一条对外 call/jmp」
+(双侧 7/7 全过)→ 打 call 点前的参数装配窗口。完整窗口在
+`.superpowers/sdd/…/abi_compare.txt`(一次性产物,不进 git);下表是逐条判读:
+
+| 符号 | Zig 装配序列(机制) | C 装配序列(机制) | 同形? |
+|---|---|---|---|
+| **JS_Eval**(返 16 B) | `lea rcx,[rbp-0x10]` 返 slot、`rdx`=ctx、`r8`=input、`r9d`=len、`+0x20`=filename、`+0x28`=flags,`call` | 同一套,另把入口 rcx(sret)直接转发给了被调方(rcx 不再 `lea`) | **同形** |
+| **JS_ToInt32**(按值收 val) | 栈槽写 `{1,0}` 后 `lea r8,[rbp-0x10]`,`rcx`/`rdx` 直传 | 栈槽由 `movups` 从 `.rdata` 灌入后 `lea r8,[rbp-0x10]` | **同形**(差异只在常量物化方式,不是 ABI) |
+| **JS_Call**(收两个 16 B + 返 16 B) | 两个栈槽 `{0,3}`;`rcx`=返 slot、`rdx`=ctx、`lea r8/lea r9`、`+0x20`=argc=1、`+0x28`=argv | 同一套(返 slot 复用入口 rcx;栈槽 `movups` 灌) | **同形** |
+| `__JS_FreeValue`(按值收,无返回) | 栈槽 `{0,-1}`、`rcx`=ctx 直传、`lea rdx,[rbp-0x10]` | 同一套 | **同形** |
+| JS_NewRuntime(纯指针,对照) | `call` | 尾 `jmp` | 差异是**码型**(返回转发),无参数装配可言 |
+| JS_NewRuntime2(纯指针,对照) | `xor ecx,edx` 后 `call` | 同 `xor` 后尾 `jmp` | 同上 |
+| JS_UpdateStackTop(纯指针,对照) | 尾 `jmp` | 尾 `jmp` | 逐条相同 |
+
+Win64 口径复核:16 B 结构体**按值**传参 = 调用方物化副本 + 一个 GPR 收指针
+(只有 1/2/4/8 B 结构体进寄存器),16 B 返回 = `rcx` 隐藏返回槽 —— **Zig 发射的桩字节
+与 C 编译器发射的走同一套约定,寄存器角色逐位对应**。
+
+### §65.5 判决与边界
+
+**判决词 = `abi_closed_static`。** 两份(实为三份)定义的尺寸/偏移断言一致,且三条
+by-value `JSValue` 签名(`JS_Eval` 返 16 B、`JS_ToInt32` 按值收、`JS_Call` 两收一返)
+的 Zig/C 调用桩装配**同形**;纯指针签名只作对照不作结论。⇒「Zig `extern fn` 会崩」的
+ABI 假设**在「布局 + 调用桩」这一半被静态排除**。
+
+边界(三条,不许越):
+1. 本节判的是**调用方装配**;被调方是同一份 quickjs.c,不存在另一半差异来源,但**实机
+   仍未开枪**,`extern fn` 路线的可用性最终仍要一枪才算数(本场不开)。
+2. **不因此放宽 `exports.zig:351-353`「不要新增 Zig `extern fn` 绑 QuickJS」的禁令** ——
+   C 桥仍是现役实现,禁令变更要人点头(计划「明确不做」表)。
+3. §36 的 rc=3 归因走的是 §47/§48 的 UBSan 线,与本节无涉;roadmap 段5 决策行的
+   「根因未查」措辞按本节判决就地改写,不改写本节之前的取证原文。
+
+坐标漂移(历史读数不改写,另记):§64.4 的删除落点 `build.zig:186-190` 因本节在 build.zig
+插入 abi-probe 块而**后移**,现读数为 `:228`/:`232` 两段 SKIPPED 注释;执行删除时以
+`grep -n SKIPPED build.zig` 现值为准。
+
+门禁口径:`abi_probe.zig` **只被 `abi-probe` step 引用,不被任何 test 根 import**
+⇒ 它不进 `599` 的账;本任务新增的 Zig 测试条数 = **0**,`just check` 计数不变。
