@@ -6142,3 +6142,77 @@ artifact `evidence/xrefs/queue_dispatchers_two_stage_4_4_4.tsv` 列 =
 下一个人可先核仪器再核结论);一行 `A'` = 校准对(含逐条在案的第 7 条),105 行 `C'` = 全部配对。
 一条命令复现全部三口径与判决(`--only A|B|C` 单跑;任一硬门/钉死判据不过 ⇒ 退出码 1、
 artifact 不落盘)。
+
+## §67 donor 首枪:`0x3AFD30` 只读采样,窗口静默(2026-10-26,点名)
+
+**授权级别**:本次会话内点名(roadmap 段2 第二行)。人对本段的原话是「**授权,立刻打**」,同一次问答里
+对第二枪的排序裁定是「donor 后我先写 Task 3,再打第二枪」—— 本段只含 donor 这一发。
+
+**这一发问的是什么**:§57.4 那张三档表的前两档 —— donor 这一族到底进不进它们 slot[1] 共用的虚
+Execute(`0x3AFD30`),进的是五张静态候选表(`0x24B1D98`/`0x24EAAC0`/`0x25F4440`/`0x2606F00`/
+`0x2606FE0`)里的哪一张。读的是 `[self+0]`,即 effect 对象自己的 vptr;它与 scope 那把枪的
+`self_vtable_rva`(base Execute 收到的 `self`)不同源,两处读数不得互相引用(§57.4 那段「不同源」的
+原话 + §55.4 未排除第 1 条)。
+
+**进程与字节**:pid=3416,hwnd=198502,`just launch` 第二次尝试才 handed off(第一次 30 s 内没等到
+launcher 窗口,`inner_exit code=21`)。上线字节 `C:\temp\sqjs_c4.dll`,sha256
+`7d3e45c4b25974324e48b0e952b44a8895c643779e3bc24ce97e41981f6ac0d3`(= 本场 `zig-out/bin/stellaris_quickjs.dll`,
+导出面 `MISSING: []`)。**整文件 sha 只当出处,不做相等断言**(每次重链都换)。
+
+**开枪前踩到的两个环境坑(都是 instrument 侧,不是引擎侧)**:
+① 远端 `sqjs_c4.dll` 原来是上一个会话留下的旧文件(sha `1b568cd4154da1e9afcb25c451c5f9000ea5ce5cf6afdc995fd9760e06412ba9`),
+`ren` 因目标已存在而**静默失败**,长度照样非 0 ⇒ 「远端有文件且有长度」证明不了上线的是本场字节。
+改用 `Copy-Item -Force` + `Get-FileHash` 对上 sha 才开枪。② ssh argv 里 DLL 写成相对名
+`sqjs_c4.dll` ⇒ 目标进程 `LoadLibraryA` 按**游戏自己的 cwd** 解析,返回 NULL,驱动在任何注入之前
+拒掉(`nothing was injected ⇒ no cleanup to run`,install 额度未耗)。argv 必须用绝对路径
+`C:\temp\sqjs_c4.dll`(`donor_shot.cmd` 钉的就是绝对形态)。
+
+**前置读数(§59.1)**:紧邻开枪的 `just game status` = `STATUS=playing note=ok pid=3416 hwnd=198502
+age=1.2s want=playing cmd=unpause`。要显式发一条 `just game unpause` 才到 `playing`:监督器的
+`plan_step` 把「裸暂停」判成人工暂停、只上报不代推(`report_paused_no_window`)。没做 `console_open`
+检查(它不是判据,§59.1)。
+
+**读数(逐字取自 artifact 首行 `#meta`,665 B)**:
+
+```
+calls=0 samples=0 entries=0
+tiers=h0=0/h1=0/h2=0/h3=0/h4=0/unmatched=0/invalid_self=0
+unmatched_rows=0 rva_zero=0 in_image=0 at_or_above_image=0
+verdict=no_calls_inconclusive named_table=-
+layout=entry=48 stats=56 ring=256 mask=0 version=1   install_rc=0
+```
+
+频率:`calls/poll_s = 0/120.0 s = 0.0 calls/s`。layout 五个数与 `docs/offline-tooling.md` donor 一节
+的口径一致(无 `LAYOUT_DRIFT`)。清理段序照纪律走完:`C4DonorProbeUninstall rc=0` → `verify=0` →
+settle 2 s → `host alive`;全程不 `FreeLibrary`,DLL 映射原样留着(#meta 里 `installed=1` 是清理**前**
+那次 stats 读数,不是残留状态)。
+
+**verdict 的有界含义**。本次拿到的是五档里的 `no_calls_inconclusive`。它**不是** §57.4 的第三档:
+第三档要「哨兵 body 等齐(执行确实发生)而 `calls==0`」,前半句是独立证据,而这把仪器既没有哨兵也
+证明不了「执行确实发生」⇒ **本次读数不含第三档资格**(`VERDICTS` 值域里没有它,判读陷阱 1)。
+安静窗口的唯一诚实读法是「没观测到」:主菜单的这 120 s 里,这一族有没有被调用,这台仪器没问出来。
+前两档若将来命中,tier 1(`[self+0]` ∈ 五表)= 经虚派发成立且**指名哪一张表**;tier 2(五表之外)=
+「看到一张静态候选之外的表」,**交给静态查表的接力**(`--who-lea` 问「谁引用这张表」),它不等于
+「运行时生成的表成立」—— 计数侧 `unmatched` 同时吸收图像内 code-address、`toRva`→0、以及
+`SizeOfImage` 之外尾巴的读数,能拆的只有环记录的 image span 三分区(本次四个数全是 0,因为没有记录)。
+
+**下一次点名带不带 mask:仍带 `--mask 0`,但前置换。** §57.4 明写「先测调用频率再定采样分母,不要
+照搬 1/512」,而频率只能从恒计的 `calls` 里读;带 mask 会让 ring 采样变稀,却不会让 `calls` 变准。
+这一发缺的不是 mask,是**这一族真的在执行**:所以下一次点名的前置是「载入进行中的存档、确认
+per-system 执行在发生」,而不是「第二次点名把 mask 调大」。
+
+**§57.5 五条未排除事项的当前状态**(逐条,带着开枪):
+1. 运行时堆上生成/复制的表,静态看不见 —— **仍未排除,且这一发没碰它**。`calls=0` 对「有没有这样
+   一张表」不提供任何信息;这一档的实体证据只能来自 tier 2 + 静态接力。
+2. `slot_hits` 与「前四槽相等」是形状判据不是身份判据 —— **未变**;本次无记录,形状判据一次都没被行使。
+3. `--who-lea` 只认一种编码(`48/4C 8D|8B` + `mod=00 rm=101` + disp32)—— **未变**,接力那一手仍受此限。
+4. `0x3B01A0` 的 lea 站点 = 0,含义是「这个问题问不出答案」不是「没人用它」—— **未变**。
+5. 候选集只扫 `.rdata`,落在 `.data` 的表形成看不见 ⇒ 「命中 0 张」不能读成「没有另一份表」——
+   **未变**;本次 `h0..h4` 全 0 同样不携带任何「五表不被用」的信息。
+
+**复现命令行**:
+
+```bash
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\\temp; python c2_donor_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 120 --settle-s 2 --out C:/temp/c4_donor_probe.tsv"
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_donor_probe.tsv evidence/logs/donor_probe_4_4_4.tsv
+```
