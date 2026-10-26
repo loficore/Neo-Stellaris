@@ -88,6 +88,16 @@ campaign only ever means "unobserved" and must never be read as "这一族不执
 ``donor_family_hit_named`` / ``donor_family_hit_unknown_table`` are the two code
 answers; ``instrument_broken`` / ``counter_desync`` say the probe itself, or the
 shot's bookkeeping, was not sound.
+
+Both code tiers are gated on ``installed == 1``: ``calls > 0`` with
+``installed == 0`` means the numbers did not come from an installed probe in this
+process, so it decodes to ``counter_desync`` (the bookkeeping-broken tier) rather
+than a code answer — no sixth verdict is added.  ``donor_family_hit_unknown_table``
+(tier 2) is NOT "运行时生成的表成立": it is a **handoff to a static lookup** of the
+ring's ``self_vtable_rva`` plus the ``#meta`` image-span partition, because
+``unmatched`` also absorbs code-address ``[self+0]`` (538 static qwords vs 5
+admitted tables), ``toRva``-refused out-of-image readings (RVA==0), and the
+~6.8 MiB tail inside the 64 MiB window but past the real ``SizeOfImage``.
 """
 
 import argparse
@@ -283,7 +293,24 @@ def verdict_for(stats):
     counters are the measurement and the ring is the witness.  Order matters:
     a silent window is answered first (calls == 0 is ENVIRONMENT), then the
     all-``invalid_self`` shape (the probe cannot read ``[self+0]``, so it can
-    speak about nothing), then the two code tiers, then the arithmetic residue.
+    speak about nothing), then the ``installed`` gate, then the two code tiers,
+    then the arithmetic residue.
+
+    ``installed != 1`` with ``calls > 0`` means those numbers did not come from
+    an installed probe in this process (a ``Reset`` under a live patch, or a
+    stats line read from a different module copy) — the exact cause
+    ``counter_desync`` already owns ("the shot's own bookkeeping is broken"), so
+    neither code tier may fire on it.  This is NOT a sixth verdict value: the
+    domain stays the five strings in ``VERDICTS``.
+
+    ``donor_family_hit_unknown_table`` (tier 2) is a HANDOFF to a static lookup,
+    not a conclusion that a runtime-generated table was proven.  ``unmatched``
+    also absorbs code-address ``[self+0]`` readings (``0x3AFD30`` appears as a
+    static qword 538 times while only 5 vtables are admitted), ``toRva``-refused
+    out-of-image pointers (their RVA lands as 0), and the ~6.8 MiB tail that sits
+    inside the 64 MiB ``img_end`` window but past the real ``SizeOfImage``.  Read
+    the ring's ``self_vtable_rva`` and the ``#meta`` span partition before saying
+    anything about the family.
     """
     calls = stats.get("calls", 0)
     if calls == 0:
@@ -293,6 +320,8 @@ def verdict_for(stats):
     hits = [stats.get("h%d" % i, 0) for i in range(5)]
     if invalid >= calls and not any(hits) and unmatched == 0:
         return "instrument_broken"
+    if stats.get("installed", 0) != 1:
+        return "counter_desync"
     if any(hits):
         return "donor_family_hit_named"
     if unmatched > 0:
@@ -533,6 +562,88 @@ def _tier_readings(stats):
     )
 
 
+def partition_unmatched(entries, image_size):
+    """Split the ring's unmatched records by where their self_vtable_rva landed.
+
+    A witness-side refinement only: the per-call ``unmatched`` counter never
+    carried an RVA, so it cannot be partitioned — this reads the ring records,
+    the same sample the driver already flags under ``mask != 0``.  Buckets mirror
+    the three sources that share one counter:
+
+    * ``rva_zero`` — ``toRva`` refused the pointer (it sat outside the module's
+      64 MiB window), so "out of the image" and "in the image but not a family
+      table" collapse together;
+    * ``in_image`` — a real RVA below the live ``SizeOfImage`` (the code-address
+      ``[self+0]`` readings, 538 vs 5, land here);
+    * ``at_or_above_image`` — an RVA at/above the real ``SizeOfImage`` but still
+      inside the 64 MiB ``img_end`` window, i.e. the ~6.8 MiB tail the counter
+      scores as in-window.
+
+    Records with ``matched != 0`` are family hits, not unmatched rows, and are
+    excluded.
+    """
+    rva_zero = in_image = at_or_above = 0
+    rows = 0
+    for entry in entries:
+        if entry.get("matched", 0) != 0:
+            continue
+        rows += 1
+        rva = entry["self_vtable_rva"]
+        if rva == 0:
+            rva_zero += 1
+        elif rva < image_size:
+            in_image += 1
+        else:
+            at_or_above += 1
+    return {"unmatched_rows": rows, "rva_zero": rva_zero,
+            "in_image": in_image, "at_or_above_image": at_or_above}
+
+
+def build_meta(*, exe_base, image_end, dll_path, dll_sha, mask, poll_s, layout,
+               stats, stats_text, entries, verdict, table, install_rc,
+               partitions=None, entries_error=None):
+    """Assemble the ``#meta`` dict written to the artifact's first line.
+
+    Pure (no handles, no ctypes) so it is testable off-machine: ``run()`` builds
+    the meta-only artifact with ``partitions=None``/``entries_error=None`` before
+    draining, then the full one after.  Every original key and its format is
+    preserved verbatim; the four span numbers and ``entries_error`` are appended
+    only when the caller passes them, so the pre-drain line never carries
+    half-known partition data.
+    """
+    meta = {
+        "exe_base": f"0x{exe_base:x}",
+        "image_size": f"0x{image_end - exe_base:x}",
+        "image_end": f"0x{image_end:x}",
+        "dll": os.path.basename(dll_path),
+        "dll_sha256": dll_sha,
+        "target_rva": f"0x{TARGET_RVA:x}",
+        "mask": f"0x{mask:x}",
+        "poll_s": poll_s,
+        "layout": (
+            f"entry={layout['entry']} stats={layout['stats']} "
+            f"ring={layout['ring']} mask={layout['mask']} "
+            f"version={layout['version']}"
+        ),
+        "calls": stats.get("calls", 0),
+        "samples": stats.get("samples", 0),
+        "entries": len(entries),
+        "tiers": _tier_readings(stats),
+        "verdict": verdict,
+        "named_table": _hex_or_dash(table),
+        "install_rc": install_rc,
+        "stats": stats_text.strip(),
+    }
+    if partitions is not None:
+        meta["unmatched_rows"] = partitions["unmatched_rows"]
+        meta["rva_zero"] = partitions["rva_zero"]
+        meta["in_image"] = partitions["in_image"]
+        meta["at_or_above_image"] = partitions["at_or_above_image"]
+    if entries_error is not None:
+        meta["entries_error"] = entries_error
+    return meta
+
+
 def _cleanup(pid, base, exports, installed_ok, settle_s):
     """uninstall -> verify -> settle -> host alive. Never FreeLibrary."""
     uninstall_rc = None
@@ -562,13 +673,17 @@ def _cleanup(pid, base, exports, installed_ok, settle_s):
     else:
         print(f"[donor] C4DonorProbeUninstall rc={uninstall_rc}")
 
-    # -3 = the target was never resolved here (install never ran), so an
-    # uninstalled run is consistent; -1/-2 after we installed are not.
-    if installed_ok and verify_rc != 0:
+    # -3 = this process never resolved the target (install never ran here), so the
+    # engine bytes were never touched and an uninstalled run stays consistent.
+    # Any OTHER non-zero verify escalates regardless of installed_ok: a -6
+    # (PatchTooWide) armed the patch and then refused it, so the bytes may still
+    # be modified even though this run never completed an install.
+    if verify_rc not in (0, -3):
         print(
-            f"RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY — verify={verify_rc} after "
-            "this run installed the detour (see the docstring's three non-zero "
-            "meanings)"
+            f"RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY — verify={verify_rc} "
+            f"(installed_ok={installed_ok}); a non-zero verify outside -3 can "
+            "mean the engine bytes are not back even when this run never "
+            "completed an install. See the docstring's three non-zero meanings."
         )
         restore_ok = False
     else:
@@ -639,49 +754,92 @@ def run(pid, exe_base, dll_path, dll_sha, mask, poll_s, settle_s, out_path):
         stats_buf = remote_alloc(pid, STATS_SIZE)
         deadline = time.monotonic() + poll_s
         last_progress = time.monotonic()
+        last_good = None               # (stats, stats_text) of the last clean read
         while True:
-            stats, stats_text = read_stats(pid, base, exports, stats_buf)
-            if poll_done(time.monotonic(), deadline):
-                break
-            if time.monotonic() - last_progress >= PROGRESS_EVERY_S:
+            try:
+                last_good = read_stats(pid, base, exports, stats_buf)
+            except ValueError as exc:
+                # A torn line must not abort the run (§56: the artifact exists to
+                # survive a lost stdout). Keep polling on the last good reading; a
+                # later clean read replaces it.
                 print(
-                    f"[donor] waiting: calls={stats.get('calls', 0)} "
-                    f"samples={stats.get('samples', 0)} "
-                    f"unmatched={stats.get('unmatched', 0)} "
-                    f"invalid_self={stats.get('invalid_self', 0)}"
+                    f"[donor] WARNING: stats read torn ({exc}); "
+                    + ("keeping the last good reading" if last_good
+                       else "no good reading yet, will keep polling")
                 )
-                last_progress = time.monotonic()
+            now = time.monotonic()
+            if poll_done(now, deadline):
+                break
+            if last_good is not None and now - last_progress >= PROGRESS_EVERY_S:
+                cur = last_good[0]
+                print(
+                    f"[donor] waiting: calls={cur.get('calls', 0)} "
+                    f"samples={cur.get('samples', 0)} "
+                    f"unmatched={cur.get('unmatched', 0)} "
+                    f"invalid_self={cur.get('invalid_self', 0)}"
+                )
+                last_progress = now
             time.sleep(POLL_INTERVAL_S)
 
-        entries = drain_entries(
-            pid, base, exports, remote_alloc(pid, RING_LEN * ENTRY_SIZE))
+        if last_good is None:
+            # Never got a complete stats line: emit a meta-only artifact rather
+            # than guess a verdict, and leave it to cleanup + exit 1.
+            partitions = partition_unmatched([], image_end - exe_base)
+            meta = build_meta(
+                exe_base=exe_base, image_end=image_end, dll_path=dll_path,
+                dll_sha=dll_sha, mask=mask, poll_s=poll_s, layout=layout,
+                stats={}, stats_text="", entries=[], verdict="counter_desync",
+                table=None, install_rc=rc_install, partitions=partitions)
+            write_tsv(out_path, [], meta)
+            print(
+                f"[donor] no readable stats line all run — wrote a meta-only "
+                f"artifact to {out_path} and refusing to invent a verdict"
+            )
+            return 1
+
+        stats, stats_text = last_good
         verdict = verdict_for(stats)
         table = _named_table(stats)
-        meta = {
-            "exe_base": f"0x{exe_base:x}",
-            "image_size": f"0x{image_end - exe_base:x}",
-            "image_end": f"0x{image_end:x}",
-            "dll": os.path.basename(dll_path),
-            "dll_sha256": dll_sha,
-            "target_rva": f"0x{TARGET_RVA:x}",
-            "mask": f"0x{mask:x}",
-            "poll_s": poll_s,
-            "layout": (
-                f"entry={layout['entry']} stats={layout['stats']} "
-                f"ring={layout['ring']} mask={layout['mask']} "
-                f"version={layout['version']}"
-            ),
-            "calls": stats.get("calls", 0),
-            "samples": stats.get("samples", 0),
-            "entries": len(entries),
-            "tiers": _tier_readings(stats),
-            "verdict": verdict,
-            "named_table": _hex_or_dash(table),
-            "install_rc": rc_install,
-            "stats": stats_text.strip(),
-        }
+
+        # Write the artifact BEFORE draining so a torn drain cannot erase the
+        # evidence (§56). The pre-drain line has entries=0 and no partition data.
+        meta = build_meta(
+            exe_base=exe_base, image_end=image_end, dll_path=dll_path,
+            dll_sha=dll_sha, mask=mask, poll_s=poll_s, layout=layout,
+            stats=stats, stats_text=stats_text, entries=[], verdict=verdict,
+            table=table, install_rc=rc_install)
+        write_tsv(out_path, [], meta)
+
+        entries = []
+        entries_error = None
+        try:
+            entries = drain_entries(
+                pid, base, exports, remote_alloc(pid, RING_LEN * ENTRY_SIZE))
+        except (ValueError, TypeError) as exc:
+            # A short blob surfaces as one of these; keep going to a full artifact.
+            entries_error = str(exc)
+            print(f"[donor] WARNING: drain failed ({exc}); "
+                  "recording entries_error and keeping entries empty")
+
+        partitions = partition_unmatched(entries, image_end - exe_base)
+        meta = build_meta(
+            exe_base=exe_base, image_end=image_end, dll_path=dll_path,
+            dll_sha=dll_sha, mask=mask, poll_s=poll_s, layout=layout,
+            stats=stats, stats_text=stats_text, entries=entries, verdict=verdict,
+            table=table, install_rc=rc_install, partitions=partitions,
+            entries_error=entries_error)
         rows = write_tsv(out_path, entries, meta)
         print(f"[donor] wrote {rows} rows to {out_path}")
+        print(
+            f"[donor] unmatched 分区(证人侧,计数侧不可分):"
+            f"unmatched_rows={partitions['unmatched_rows']} "
+            f"rva_zero={partitions['rva_zero']} "
+            f"in_image={partitions['in_image']} "
+            f"at_or_above_image={partitions['at_or_above_image']}"
+            + ("  — mask!=0 时这是 SAMPLE" if mask else "")
+        )
+        if entries_error is not None:
+            print(f"[donor] entries_error={entries_error} — ring not decoded")
         print(f"STATS: {stats_text.strip()}")
         print(f"VERDICT: {verdict}"
               + (f" 表首={_hex_or_dash(table)}" if table else ""))

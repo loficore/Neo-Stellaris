@@ -1046,7 +1046,7 @@ assert_game_alive`。每根箭头是真依赖:`resolve_base_address` 在注入**
 | verdict | 读数 | 这是什么 |
 |---|---|---|
 | `donor_family_hit_named` | 某个 `hN>0` | 经虚派发成立,且**指名哪一张表**(`table_rvas()[N]`;index 2 = `0x25F4440`) |
-| `donor_family_hit_unknown_table` | `calls>0`、五个 `h` 全 0、`unmatched>0` | 「另一份表」成立且形态是**运行时生成的表** |
+| `donor_family_hit_unknown_table` | `calls>0`、`installed==1`、五个 `h` 全 0、`unmatched>0` | 看到一张五表之外的 `[self+0]`(且探针已装)——**交给静态查表的接力**(环 `self_vtable_rva` + `#meta` 的 image span 三分区),**不是「运行时生成的表成立」**:`unmatched` 同时吸收 code-address(538 vs 5)、`toRva`→0 与真实 `SizeOfImage` 外那 ~6.8 MiB 尾巴的读数 |
 | `no_calls_inconclusive` | `calls==0` | **ENVIRONMENT**,不是代码结论 |
 | `instrument_broken` | `invalid_self>=calls` 且其余计数全 0 | 探针读不出 `[self+0]`,对本次观测没有陈述能力 |
 | `counter_desync` | `calls>0` 但没有一个计数器对上 | 记账坏了(典型:带活补丁跑了 `Reset`),不是引擎行为 |
@@ -1062,6 +1062,11 @@ assert_game_alive`。每根箭头是真依赖:`resolve_base_address` 在注入**
    `[child+0]` 指向我们在 DLL 里的 vtable 副本,那种状态下每个读数都落在五表之外,会被记成 `unmatched` ——
    一个**假的 tier 2**。所以模块在 `preflightChecks` 里直接拒绝该状态(这就是 `-2` 的第二种成因),
    驱动对此不重试、只要新进程。这也是为什么这条枪与 predicate/slot2 那把**不能同进程共跑**。
+   另有**两类**会造成同一个假 tier 2,一并记下:落在图像内的 **code-address `[self+0]`**(`0x3AFD30` 静态
+   qword 出现 538 次却只承认 5 张表),以及 `toRva`→0 的**图像外读数**(含 64 MiB 窗口内、真实 `SizeOfImage`
+   之外那 ~6.8 MiB 尾巴)——两者都进同一个 `unmatched` 计数。所以 tier 2 只是**接力**:`#meta` 的 image span
+   三分区(`rva_zero`/`in_image`/`at_or_above_image`)拆的是**证人侧**的环记录,**计数侧拆不开**;且
+   `installed==0` 时两条代码档都不发射(记 `counter_desync`)。
 3. **`mask != 0` 时 ring 与 counters 不同源,比例只能从 counters 取。** 五个 `hN`/`unmatched`/`invalid_self`
    是**每次调用都计**、且在采样门**之前**计,只有环的写入被 `calls & mask` 筛过(§57.4 的恒计设计 ⇒ 三档判据
    不需要分母)。默认 `--mask 0` 每条落环;**先跑一次 20 s 窗口读 `calls` 增量定频率,再决定下一次点名要不要带

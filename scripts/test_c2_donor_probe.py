@@ -287,3 +287,161 @@ def test_verdict_never_returns_the_third_tier():
         if invalid or unmatched or hit:
             stats["samples"] = calls
         assert verdict_for(stats) in VERDICTS
+
+
+# ---------------------------------------------------------------------------
+# Final-review fix pass: five tests written FIRST (RED), then the driver changed
+# ---------------------------------------------------------------------------
+
+def test_verdict_requires_installed_for_code_tiers():
+    """Finding 1a: both code tiers are gated on ``installed == 1``.
+
+    ``calls > 0`` with ``installed == 0`` means the numbers did not come from an
+    installed probe in this process (a ``Reset`` under a live patch, or a stats
+    line read from a different module copy).  That is exactly the cause
+    ``counter_desync`` already owns ("the shot's own bookkeeping is broken"), so
+    neither code tier may fire — and no sixth verdict is introduced.  The
+    ``_stats`` helper keeps ``installed = 1`` by default, so the surviving tier
+    assertions below only hold because the gate is checked, not because a code
+    tier was removed.
+    """
+    # tier-2 shape (all h zero, unmatched>0): installed flips the answer.
+    assert verdict_for(_stats(calls=9, samples=9, unmatched=9, patch_size=16,
+                              installed=0)) == "counter_desync"
+    assert verdict_for(_stats(calls=9, samples=9, unmatched=9, patch_size=16,
+                              installed=1)) == "donor_family_hit_unknown_table"
+    # tier-1 shape (a named table hit) is refused too, not just tier 2.
+    assert verdict_for(_stats(calls=17, samples=17, h2=3, unmatched=5,
+                              invalid_self=1, patch_size=16,
+                              installed=0)) == "counter_desync"
+
+
+def test_partition_unmatched_splits_by_image_span():
+    """Finding 1b: the ring witness splits ``unmatched`` by where the RVA landed.
+
+    Buckets must mirror the ``toRva`` refusal (rva==0), a real in-image RVA, and
+    the ``at_or_above`` tail past the live ``SizeOfImage``; a ``matched != 0``
+    record is a family hit, not an unmatched row, and must not be counted.
+    """
+    image_size = 0x3927000            # 4.4.4 SizeOfImage, < the 64 MiB toRva window
+    entries = [
+        {"matched": 0, "self_vtable_rva": 0},                  # rva_zero (toRva refused)
+        {"matched": 0, "self_vtable_rva": 0x1000},             # in_image
+        {"matched": 0, "self_vtable_rva": image_size - 1},     # in_image (just below end)
+        {"matched": 0, "self_vtable_rva": image_size},         # at_or_above (== SizeOfImage)
+        {"matched": 0, "self_vtable_rva": image_size + 0x100},  # at_or_above (the tail)
+        {"matched": 3, "self_vtable_rva": 0x25F4440},          # matched -> excluded
+    ]
+    got = donor.partition_unmatched(entries, image_size)
+    assert got == {
+        "unmatched_rows": 5,
+        "rva_zero": 1,
+        "in_image": 2,
+        "at_or_above_image": 2,
+    }
+
+
+def test_write_tsv_writes_meta_when_there_are_no_rows(tmp_path):
+    """Finding 2's precondition: a meta-only artifact is writable with no rows.
+
+    ``run()`` now writes the ``#meta`` line *before* draining so a torn drain
+    cannot erase the whole evidence artifact.  This locks the ``write_tsv``
+    contract that makes that ordering meaningful.
+    """
+    out = tmp_path / "donor_meta_only.tsv"
+    meta = {"exe_base": "0x140000000", "verdict": "counter_desync", "calls": 0}
+    rows = donor.write_tsv(str(out), [], meta)
+    assert rows == 0
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("#meta ")
+    assert "verdict=counter_desync" in lines[0]
+    assert lines[1].startswith("kind\tvalid\tmatched\ttable_index")
+    assert len(lines) == 2   # meta + header, no data rows
+
+
+def test_build_meta_records_entries_error_and_partitions():
+    """Finding 1b + 2: build_meta is pure, keeps every key, adds two optionally.
+
+    With ``partitions`` and ``entries_error`` present, the four span numbers and
+    the error string are appended alongside the unchanged original keys.  With
+    them absent (the pre-drain meta-only write) neither appears — so the first
+    artifact line does not carry half-known partition data.
+    """
+    common = dict(
+        exe_base=0x140000000,
+        image_end=0x140000000 + 0x3927000,
+        dll_path=r"C:/temp/sqjs_c4.dll",
+        dll_sha="deadbeef",
+        mask=0,
+        poll_s=120.0,
+        layout={"entry": 48, "stats": 56, "ring": 256, "mask": 0, "version": 1},
+        stats=_stats(calls=3, samples=3, unmatched=3),
+        stats_text="calls=3 samples=3 invalid_self=0 unmatched=3 h0=0 h1=0 "
+                   "h2=0 h3=0 h4=0 patch_size=16 installed=1 mask=0",
+        entries=[],
+        verdict="donor_family_hit_unknown_table",
+        table=None,
+        install_rc=0,
+    )
+    original_keys = (
+        "exe_base", "image_size", "image_end", "dll", "dll_sha256", "target_rva",
+        "mask", "poll_s", "layout", "calls", "samples", "entries", "tiers",
+        "verdict", "named_table", "install_rc", "stats",
+    )
+    partitions = {"unmatched_rows": 3, "rva_zero": 1, "in_image": 1,
+                  "at_or_above_image": 1}
+
+    with_both = donor.build_meta(partitions=partitions, entries_error="short read",
+                                 **common)
+    for key in original_keys:
+        assert key in with_both, f"build_meta dropped an original key {key!r}"
+    assert with_both["image_size"] == f"0x{0x3927000:x}"
+    assert with_both["unmatched_rows"] == 3
+    assert with_both["rva_zero"] == 1
+    assert with_both["in_image"] == 1
+    assert with_both["at_or_above_image"] == 1
+    assert with_both["entries_error"] == "short read"
+
+    without = donor.build_meta(**common)
+    for key in ("unmatched_rows", "rva_zero", "in_image", "at_or_above_image",
+                "entries_error"):
+        assert key not in without, f"{key!r} must only appear when present"
+    for key in original_keys:
+        assert key in without
+
+
+def test_cleanup_escalates_verify_without_install(monkeypatch, capsys):
+    """Finding 3: a bad verify escalates even when this run did not install.
+
+    This is the one test that must stub, because the dependency is a live process
+    API (``call_remote`` / ``assert_game_alive`` on a running game).  It exercises
+    only the pure control flow of the verify-escalation decision — zero shots.
+    ``-6`` (PatchTooWide) leaves ``installed_ok`` False while the engine bytes may
+    still be patched, so ``verify == -2`` with ``installed_ok == False`` must
+    escalate; ``-3`` (this process never resolved the target) stays forgiven.
+    """
+    exports = {"C4DonorProbeUninstall": 0x11, "C4DonorProbeVerify": 0x22}
+    state = {"verify": -2}
+
+    def fake_call_remote(pid, base, rva, *a, **k):
+        if rva == exports["C4DonorProbeVerify"]:
+            return state["verify"]
+        return 0                       # uninstall reports a clean return
+
+    monkeypatch.setattr(donor, "call_remote", fake_call_remote)
+    monkeypatch.setattr(donor, "call_remote_with_arg", lambda *a, **k: 0)
+    monkeypatch.setattr(donor, "assert_game_alive", lambda pid: None)
+
+    # verify=-2 with installed_ok=False must escalate (banner, not-ok).
+    state["verify"] = -2
+    ok = donor._cleanup(1234, 0x140000000, exports, False, 0)
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY" in out
+
+    # verify=-3 (never resolved here) stays forgiven even without an install.
+    state["verify"] = -3
+    ok = donor._cleanup(1234, 0x140000000, exports, False, 0)
+    assert ok is True
+    out = capsys.readouterr().out
+    assert "RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY" not in out
