@@ -782,8 +782,9 @@ def run(pid, exe_base, dll_path, dll_sha, mask, poll_s, settle_s, out_path):
             time.sleep(POLL_INTERVAL_S)
 
         if last_good is None:
-            # Never got a complete stats line: emit a meta-only artifact rather
-            # than guess a verdict, and leave it to cleanup + exit 1.
+            # Never got a complete stats line: the artifact still gets written,
+            # stamped with the instrumentation tier that means "this run's
+            # bookkeeping produced nothing readable" — never a code answer.
             partitions = partition_unmatched([], image_end - exe_base)
             meta = build_meta(
                 exe_base=exe_base, image_end=image_end, dll_path=dll_path,
@@ -793,7 +794,10 @@ def run(pid, exe_base, dll_path, dll_sha, mask, poll_s, settle_s, out_path):
             write_tsv(out_path, [], meta)
             print(
                 f"[donor] no readable stats line all run — wrote a meta-only "
-                f"artifact to {out_path} and refusing to invent a verdict"
+                f"artifact to {out_path} stamped verdict=counter_desync "
+                "(the bookkeeping tier: no stats line was ever complete, so no "
+                "code tier may fire and nothing here is a negative about the "
+                "family)"
             )
             return 1
 

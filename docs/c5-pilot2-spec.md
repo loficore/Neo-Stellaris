@@ -251,7 +251,7 @@ docstring 策略),同样被裁定③的 trigger 口径牵动。
    的问题)、`no_calls_inconclusive`、`instrument_broken`、`counter_desync`(后三档是环境/仪器读数)。
    禁令照旧:它给出的任何读数都**不许读成「不经这一族」** —— §57.4 第三档要「哨兵 body 等齐(执行确实发生)
    而 `calls==0`」,其前半句是独立证据,运行中的战役永远供不上。用法与门序:
-   `docs/offline-tooling.md` C4 donor 一节;离线围栏 `scripts/test_c2_donor_probe.py`(8 条)。
+   `docs/offline-tooling.md` C4 donor 一节;离线围栏 `scripts/test_c2_donor_probe.py`(14 条)。
    C5 从它拿的是 §2「执行落点」那行 `静态推断(未验证)` 的第一手读数。
 2. **scope 一问仍未收口(roadmap 段4「真正的 `CEventScope`」条)。** §59 `no_scope_candidate` 原样保持;
    §63 判队列派发方 = `dispatchers_partial`(限于 `call [reg+0x28]` 直接形态口径),§66 判两段形态 =

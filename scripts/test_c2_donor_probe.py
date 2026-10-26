@@ -21,6 +21,7 @@ Host-only, zero shots: a file read, one exe byte window, no process, no
 Windows API (ruling P3).
 """
 
+import inspect
 import pathlib
 import re
 import struct
@@ -228,7 +229,7 @@ def test_decode_stats_parses_every_key():
 
 
 def test_verdict_named_table_and_unknown_table():
-    """§57.4 tier 1 names the table; tier 2 is the runtime-generated-table case.
+    """§57.4 tier 1 names the table; tier 2 is the off-five-table handoff.
 
     The named tier must resolve to a real RVA through ``table_rvas``, so the
     driver's wording and the Zig module's table cannot drift apart: the same
@@ -445,3 +446,24 @@ def test_cleanup_escalates_verify_without_install(monkeypatch, capsys):
     assert ok is True
     out = capsys.readouterr().out
     assert "RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY" not in out
+
+
+def test_run_writes_the_artifact_before_it_drains_the_ring():
+    """终修 Finding 2 的顺序保护:meta-only artifact 必须先于 drain 落盘。
+
+    `write_tsv(path, [], meta)` 本身从来没坏过(所以它单飞时是一条基线就绿的特征
+    测试),真正修的是 `run()` 里的**写序**:先写统计、再碰环。删掉那一行,13 条
+    测试全绿 —— 这个缺口由本条源文本断言补上(本文件已经在 :123/:134/:139/:243
+    用源文本读权威,口径一致,且不需要进程工装)。
+    """
+    src = inspect.getsource(donor.run)
+    readable = src.index("stats, stats_text = last_good")
+    drained = src.index("entries = drain_entries(", readable)
+    window = src[readable:drained]
+    assert "write_tsv(out_path, [], meta)" in window, (
+        "run() 必须在 drain 之前写一次 meta-only artifact:一次坏 drain 不许吃掉"
+        "已经拿到的读数(§56 整段 stdout 被 ssh reset 吃掉的失效模式)")
+    assert "entries_error=None" in src[:drained] or "entries_error = None" in window, (
+        "drain 前必须先把 entries_error 初始化,否则 except 分支会引用未绑定变量")
+    assert "rows = write_tsv(out_path, entries, meta)" in src[drained:], (
+        "drain 之后仍要用环记录重写 artifact,行与 #meta 同源")

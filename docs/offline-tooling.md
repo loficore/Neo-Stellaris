@@ -1049,7 +1049,7 @@ assert_game_alive`。每根箭头是真依赖:`resolve_base_address` 在注入**
 | `donor_family_hit_unknown_table` | `calls>0`、`installed==1`、五个 `h` 全 0、`unmatched>0` | 看到一张五表之外的 `[self+0]`(且探针已装)——**交给静态查表的接力**(环 `self_vtable_rva` + `#meta` 的 image span 三分区),**不是「运行时生成的表成立」**:`unmatched` 同时吸收 code-address(538 vs 5)、`toRva`→0 与真实 `SizeOfImage` 外那 ~6.8 MiB 尾巴的读数 |
 | `no_calls_inconclusive` | `calls==0` | **ENVIRONMENT**,不是代码结论 |
 | `instrument_broken` | `invalid_self>=calls` 且其余计数全 0 | 探针读不出 `[self+0]`,对本次观测没有陈述能力 |
-| `counter_desync` | `calls>0` 但没有一个计数器对上 | 记账坏了(典型:带活补丁跑了 `Reset`),不是引擎行为 |
+| `counter_desync` | `calls>0` 但没有一个计数器对上;或 `installed!=1`;或整跑没有一条完整 stats 行 | 记账坏了(典型:带活补丁跑了 `Reset`、读到另一份模块拷贝的 stats),不是引擎行为。**两条代码档的门**就在这一档前面 |
 
 **三条判读陷阱**:
 
@@ -1081,12 +1081,17 @@ assert_game_alive`。每根箭头是真依赖:`resolve_base_address` 在注入**
 (§55.4 未排除第 1 条:base Execute 派发点的 `r8`/`r9` 是上一调用者的 scratch,而这里 `r8` **是**第三个参数)。
 
 TSV 首行是 `#meta`,带 `exe_base`、`image_size`、注入那份 DLL 的 `sha256`、`mask`、`calls`、
-`tiers=h0=/…/unmatched=/invalid_self=` 逐档读数、`verdict` 与 `named_table` —— artifact 是 stdout 丢了
-之后还能活下来的那份(§56 那一枪整段 stdout 被一次 ssh reset 吃掉,判据依赖的数跟着没了)。
+`tiers=h0=/…/unmatched=/invalid_self=` 逐档读数、`verdict` 与 `named_table`,终修之后还带环记录的
+image span 三分区(`unmatched_rows`/`rva_zero`/`in_image`/`at_or_above_image`)与 drain 失败时的
+`entries_error=` —— artifact 是 stdout 丢了之后还能活下来的那份(§56 那一枪整段 stdout 被一次 ssh reset
+吃掉,判据依赖的数跟着没了)。因此 `run()` **先写 meta-only artifact 再 drain**:一次坏 drain 只许留下
+`entries_error`,不许吃掉已经拿到的读数(这一条写序由 `test_run_writes_the_artifact_before_it_drains_the_ring`
+钉住)。
 
 判读纯函数(`decode_layout` / `decode_entry` / `decode_stats` / `verdict_for` / `table_rvas` /
-`write_tsv`,常量 `VERDICTS` / `NEEDED_EXPORTS`)由 `python3 -m pytest scripts/test_c2_donor_probe.py -q`
-覆盖(8 条:本任务 6 + Task 2 的两条权威围栏),无游戏、无 Windows API、零枪。
+`write_tsv` / `partition_unmatched` / `build_meta`,常量 `VERDICTS` / `NEEDED_EXPORTS`)由
+`python3 -m pytest scripts/test_c2_donor_probe.py -q` 覆盖(**14 条**:Task 2 的两条权威围栏 +
+Task 3 的 6 条判读 + 终修的 5 条 + 1 条写序保护),无游戏、无 Windows API、零枪。
 
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
