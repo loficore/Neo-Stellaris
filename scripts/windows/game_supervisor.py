@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 
+from popup_geometry import panel_bbox
 from popup_guard import bump, count_attempt, decide_action
 from popup_identity import fingerprint, geometry_signature, load_allowlist
 
@@ -713,18 +714,12 @@ def _panel_bbox(luma):
     Row/column profiles of a high-luma mask; a panel has long, dense runs.
     The choice window is a dark panel, so this is used only to anchor an
     explicit ``dismiss`` and never to decide that a choice window exists.
+    The three gates live in ``popup_geometry.panel_bbox``.
     """
     import numpy as np
-    h, w = luma.shape
     mask = luma > 120
-    rows = np.nonzero(mask.sum(axis=1) > max(60, int(w * 0.08)))[0]
-    cols = np.nonzero(mask.sum(axis=0) > max(40, int(h * 0.08)))[0]
-    if rows.size < 100 or cols.size < 100:
-        return None
-    bbox = [int(cols[0]), int(rows[0]), int(cols[-1]), int(rows[-1])]
-    if bbox[2] - bbox[0] < 300 or bbox[3] - bbox[1] < 250:
-        return None
-    return bbox
+    return panel_bbox([int(n) for n in mask.sum(axis=1)],
+                      [int(n) for n in mask.sum(axis=0)])
 
 
 def read_window(hwnd: int):
