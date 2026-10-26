@@ -6217,7 +6217,7 @@ ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\\temp; python c2_donor_pro
 scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_donor_probe.tsv evidence/logs/donor_probe_4_4_4.tsv
 ```
 
-## §68 scope 深跟读第二枪:这台仪器第一次 `scope_candidate`,而 `lineage_edge_found` 的两条边都不是血缘(2026-10-26,点名)
+## §68 scope 深跟读第二枪:修正仪器后的第一发 `scope_candidate`(§59 是 0 命中、§56 在误配仪器下已有 14 条),而 `lineage_edge_found` 的两条边都不是血缘(2026-10-26,点名)
 
 **授权级别**:点名。人对这一发的原话是「**donor 后我先写 Task 3,再打第二枪**」—— 那是一条顺序裁定,
 同时也是本发的授权:Task 3 落地之后打这一发。前置读数、argv、清理复核逐字记在本节末。
@@ -6237,7 +6237,8 @@ diagnosis=handoff_never_fired` 收场(三次点击都拿到焦点、光标都落
 `just game click 1077 890` —— 事件关掉后游戏自己恢复,状态行回到
 `STATUS=playing note=ok pid=20220 hwnd=329928 age=2.3s want=playing cmd=click 1077 890`。
 **紧邻开枪的前置读数就是这一行**(§59.1:判据是 `state=playing`,`console_open` 不是)。
-这一发因此也是 §59 那一枪之后**第一次在「战役真的在跑」的条件下**打 base Execute。
+本发没有换来新的环境条件 —— §59、§67、本发三发都是进战役后按 `state=playing` 前置打的;
+换来的是**深度**:修正仪器之后第一次带着 depth-2 形状问 base Execute。
 
 ### §68.1 与 §59.3 基线的逐键差分(同一仪器、同一 DLL 字节、不同深度)
 
@@ -6259,19 +6260,27 @@ diagnosis=handoff_never_fired` 收场(三次点击都拿到焦点、光标都落
 (判读陷阱 2),这次连形状都不像指针,所以 depth-2 在 `arg3`/`arg4` 两支**必然是 0 计划**
 (`d2_planned_by_source arg3=0/arg4=0`)—— 这是「没问出东西」,不是「问出没有」。
 
-**预算没问完的那一支要按预算读**:`d2_capped_by_source self=19`(helper=0),另有
-`deduped` self=5/helper=1。所以 `self` 这一支的深跟读**只问了 8 个地址就撞到每源预算**,
+**预算没问完的那一支要按预算读**:`d2_capped_by_source self=19`(helper=0,这一键在 `#meta` 里),另有
+`deduped_by_source` self=5/helper=1 —— **去重那两个数只在那一发 stdout 的逐源行里**,`d2_meta_rows`
+的六个 `#meta` 键不含它们,所以它们不能从 TSV 读回,只能作为 stdout 记录引用。
+所以 `self` 这一支的深跟读**只问了 8 个地址就撞到每源预算**,
 剩下 19 个不同的候选值一个都没被 derefence。这一行不许读成「那 19 个槽里没有 scope」,
 它读作「预算在这里截断」(与 §56.4 那次同一个形状,只是这次有键记着)。
 
-### §68.2 第一次 `known=1`:两条 floor 命中指名到根 + 偏移 + slot2
+### §68.2 `known=2`:修正仪器后的第一次非零,两条 floor 命中指名到根 + 偏移 + slot2(同两个 RVA 在 §56.4 已有)
 
 ```
 object  root=0x1f6d6ecd8  source=self  off=0x30  ptr=0x1f6d6e510  vptr_rva=0x2545e40  slot2_rva=0xcc8bd0
 object  root=0x1f6db2dc8  source=self  off=0x10  ptr=0x1f6db2d10  vptr_rva=0x254fa18  slot2_rva=0xde40c0
 ```
 
-§56 与 §59 两发的四桶里 `known` 都是 0,这一发是 2,且都在 `self` 根上。`member_vtable` 那 13 个
+按修正流程打的两发里,`known` 这一档从 §59 的 0 变成本发的 2,两条都在 `self` 根上。**「这台仪器第
+一次拿到 `known` 命中」这句话不成立,本节的初稿那样写过并已更正**:§56.4 在误配仪器那一发就报
+`known_vtable_hits=14` ⇒ `VERDICT: scope_candidate`,§56.8 只撤回了那一发的**负结论**、明写
+「`VERDICT: scope_candidate` 本身不变:14 条 `known` 命中不依赖上面任何一句话」;而 §56.4 那张命中表
+里已经有 `+0x30`→`0x2545e40`/slot2 `0xcc8bd0` 与 `+0x10`→`0x254fa18`/slot2 `0xde40c0` 两行,
+**与上面这两条同值** ⇒ 本发的 `known` 是**同两个 RVA 在修正仪器与更深层下重新交出**,不是新认出的类。
+`member_vtable` 那 13 个
 (artifact 里 14 行)**仍不进判词**(判读陷阱 7:它说的是 root 自己的类)。
 离线复算(`scripts/scope_reclassify.py`)对同一份 TSV:`floor set 1805 / shape set 172296 /
 object rows 106 / floor_hits 2 / new_only_hits 3 / still_no 33 / undecidable 68`。

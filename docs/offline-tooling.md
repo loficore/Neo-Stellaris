@@ -781,8 +781,10 @@ depth-1 每行的 `candidates[*]["ptr"]` 当作**再下一层的根**,再走一�
 **预算仍按源给**(`DEPTH2_PER_SOURCE = 8`,把 `.d2` 折回基源计源,四源各 8),而且**depth-1 已经读过的地址不算
 线索**:每个根的 `self_ptr` 与 `ctx_words[1]` 本来就在 `objects` 的 `root` 字段里,计划阶段直接跳过(`already`),
 同一个地址也只计划一次。**预算的三种花费分开记账** —— `planned_by_source` / `followed_by_source` /
-`capped_by_source`(+ `deduped_by_source`),全部进 `#meta` 的 `d2_planned_by_source` /
-`d2_followed_by_source` / `d2_capped_by_source` 与 `depth2_per_source`。缺这几个键,产物里一条短的深度 2
+`capped_by_source`,进 `#meta` 的 `d2_planned_by_source` / `d2_followed_by_source` /
+`d2_capped_by_source` 与 `depth2_per_source`;第四个计数 `deduped_by_source` **只在 stdout 的逐源行里,
+`d2_meta_rows` 不把它写进 `#meta`**(六键是固定的),所以引用去重数必须标出处是 stdout,不能声称可从
+TSV 读回。缺前面那几个键,产物里一条短的深度 2
 列表就退化成「那些槽没东西」的误读,这正是 §56.4 那次把预算耗尽读成负结论的同一形状。
 区域仪器(`region` 行)现在吃**两层的根**(`collect_region_addrs`),`source=` 保留各层自己的标签。
 **跨源共享(`find_shared_cells`)**按**候选值**分组,只保留出现在 **≥2 个不同基源**的值,行是
@@ -791,8 +793,14 @@ depth-1 每行的 `candidates[*]["ptr"]` 当作**再下一层的根**,再走一�
 (`helper` 的 `+0x10` 与 `self` 的 `+0x28` 都给出 `0x2ddc2c90`)的问法机械化;**同源两个槽同值不算共享**,
 它只说那个对象里有两个字段相等。`value_rva` 只在值落在镜像内才给,界外保留绝对值(与本节开头
 「RVA 一律界在 `[exe_base, image_end)`」同一条:把堆地址压成 `rva=0` 会伪造一次镜像命中)。
-`VERDICT_D2` 是另一条固定阶梯:`no_depth2_planned` → `depth2_unreadable` → `depth2_known_vtable_hit`
-→ `lineage_edge_found` → `no_depth2_lead`,其中**只有后两档是证据**(`EVIDENCE_D2_VERDICTS`)。
+`VERDICT_D2` 是另一条固定阶梯,`classify_depth2` 按此**判定优先顺序**走出:`no_depth2_planned` →
+`depth2_unreadable` → `depth2_known_vtable_hit` → `lineage_edge_found` → `no_depth2_lead`。
+**这个顺序不是取证资格顺序**;有取证资格的只有 `depth2_known_vtable_hit` 与
+`lineage_edge_found` 两档(`EVIDENCE_D2_VERDICTS`,在 `D2_VERDICTS` 枚举里排在**头两元**)。
+**证据档也不自动等于血缘**:两档都在候选值/候选 vptr 上机械判定,而 `find_shared_cells`
+**不筛 `plausible_user_ptr`** —— 一个标量形状的值(如 §68.3 第一条 `0x100000000` = `1<<32`)同现多处
+就能连成边并把 `verdict_d2` 抬到 `lineage_edge_found`;读这一档必须逐条连同 `rva=` 与值的形状一起读,
+见判读陷阱 12。
 **它与 `classify()` 的六档不同义、不合并**:后者回答「depth-1 的根有没有交出已知类」并决定退出码,一字未改;
 前者只回答「再下一层有没有线索」,不进退出码,也不参与任何旧判据。
 
@@ -878,13 +886,19 @@ depth-1 每行的 `candidates[*]["ptr"]` 当作**再下一层的根**,再走一�
     `none` 是要带进取证卷的 datum,不是负结论;`ambiguous` 同理 —— 它是字节里真实存在的重叠,
     照原样进卷,不替他选一个候选。
 
-12. **`no_depth2_lead` 与 `depth2_unreadable` 都不说「更深一层没有对象」。** 前者只说「这一层交出的候选值,
+12. **两个证据档说「有线索」,永远不说「是血缘/是对象」;三个负档更弱。** 先说负档:
+    `no_depth2_lead` 与 `depth2_unreadable` 都不说「更深一层没有对象」。前者只说「这一层交出的候选值,
     没有一个落进那 1,805 个已知 vtable,也没有一个值跨两个基源共享」;而那张表**是下限不是类数**
     (structures §14:覆写了 Execute 的类一个都不在里面),所以「不在集合内」永远推不出「不是对象」。
     后者更弱,它是**仪器的陈述**(`reader` 对这一批地址一个 qword 都没拿到),对内存里有什么不说话。
     同一形状也管 `no_depth2_planned`:那一档是「depth-1 没交出任何新地址」,不是「对象里没有成员指针」。
     五档里只有 `depth2_known_vtable_hit` 与 `lineage_edge_found` 有取证资格(`EVIDENCE_D2_VERDICTS`),
     其余三档写进卷里时只能作为「本次这一发问到什么程度」的说明句。
+    **资格档也有它的弱形,不能只读那一行判决词**:`find_shared_cells` 按候选值分组且**不筛
+    `plausible_user_ptr`**,所以一个**标量**同现多处就能连成边 ⇒ `lineage_edge_found` 可能是
+    「同一份计数在多处出现」而不是两个对象共享一个成员(§68.3 第一条 `0x100000000` = `1<<32` 就是这样
+    一档里的一条边);`depth2_known_vtable_hit` 同理只说「解出来的值落在 floor map 里」,它不说那个 root
+    就是 scope。所以读这两个档时必须**逐条**连同 `rva=`、值的形状、界内/界外一起读,判决词本身不是结论。
 
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
