@@ -92,6 +92,48 @@ pub fn build(b: *std.Build) void {
     const inject_step = b.step("inject", "Build only inject.exe");
     inject_step.dependOn(&b.addInstallArtifact(inject, .{}).step);
 
+    // --- abi-probe (§65): NON-DEFAULT step, never in the default install graph.
+    // Builds two probe DLLs side by side — one from the C side (this block),
+    // one from the Zig side (below) — so their call stubs can be compared by
+    // scripts/scratch/2026-10_abi_probe/compare_stubs.py. Neither probe is
+    // ever executed; they exist only to make the compiler emit stub bytes.
+    // Fixed ReleaseFast (independent of -Doptimize): Debug codegen outlines the
+    // JSValue ctors and emits panic wrappers, which drown the one-call-per-stub
+    // self-check; the optimized form is also the honest parameter assembly.
+    const abi_probe_step = b.step("abi-probe", "Build Zig/C QuickJS ABI probes (offline §65; not shipped)");
+
+    const abi_c_mod = b.createModule(.{
+        .root_source_file = null,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    abi_c_mod.addIncludePath(b.path("libs/quickjs"));
+    abi_c_mod.addCSourceFiles(.{
+        .root = b.path("."),
+        .files = quickjs_c_sources ++ &[_][]const u8{"src/dll/quickjs/abi_probe.c"},
+        .flags = quickjs_c_flags ++ &[_][]const u8{"-fno-stack-protector"},
+    });
+    abi_c_mod.link_libc = true;
+    const abi_c_dll = b.addLibrary(.{
+        .name = "abi_probe_c",
+        .linkage = .dynamic,
+        .root_module = abi_c_mod,
+    });
+    abi_probe_step.dependOn(&b.addInstallArtifact(abi_c_dll, .{}).step);
+
+    const abi_zig_dll = b.addLibrary(.{
+        .name = "abi_probe_zig",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dll/quickjs/abi_probe.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    abi_zig_dll.dll_export_fns = true;
+    linkQuickjs(b, abi_zig_dll.root_module);
+    abi_probe_step.dependOn(&b.addInstallArtifact(abi_zig_dll, .{}).step);
+
     // --- Run tests (native target so they execute on this machine) ---
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
