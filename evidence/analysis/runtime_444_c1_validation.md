@@ -5704,3 +5704,94 @@ python3 scripts/scratch/2026-10_exec_frame_census/forwarding_wrappers.py      # 
    `0xdef440` 三处 `mov [rdx], rax` 就是交换循环游标)。
 
 现版口径是「操作符字符串 + x86 别名表」(见脚本 docstring),并以第 1 行的已知读数做自校验。
+
+## §63 零枪:§60.7-1 队列派发方集合 —— 三条口径互证(2026-10-26,离线)
+
+授权级 = 离线 **零枪**:无 launch/inject/install/Frida/process,只静态读默认本地 exe 拷贝(sha 同 §60 前置,
+`docs/offline-tooling.md`)。生产者 = `scripts/scratch/2026-10_exec_frame_census/queue_dispatchers.py`
+(一条命令跑全三口径,A/B 自校验 + C 校准全绿才写 `evidence/xrefs/queue_dispatchers_4_4_4.tsv`;任一不过 ⇒
+退出码 1、不写 artifact、不出负结论)。探针内部:口径 A = §60.5 one-shot 的同一条判据(节表字段偏移照
+`find_refs.py`,键 = `BASE+RVA` 的 LE-qword、8 对齐、`chars & 0x40` 段);口径 B 的 rip 引用直接 import
+`riprefs.refs_for`(§60.5 `riprefs.py --verify` 的同一实现);口径 C = 「候选字节形态 + 从 `.pdata` 函数首
+对齐解码复核」,与 riprefs 同一族做法,只是操作数从 rip 换成 `[reg+disp]`。本节答 **§60.7-1(谁经 `+0x28`
+槽派发)**;**§59 的 `no_scope_candidate` 原样不动**,本轮没开任何新枪。
+
+### §63.1 口径 A —— 对齐 qword 扫描,自校验恰好 1
+
+`python3 scripts/scratch/2026-10_exec_frame_census/queue_dispatchers.py --only A` → 逐字读数:
+
+```
+channel A: aligned_hits=1 self_check=ok @ 0x26d4df8
+```
+
+`0x26d4df8 = 0x26d4dd0 + 0x28`(§60.5 的 vtable 槽)。判据是「恰好 1」:读到 0 或 ≥2 ⇒ 探针自己停
+(exit 1)。⇒ 全镜像的初始化数据段里,承载函数 `0x1c42fe0` 的**静态持有者只有一个**,就是队列表 `+0x28` 槽。
+
+### §63.2 口径 B —— 引用者集合(riprefs 同实现 + E8 直调扫描)
+
+`python3 ... queue_dispatchers.py --only B` → 逐字读数:
+
+```
+channel B vtable-ref  0x1c42d4d  func 1c42d30..1c42ddc
+channel B vtable-ref  0x1c42def  func 1c42de0..1c42ede
+channel B ctor-call   0x1ba708e
+channel B ctor-call   0x1ba7685
+channel B build-site  0x1ba7076  mov ecx,0x128; call new 0x2185218
+channel B build-site  0x1ba766e  mov ecx,0x128; call new 0x2185218
+channel B: self_check=ok vtable_refs=2 ctor_callers=2 build_sites=['0x1ba7076', '0x1ba766e'] size=0x128
+```
+
+- vtable `0x26d4dd0` 的 RIP 引用**恰好 2 处**,桶 = ctor `0x1c42d30..0x1c42ddc` 与析构 `0x1c42de0..` ——
+  与 §60.5 `riprefs.py 0x26d4dd0` 的两处逐位相符(0x1c42d4d/0x1c42def)。
+- ctor 的调用点是 `E8 rel32` 直调,**riprefs 的形态覆盖不到它**(它只管 rip 操作数)—— §60.5 那两个站点
+  (0x1ba708e/0x1ba7685)本来是 `fastcalls.py` 拿的;本探针用同口径「候选算术 + 函数首对齐复核」自扫
+  `E8` 复现,两桶与 §60.5 完全一致。
+- 构造站点字节抽查(`python3 scripts/disrva.py 0x1ba7048 16`):`0x1ba7076 mov ecx, 0x128` →
+  `0x1ba707b call 0x2185218` → `0x1ba7080 mov [rsp+0x88], rax` → `0x1ba708e call 0x1c42d30`;
+  第二处同形(`disrva.py 0x1ba7658 8`:`0x1ba766e mov ecx, 0x128` → `0x1ba7673 call 0x2185218`)。
+  **一处修正**:§60.5 写的 0x1ba7070/0x1ba7660 是那次 `disrva.py` 命令的**窗口参数**,不是这对字节的首地址;
+  按 §60.5 自己的命令重跑,`mov ecx,0x128` 首地址落在 **0x1ba7076/0x1ba766e**,datum 以字节为准。
+- ⇒ B 把「谁能造出这个队列对象」钉死为**恰好两个静态构造点**(对象大小 0x128,§60.5 的 'Default Game'/'Game'
+  两桶),与「谁引用这张 vtable」钉死为 ctor+析构 恰好两处。
+
+### §63.3 口径 C —— `call [reg+0x28]` 站点集合;检测器先行
+
+**校准**(§62.4 坑 1/2 同族:先证明机器能读出已知读数,再让它报未知):同一台机器、同一套形态扫描,位移
+换成 `0x60` —— §60.5 记量排空循环 `0x1c42ee0..0x1c42fdc` 里有一条 `call [rax+0x60]`
+(`disrva.py 0x1c42ee0 60` 实测 `01c42f74 call qword ptr [rax + 0x60]`)。探针必须找到它才允许出 `+0x28`
+的数;首轮它 FAIL,抓到的是**扫描器自己的键空间 bug**(候选按 blob 内偏移、复核按 RVA 比对,两边没对消)
+—— 修正后校准恰好命中 0x1c42f74。这一条本身就是「负结论先怀疑检测器」的活样本。
+
+`python3 ... queue_dispatchers.py --only C` → 逐字读数:
+
+```
+channel C: calib call[reg+0x60] @0x1c42ee0..0x1c42fdc -> ['0x1c42f74'] self_check=ok; call[reg+0x28] sites=1214 with_ab_object_ref=0 []
+```
+
+全量跑 `python3 ... queue_dispatchers.py` 写 artifact(`#verdict dispatchers_partial …`;1214 条 C 行 +
+A/B 行,列 `channel, site_rva, func_rva, func_begin, form, slot, object_ref, note`)。形态覆盖:
+`call qword ptr [reg+disp8/disp32]`(含 SIB),`.text` 全量候选 + `.pdata` 函数首对齐复核;disp8 上限 0x7f,
+0x28 两种编码都可表 ⇒ 该形态**无形态漏**。
+
+补充 one-shot(inline python,`riprefs.refs_for` 同一实现问 `0x2a01b18`/`0x2a01b24`,再与 1214 站点所在
+函数取交):`0x2a01b18: referrer_fns=5 with_0x28_site=[]`、`0x2a01b24: referrer_fns=4 with_0x28_site=[]`
+—— 连「引用 self-注册数组的函数」里也没有一条 `call [reg+0x28]`。
+
+### §63.4 判决与边界
+
+**判决 = `dispatchers_partial`**(三档 `dispatchers_found | dispatchers_partial | no_dispatcher_static`)。
+为什么是中间档:口径 C 的站点集合**非空**(1214 条,拒绝 `no_dispatcher_static`),但没有一条所在函数引用
+A/B 集合里的对象(vtable `0x26d4dd0` / ctor `0x1c42d30` / 直调 ctor;连注册数组都是负的),派发方**无法具名**
+(拒绝 `dispatchers_found`)。这不是「没人派发」—— §60.5 已证承载函数 0 直接调用、只被 `call [obj_vtbl+0x28]`
+形态动态调用 —— 而是**静态归因在 `+0x28` 这个位移上到不了运行时对象**:1214 条站点的目标类取决于寄存器里
+运行时装的是谁,离线不可按类分(判读陷阱 11 的窗口陈述反面:这次集合是读全了的)。
+
+边界(不越过的部分):
+1. 本节判的是「`call [reg+0x28]` **直接形态**的静态持有者与站点集合」;`mov reg,[obj+0x28]; call reg` 这类
+   两段形态不在口径 C 内,本节**不宣称**它不存在,只把它留给后续。
+2. 本节**没有**回答「谁是 scope」—— §59 的 `no_scope_candidate` 原样保持。
+3. §60.7 其余未决项(−2…−7)不在本节覆盖内;−1 由本节**在口径 C 的形态边界内**作答。
+4. 零枪:无 launch/inject/install/Frida/process;C1 授权位未动。
+
+`python3 scripts/scratch/2026-10_exec_frame_census/queue_dispatchers.py` 一条命令复现全部三口径与判决
+(`--only A|B|C` 单跑;任一自校验/校准不过 ⇒ 退出码 1、artifact 不落盘)。
