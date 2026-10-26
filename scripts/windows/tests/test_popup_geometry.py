@@ -49,3 +49,27 @@ def test_numpy_side_keeps_only_the_luma_threshold():
 
 def test_pure_core_never_imports_numpy():
     assert "import numpy" not in inspect.getsource(pg)
+
+
+def test_close_point_in_crop_batch2_contract():
+    bbox = [879, 555, 1939, 1105]        # 批次 2 那扇「对话框 + 舰队列表」并集切片的信封
+    assert pg.close_point_in_crop(bbox) == (964, 51)
+
+
+def test_close_point_in_crop_tracks_close_point():
+    bbox = [879, 555, 1939, 1105]
+    x, y, method = gs.close_point(bbox)
+    assert (x, y) == (1843, 606) and method == "fixed_inset"
+    assert pg.close_point_in_crop(bbox) == (x - bbox[0], y - bbox[1])
+
+
+def test_close_point_in_crop_negative_when_inset_exceeds_width():
+    assert pg.close_point_in_crop([0, 500, 90, 900]) == (-6, 51)   # 裁片里没有 ✖：x 为负
+
+
+def test_window_enum_record_keeps_every_candidate():
+    cands = [(0x1001, (0, 0, 100, 100)), (0x1002, (879, 555, 1939, 1105))]
+    rec = pg.window_enum_record(pid=4242, candidates=cands, chosen=0x1002)
+    assert rec["event"] == "window_candidates" and rec["candidates_n"] == 2
+    assert [r["hwnd"] for r in rec["rects"]] == [0x1001, 0x1002]
+    assert rec["rects"][1]["rect"] == [879, 555, 1939, 1105]

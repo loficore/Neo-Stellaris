@@ -11,6 +11,10 @@ the "window vs slice" ambiguity the next named batch has to adjudicate.
 
 from __future__ import annotations
 
+# Mirror of game_supervisor.CLOSE_INSET; the close_point tracking test in
+# tests/test_popup_geometry.py pins the two against each other.
+CLOSE_INSET = (96, 51)
+
 
 def panel_bbox(row_bright: list[int], col_bright: list[int]) -> list[int] | None:
     """Bright-panel envelope ``[x0, y0, x1, y1]`` (inclusive) or ``None``.
@@ -34,3 +38,29 @@ def panel_bbox(row_bright: list[int], col_bright: list[int]) -> list[int] | None
     if bbox[2] - bbox[0] < 300 or bbox[3] - bbox[1] < 250:
         return None
     return bbox
+
+
+def close_point_in_crop(bbox, inset: tuple[int, int] = CLOSE_INSET) -> tuple[int, int]:
+    """Screen close point mapped into crop-local coordinates.
+
+    ``crop_to_png`` grabs ``grab_box(tuple(bbox))`` with no padding, so the
+    crop origin is ``(bbox[0], bbox[1])`` and the x can come out negative:
+    an envelope narrower than the inset has no ✖ inside the crop at all, and
+    that must be a readable number, not an after-the-fact explanation.
+    """
+    dx, dy = inset
+    return (bbox[2] - dx - bbox[0], bbox[1] + dy - bbox[1])
+
+
+def window_enum_record(pid: int, candidates: list, chosen: int) -> dict:
+    """One offline-readable record of every enumeration candidate.
+
+    ``candidates`` is ``[(hwnd, rect_or_None), ...]`` in enumeration order;
+    the whole point is "who else was on screen", so a candidate whose rect
+    failed to read is still kept, with ``rect: None``.
+    """
+    return {"event": "window_candidates", "pid": pid, "chosen": chosen,
+            "candidates_n": len(candidates),
+            "rects": [{"hwnd": hwnd,
+                       "rect": list(rect) if rect is not None else None}
+                      for hwnd, rect in candidates]}

@@ -22,7 +22,7 @@ import subprocess
 import sys
 import time
 
-from popup_geometry import panel_bbox
+from popup_geometry import panel_bbox, window_enum_record
 from popup_guard import bump, count_attempt, decide_action
 from popup_identity import fingerprint, geometry_signature, load_allowlist
 
@@ -472,11 +472,17 @@ def _be_dpi_aware() -> None:
         pass
 
 
-def find_window(pid: int) -> int:
+def window_candidates(pid: int) -> list:
+    """Every visible, titled window of ``pid`` as ``[(hwnd, rect_or_None)]``.
+
+    Thin Windows-side wrapper: a candidate whose rect cannot be read is kept
+    with ``rect: None`` -- the record's whole value is "who else was on
+    screen", so one bad candidate must not void the list.
+    """
     import ctypes
     import ctypes.wintypes as wt
     user32 = _user32()
-    found = []
+    cands = []
 
     @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
     def cb(hwnd, _):
@@ -484,12 +490,19 @@ def find_window(pid: int) -> int:
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
         if wpid.value == pid and user32.IsWindowVisible(hwnd):
             if user32.GetWindowTextLengthW(hwnd):
-                found.append(hwnd)
-                return False
+                try:
+                    cands.append((int(hwnd), window_rect(hwnd)))
+                except OSError:
+                    cands.append((int(hwnd), None))
         return True
 
     user32.EnumWindows(cb, 0)
-    return found[0] if found else 0
+    return cands
+
+
+def find_window(pid: int) -> int:
+    cands = window_candidates(pid)
+    return cands[0][0] if cands else 0
 
 
 def find_game():
@@ -980,7 +993,10 @@ def apply_popup_decision(hwnd: int, bbox, got: dict, state: dict, *,
     to kill the daemon, whose heartbeat gates every later action.
     """
     popup_id = got["popup_id"]
-    logger({"event": "popup_seen", **got})
+    logger({"event": "popup_seen", **got,
+            "bbox": list(bbox) if bbox is not None else None,
+            "window_rect": state.get("window_rect"),
+            "candidates_n": state.get("window_candidates_n")})
     path = None
     if bbox is not None:
         # ':' is NTFS's stream separator; an id used verbatim as a filename
@@ -1247,6 +1263,13 @@ def serve(args) -> int:
                 except OSError:
                     stats = {"bright": 0.0, "gold": 0, "rows": [], "bbox": None}
                     rect = None
+                state["window_rect"] = list(rect) if rect is not None else None
+                if rect is not None:
+                    cands = window_candidates(pid)
+                    state["window_candidates_n"] = len(cands)
+                    _log(window_enum_record(pid, cands, hwnd))
+                else:
+                    state["window_candidates_n"] = None
                 if rect is not None:
                     if stats["bbox"]:
                         state["last_bbox"] = stats["bbox"]

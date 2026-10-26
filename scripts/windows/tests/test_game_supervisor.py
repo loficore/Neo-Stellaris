@@ -724,6 +724,49 @@ def test_a_dialog_without_geometry_holds_and_records_no_evidence_path():
     assert logged[1]["path"] is None
 
 
+def test_popup_seen_gains_three_geometry_keys_and_nothing_else():
+    # 「窗 vs 切片」的证人:每条 popup_seen 自带 bbox、窗 rect 与候选数。
+    # 只加事件字段,不动 reason/note —— 词汇表围栏(Review Focus 3)必须原样绿。
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0}
+    clicked, saved, logged = [], [], []
+    box = [10, 20, 910, 420]
+    got = gs.popup_tick(0, "p.png", box, 0, state,
+                        lambda p: (["some text"], "ok", 5.0), now=1_000.0)
+    gs.apply_popup_decision(
+        0, box, got, state, clicker=lambda h, b: clicked.append(b),
+        saver=lambda h, b, png, pid: saved.append(pid),
+        logger=lambda rec: logged.append(rec))
+    seen = logged[0]
+    assert set(seen) == {"event"} | set(got) | {
+        "bbox", "window_rect", "candidates_n"}
+    assert seen["bbox"] == list(box)
+    # state 没写 window_rect / window_candidates_n ⇒ 离线默认 None。
+    assert seen["window_rect"] is None and seen["candidates_n"] is None
+    state["window_rect"] = [0, 0, 1920, 1080]
+    state["window_candidates_n"] = 3
+    gs.apply_popup_decision(
+        0, box, got, state, clicker=lambda h, b: clicked.append(b),
+        saver=lambda h, b, png, pid: saved.append(pid),
+        logger=lambda rec: logged.append(rec))
+    seen = logged[3]
+    assert seen["window_rect"] == [0, 0, 1920, 1080]
+    assert seen["candidates_n"] == 3
+
+
+def test_popup_seen_records_null_bbox_when_no_geometry():
+    state = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
+             "popup_last_ocr_ts": 0.0}
+    logged = []
+    got = gs.popup_tick(0, "p.png", None, 0, state,
+                        lambda p: (["some text"], "ok", 5.0), now=1_000.0)
+    gs.apply_popup_decision(
+        0, None, got, state, clicker=lambda h, b: None,
+        saver=lambda h, b, png, pid: None,
+        logger=lambda rec: logged.append(rec))
+    assert logged[0]["bbox"] is None
+
+
 def test_every_reason_the_guard_can_return_has_a_supervisor_note():
     # POPUP_NOTES[reason] 在副作用层查表且没有兜底:新增一个 reason 忘了补
     # note,会在 serve 里 KeyError 并把守护进程打死(心跳一断,后面全被判成
