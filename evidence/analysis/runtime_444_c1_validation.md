@@ -5991,3 +5991,150 @@ ABI 假设**在「布局 + 调用桩」这一半被静态排除**。
 
 门禁口径:`abi_probe.zig` **只被 `abi-probe` step 引用,不被任何 test 根 import**
 ⇒ 它不进 `599` 的账;本任务新增的 Zig 测试条数 = **0**,`just check` 计数不变。
+
+## §66 零枪:§63 边界外的两段形态派发方 —— 字节候选 + 函数首对齐复核(2026-10-26,离线)
+
+授权级 = 离线 **零枪**:无 launch/inject/install/Frida/process,只静态读默认本地 exe 拷贝
+(sha 同 §60 前置,`docs/offline-tooling.md`);零运行时断言。生产者 =
+`scripts/scratch/2026-10_exec_frame_census/queue_dispatchers_two_stage.py`(一条命令跑全三口径,
+A′/B′ 硬门 + C′ 钉死判据全绿才写 `evidence/xrefs/queue_dispatchers_two_stage_4_4_4.tsv`;
+任一不过 ⇒ 退出码 1、不写 artifact、不出负结论)。本节补的是 §63 边界 1 明文留下的口子:
+`mov reg,[obj+0x28]; call reg` **两段形态**不在 §63 的 `call [reg+0x28]` 直接形态口径内。
+解码口径直接 import 同族 `queue_dispatchers`(read_image/_blob/_md/_object_ref_functions/BASE),
+复核与 §63 `_call_mem_disp_sites` 同一纪律:**候选=字节形态,复核=只对候选所在函数从 `.pdata`
+函数首对齐解码**,绝不拿一次性整段 `.text` disasm 的结果当集合(见 §66.4 判读陷阱)。
+
+### §66.1 口径 A′ —— `mov r64,[r64+0x28]` 候选 + 校准对硬门
+
+`python3 scripts/scratch/2026-10_exec_frame_census/queue_dispatchers_two_stage.py --only A` → 逐字读数:
+
+```
+channel A': mov_candidates=8330 self_check=ok calibration_pair=(0x24d7e4,0x24d800)
+channel A' sample: seed=444 n=400 verified_true=398 off_function=2 not_verified=0 []
+```
+
+候选字节形态 `[\x48-\x4f]\x8b[\x48-\x7f]\x28`(REX + `8b /r` mod=01 disp8、rm≠SIB 意图),
+硬门 = 恰好 **8,330**(实测相符)+ 校准对必须找到。校准对 = load `0x24d7e4` / call `0x24d800`,
+同在函数 `0x24d4d0`(`.pdata` 判 `0x24d4d0..0x24fc16`);逐条反汇编
+(`python3 scripts/disrva.py 0x24d7e4 8`,2026-10-26 在案):
+
+```
+  0024d7e4  mov     r10, qword ptr [rax + 0x28]
+  0024d7e8  mov     rax, qword ptr [rdi + 0x30]
+  0024d7ec  mov     rcx, qword ptr [rax + 8]
+  0024d7f0  lea     rdx, [rcx + 0x20]
+  0024d7f4  mov     r9d, dword ptr [rcx + 8]
+  0024d7f8  mov     r8d, ebx
+  0024d7fb  lea     rcx, [rsp + 0x20]
+  0024d800  call    r10
+```
+
+load 之后**第 7 条指令**就是 `call r10`,其间无任何写 `r10` 的 mov(写的是 rax/rcx/rdx/r9d/r8d)
+⇒ 落在 C′ 的 ≤24 窗口里,已复现进 TSV 第 6 行(`C' 0x24d7e4 0x24d800 …,gap=7`)。
+抽样复核 = 固定种子 444 抽 400 条、函数首对齐解码:398 条真、2 条落在 `.pdata` 函数边界外
+(对齐解码不可达,即 padding/缝隙字节),0 条被解码判假 —— 与计划 brief 的「399 为真」是同一
+现象(字节形态轻微过匹配 + 函数外伪命中),切分随抽样方法而移,不构成仪器分歧。
+全量 8,330 条候选里 off-function 共 34 条(0.41%,与抽样 2/400 同率)。
+
+### §66.2 口径 B′ —— `call <reg>` 候选下限门
+
+`python3 ... queue_dispatchers_two_stage.py --only B` → 逐字读数:
+
+```
+channel B': call_candidates=14998 self_check=ok side_floor=ok(mov=8330,call=14998)
+```
+
+候选字节形态 `[\x40-\x4f]?\xff[\xd0-\xd7]`(可选 REX + `ff /2` mod=11)。硬门 = 恰好 **14,998**
+(实测相符);续跑门 = `mov`/`call` 两侧候选各 ≥ 1,000(否则「配对 0」不可信,禁入 C′)。
+全量 14,998 条里 off-function 共 7 条。
+
+### §66.3 口径 C′ —— 同函数体内 load→call 配对(窗口 ≤ 24 条指令)
+
+配对语义(钉死):同一函数体内(扫描限定「函数内同时含两种候选」,实测 1,420 个),
+已核复 load 之后 ≤ 24 条指令内出现已核复 `call <dst>`,其间 `<dst>` 未被任何写目的地的
+`mov` 重定义(GPR 家族归一后比较,`mov r10d,…` 算重定义 `r10`)。
+
+`python3 ... queue_dispatchers_two_stage.py --only C` → 逐字读数:
+
+```
+channel C': pairs=105 both_form_funcs=1420 window<=24 object_fn_pairs=0 named=0 self_check=ok (undecodable-in-both=41, off-fn mov/call=34/7)
+```
+
+全量跑 `python3 ... queue_dispatchers_two_stage.py`(A′/B′/C′ 一条链)→ 逐字读数:
+
+```
+channel A': mov_candidates=8330 self_check=ok calibration_pair=(0x24d7e4,0x24d800)
+channel A' sample: seed=444 n=400 verified_true=398 off_function=2 not_verified=0 []
+channel B': call_candidates=14998 self_check=ok side_floor=ok(mov=8330,call=14998)
+channel C': pairs=105 both_form_funcs=1420 window<=24 object_fn_pairs=0 named=0 self_check=ok (undecodable-in-both=41, off-fn mov/call=34/7)
+verdict=two_stage_dispatchers_partial pairs=105 -> evidence/xrefs/queue_dispatchers_two_stage_4_4_4.tsv
+trap-note: 一次性 disasm 整段 .text 的 call-reg 计数 = 17(desync 假数,§62.4 坑 1 同族)
+```
+
+配对集合非空:**105 对**,承载函数 86 个(多函数可贡献多对);
+承载寄存器分布 `r10`×61、`rbx`×31、`r9`×9、`rdx`×2、`rsi`×1、`rdi`×1;base 寄存器
+`rax`×90、`rcx`×7、`r10`×7、`rdx`×1;gap 全在 1..20。首三行样例(load/call/承载函数 begin..end):
+
+```
+C'  0x221430  0x22144b  0x221260..0x221726  mov r10, qword ptr [rax + 0x28]  rax->r10  gap=7
+C'  0x2407d2  0x2407ec  0x240700..0x24086d  mov r10, qword ptr [rax + 0x28]  rax->r10  gap=7
+C'  0x24d7e4  0x24d800  0x24d4d0..0x24fc16  mov r10, qword ptr [rax + 0x28]  rax->r10  gap=7  (校准对)
+```
+
+钉死判据第二条:§63 的四个对象引用函数 `{0x1c42d30, 0x1c42de0, 0x1ba6d20, 0x1ba72a0}`
+(直接 import `queue_dispatchers._object_ref_functions` 重算,集合与这四个**相等**才继续)
+内**配对数 = 0** —— 已复现;全部 105 对的 `object_ref` 列都是 `-`。
+`undecodable-in-both=41` 是两侧字节候选中「对齐解码在函数内但落点不是该形态」的伪命中
+(用 `skipdata=True` 重解码不改变配对数 ⇒ 不是解码停滞丢点,与 §63 的处置一致)。
+
+### §66.4 读数漂移与判读陷阱(仪器状态自证)
+
+**判读陷阱(记在本节,§62.4 坑 1 同族)**:一次性 `md.disasm(整段 .text)` 会撞不可解码字节
+**静默停止**,本场实测它整段只报出 **17** 个 `call reg`(与 §62.4 当年的假数同值)——
+17 对着候选口径的 **14,998**,就是「bulk 一次跑不能当集合」的反证本身。复核一律从 `.pdata`
+函数首对齐解码(§66.1–§66.3 全程如此)。
+
+**与计划 brief 的 C′ 读数漂移(报告而非迁就)**:brief 的表写「样本 132 条」。本探针按钉死语义
+全量扫得 **105**,132 在任何钉死语义组合下构造不出。变体网格(同一 exe、同一候选集,均含
+「函数内同时含两种候选」限定):
+
+| 变体 | 配对数 |
+|---|---|
+| 钉死语义(load=候选位核复、call=候选位核复、mov 重定义剔除、窗口≤24) | **105** |
+| 同上但 load 从解码流取(含 A′ 字节形态看不见的 dst=rax、disp32 变体) | 116 |
+| 钉死语义去掉重定义剔除(窗口≤24 的无重定义上界) | 118 |
+| 流式 load + 无重定义剔除 | 135 |
+| 窗口扫描(钉死语义):16→96,20→105,24/28/32→105,40→109,50→112,64→113,不限→122 | — |
+| `skipdata=True` / `size==4` 松紧 / 家族归一松紧 / disp 复核松紧 | 均不变(105 或流式 116) |
+
+⇒ 实测变体中 132 不可构造:单条钉死条款放宽的上界是 118(去重定义剔除)与 116(load 越出候选),
+最接近的 135 已经同时违反两处(load 越出候选 + 弃重定义剔除);窗口单独放宽(≤28/≤32 仍 105,
+完全不设限也只到 122)。
+A′/B′ 硬门(8330、14998、校准对第 7 条、两侧 ≥1,000)与 C′ 两条钉死判据(非空、四对象函数=0)
+全部复现,检测器健康,按「brief 读数本身可疑时报改不静默改判据」处置:**本节与 artifact 记
+全量实际读数 105**,判决档位不受影响(非空即中间档)。
+
+### §66.5 判决与边界
+
+**判决词 = `two_stage_dispatchers_partial`**(三档逐字
+`two_stage_dispatchers_named | two_stage_dispatchers_partial | no_two_stage_pair_static`)。
+为什么是中间档:配对集合**非空**(105 对,拒绝 `no_two_stage_pair_static` —— 该档也只在
+A′/B′ 全绿时才有资格写,本场全绿),但没有一条配对的承载函数引用 §63 的 A/B 对象
+(vtable `0x26d4dd0` / ctor `0x1c42d30` 那四个函数,拒绝 `two_stage_dispatchers_named`;
+named 档若出现,必须附该承载函数的逐字节反汇编复核才允许断言,本场未触发)。
+与 §63 同形:**静态能读全「两段形态的站点集合」,读不出「运行时谁把 [obj+0x28] 装进寄存器」**。
+
+边界(三条,不许越):
+1. 本节判的是「`mov reg,[obj+0x28]; call reg` **两段形态**」的静态配对集合;本节**没有**回答
+   「谁是 scope」—— §59 的 `no_scope_candidate` 原样保持。
+2. §63 的 `dispatchers_partial` 与本节的 `two_stage_dispatchers_partial` **不同义、不合并**:
+   前者是 `call [reg+0x28]` 直接形态(1214 站点无一配对象),后者是两段形态(105 对无一配对象),
+   两个集合、两个口径、两个判决词。
+3. 零枪、零运行时断言:C1 授权位未动,本节没有任何「实机如此」的宣称。
+
+artifact `evidence/xrefs/queue_dispatchers_two_stage_4_4_4.tsv` 列 =
+`channel, load_rva, call_rva, func_begin, func_end, load_form, base_reg, call_reg, object_ref, note`,
+`#verdict` 行带 `mov_cands=8330` / `call_cands=14998` 两个仪器状态数(与三档判决词并列,
+下一个人可先核仪器再核结论);一行 `A'` = 校准对(含逐条在案的第 7 条),105 行 `C'` = 全部配对。
+一条命令复现全部三口径与判决(`--only A|B|C` 单跑;任一硬门/钉死判据不过 ⇒ 退出码 1、
+artifact 不落盘)。
