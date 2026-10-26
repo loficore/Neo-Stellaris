@@ -713,3 +713,33 @@ test "wire rejects an invalid mode and an unset spec" {
     try std.testing.expectEqual(@as(u32, 0), donor_calls);
     _ = C2ExecDisarmState();
 }
+
+test "donor install returns error.Unsupported off Windows" {
+    try std.testing.expectError(error.Unsupported, donor_probe.install());
+}
+
+test "donor EXPECTED_CODE is the prologue bytes read from 0x3AFD30" {
+    // Read off the exe copy with scripts/disrva.py and pinned by
+    // scripts/test_c2_donor_probe.py — this array is the transcription, the
+    // exe bytes are the authority.
+    const expect = [24]u8{
+        0x48, 0x89, 0x5C, 0x24, 0x10, // mov [rsp+0x10], rbx
+        0x48, 0x89, 0x74, 0x24, 0x18, // mov [rsp+0x18], rsi
+        0x48, 0x89, 0x7C, 0x24, 0x20, // mov [rsp+0x20], rdi
+        0x55,                         // push rbp
+        0x41, 0x54,                   // push r12
+        0x41, 0x55,                   // push r13
+        0x41, 0x56,                   // push r14
+        0x41, 0x57,                   // push r15
+    };
+    try std.testing.expectEqual(@as(usize, 24), donor_probe.EXPECTED_CODE.len);
+    try std.testing.expectEqualSlices(u8, &expect, &donor_probe.EXPECTED_CODE);
+}
+
+test "preflightChecks refuses when installed or when the patch is armed" {
+    try donor_probe.preflightChecks(false, false);
+    try std.testing.expectError(error.AlreadyInstalled, donor_probe.preflightChecks(true, false));
+    try std.testing.expectError(error.PatchActive, donor_probe.preflightChecks(false, true));
+    // installed is checked first: with both flags up the report is AlreadyInstalled.
+    try std.testing.expectError(error.AlreadyInstalled, donor_probe.preflightChecks(true, true));
+}

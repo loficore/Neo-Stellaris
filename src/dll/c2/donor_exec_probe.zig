@@ -3,9 +3,11 @@
 // Target: RVA 0x3AFD30 (offsets.keyword_reg.RVA_EFFECT_DONOR_EXECUTE, referenced
 // here, never redefined) — the [vptr+0x08] Execute override shared by the five
 // CEffect-family vtables named in evidence §57.4. It is NOT the base Execute
-// 0x1D08520. This probe only records: it never writes engine memory, never
-// modifies registers or arguments, and never changes control flow; the Task 2
-// detour always forwards to the original.
+// 0x1D08520. The recording path only reads: the detour never writes engine
+// memory, never modifies registers or arguments, and never changes control
+// flow — it always forwards to the original. Engine bytes are written in
+// exactly three places: the install-time JMP patch, removeHook's restore, and
+// restoreTarget's copy of the saved prologue back over the patch.
 //
 // Entry.ctx_ptr / a3 / a4 are recorded as VALUES only — dereferencing them is
 // the Python driver's ReadProcessMemory job, for the same reason scope_probe.zig
@@ -13,14 +15,21 @@
 // never fault the host. This probe deliberately does NOT read the eight qwords
 // under ctx — §53.5 disproved the [ctx+0x30] chain; nothing new is built on it.
 //
-// Counters (table_hits/unmatched/invalid_self, and samples/calls on the Task 2
-// side) are per-call; only the ring write passes the shouldSample gate. That is
-// §57.4's hot-path discipline: measure the call frequency from the calls delta
-// first, then pick the sampling denominator — the tier verdicts (matched /
-// table_hits = tier 1, unmatched = tier 2) never depend on the denominator.
+// Counters (table_hits/unmatched/invalid_self in capture(), samples behind the
+// gate, calls in the detour) are per-call; only the ring write passes the
+// shouldSample gate. That is §57.4's hot-path discipline: measure the call
+// frequency from the calls delta first, then pick the sampling denominator —
+// the tier verdicts (matched / table_hits = tier 1, unmatched = tier 2) never
+// depend on the denominator.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const offsets = @import("../shared/offsets.zig");
+const detour_mod = @import("../hooking/detour.zig");
+const windows = @import("../hooking/windows.zig");
+const predicate_hook = @import("predicate_hook.zig");
+
+const is_windows = builtin.os.tag == .windows;
 
 /// §57.4's target: the shared donor-family Execute override (hidden_effect's
 /// own [vptr+0x08], live since §52). Reference only — the value lives in offsets.zig.
@@ -32,6 +41,21 @@ pub const LAYOUT_VERSION: u32 = 1;
 /// The five CEffect-family vtables that share the 0x3AFD30 Execute override
 /// (§57.4). classifyTable joins [self+0]'s RVA against this table.
 pub const FAMILY_VTABLES = [5]u32{ 0x24B1D98, 0x24EAAC0, 0x25F4440, 0x2606F00, 0x2606FE0 };
+
+/// 24-byte prologue of 0x3AFD30, read off the exe and pinned byte-for-byte by
+/// scripts/test_c2_donor_probe.py against scripts/disrva.py. install() refuses
+/// any other bytes; this is the same fingerprint-gate shape as
+/// predicate_hook.zig:32 (whose 21-byte prologue covers one fewer spill slot).
+pub const EXPECTED_CODE: [24]u8 = [24]u8{
+    0x48, 0x89, 0x5C, 0x24, 0x10, // mov [rsp+0x10], rbx
+    0x48, 0x89, 0x74, 0x24, 0x18, // mov [rsp+0x18], rsi
+    0x48, 0x89, 0x7C, 0x24, 0x20, // mov [rsp+0x20], rdi
+    0x55, // push rbp
+    0x41, 0x54, // push r12
+    0x41, 0x55, // push r13
+    0x41, 0x56, // push r14
+    0x41, 0x57, // push r15
+};
 
 pub const Entry = extern struct {
     valid: u8 = 0,
@@ -66,6 +90,12 @@ var sample_mask: u64 = 0;
 var ring: [RING_LEN]Entry = undefined;
 var seq = std.atomic.Value(u64).init(0);
 var stats = Stats{};
+
+var installed = false;
+var hook: ?detour_mod.Hook = null;
+var orig: ?*anyopaque = null;
+var target_addr: usize = 0;
+var saved_code: [32]u8 = [_]u8{0} ** 32;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -178,7 +208,8 @@ pub fn layoutInto(out: [*]u32) u32 {
 }
 
 /// One line, fixed key order (the driver parses these keys; see the Task 3 driver).
-/// `installed` stays the constant 0 until Task 2 supplies install state + verify().
+/// `installed` renders this module's own install flag, maintained by
+/// install()/uninstall() below.
 pub fn statsInto(out: []u8) usize {
     const written = std.fmt.bufPrint(
         out,
@@ -194,7 +225,7 @@ pub fn statsInto(out: []u8) usize {
             stats.table_hits[3],
             stats.table_hits[4],
             stats.patch_size,
-            @as(u8, 0), // installed: constant 0 until Task 2
+            @intFromBool(installed),
             sampleMask(),
         },
     ) catch return 0;
@@ -218,12 +249,142 @@ pub fn drainInto(out: [*]u8) u32 {
 
 /// Clears counters, ring sequence, the sampling mask and the image window —
 /// back to the module's initial state. Only before install or after uninstall.
+/// It does NOT uninstall the hook: with a live patch a cleared calls counter
+/// would silently restart the sampling denominator mid-shot.
 pub fn reset() void {
     stats = .{};
     _ = seq.swap(0, .monotonic);
     setSampleMask(0);
     img_base = 0;
     img_end = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Assembly: fingerprint gate + install / uninstall / verify
+// (shape copied line-for-line from predicate_hook.zig:160-200 — same-family
+// prologue gate, saved_code snapshot, restoreTarget, flushInstructionCache)
+// ---------------------------------------------------------------------------
+
+pub const InstallError = error{
+    Unsupported,
+    AlreadyInstalled,
+    PatchActive,
+    ModuleNotFound,
+    AlreadyHooked,
+    UnexpectedPrologue,
+    PatchTooWide,
+    DetourUnavailable,
+};
+
+/// The two refusal checks install() runs before touching anything.
+/// PatchActive rejection (§57.4): the predicate detour repoints instantiated
+/// objects' [child+0] at our DLL-owned vtable, so a [self+0] read under an
+/// armed predicate detour can never land in the five-table join — readings
+/// taken in that state would be mislabeled "unmatched", so we refuse instead.
+/// Order is pinned by the tests: already_installed first, patch_active second.
+pub fn preflightChecks(already_installed: bool, patch_active: bool) InstallError!void {
+    if (already_installed) return error.AlreadyInstalled;
+    if (patch_active) return error.PatchActive;
+}
+
+pub const OrigFn = *const fn (u64, u64, u64, u64) callconv(.c) u64;
+
+/// 0x3AFD30 is documented with three arguments (self, ctx, a3 — §52.6, r8 is
+/// the real third parameter). The detour still takes the fourth register slot
+/// (r9) so it is only recorded, never invented, and all four values are
+/// forwarded unchanged: forwarding three where the caller passed four would
+/// change the state the callee sees. capture() gets no engine write — the
+/// calls increment here is the module's only counter owner.
+fn donorDetour(self: u64, ctx: u64, a3: u64, a4: u64) callconv(.c) u64 {
+    const calls = @atomicRmw(u64, &stats.calls, .Add, 1, .monotonic) + 1;
+    capture(calls, @intCast(self), @intCast(ctx), a3, a4, @returnAddress());
+    const f: OrigFn = @ptrCast(orig orelse return 0);
+    return f(self, ctx, a3, a4);
+}
+
+/// Arm the recording detour on 0x3AFD30.
+/// The first statement must stay `if (!is_windows) return error.Unsupported;`:
+/// the exports root links on the Linux host only because that guard lets the
+/// comptime fold remove every kernel32 reference below it (windows.zig header).
+pub fn install() InstallError!void {
+    if (!is_windows) return error.Unsupported;
+    try preflightChecks(installed, predicate_hook.isInstalled());
+
+    const target = windows.moduleFunction(RVA_DONOR_EXECUTE) catch return error.ModuleNotFound;
+    if (detour_mod.isHooked(target)) return error.AlreadyHooked;
+
+    target_addr = @intFromPtr(target); // set before the gate so fingerprintMatches can re-check
+
+    const tb: [*]const u8 = @ptrCast(target);
+    for (EXPECTED_CODE, 0..) |byte, i| {
+        if (tb[i] != byte) return error.UnexpectedPrologue;
+    }
+    @memcpy(&saved_code, tb[0..saved_code.len]);
+
+    // Same image-window algorithm as scope_probe.install:171-172; the window is
+    // published through the one existing accessor.
+    const base = @intFromPtr(target) - RVA_DONOR_EXECUTE;
+    setImageBounds(base, base + 0x400_0000);
+
+    const h = detour_mod.installHookArmed(target, @ptrCast(@constCast(&donorDetour)), &orig) catch
+        return error.DetourUnavailable;
+    if (h.patch_size > saved_code.len) return error.PatchTooWide;
+    hook = h;
+    installed = true;
+    stats.patch_size = h.patch_size;
+    std.log.info("c2.donor_exec_probe: installed detour at 0x{x}", .{RVA_DONOR_EXECUTE});
+}
+
+/// Copies our own snapshot of the original prologue back over the patch.
+/// Authoritative restore: it does not depend on the trampoline bytes
+/// removeHook reads still being intact. Together with removeHook this is the
+/// only path in this probe that writes engine memory; capture and verify stay
+/// read-only.
+fn restoreTarget(len: usize) !void {
+    var guard = try windows.ProtectGuard.change(@ptrFromInt(target_addr), len, .execute_readwrite);
+    defer guard.deinit();
+    const dst: [*]u8 = @ptrFromInt(target_addr);
+    @memcpy(dst[0..len], saved_code[0..len]);
+    windows.flushInstructionCache(@ptrFromInt(target_addr), len);
+}
+
+/// Remove the detour. A no-op when not installed — the driver may still call
+/// it after a failed install.
+pub fn uninstall() !void {
+    if (!installed) return;
+    const h = hook orelse return;
+    detour_mod.removeHook(&h) catch {};
+    hook = null;
+    installed = false;
+    try restoreTarget(h.patch_size);
+    orig = null; // only once the engine bytes are ours again
+    if (!fingerprintMatches()) return error.RestoreIncomplete;
+    std.log.info("c2.donor_exec_probe: uninstalled detour", .{});
+}
+
+/// True when the engine's own 24-byte prologue is present at the target.
+fn fingerprintMatches() bool {
+    if (target_addr == 0) return false;
+    const tb: [*]const u8 = @ptrFromInt(target_addr);
+    for (EXPECTED_CODE, 0..) |byte, i| {
+        if (tb[i] != byte) return false;
+    }
+    return true;
+}
+
+/// Read-only state check, 0 = consistent, non-zero = not.
+/// installed: the hook must still be registered in the detour table.
+/// not installed: the target was resolved this session and the engine bytes
+/// are intact. -1 hook lost, -2 bytes mismatched, -3 target never resolved.
+pub fn verify() i32 {
+    if (target_addr == 0) return -3;
+    const target: *anyopaque = @ptrFromInt(target_addr);
+    if (installed) return if (detour_mod.isHooked(target)) 0 else -1;
+    return if (fingerprintMatches()) 0 else -2;
+}
+
+pub fn isInstalled() bool {
+    return installed;
 }
 
 test "donor probe Entry is 48 bytes and Stats is 56 bytes" {

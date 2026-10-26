@@ -13,7 +13,8 @@
 //
 // moduleFunction and allocNear are deliberately NOT guarded: Zig only emits
 // the bodies reachable from a root, and every path to these two is folded
-// before it gets here — the three c2 install()s open with
+// before it gets here — the four c2 install()s (predicate_hook, scope_probe,
+// live_probe, donor_exec_probe) open with
 // `if (!is_windows) return error.Unsupported;`, and the scripted install()s
 // are reached only through the LookupHookInstall/ExecHookInstall exports,
 // which open with `if (!is_windows) return -2;` — plus, for
