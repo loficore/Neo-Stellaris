@@ -5795,3 +5795,86 @@ A/B 集合里的对象(vtable `0x26d4dd0` / ctor `0x1c42d30` / 直调 ctor;连�
 
 `python3 scripts/scratch/2026-10_exec_frame_census/queue_dispatchers.py` 一条命令复现全部三口径与判决
 (`--only A|B|C` 单跑;任一自校验/校准不过 ⇒ 退出码 1、artifact 不落盘)。
+
+## §64 零枪:孤儿 handler 的案卷 —— 前提「命名消费者 = C3」已被离线证伪,裁定仍归人(2026-10-26,离线)
+
+授权级 = 离线零枪(不 launch/inject/install/进程),且**本节只出材料,不做裁定**。对象 =
+`src/dll/effects/handler.zig` + `src/dll/triggers/handler.zig`(§29 判「kept as orphans」留待 C3 的那两个)。
+§29 原文(:707-711 逐字):「**kept as orphans.** … these two are the intended JS-routing layer for C3, so
+they are a *placeholder with a named consumer* … If C3 ends up routing through QuickJS differently, they
+are deleted then, not now.」本节把「等的那个消费者」在 2026-10-26 仓库里的真实状态读全。
+
+### §64.1 三条离线事实(git grep 实跑,输出原样;超长行截到 120 字符并标注)
+
+**事实 1 —— 零 importer。** 三条命令的第一条:
+
+```
+git grep -n "effects/handler\|triggers/handler" -- '*.zig' '*.py' '*.md' \
+  | grep -v '^src/dll/effects/handler.zig:\|^src/dll/triggers/handler.zig:'
+```
+
+命中只剩**文档与旧读数**:`docs/offline-tooling.md:66-67`(29 条缺口构成 19+5+5)、`docs/roadmap.md:98`、
+`docs/scope-read-points.md:57`(超长行,截断;含「effects/handler.zig 5 + triggers/handler.zig 5 … 零 importer」)、
+`evidence/analysis/runtime_444_c1_validation.md:460/:707`(§29 自己)、`evidence/analysis/zig_test_coverage.md:26/27/64/65`
+—— `src/**.zig` 与 `build.zig` 对该路径串**零命中**。**两处 brief 未料到的形状**:brief 的 Expected 说这条会露出
+`build.zig:186-190` 与 `README.md:30/:32` —— 实跑不命中,因为那两处写的是「Effects handler」/「handler.zig」
+而不是路径串;补跑 `grep -n "handler" build.zig` → :186/:187/:190 =
+「`// Effects handler tests — SKIPPED: std.Thread.Mutex unavailable for x86_64-windows target.`」等原文,
+`grep -n handler README.md` → :7/:8/:30/:32/:145/:146/:245(:30/:32 = 「`handler.zig — JS callback routing
+(orphan: its hook was removed, see §26.3)`」)。再按符号问一遍全仓库:
+`git grep -n "effects/handler\|triggers/handler\|effects_handler\|triggers_handler" -- 'src/**.zig' 'build.zig'`
+(排除文件自身)→ **No matches found** —— import/build 面确实为零。
+
+**事实 2 —— 孤儿函数的名字在仓库里不出现在别处。** 第二条命令:
+
+```
+git grep -n "handleCustomEffect\|handleCustomTrigger\|getHandlerCount" -- '*.zig' '*.py' '*.md'
+```
+
+`handleCustomEffect` 只在 `effects/handler.zig`(:190 定义 + 测试内引用),`handleCustomTrigger` 只在
+`triggers/handler.zig`(:190)。**一处必须具名的出入**:`getHandlerCount` 有三个文件各自**定义** —— 孤儿两份
+之外还有 `src/dll/c2/handler.zig:131`;那是 C2 现役 handler 的**同名函数**,不是对孤儿的引用(三处定义互不相干,
+git grep 的命中全是定义/测试行,没有跨文件调用)⇒ 「名字不出现在别处」对 `handleCustom*` 严格成立,对
+`getHandlerCount` 要按「族」读。
+
+**事实 3 —— 现役 C4/C2 路线不经过它们。** 链路 = `0x1D08520` → slot[2] →
+`src/dll/c2/vtable.zig:40` 的 `extern fn C2ExecCall(token: u32, ctx_word: u64) c_int;` →
+`src/dll/quickjs/quickjs_wrapper.c:1097` 起的 `C2ExecCall`(**brief 写的 :1097 是 `C2ExecCall` 定义行,
+`JS_Call` 实际调用在 :1121/:1265**,文件也在 `src/dll/quickjs/` 不是 `src/dll/c2/`)。
+`src/dll/c2/handler.zig` 的 `dispatchEffect`/`dispatchTrigger`/`setContext` 按符号问外部引用
+(`git grep -n … -- 'src/**.zig'` 排除 c2/handler.zig 自身)→ **零命中**;被 exports 引用的只有
+`registerHandler`:`exports.zig:675/:712`,签名 `registerHandler(name, js_func: c.JSValue, kind)`
+(c2/handler.zig:73),**与孤儿的 `registerHandler(effect_name, js_function_name)` 不是同一个函数**。
+且 `C2RegisterEffect` 的返回值由 `main.js_runtime` 门控(有 runtime 成功返回 1/失败返回 0;runtime 从未建立
+⇒ 走空分支返回 0)—— runtime 永不建立的出处 = `docs/offline-tooling.md:66-71`(`main.initializeQuickJS`
+无调用点,「29 条零执行 = 可达性不是链接」)。§49.3(:3186 逐字)「The keyword→JS routing layer (C3) and
+a visible new effect (C4) are untouched.」与 §50(:3261)「remain untouched, and caller-supplied JS text
+stays deferred (P21)」记的是**当时**两枪都没碰 C3 —— 与现役路线不经过孤儿一致。
+
+### §64.2 正面结论:前提没了
+
+`docs/roadmap.md:116` 段 5 逐字:「**C3 不再是待办,降为设计依据**:注册只需要两个前置 —— 目标 db 已拉起,
+且我们的插入早于任何*求值*引用该 keyword;」。§29 决定「留」的唯一理由是「placeholder with a *named consumer*
+(C3)」;C3 已不是待办 ⇒ **这个命名消费者不存在了**——§29 那句的条件句「If C3 ends up routing through
+QuickJS differently, they are deleted then, not now」里等的触发条件**永远不会再被经过**。这是本节读全的
+离线事实,不是删除建议。
+
+### §64.3 边界声明(Review Focus 5)
+
+**本节不判「该不该删」。** §29 的「留」是用户裁定,不是分析结论;离线只证到「等的那个消费者不存在了」。
+案卷到此为止,删除需要新的裁定(见 §64.4 落点表)。本节同样不动 C1 授权位、不开枪、不改 `src/`。
+
+### §64.4 移交清单(只写不执行)
+
+若裁定为「删」,确切落点:
+1. 删文件:`src/dll/effects/handler.zig`、`src/dll/triggers/handler.zig`。
+2. `build.zig:186-190`:两段 SKIPPED 注释一并删。
+3. `README.md`:行 7/8(特性清单里 Custom Effects/Triggers 两行)、30/32(目录树 handler 两行)、
+   145/146(`registerEffect`/`registerTrigger` 表两行)、245(ID>4081 路由段)。
+4. `docs/offline-tooling.md:66-71`:「29 条」构成 `19 + 5 + 5` → **19 条**(两个 handler 的 10 条随文件消失;
+   但 `api/bridge.zig` 的 19 条仍在,`main.initializeQuickJS` 无调用点没被本删除修复)。
+5. `docs/roadmap.md:98`:整条孤儿候选移除(该文件行数上限 140,删行允许)。
+6. `docs/scope-read-points.md:57` 与 `evidence/analysis/*`(§29 :460/:707、zig_test_coverage 26/27/64/65)
+   里的旧读数是**历史数,不改写**(append-only);删除后的新基线句(`599/599` 是否变、29→19)另记新节。
+7. 预期门禁效应:两个文件**没有被任何构建根 import**(事实 1),其 10 条 test 本就在零执行缺口里 ⇒
+   Zig 门禁计数与 DLL 字节**不应有任何变化**;真变了就是删坏了,回滚重查。
