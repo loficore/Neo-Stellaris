@@ -1148,6 +1148,75 @@ image span 三分区(`unmatched_rows`/`rva_zero`/`in_image`/`at_or_above_image`)
 `python3 -m pytest scripts/test_c2_donor_probe.py -q` 覆盖(**14 条**:Task 2 的两条权威围栏 +
 Task 3 的 6 条判读 + 终修的 5 条 + 1 条写序保护),无游戏、无 Windows API、零 shot。
 
+### `scripts/c2_witness_probe.py [dll] [--mask 0] [--poll-s 120] [--settle-s 2] [--out C:/temp/c4_witness_probe.tsv]`
+
+donor 一族的**兄弟仪器**:同一族、同一张五表、另一个槽位。它是 §57.4 第三档所要求的**哨兵证人** ——
+一次 shot 一个进程,**本计划只把它写好并静态验证,从未运行**(运行需要本次会话内点名,见 `docs/roadmap.md`
+的授权表)。默认 DLL `C:\temp\sqjs_c4.dll`,argv 与 donor 逐字同形。
+
+**它与 donor 的关系(两条,先读这段再读下面)**:
+
+1. **同进程共存合法,但必须串行。** donor 的 `-2` 有两条成因(本 guard 已装 / predicate detour 还 armed),
+   证人同样两条,而**两组 guard 变量各自私有** —— 所以「donor 装着」既不是证人的 `-2`,也不是它的
+   predicate 成因。合法序列是 `donor Install → … → donor Uninstall 且 Verify=0 → witness Install`,
+   反向同理;**并行双 detour 挂同一族不同槽不做**,那需要证明两个 hook 的 trampoline 与还原顺序互不踩踏。
+2. **donor 必须先读到证人的结论,才有第三档资格。** §57.4 第三档要的是「执行确实发生而 donor 安静」,
+   「执行确实发生」这半句由证人的 `calls>0` 提供;证人自己安静时,它**不提供任何东西**,donor 的安静
+   于是也只是没观测到。两次 shot 的 `calls` 不同源(不同函数、不同调用频率),**不许互相除、不许互相引用**。
+
+**它读谁的字节**:detour 挂在 `0x3B01A0`(`offsets.keyword_reg.RVA_EFFECT_DONOR_INSTANTIATE`,donor 族
+`slot[2]`,即 `[vptr+0x08]` 之后那一槽;不是 donor 自己的 `0x3AFD30`,也不是 base Execute `0x1D08520`)。
+读法与 donor 完全一致:**唯一一次引擎内存读是 `[self+0]**,拿它的 RVA join 同一张 `FAMILY_VTABLES`
+五表;`rdx`/`r8`/`r9` 只按**值**记录,一个都不解引用。函数体恒转发原函数。引擎字节同样只在 install 的
+JMP、`removeHook` 的还原、`restoreTarget` 三处被写。前置指纹是 `0x3B01A0` 的 24 字节原前序
+(`48 89 5c 24 18 4c 89 4c 24 20 48 89 4c 24 08 55 56 57 41 54 41 55 41 56`),逐字节不符即 `-5` 拒装;
+围栏 `scripts/test_c2_witness_probe.py` 把这 24 字节和五张表钉回它们的权威(exe 与取证卷 §57.2 观测 4),
+且与 Task 1 抄下来的字面量做**第三方**对账。
+
+**门序**:与 donor 逐字相同 —— `resolve_pid → resolve_base_address → sha 门 → gate_module(NEEDED_EXPORTS)
+→ Layout → Reset → SetMask → Install → 轮询 Stats → Drain → write_tsv → finally: Uninstall → Verify →
+settle → assert_game_alive`。每一根箭头的理由也在 donor 节里写完,不重复;本仪器独有的一条是
+`NEEDED_EXPORTS` 的**九名**(`C2Sanity` + 八个 `C4WitnessProbe{Install,SetMask,Uninstall,Verify,Layout,
+StatsInto,DrainInto,Reset}`),缺一名即不注入 —— 从文件核,不从进程核。
+
+**依赖码**:与 donor 同一张表,导出名前缀换成 `C4WitnessProbe`:`Install` `0` / `-2`(本进程已装好**或**
+predicate detour 还 armed)/ `-3` stellaris.exe 未找到 / `-4` 目标已被 hook / `-5` 指纹不符 / `-6` patch 过宽 /
+`-1` 其余;`Uninstall` `0` / `-7`(打印 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`,放弃该进程);
+`SetMask` 恒 `0`(任何 u64 都合法,`mask=0` 有语义);`Verify` 原样透传 `-1/-2/-3`。`-2` **不重试**,
+唯一杠杆是新进程。清理段之后**绝不 `FreeLibrary`**。
+
+**verdict 值域**(`VERDICTS` 是唯一权威;退出码 0 只给两个 hit 证据档且清理成功):
+
+| verdict | 读数 | 这是什么 |
+|---|---|---|
+| `witness_family_hit_named` | 某个 `hN>0` 且 `installed==1` | 经这一族的 `slot[2]` 派发成立,并**指名哪张表**(`table_rvas()[N]`;index 2 = `0x25F4440`)—— 这就是第三档需要的那半句「执行确实发生」 |
+| `witness_family_hit_unknown_table` | `calls>0`、`installed==1`、五个 `h` 全 0、`unmatched>0` | 五表之外的 `[self+0]` ——**交给静态查表的接力**(环 `self_vtable_rva` + `#meta` 的 span 三分区)。注意这里的分母是 **454 个静态 qword 对 5 张承认的表**(donor 那个数是 538),图像内 code-address 读数更容易涌入,接力之前什么都别下结论 |
+| `no_calls_inconclusive` | `calls==0` | **ENVIRONMENT**。证人安静 ⇒ 第三档资格**不成立**,而不是成立 |
+| `instrument_broken` | `invalid_self>=calls` 且其余计数全 0 | 读不出 `[self+0]`,本仪器对本次观测没有陈述能力 |
+| `counter_desync` | `calls>0` 但没有一个计数器对上;或 `installed!=1`;或整跑没有一条完整 stats 行 | 记账坏了。两条代码档的门就在这一档前面 |
+
+**三条判读陷阱(证人版)**:
+
+1. **证人安静 ≠ 第三档,而且这条比 donor 那边更要命。** §57.4 的第三档 = 「证人 `calls>0`(执行确实发生)
+   **且** donor `calls==0`」。本仪器的 `no_calls_inconclusive` 是这条判据**前半句失败**的记录,值域里同样
+   没有「这一族不执行」这一档(`test_verdicts_has_no_tier3_value` 把五个字面量与三条禁用名一起钉死)。
+2. **predicate armed 时每个读数都是假的 tier 2。** 与 donor 同一机制:那种状态下实例化对象的 `[child+0]`
+   指向我们 DLL 里的 vtable 副本,永远落在五表之外 ⇒ 模块 `preflightChecks` 直接拒装(`-2` 的第二成因)。
+   除了它,同一假 tier 2 还有两类来源:图像内 code-address `[self+0]`(**454** vs 5)与 `toRva`→0 的图像外
+   读数(含 64 MiB 窗口内、真实 `SizeOfImage` 之外那 ~6.8 MiB 尾巴)。`#meta` 的 span 三分区拆的是环记录,
+   计数侧拆不开。
+3. **两个仪器的 `[self+0]` 不同源,不得互引。** 证人的 `self_ptr` 是 `slot[2]` 的接收者,donor 的是 `slot[1]`
+   的接收者;同一次 shot 里两边都见到同一个 vtable,也只说明**两槽各被派发过**,不说明是同一个对象实例。
+   `mask != 0` 时 ring 与 counters 的不同源问题照 donor 第 3 条:比例只从 counters 取,**先跑 20 s 窗口读
+   `calls` 增量定这一族的真实频率**,再决定带不带 mask。
+
+`run()` 同样**先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败,不许吃掉已拿到的读数。
+
+判读纯函数(`decode_layout` / `decode_entry` / `decode_stats` / `verdict_for` / `table_rvas` / `write_tsv` /
+`partition_unmatched` / `build_meta`,常量 `VERDICTS` / `EVIDENCE_VERDICTS` / `NEEDED_EXPORTS`)由
+`python3 -m pytest scripts/test_c2_witness_probe.py -q` 覆盖(**16 条**:donor 的 14 条平移换靶 +
+`test_verdicts_has_no_tier3_value` + `test_prologue_bytes_pinned`),无游戏、无 Windows API、零 shot。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
