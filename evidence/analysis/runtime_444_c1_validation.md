@@ -6526,3 +6526,90 @@ scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_witness_freq.tsv evidence/lo
 产物：`evidence/logs/witness_probe_4_4_4.tsv`（正式窗，665 B）、`evidence/logs/witness_freq_4_4_4.tsv`
 （频率窗，664 B）。频率窗那份不在本计划 Task 7 的 Files 清单里，是本窗口自己加的 —— 它的 `#meta` 是
 「不是恒计」这条决策的唯一凭据，留在主机 `C:\temp` 会被下一次上线覆盖（§67 坑 ①、Task 6 finding 同一族）。
+
+## §70 donor 重打：§67 那条前置补齐之后仍然静默 —— 落 spec §4 判决表第 4 行「本仪器无第三档资格」(2026-10-27,点名)
+
+**授权级别**：本窗口第三次点名，问题里写的是「donor 正式窗（Task 8 Step 2，本窗口唯一剩下的一发
+shot）授权吗」，选项原文「**授权，同进程一发（120 s）**」。§69 那两发证人 shot 是前一次问答给的，
+不含这一发。
+
+### §70.1 进程出处：为什么合法地沿用 §69 那个进程
+
+沿用 **pid=15500 / hwnd=133164**，没走 spec §3 的换进程 fallback。判据逐条：
+
+- 证人两窗的清理段都是 `C4WitnessProbeUninstall rc=0` → `verify=0` → `host alive`（§69.3/§69.4 原文）。
+  Task 8 Step 1 的同进程门要的就是这两个 0；任一非 0 或 `-7` 才 fallback。
+- 两把 guard 是**各自私有的变量**，`-2`（已装）这条成因对本进程不成立 —— 证人已拆，donor 从未在本进程
+  装过；`predicate armed` 那条也不成立（本窗口没人碰 `0x1D08520` 的哨兵）。所以 donor 装进这个进程
+  不需要新进程，省一次 launch（这是 Task 2 就把 guard 变量分开的直接收益）。
+- 前置读数（§59.1，紧邻本发之前）：`STATUS=playing note=ok pid=15500 hwnd=133164 age=1.7s want=playing
+  policy=first handled=5 cmd=click 1045 885 speed=None`。发完同态（`age=1.8s`、`handled` 未涨）。
+- 「存档真在跑」这条 §67 前置是怎么来的：本进程由 launcher `--continuelastsave` 自动续档进战役（§69.1），
+  画面日期在武装段那段 playing 期间从 **2273.01.01 走到 2282.06.26**（两张截图对读：`load_step1.png`
+  与 `load_step6_small.jpg`，都是主机原帧 `ns_game_shot.png` 的判读副本）。**donor 这一发的 120 s 内部
+  没有再取帧**（一次全帧拉回 ≈23 min，代价与这条读数的边际价值不成比），所以本段能说的是「窗口前后
+  `STATUS=playing`，且同一进程此前确实在推进日期」，不是「这 120 s 里日期又走了多少」。
+
+### §70.2 读数（donor `#meta` 逐字，665 B）
+
+argv 逐字取自 `scripts/scratch/2026-10_c4_sentinel_window/donor_shot.cmd`，即 §67 :6216 那条复现行：
+
+```
+#meta exe_base=0x7ff7a6030000 image_size=0x3927000 image_end=0x7ff7a9957000 dll=sqjs_c4.dll dll_sha256=6613e3240fdad4ea594aedd0eae4673ab7eec818100fb035f35ed1ad937eafd9 target_rva=0x3afd30 mask=0x0 poll_s=120.0 layout=entry=48 stats=56 ring=256 mask=0 version=1 calls=0 samples=0 entries=0 tiers=h0=0/h1=0/h2=0/h3=0/h4=0/unmatched=0/invalid_self=0 verdict=no_calls_inconclusive named_table=- install_rc=0 stats=calls=0 samples=0 invalid_self=0 unmatched=0 h0=0 h1=0 h2=0 h3=0 h4=0 patch_size=15 installed=1 mask=0 unmatched_rows=0 rva_zero=0 in_image=0 at_or_above_image=0
+```
+
+`LAYOUT entry=48 stats=56 ring=256 mask=0 version=1` 与 §67 逐字相同（无 `LAYOUT_DRIFT`）；
+`target_rva=0x3afd30` = donor slot[1] Execute 覆写。频率：`calls/poll_s = 0/120.0 s = 0.0 calls/s`。
+**清理段（逐字）**：`C4DonorProbeUninstall rc=0` → `verify=0` → settle 2 s → `host alive`；不 `FreeLibrary`。
+
+artifact 落法：本发追加进 `evidence/logs/donor_probe_4_4_4.tsv` 作**第 3–4 行**，§67 第一次读数留在
+第 1–2 行原样未动（`evidence/` 按 basename 追加不改写）。两段的 `exe_base` 不同（`0x7ff69e4e0000` vs
+`0x7ff7a6030000`）正是两个进程、ASLR 各掷一次的样子。
+
+### §70.3 spec §4 判决表的落点：第 4 行
+
+| 本窗口拿到的 | 值 |
+|---|---|
+| witness（§69.4，`0x3B01A0`） | `calls==0`，`named_table=-`，`tiers` 五档计数全 0 |
+| donor（本节，`0x3AFD30`） | `calls==0`，`named_table=-`，`tiers` 五档计数全 0 |
+
+⇒ 落 **spec §4 第 4 行**：`witness calls==0 / donor 任意` ⇒ **本仪器无第三档资格**，donor 读数按 §67
+同款有界措辞 —— 「没观测到」≠「没有」。第 1–3 行的前半句全是 `witness calls>0`，本窗口一次都没满足过，
+所以 (c) 成立、前两档命中、弱第三档三种落点**都没有被判决**：既不是成立，也不是不成立，是这一档资格
+从未出现。
+
+**两条 `named_table`/`tiers` 各归各表，不互引**：证人的 `[self+0]` 读的是它命中对象自己的 vptr，donor 的
+读的是另一处（§57.4 那段「不同源」对 donor/scope 成立，对 donor/证人同样成立）。本窗口两者都是 `-` 与
+全 0，所以没有任何跨仪器的等式可以写；把「两个都 0」读成「同一个对象两次都没被调用」会超出读数。
+
+### §70.4 频率结论（回填 §67「下一次带不带 mask」）
+
+§67 结尾说「这一发缺的不是 mask，是这一族真的在执行」，并把下一次点名的前置写成「载入进行中的存档、
+确认 per-system 执行在发生」。本窗口把那条前置走完并且**换了条件重打同一形状**：战役在跑、`playing`、
+日期确实推进过，donor 仍 `0.0 calls/s`，证人两窗也 `0.0 calls/s`。
+
+⇒ 回填口径：`--mask 0` 继续带，而且现在有了第二条理由 —— 不只是「计数没起来所以不能谈采样分母」，
+而是**在一份真在推进的存档里两把仪器的 `calls` 都不涨**，恒计与非恒计这个问题在这两个靶上都不出现。
+「重打同一形状」到此为止：§67 + §70 两次 donor、§69 两次证人，四种时间窗（主菜单 120 s、战役 20 s、
+战役 120 s、战役 donor 120 s）都是同一个答案，再打第五发同一形状不改变落点。
+
+**这把仪器问不出来的东西（§57.5 式未排除项，本窗口新增两条）**：
+1. 「族在执行但不走 slot[2] instantiate helper」与「族不在执行」—— §69.5 第 2 行，本仪器分不开。
+2. 「族在执行但不经 slot[1] 这个 Execute 覆写」—— donor 侧的对称读法，同样分不开：`0x3AFD30` 只是 donor
+   那一族对象的 slot[1] 覆写地址，per-system 执行若走别的类自己的槽，这把仪器看不见。
+3. 运行时堆上生成/复制的表（§57.5 第 1 条）—— **仍未排除，这两发同样没碰它**；`calls=0` 对它有零信息。
+
+### §70.5 §68.8 移交表改判（本窗口收口）
+
+| # | 原判 | 本窗口之后的状态 |
+|---|---|---|
+| ① | §57.4 第三档，要一个不带 predicate 的证人 | **问完这一轮，未触发**。证人已建成、装过、在运行中的存档上扫过 20 s + 120 s（§69），donor 同进程重打 120 s（§70），落 spec §4 第 4 行 = 无资格。①的前置从「缺一把证人」变成「缺一次真的经过这两个靶之一的执行」—— 这是**换靶/换形状**的问题，不是再点名一次同一形状的问题。 |
+| ② | scope 载体：条件式移交，未触发 | **未被本窗口触及**，原样保留（§68.8 那句「要新形状，不要重打同一形状」同样适用于本表 ①）。 |
+| ③ | C5 试点二等 5 项裁定 | **未被本窗口触及**，原样保留（归人）。 |
+
+**复现命令行**：
+
+```bash
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\\temp; python c2_donor_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 120 --settle-s 2 --out C:/temp/c4_donor_probe.tsv"
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_donor_probe.tsv /tmp/donor_run2.tsv   # 再追加进 evidence/logs/donor_probe_4_4_4.tsv 第 3–4 行
+```
