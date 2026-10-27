@@ -6632,3 +6632,162 @@ argv。出处逐字：
   不靠哈希），**在字节层面不可比**。本节把第 4 行落成「资格从未出现」而不是「§67 被复核并确认」，就是这个差别。
 - 立下的规矩（本窗口起生效，已在备枪舱流程里执行）：**任何上线前先对主机侧 `.py` 与 git 的 sha256；不一致就先
   把主机那份拉回留副本，再覆盖。** 违反的代价已经付过一次了（上面第二条）。
+
+## §71 零 shot:族外靶离线定形 —— §13 那七把各 2,090 次的 shim 全在家族五张 vtable 之外,主靶 `0xCC4220` 的指纹与派发位钉死(2026-10-27,离线)
+
+**授权级别**：离线。零 shot、无实机动作、无注入;本节只读 exe 拷贝(`NS_STELLARIS_EXE` → `/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe`,
+sha256 `9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56`)与三份既有 artifact。
+本节是窗口计划 `2026-10-27-live-window-out-of-family-witness.md` 的 Task 1,产物是 Task 2/4 的常量来源。
+
+### §71.1 定形出来的四个值
+
+| 项 | 值 | 来源 |
+|---|---|---|
+| 主靶 RVA | `0xCC4220` | structures §13 :412(七把 2,090 里表序第一把) |
+| 主靶绑的 vtable | `0x25460F0` | §13 同表;map 行 `vtable 0x025460f0  slot0 0x0015ccc0  ExecuteActual(slot2) 0x00cc4220` |
+| 24 B 前序 | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08` | §71.5(命令与逐指令边界) |
+| 族外七张 vtable | `0x25460F0 / 0x250E188 / 0x254FA18 / 0x25531E8 / 0x2551620 / 0x2553178 / 0x2553140` | §71.3 |
+| 兜底靶 | `0x6BE150`(`.pdata` 函数 `0x6be150..0x6be23c`) | §71.4,启用条件见 §71.6 |
+
+**§13 那张表在这份 exe 拷贝上逐字复核过**(九行同计数段),不只是转述:
+
+```
+  shim   0xe99c10  vtable  0x254a190  x2165      ← 2,165
+  shim   0xe586d0  vtable  0x24c52b0  x2096      ← 2,096
+  shim   0xcc4220  vtable  0x25460f0  x2090   ┐
+  shim   0x974840  vtable  0x250e188  x2090   │
+  shim   0xde40c0  vtable  0x254fa18  x2090   ├ 七把 plateau
+  shim   0xe98720  vtable  0x25531e8  x2090   │
+  shim   0xe58d80  vtable  0x2551620  x2090   │
+  shim   0xe9b580  vtable  0x2553178  x2090   │
+  shim   0xe96e90  vtable  0x2553140  x2090   ┘
+```
+
+2,090 是 2026-09-29 那份读数的**静态对应物**。本窗口之前**不假定**它在 4.4.4 当前场景、当前存档上仍然成立 ——
+§13 自己的原话就是 `Next capture should correlate this number against the live system count … before claiming it`
+(structures :425)。§74(Task 10)才是那次复采。
+
+### §71.2 段①:普查表 28 个 `func_start` × map 的 `ExecuteActual(slot2)` 列
+
+脚本:`scripts/scratch/2026-10_live_window_shim_witness/join_family_boundary.py`(本窗口新写,一次性探针,保留原 basename)。
+原始输出逐字:
+
+```
+# map_vtables=1805 map_distinct_slot2=543 census_shim_rows=25
+# callers_tsv_rows=62 distinct_func_start=28
+## ① 普查表 func_start 与 map 的 ExecuteActual(slot2) 列
+of 28 distinct func_start, 27 appear as some vtable's slot2; 1 do not —— 缺席 = 不在**这份静态集合**里,不是「族外」的证明
+present=27 absent=1
+  absent 0x6be150
+```
+
+判读:28 个里有 27 个就在 floor map 的 543 个 `slot2` 值里 —— 与 §62.2 的口径 1(裸扫 `.rdata` 命中数逐函数 1–365)
+同一批函数自证。唯一缺席的是 `0x6BE150`(§66 那条 `origin=not_examined` 的候选,`token_id_use_sites_4_4_4.tsv:94000`
+给它挂的静态名字是 `animation`)。
+
+**边界**:map 是**下限**(只收 slot[1] 仍是 base Execute 的那批,AGENTS 段3 第 3 行)。所以「缺席」只等于
+「不在这份静态集合里」,不等于「不参与 vtable 派发」,更不等于「族外」。§71.4 用三口径把它问到底。
+
+### §71.3 段②:七把 shim 的 vtable × 家族五张 = 空集(这条是「族外」的直接读数)
+
+家族五张 = `0x24B1D98 / 0x24EAAC0 / 0x25F4440 / 0x2606F00 / 0x2606FE0`(§57.2 观测 4 / §60.6)。
+原始输出逐字:
+
+```
+## ② §13 七把 shim 的 vtable × 家族五张
+family_five=0x24b1d98 0x24eaac0 0x25f4440 0x2606f00 0x2606fe0
+census_rows_with_count_2090=7 (其余 18 行计数不同,单列)
+  shim 0xcc4220 vtable 0x25460f0 x2090 family=no
+  shim 0x974840 vtable 0x250e188 x2090 family=no
+  shim 0xde40c0 vtable 0x254fa18 x2090 family=no
+  shim 0xe98720 vtable 0x25531e8 x2090 family=no
+  shim 0xe58d80 vtable 0x2551620 x2090 family=no
+  shim 0xe9b580 vtable 0x2553178 x2090 family=no
+  shim 0xe96e90 vtable 0x2553140 x2090 family=no
+intersection={} EXPECT_EMPTY=True
+```
+
+（七行 = census 里计数恰为 2,090 的那批;同一文件另有 18 行计数不同 —— 2,096 / 2,165 / 2,442 … 54,003 ——
+本脚本把它们单列、不并进七把。这条口径防的是「把完全不同的执行体凑成七张表」。)
+
+**补一条同源读数(不在计划文本里,定靶需要它)**:把这七把 shim **自己**当对象再过一遍 §62.2 三口径,七把**全部**是
+「命中 1 处 / 命中前一槽 = `0x1d08520` / 命中 −0x10 落进 map 基址」= 3/3:
+
+```
+target 0xcc4220 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+  hit@rdata+0x1b4100 prev=0x1d08520
+target 0x974840 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xde40c0 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xe98720 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xe58d80 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xe9b580 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xe96e90 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+```
+
+⇒ 「族外」的**准确含义**是:「**派发位相同,表不同**」—— 每把 shim 都是自己那张 vtable 的 **slot[2]**
+(`ExecuteActual`),而 slot[1] 就是 base Execute `0x1D08520`,与 donor 靶 `0x3AFD30`、证人靶 `0x3B01A0`
+**同一个派发位**;差别只在 vtable 不属于家族那五张。
+
+**这一条同时给出两个方向的界**:
+- 正面:`calls>0` 能证明「一个 vtable 派发的 `ExecuteActual` 真的执行了」,形状与家族内证人**可比** —— 这正是 §57.4
+  第三档缺的那类「执行确实发生」的独立证据形态。
+- 反面:「不在家族五张」**只等于**「不在这五张里」。家族五张是 §57.2 那张**有界集合**,不是 CEffect 全体
+  (1,805 是下限,AGENTS 段3 第 3 行)。所以任何写法都不能升格成「它不是 CEffect」或「族外没有另一份表」
+  (Review Focus 3)。
+
+### §71.4 段③:缺席候选 `0x6BE150` 的三口径 = 三零,以及它作为兜底靶的性质
+
+```
+target 0x6be150 hits=0 prev_is_base_execute=0/0 hit_minus_0x10_in_map=0/0
+```
+
+三口径**全 0**:`.rdata` 里没有任何 8 对齐 qword 指向它 ⇒ 它既不是 floor map 里任何一张 vtable 的槽,也没有别的
+vtable 引它 ⇒ **它不是 vtable 派发的执行体**,是被直接 `call` 进去的普通函数(`.pdata` 给它的边界是
+`0x6be150..0x6be23c`,0xec 字节;猜它是 `animation` 的那条名字来自 `token_id_use_sites` 的静态挂靠,不是本节读数)。
+
+这也决定了它的**用途边界**:它**不能**当「同形证人」(它不经过 `[vptr+0x10]`),只能当主靶装不上时的**备用活体**,
+而且它的 `calls>0` 连「一个 `ExecuteActual` 跑了」都证不出来。
+
+### §71.5 24 B 前序:命令、逐指令边界、以及 36 vs 24 的取舍
+
+```
+$ python3 scripts/scratch/2026-10_c4_sentinel_window/pin_prologue.py cc4220 24
+# exe=/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
+# rva=0xcc4220 bytes=36/36 section=.text
+48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08 48 8b da 48 8b f1 40 80 e7 01 74 26
+```
+
+`pin_prologue.py` 的第二个参数按**十六进制**解析,所以 `24` = 36 字节(退出码 0、落在 `.text`)。36 B 里
+**前 24 字节恰好是 6 条完整指令**(指纹长度就取这 24;理由同 donor/证人:指纹要吃满的必须是定长指令序列,
+而不是某条指令的中间):
+
+| 字节 | 指令 |
+|---|---|
+| `48 89 5c 24 08` | `mov [rsp+8], rbx` |
+| `48 89 6c 24 10` | `mov [rsp+0x10], rbp` |
+| `48 89 74 24 18` | `mov [rsp+0x18], rsi` |
+| `57` | `push rdi` |
+| `48 83 ec 20` | `sub rsp, 0x20` |
+| `0f b6 79 08` | `movzx edi, byte [rcx+8]` |
+
+后 12 B(`48 8b da` `mov rbx,rdx` / `48 8b f1` `mov rsi,rcx` / `40 80 e7 01` `and dil,1` / `74 26` `je +0x26`)
+属于同一个函数头、不在指纹里;`install()` 的指纹门只比对**前 24**。
+
+**函数头确认**:`scripts/disrva.py 0xcc4220 --len=40` 从 `0xcc4220` 起就是这 6 条,无前导;
+`scripts/pdata.py 0xcc4220` 给出 `func 0xcc4220..0xcc48ab (0x68b bytes) unwind 0x271f460`
+⇒ `0xCC4220` 是**函数起点**,不是中段。函数体第一件事是把 `rcx` 当对象读 `[rcx+8]` 的一个 bool
+(`movzx edi, byte [rcx+8]` → `and dil,1`)再 `je` 分两路 —— 与「`+8` 是 `CEffect` 家族的启用位」这一读法同形,
+但本节只用它做指纹,不做类归属推断。
+
+### §71.6 靶的取舍与有界含义(落进 Task 2/4 的三行诚实条款)
+
+- **主靶 = `0xCC4220`**;`-5 UnexpectedPrologue` ⇒ **停手留证,不换靶硬绕**(Global Constraints);兜底靶 `0x6BE150`
+  只在主靶装不上、且人明确点了名的那一窗口里启用 —— 它是「备用活体」,不是同形证人(§71.4)。
+- `calls == 0` **不是** §57.4 第三档的正面证据,只是「本窗口没观测到」。
+- `calls > 0` 只证明**这个执行体在跑**,**不**证明它按 system 走(§13 :425 的 `correlate before claiming it` 未做)。
+- 七张表的命中是**形状**判据不是身份判据(§57.5 第 2 条);「不在七张里」≠「族外没有另一份表」。
+
+### §71.7 移交
+
+Task 2 抄 §71.1 的 24 B 串 + 七张 vtable,Task 4 抄同一串做围栏常量(不运行时读盘)。Task 8 的两发实机窗是本节
+唯一的实机后续;若 `verdict` 落非证据档,分档措辞归 §72,本节不改写。
