@@ -185,6 +185,16 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // C4 witness guard tests (§57.4 第三档的独立证据)。证人模块用相对 import,
+    // 独立 step 的 root 必须落在 src/dll/ —— 口径照上面的 c2_exec_test.zig。
+    const witness_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dll/c2_witness_test.zig"),
+            .target = native,
+            .optimize = optimize,
+        }),
+    });
+
     // Keyword registry tests run via the exports.zig test root (main.zig imports
     // keyword_registry), so no standalone test module is needed here.
 
@@ -309,6 +319,9 @@ pub fn build(b: *std.Build) void {
     const run_offsets_tests = b.addRunArtifact(offsets_tests);
     run_offsets_tests.skip_foreign_checks = true;
 
+    const run_witness_tests = b.addRunArtifact(witness_tests);
+    run_witness_tests.skip_foreign_checks = true;
+
     const run_detour_tests = b.addRunArtifact(detour_tests);
     run_detour_tests.skip_foreign_checks = true;
 
@@ -342,6 +355,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_c2_diag_tests.step);
     test_step.dependOn(&run_c2_exec_tests.step);
     test_step.dependOn(&run_offsets_tests.step);
+    test_step.dependOn(&run_witness_tests.step);
     test_step.dependOn(&run_detour_tests.step);
     test_step.dependOn(&run_api_gamestate_tests.step);
     // scope.zig 的独立测试曾在 §26 之前以 `import of file outside module path` 被禁;
