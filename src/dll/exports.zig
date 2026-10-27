@@ -204,6 +204,7 @@ const c2_wire = main.c2_wire;
 const chokepoint_table = @import("c2/chokepoint_table.zig");
 const c2_donor_probe = @import("c2/donor_exec_probe.zig");
 const c2_witness_probe = @import("c2/instantiate_witness_probe.zig");
+const c2_shim_probe = @import("c2/shim_witness_probe.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 

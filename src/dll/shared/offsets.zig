@@ -231,6 +231,13 @@ pub const keyword_reg = struct {
     pub const RVA_EFFECT_DONOR_INSTANTIATE: usize = 0x3B01A0;
     /// effect `[vptr+0x98]` base predicate: 21-byte prologue, two args (child, parent).
     pub const RVA_EFFECT_PREDICATE: usize = 0x3B1420;
+    /// structures §13 (c1_validation §71): the first of the seven exec shims that each ran
+    /// exactly 2,090 times in the 2026-09-29 census — the out-of-family witness target. §71
+    /// pinned it offline: it is the `slot[2]` (`ExecuteActual`) of vtable `0x25460F0`, whose
+    /// slot[1] is still base Execute, so it sits at the SAME dispatch slot as
+    /// `0x3AFD30`/`0x3B01A0` while its vtable is NOT one of the five family tables.
+    /// 2,090 is the static counterpart of that one earlier reading, not a standing fact (§74).
+    pub const RVA_SHIM_WITNESS_EXECUTE: usize = 0xCC4220;
 
     /// §24 — C1 borrows an official `class_info` instead of fabricating an object, so these two
     /// donors are data, not code we write. Aliasing is a shape the shipped game already uses: 9
@@ -535,4 +542,10 @@ test "C4 execution-path constants are pinned" {
     try std.testing.expect(k.RVA_EFFECT_DONOR_EXECUTE < text_end);
     try std.testing.expect(k.RVA_EFFECT_DONOR_INSTANTIATE < text_end);
     try std.testing.expect(k.RVA_EFFECT_PREDICATE < text_end);
+    // §13 七把同计数 shim 里表序第一把(每把 2,090 次)——族外证人的靶。§71 离线定形:
+    // 它是 vtable 0x25460F0 的 slot[2],slot[1] 仍是 base Execute ⇒ 与 donor/证人同一个派发位。
+    try std.testing.expectEqual(@as(usize, 0xCC4220), k.RVA_SHIM_WITNESS_EXECUTE);
+    try std.testing.expect(k.RVA_SHIM_WITNESS_EXECUTE != k.RVA_BASE_EXECUTE);
+    try std.testing.expect(k.RVA_SHIM_WITNESS_EXECUTE != k.RVA_EFFECT_DONOR_EXECUTE);
+    try std.testing.expect(k.RVA_SHIM_WITNESS_EXECUTE < text_end);
 }
