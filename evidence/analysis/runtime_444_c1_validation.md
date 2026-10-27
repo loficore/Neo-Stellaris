@@ -6613,3 +6613,22 @@ artifact 落法：本发追加进 `evidence/logs/donor_probe_4_4_4.tsv` 作**第
 ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\\temp; python c2_donor_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 120 --settle-s 2 --out C:/temp/c4_donor_probe.tsv"
 scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_donor_probe.tsv /tmp/donor_run2.tsv   # 再追加进 evidence/logs/donor_probe_4_4_4.tsv 第 3–4 行
 ```
+
+### §70.6 donor 驱动出处：为什么本发能与 §67 并排读，而 §67/§68 那两发不能与更早的读数并排
+
+本节把 §67 与 §70 两发 donor 读数放在同一张判决表里读，这个动作的合法性取决于**驱动字节**，不只取决于
+argv。出处逐字：
+
+- 本窗口上线**前**核对：主机 `C:\temp\c2_donor_probe.py` = `0a529c537c87ba9044a7263e7b017e6b9cf1af0d865856af8ad458c3e09c0034`，
+  与 git HEAD 那一份逐字节相等（§69 那段同时钉了 witness 驱动 `9254c512…` = HEAD）。⇒ §70 这发的判读纯函数
+  （`decode_stats` / `verdict_for` / 写序）就是仓库里被 14 条围栏钉住的那一份。
+- **§67 与 §68 那两发不是**：2026-10-27 备枪舱上线前实测，主机当时那份 donor 驱动 sha256 =
+  `d48378d711f6c3ae0abcec730825018cc85e45be8a717584c92c2133b1ae58f3`，git 里 donor 驱动的四个历史版本
+  （`0a529c53` / `ea2a555d` / `27bf9dba` / `756edba9`）**没有一个对得上** —— 那是一份从没回写进 git 的现场改动，
+  被本次上传覆盖，覆盖前未留副本，字节已不可取回。
+- 影响的口径要写准：`d48378d7` 与 HEAD 的差异**内容未知**，所以既不能说 §67/§68 的读数错了，也不能说它与本发
+  逐位可比。能说的是：§67 那句 `calls=0` / `no_calls_inconclusive` 是在「判读纯函数版本未经证明」的前提下取到的，
+  而 §70 是在「= HEAD」的前提下取到的 ⇒ 两发**在 verdict 语义上可比**（五档判词的语义由围栏文档与 §57.4 共同固定，
+  不靠哈希），**在字节层面不可比**。本节把第 4 行落成「资格从未出现」而不是「§67 被复核并确认」，就是这个差别。
+- 立下的规矩（本窗口起生效，已在备枪舱流程里执行）：**任何上线前先对主机侧 `.py` 与 git 的 sha256；不一致就先
+  把主机那份拉回留副本，再覆盖。** 违反的代价已经付过一次了（上面第二条）。
