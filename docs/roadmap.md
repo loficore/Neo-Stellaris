@@ -19,7 +19,7 @@
 | 门 | 状态 | 翻它要改哪一行 | 上次授权动作 |
 |---|---|---|---|
 | `authorize.c1_registration` | **开** | `src/dll/scripted/keyword_registry.zig:211` 现为 `true`;翻回 `false` 即撤回 | 2026-10 的 C1:注册 trigger `neo_effect` + effect `neo_action` |
-| 实机只记录 detour `0x1D08520` | **只在点名时** | 无常量可翻;装与拆都要明确指令 + 等热路径静默窗口 | 2026-10-26 两次点名:§67 donor 第一次 shot(pid 3416)、§68 scope 深跟读第二次 shot(pid 20220,同一份 DLL 字节),两次各一个新进程、装拆均 `rc=0`、host 存活。铁律不变:`ExecHookVerify != 0` 时绝不 `FreeLibrary` |
+| 实机只记录 detour `0x1D08520` | **只在点名时** | 无常量可翻;装与拆都要明确指令 + 等热路径静默窗口 | 2026-10-27 证人两窗(pid 15500,§69:20 s 频率窗 + 120 s 正式窗,靶 `0x3B01A0` 同进程串行,装拆均 `rc=0`、`verify=0`、host 存活);前一日 2026-10-26 两次点名(§67 donor pid 3416、§68 scope pid 20220,同一份 DLL 字节)。铁律不变:`ExecHookVerify != 0` 时绝不 `FreeLibrary` |
 | 实机 shot 预算 | 见在飞计划 | 预算归各计划自己的 Global Constraints,本表不重复数 | — |
 
 `AGENTS.md` 约束 1–8 的文本不在这里复制 —— 段2 只记**状态与改动点**,约束文本继续住在它唯一的权威位置。
