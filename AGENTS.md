@@ -15,7 +15,7 @@ registration pipeline and identify extension points for new effects/triggers.
 |---|---|
 | 取证 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
 | 取证 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证 §24–§68(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两次 shot §58–§59、零 shot 帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 第一次 shot 只读采样=静默窗口 §67、scope 深跟读第二次 shot=修正仪器后第一发 `scope_candidate`(§56 误配仪器下已 14 条命中)且两条边非血缘 §68) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 取证 §24–§70(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两次 shot §58–§59、零 shot 帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 第一次 shot 只读采样=静默窗口 §67、scope 深跟读第二次 shot=修正仪器后第一发 `scope_candidate`(§56 误配仪器下已 14 条命中)且两条边非血缘 §68、同族 slot[2] 证人 shot 与载入窗口 §69、证人+donor 载入后重打与 spec §4 判决落点 §70) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
 | 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
 | 阶段状态、前置、授权级别 | `docs/roadmap.md` |
@@ -156,7 +156,8 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x1D08520` arg2 | **调用方内联构造的 0x20 B 执行深度帧**:`+8` 是调用深度计数,`+0x10` 是 helper;**不是** scope 对象 | §26 §53 |
 | `0x3B1330` | effect `[vptr+0x70]` base impl = 递归 parse(子向量在 `[obj+0x10]`/`[obj+0x1c]*8`) | §24.4.2 |
 | `0x3B1420` | effect `[vptr+0x98]` base impl = **bool 谓词**,不是 parse(§52 的 detour 点) | §23.1 §52 |
-| `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写;**第一次 shot 只读采样已打 = §67**:`calls=0`/120 s 静默,verdict `no_calls_inconclusive`(该档不含 §57.4 第三档资格,安静只读作「没观测到」) | §52 §67 |
+| `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写;**第一次 shot 只读采样已打 = §67**:`calls=0`/120 s 静默,verdict `no_calls_inconclusive`(该档不含 §57.4 第三档资格,安静只读作「没观测到」);**载入战役后同进程重打 = §70**(pid 15500,`--mask 0`,`calls=0`/120 s,同一 verdict,装拆 `rc=0`/`verify=0`/host alive) | §52 §67 §70 |
+| `0x3B01A0` | donor 表 slot[2] `+0x10` = **instantiate helper**,上表那个消费者的另一身份;**证人靶,两窗已打 = §69**:20 s 频率窗 + 120 s 正式窗,`--mask 0`,载入战役后仍 `calls=0`,verdict `no_calls_inconclusive` ⇒ 第三档资格不成立(§69.5 三行诚实条款) | §57.2 §69 |
 | `0x2606FE0` | donor effect vtable,25 槽可复制(slot[1]=Execute、slot[2]=instantiate、slot[19]=谓词) | §52 |
 | `0x89F960` / `0x8A0450` | `GetScriptedEffect` / `GetScriptedTrigger` — **不是 getter**;唯一副作用是重复定义告警 | §27 |
 | `0x1C91C30` | 上述重复告警走的 logger | §27 |

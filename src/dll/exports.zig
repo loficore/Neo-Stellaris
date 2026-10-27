@@ -203,6 +203,7 @@ const c2_scope_probe = main.c2_scope_probe;
 const c2_wire = main.c2_wire;
 const chokepoint_table = @import("c2/chokepoint_table.zig");
 const c2_donor_probe = @import("c2/donor_exec_probe.zig");
+const c2_witness_probe = @import("c2/instantiate_witness_probe.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
@@ -654,6 +655,74 @@ export fn C4DonorProbeDrainInto(out: [*]u8) callconv(.c) u32 {
 /// 悄悄重置回 0)。因此必须在 Install 之前调用。
 export fn C4DonorProbeReset() callconv(.c) void {
     c2_donor_probe.reset();
+}
+
+// ---------------------------------------------------------------------------
+// C4 forensics: read-only same-family slot[2] instantiate witness (0x3B01A0, §57.4 第三档)
+//
+// Thin fold layer only: every export calls the module and maps its errors to
+// the negative codes the driver's docstring documents. No judgement lives here.
+// ---------------------------------------------------------------------------
+
+/// 只记录同族 slot[2] instantiate helper(0x3B01A0)。依赖码:0 OK | -1 其它 |
+/// -2 该进程已装好本 guard 或 predicate detour 还 armed(§57.4:[self+0] 会指向我们
+/// DLL 的 vtable,这种状态下读数不能要)| -3 stellaris.exe 未找到 | -4 目标已被 hook
+/// | -5 指纹不符 | -6 patch 过宽。一进程一次 install 额度,所以 -2 不重试。
+/// 本 guard 的状态是 instantiate_witness_probe.zig 私有的,和 C4DonorProbe* 互不相干
+/// ⇒ 同一进程可以先装证人再装 donor(spec §3 的同进程双 guard)。
+export fn C4WitnessProbeInstall() callconv(.c) i32 {
+    c2_witness_probe.install() catch |err| return switch (err) {
+        error.AlreadyInstalled, error.PatchActive => -2,
+        error.ModuleNotFound => -3,
+        error.AlreadyHooked => -4,
+        error.UnexpectedPrologue => -5,
+        error.PatchTooWide => -6,
+        else => -1,
+    };
+    return 0;
+}
+
+/// 采样掩码。任何 u64 都是合法值,故**没有非法值档**:恒返回 0。
+/// mask=0 是「每条都落环」的有语义取值,不是错误;mask=0x1FF 才是 1/512。
+export fn C4WitnessProbeSetMask(mask: u64) callconv(.c) i32 {
+    c2_witness_probe.setSampleMask(mask);
+    return 0;
+}
+
+/// 0 = 引擎字节已验证还原。-7 = RestoreIncomplete:还原没成功,不要信任该进程,
+/// 且**绝不 FreeLibrary**(驱动打印 RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY)。
+/// 未安装时是 no-op,所以 install 失败后也可以安全调用。
+export fn C4WitnessProbeUninstall() callconv(.c) i32 {
+    c2_witness_probe.uninstall() catch |err| return switch (err) {
+        error.RestoreIncomplete => -7,
+        else => -1,
+    };
+    return 0;
+}
+
+/// 原样透传模块的有符号约定,不重新折叠:0 一致 | -1 装着但 hook 丢了 |
+/// -2 已卸但引擎字节不符 | -3 本进程从未解析到目标。
+export fn C4WitnessProbeVerify() callconv(.c) i32 {
+    return c2_witness_probe.verify();
+}
+
+/// 六个布局词:[48, 56, 256, mask_lo, mask_hi, version]。mask 是 u64,占两词。
+export fn C4WitnessProbeLayout(out: [*]u32) callconv(.c) u32 {
+    return c2_witness_probe.layoutInto(out);
+}
+
+export fn C4WitnessProbeStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_witness_probe.statsInto(out[0..512]));
+}
+
+export fn C4WitnessProbeDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_witness_probe.drainInto(out);
+}
+
+/// 清计数 + 环 + mask + 镜像窗口;不卸载 hook(带活补丁清 calls 会把采样分母
+/// 悄悄重置回 0)。因此必须在 Install 之前调用。
+export fn C4WitnessProbeReset() callconv(.c) void {
+    c2_witness_probe.reset();
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.

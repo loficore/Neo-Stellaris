@@ -6386,3 +6386,249 @@ ssh Windows_Jiaolong "cd C:\temp; python C:\temp\ns_scope_finish_cleanup.py 2022
 
 本发（§68）落在 ② 的**证据档**：`lineage_edge_found` 成立但两条边一条是标量、一条是模块内静态表
 （§68.3），没把载体往前推一格，所以 ② 现在是**条件式移交**，未触发。
+
+## §69 同族 slot[2] 证人两窗（20 s + 120 s）：`0x3B01A0` 全程静默 —— 而「载入进行中存档」这一步是 launcher 的 `--continuelastsave` 代做的，点击路径本窗口未执行(2026-10-27,点名 ×2)
+
+**授权级别**：同一个窗口里两段点名，彼此分开。第一段人给的是「**授权武装：launch + 载入点击**」，
+选项原文明写「到 Step 5 读数后即停，再单独问 shot」；第二段在武装读数达成后另问一次，选项原文
+「**两发都授权（频率窗→正式窗）**」。本段含这两发证人 shot，不含 donor 重打（那是 §70 的事）。
+
+**进程与字节**：pid=15500，hwnd=133164。`just launch` 一次成功（`GAME_OBSERVE step=ok alive_s=30`、
+`code=0`），没有 §67 那次 `inner_exit code=21` 的重试。上线字节 `C:\temp\sqjs_c4.dll`，sha256
+`6613e3240fdad4ea594aedd0eae4673ab7eec818100fb035f35ed1ad937eafd9`（= 本场 `zig-out/bin/stellaris_quickjs.dll`；
+导出门 17 名 `MISSING=[]`；走 `Copy-Item -Force` + `Get-FileHash`，不 `ren`，§67 坑 ①）。
+**整文件 sha 只当出处，不做相等断言。**
+
+本窗口另外钉了一条出处事实：主机侧 `C:\temp\c2_witness_probe.py` = `9254c5121d361f501ebf04fa5fb1bbac47158f9e75c1917d4ea4d16050304feb`、
+`C:\temp\c2_donor_probe.py` = `0a529c537c87ba9044a7263e7b017e6b9cf1af0d865856af8ad458c3e09c0034`，
+两个都逐字节等于 git HEAD 那一份 ⇒ 本窗两发放出去的仪器与仓库里那份同源可查。（对照：上一窗口的
+donor 驱动在主机上与 git 全部四个版本都不符，那批字节已不可取回 —— 这条规矩就是从那件事来的。）
+
+### §69.1 载入这一步实际发生了什么（不粉）
+
+计划里的点击梯（Task 5 的决策核 + Step 4 的「逐步读图确认才点」）**一条都没有用上**。起进程后的第一张
+截图 `ns_game_shot.png`（2160×1440，本地判读副本 basename `load_step1.png`）显示游戏**已经在战役内**
+（日期 2273.01.01、暂停态）。进程命令行原文含 `--continuelastsave`（在 `--pdx-launcher-session-token`
+之后、`-gdpr-compliant` 之前）⇒ 进战役的机制是 **launcher 自动续最近存档**，不是我们点 load 界面选存档。
+
+因此本窗口对「载入进行中存档」这一前置的贡献是**达成状态**，不是**达成路径**：
+
+- 存档确实在跑（下面 §69.2 的日期推进与 `playing` 读数是它的证据），但「我们能把存档载进去」这件事
+  **没有被本窗口验证过**。
+- `scripts/scratch/2026-10_c4_sentinel_window/load_path.py` 的 `STEPS` 保持空列表，
+  `test_load_path.py` 复跑 **7 passed**；那条 `test_module_sequence_starts_empty`（写着「这条就是会被
+  Task 7 改掉的那条」）**没有被改掉** —— 点击梯的实机验证仍是未做项，不在本段的读数里。
+- 本窗口唯一一次由读图决定的点击是 §69.2 的清障点击，它属于「把状态弄回 playing」，不属于载入路径。
+
+### §69.2 事件窗、清障点击与前置读数
+
+武装完成后紧邻的第一次 `just game status` **不是** playing：
+
+```
+STATUS=paused note=choice_stuck pid=15500 hwnd=133164 age=1.3s want=playing policy=first handled=5 cmd=unpause speed=None
+```
+
+截图（主机原帧 `ns_game_shot.png`，本地全帧 basename `load_step6_choice.png`，1,659,703 B；
+快速判读用同帧缩略 `ns_game_shot_small.jpg` → `load_step6_small.jpg`；量坐标用主机侧原生分辨率裁剪
+`ns_dialog.png` → `dialog.png`（裁剪原点 760,500，尺寸 640×440）与 `ns_confirm_band.png` →
+`confirm_band.png`（原点 900,850，尺寸 370×90））读回：这是一扇**事件窗**「克伯利安会议的末日」，
+正文两句（「被称为克伯利安会议的帝国在敌人的进攻之下已经灭亡。这会怎样影响星系的政治环境还有待观察。」），
+底部一条通宽的「确认」按钮，**没有任何可选项**。⇒ `choice_stuck` 的成因是**分类器把单按钮事件窗
+当成了选择窗**：`policy=first` 去点「第一行」，在那扇窗上指不到「确认」，同签名连击 >3 次后按纪律停手。
+这是仪器侧的分类缺口，不是引擎异常。
+
+按原图量取按钮条（在 640×440 裁剪内 x≈40–530、y≈372–400 ⇒ 原生中心 ≈(1045, 885)，按钮条横向跨度
+556 px，容差远大于量取误差）⇒ 一发 `just game click 1045 885` 点掉，状态回到 playing：
+
+```
+STATUS=playing note=ok pid=15500 hwnd=133164 age=0.1s want=playing policy=first handled=5 cmd=click 1045 885 speed=None
+```
+
+**发正式窗前最后一次紧邻读数**（Step 5 口径，§59.1：前置判据只有这一条，没做 `console_open` 检查）：
+
+```
+STATUS=playing note=ok pid=15500 hwnd=133164 age=1.4s want=playing policy=first handled=5 cmd=click 1045 885 speed=None
+```
+
+**发完正式窗后**同态且 `handled` 未涨（`age=0.5s ... handled=5 cmd=click 1045 885`）⇒ 120 s 里没有任何
+新弹窗打断；日期从 2273.01.01 走到 2282.06.26 是「这段时间真在跑模拟」的同一条侧面读数。
+
+**环境坑（与 §67 那两条不同的一条，判读陷阱 #10 在本窗口复现）**：第一次 `just game unpause` 得到
+`note=resume_failed: focus refused before Space`。成因 = 我们自己的两扇任务父壳 cmd 持有前台并把游戏
+挤下去（`tasklist`：cmd 9064 = `ns_awake_task.cmd`、17164 = `ns_game_supervisor_task.cmd`）。按文档处置
+`taskkill /F` **只杀父壳**：pythonw 5624 / 17264 存活（`tasklist` 复核），`just awake check` 仍
+`STATE=serving DESKTOP=unlocked detail=Default pid=5624` rc=0 ⇒ 防锁屏没被这次处置打断；顺带消掉压在
+画面上的黑底控制台窗（§54.10 / 批次 2 记的像素污染面）。判据仍在那两个字符串上，不在 `game.log` 上。
+
+### §69.3 频率窗（20 s，先测频率再定分母，§57.4）
+
+argv：`python c2_witness_probe.py C:\temp\sqjs_c4.dll --mask 0 --poll-s 20 --settle-s 2 --out C:\temp\c4_witness_freq.tsv`
+（artifact 拉回 `evidence/logs/witness_freq_4_4_4.tsv`，664 B）。读数 `calls=0 samples=0` ⇒
+**`calls/poll_s = 0/20.0 s = 0.0 calls/s`**，`install_rc=0`，清理段走完。
+
+决策：**这一档不是恒计**，所以「用 mask 定分母」这个问题在这一发里没有出现 —— 分母讨论要等到真的看到
+非零计数才有对象。正式窗因此照 §57.4 的口径继续 `--mask 0`（全计），不调 mask。
+
+### §69.4 正式窗（120 s，本窗判决读数）
+
+argv 逐字取自 `scripts/scratch/2026-10_c4_sentinel_window/witness_shot.cmd`；artifact
+`evidence/logs/witness_probe_4_4_4.tsv`（665 B），`#meta` 首行逐字：
+
+```
+#meta exe_base=0x7ff7a6030000 image_size=0x3927000 image_end=0x7ff7a9957000 dll=sqjs_c4.dll dll_sha256=6613e3240fdad4ea594aedd0eae4673ab7eec818100fb035f35ed1ad937eafd9 target_rva=0x3b01a0 mask=0x0 poll_s=120.0 layout=entry=48 stats=56 ring=256 mask=0 version=1 calls=0 samples=0 entries=0 tiers=h0=0/h1=0/h2=0/h3=0/h4=0/unmatched=0/invalid_self=0 verdict=no_calls_inconclusive named_table=- install_rc=0 stats=calls=0 samples=0 invalid_self=0 unmatched=0 h0=0 h1=0 h2=0 h3=0 h4=0 patch_size=15 installed=1 mask=0 unmatched_rows=0 rva_zero=0 in_image=0 at_or_above_image=0
+```
+
+频率：`calls/poll_s = 0/120.0 s = 0.0 calls/s`。`LAYOUT entry=48 stats=56 ring=256 mask=0 version=1`
+与 donor 口径一致（无 `LAYOUT_DRIFT`）；`target_rva=0x3b01a0` = 证人靶（slot[2] instantiate helper，
+静态 qword 出现 454 次，与 donor 的 538 不是同一个数，不得混引）。`named_table=-`、四个 code-span
+分区计数全 0（没有记录可分）。
+
+**清理段（逐字）**：`C4WitnessProbeUninstall rc=0` → `verify=0` → settle 2 s → `host alive`。两窗各自
+走完这条序；`#meta` 里的 `installed=1` 是清理**前**那次 stats 读数，不是残留状态。全程不 `FreeLibrary`，
+DLL 映射原样留着。
+
+### §69.5 verdict 的有界含义（三行诚实条款，原样落文，不可事后放宽）
+
+两窗都落在五档里的 `no_calls_inconclusive`（驱动结尾把它打成 ENVIRONMENT result）：
+
+1. 证人 `calls==0` ⇒ **第三档资格不成立**。
+2. instantiate helper 可能只在 parse / 全树枚举时被调用（§57.2 观测 4：枚举器对每个节点 `create`），
+   「证人安静」有两种本仪器分不开的读法 —— **族不在执行** / **族在执行但不走 runtime-instantiate** ——
+   两种读法都列名进未排除项，读数只判「本仪器没问出执行在发生」。
+3. 只有证人 `calls>0`（尤其 tier-1 join）配上 donor 读数才进入判决表；tier-1 是「这一族在执行」的
+   **最强同源陈述**。
+
+⇒ 本窗口对 §57.4 的净贡献是**零**：既没建立第三档，也没否证它。它钉住的是两件工具事实 —— 这把仪器
+能问这个问题（install/verify/清理三段全绿、布局无漂移、靶与 donor 不同源），以及**在一份正在跑的存档里
+20 s + 120 s 两窗它都没听到 slot[2] 被调用**。第二件不是引擎的陈述：正在跑的存档里 per-system 执行
+几乎必然在发生（日期在走），而证人没响 ⇒ 这把仪器证不了「执行经过 instantiate helper」，这条与前一条
+合起来就是 §57.5 式的未排除项，不是新判决。
+
+**下一次点名带不带 mask**：仍 `--mask 0`。这一发缺的不是采样密度，是**一次真的经过 helper 的执行**；
+要么换触发形状（载入瞬间的 parse/枚举最可能命中 helper），要么承认这把仪器的靶选错了并回静态侧重新
+选点 —— 后者是新的取证节，不是重打。
+
+**§68.8 移交表 ① 的当前状态**：证人已存在、已装过、已扫过一份运行中的存档两窗，①的前置里
+「不带 predicate 的证人」这一条**已满足**，「哨兵 body 等齐（执行确实发生）」这一条**没有**（本窗只有
+日期推进这种侧面读数，不是哨兵）。① 仍是未触发。
+
+**复现命令行**：
+
+```bash
+# 频率窗（20 s）
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\\temp; python c2_witness_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 20 --settle-s 2 --out C:\\temp\\c4_witness_freq.tsv"
+# 正式窗（120 s）
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\\temp; python c2_witness_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 120 --settle-s 2 --out C:/temp/c4_witness_probe.tsv"
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_witness_probe.tsv evidence/logs/witness_probe_4_4_4.tsv
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_witness_freq.tsv evidence/logs/witness_freq_4_4_4.tsv
+```
+
+产物：`evidence/logs/witness_probe_4_4_4.tsv`（正式窗，665 B）、`evidence/logs/witness_freq_4_4_4.tsv`
+（频率窗，664 B）。频率窗那份不在本计划 Task 7 的 Files 清单里，是本窗口自己加的 —— 它的 `#meta` 是
+「不是恒计」这条决策的唯一凭据，留在主机 `C:\temp` 会被下一次上线覆盖（§67 坑 ①、Task 6 finding 同一族）。
+
+## §70 donor 重打：§67 那条前置补齐之后仍然静默 —— 落 spec §4 判决表第 4 行「本仪器无第三档资格」(2026-10-27,点名)
+
+**授权级别**：本窗口第三次点名，问题里写的是「donor 正式窗（Task 8 Step 2，本窗口唯一剩下的一发
+shot）授权吗」，选项原文「**授权，同进程一发（120 s）**」。§69 那两发证人 shot 是前一次问答给的，
+不含这一发。
+
+### §70.1 进程出处：为什么合法地沿用 §69 那个进程
+
+沿用 **pid=15500 / hwnd=133164**，没走 spec §3 的换进程 fallback。判据逐条：
+
+- 证人两窗的清理段都是 `C4WitnessProbeUninstall rc=0` → `verify=0` → `host alive`（§69.3/§69.4 原文）。
+  Task 8 Step 1 的同进程门要的就是这两个 0；任一非 0 或 `-7` 才 fallback。
+- 两把 guard 是**各自私有的变量**，`-2`（已装）这条成因对本进程不成立 —— 证人已拆，donor 从未在本进程
+  装过；`predicate armed` 那条也不成立（本窗口没人碰 `0x1D08520` 的哨兵）。所以 donor 装进这个进程
+  不需要新进程，省一次 launch（这是 Task 2 就把 guard 变量分开的直接收益）。
+- 前置读数（§59.1，紧邻本发之前）：`STATUS=playing note=ok pid=15500 hwnd=133164 age=1.7s want=playing
+  policy=first handled=5 cmd=click 1045 885 speed=None`。发完同态（`age=1.8s`、`handled` 未涨）。
+- 「存档真在跑」这条 §67 前置是怎么来的：本进程由 launcher `--continuelastsave` 自动续档进战役（§69.1），
+  画面日期在武装段那段 playing 期间从 **2273.01.01 走到 2282.06.26**（两张截图对读：`load_step1.png`
+  与 `load_step6_small.jpg`，都是主机原帧 `ns_game_shot.png` 的判读副本）。**donor 这一发的 120 s 内部
+  没有再取帧**（一次全帧拉回 ≈23 min，代价与这条读数的边际价值不成比），所以本段能说的是「窗口前后
+  `STATUS=playing`，且同一进程此前确实在推进日期」，不是「这 120 s 里日期又走了多少」。
+
+### §70.2 读数（donor `#meta` 逐字，665 B）
+
+argv 逐字取自 `scripts/scratch/2026-10_c4_sentinel_window/donor_shot.cmd`，即 §67 :6216 那条复现行：
+
+```
+#meta exe_base=0x7ff7a6030000 image_size=0x3927000 image_end=0x7ff7a9957000 dll=sqjs_c4.dll dll_sha256=6613e3240fdad4ea594aedd0eae4673ab7eec818100fb035f35ed1ad937eafd9 target_rva=0x3afd30 mask=0x0 poll_s=120.0 layout=entry=48 stats=56 ring=256 mask=0 version=1 calls=0 samples=0 entries=0 tiers=h0=0/h1=0/h2=0/h3=0/h4=0/unmatched=0/invalid_self=0 verdict=no_calls_inconclusive named_table=- install_rc=0 stats=calls=0 samples=0 invalid_self=0 unmatched=0 h0=0 h1=0 h2=0 h3=0 h4=0 patch_size=15 installed=1 mask=0 unmatched_rows=0 rva_zero=0 in_image=0 at_or_above_image=0
+```
+
+`LAYOUT entry=48 stats=56 ring=256 mask=0 version=1` 与 §67 逐字相同（无 `LAYOUT_DRIFT`）；
+`target_rva=0x3afd30` = donor slot[1] Execute 覆写。频率：`calls/poll_s = 0/120.0 s = 0.0 calls/s`。
+**清理段（逐字）**：`C4DonorProbeUninstall rc=0` → `verify=0` → settle 2 s → `host alive`；不 `FreeLibrary`。
+
+artifact 落法：本发追加进 `evidence/logs/donor_probe_4_4_4.tsv` 作**第 3–4 行**，§67 第一次读数留在
+第 1–2 行原样未动（`evidence/` 按 basename 追加不改写）。两段的 `exe_base` 不同（`0x7ff69e4e0000` vs
+`0x7ff7a6030000`）正是两个进程、ASLR 各掷一次的样子。
+
+### §70.3 spec §4 判决表的落点：第 4 行
+
+| 本窗口拿到的 | 值 |
+|---|---|
+| witness（§69.4，`0x3B01A0`） | `calls==0`，`named_table=-`，`tiers` 五档计数全 0 |
+| donor（本节，`0x3AFD30`） | `calls==0`，`named_table=-`，`tiers` 五档计数全 0 |
+
+⇒ 落 **spec §4 第 4 行**：`witness calls==0 / donor 任意` ⇒ **本仪器无第三档资格**，donor 读数按 §67
+同款有界措辞 —— 「没观测到」≠「没有」。第 1–3 行的前半句全是 `witness calls>0`，本窗口一次都没满足过，
+所以 (c) 成立、前两档命中、弱第三档三种落点**都没有被判决**：既不是成立，也不是不成立，是这一档资格
+从未出现。
+
+**两条 `named_table`/`tiers` 各归各表，不互引**：证人的 `[self+0]` 读的是它命中对象自己的 vptr，donor 的
+读的是另一处（§57.4 那段「不同源」对 donor/scope 成立，对 donor/证人同样成立）。本窗口两者都是 `-` 与
+全 0，所以没有任何跨仪器的等式可以写；把「两个都 0」读成「同一个对象两次都没被调用」会超出读数。
+
+### §70.4 频率结论（回填 §67「下一次带不带 mask」）
+
+§67 结尾说「这一发缺的不是 mask，是这一族真的在执行」，并把下一次点名的前置写成「载入进行中的存档、
+确认 per-system 执行在发生」。本窗口把那条前置走完并且**换了条件重打同一形状**：战役在跑、`playing`、
+日期确实推进过，donor 仍 `0.0 calls/s`，证人两窗也 `0.0 calls/s`。
+
+⇒ 回填口径：`--mask 0` 继续带，而且现在有了第二条理由 —— 不只是「计数没起来所以不能谈采样分母」，
+而是**在一份真在推进的存档里两把仪器的 `calls` 都不涨**，恒计与非恒计这个问题在这两个靶上都不出现。
+「重打同一形状」到此为止：§67 + §70 两次 donor、§69 两次证人，四种时间窗（主菜单 120 s、战役 20 s、
+战役 120 s、战役 donor 120 s）都是同一个答案，再打第五发同一形状不改变落点。
+
+**这把仪器问不出来的东西（§57.5 式未排除项，本窗口新增两条）**：
+1. 「族在执行但不走 slot[2] instantiate helper」与「族不在执行」—— §69.5 第 2 行，本仪器分不开。
+2. 「族在执行但不经 slot[1] 这个 Execute 覆写」—— donor 侧的对称读法，同样分不开：`0x3AFD30` 只是 donor
+   那一族对象的 slot[1] 覆写地址，per-system 执行若走别的类自己的槽，这把仪器看不见。
+3. 运行时堆上生成/复制的表（§57.5 第 1 条）—— **仍未排除，这两发同样没碰它**；`calls=0` 对它有零信息。
+
+### §70.5 §68.8 移交表改判（本窗口收口）
+
+| # | 原判 | 本窗口之后的状态 |
+|---|---|---|
+| ① | §57.4 第三档，要一个不带 predicate 的证人 | **问完这一轮，未触发**。证人已建成、装过、在运行中的存档上扫过 20 s + 120 s（§69），donor 同进程重打 120 s（§70），落 spec §4 第 4 行 = 无资格。①的前置从「缺一把证人」变成「缺一次真的经过这两个靶之一的执行」—— 这是**换靶/换形状**的问题，不是再点名一次同一形状的问题。 |
+| ② | scope 载体：条件式移交，未触发 | **未被本窗口触及**，原样保留（§68.8 那句「要新形状，不要重打同一形状」同样适用于本表 ①）。 |
+| ③ | C5 试点二等 5 项裁定 | **未被本窗口触及**，原样保留（归人）。 |
+
+**复现命令行**：
+
+```bash
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "cd C:\\temp; python c2_donor_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 120 --settle-s 2 --out C:/temp/c4_donor_probe.tsv"
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_donor_probe.tsv /tmp/donor_run2.tsv   # 再追加进 evidence/logs/donor_probe_4_4_4.tsv 第 3–4 行
+```
+
+### §70.6 donor 驱动出处：为什么本发能与 §67 并排读，而 §67/§68 那两发不能与更早的读数并排
+
+本节把 §67 与 §70 两发 donor 读数放在同一张判决表里读，这个动作的合法性取决于**驱动字节**，不只取决于
+argv。出处逐字：
+
+- 本窗口上线**前**核对：主机 `C:\temp\c2_donor_probe.py` = `0a529c537c87ba9044a7263e7b017e6b9cf1af0d865856af8ad458c3e09c0034`，
+  与 git HEAD 那一份逐字节相等（§69 那段同时钉了 witness 驱动 `9254c512…` = HEAD）。⇒ §70 这发的判读纯函数
+  （`decode_stats` / `verdict_for` / 写序）就是仓库里被 14 条围栏钉住的那一份。
+- **§67 与 §68 那两发不是**：2026-10-27 备枪舱上线前实测，主机当时那份 donor 驱动 sha256 =
+  `d48378d711f6c3ae0abcec730825018cc85e45be8a717584c92c2133b1ae58f3`，git 里 donor 驱动的四个历史版本
+  （`0a529c53` / `ea2a555d` / `27bf9dba` / `756edba9`）**没有一个对得上** —— 那是一份从没回写进 git 的现场改动，
+  被本次上传覆盖，覆盖前未留副本，字节已不可取回。
+- 影响的口径要写准：`d48378d7` 与 HEAD 的差异**内容未知**，所以既不能说 §67/§68 的读数错了，也不能说它与本发
+  逐位可比。能说的是：§67 那句 `calls=0` / `no_calls_inconclusive` 是在「判读纯函数版本未经证明」的前提下取到的，
+  而 §70 是在「= HEAD」的前提下取到的 ⇒ 两发**在 verdict 语义上可比**（五档判词的语义由围栏文档与 §57.4 共同固定，
+  不靠哈希），**在字节层面不可比**。本节把第 4 行落成「资格从未出现」而不是「§67 被复核并确认」，就是这个差别。
+- 立下的规矩（本窗口起生效，已在备枪舱流程里执行）：**任何上线前先对主机侧 `.py` 与 git 的 sha256；不一致就先
+  把主机那份拉回留副本，再覆盖。** 违反的代价已经付过一次了（上面第二条）。

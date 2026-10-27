@@ -225,6 +225,10 @@ pub const keyword_reg = struct {
     pub const EFFECT_VTBL_COPY_SLOTS: usize = 25;
     /// hidden_effect's own `[vptr+0x08]` — the chain target, kept OFF live (§52).
     pub const RVA_EFFECT_DONOR_EXECUTE: usize = 0x3AFD30;
+    /// The same family's slot[2] (`[vptr+0x10]`) — §57.2 观测 4 pins the donor family's first four
+    /// slots as `0x1B4B30, 0x3AFD30, 0x3B01A0, 0x159730`, so `0x3B01A0` is slot[2], the instantiate
+    /// helper. Witness target for the §57.4 tier-3 question.
+    pub const RVA_EFFECT_DONOR_INSTANTIATE: usize = 0x3B01A0;
     /// effect `[vptr+0x98]` base predicate: 21-byte prologue, two args (child, parent).
     pub const RVA_EFFECT_PREDICATE: usize = 0x3B1420;
 
@@ -523,9 +527,12 @@ test "C4 execution-path constants are pinned" {
     try std.testing.expect(k.EFFECT_VTBL_COPY_SLOTS > k.EFFECT_VTBL_INSTANTIATE_PREDICATE / 8);
     try std.testing.expectEqual(@as(usize, 200), k.EFFECT_VTBL_COPY_SLOTS * 8);
     try std.testing.expectEqual(@as(usize, 0x3AFD30), k.RVA_EFFECT_DONOR_EXECUTE);
+    try std.testing.expectEqual(@as(usize, 0x3B01A0), k.RVA_EFFECT_DONOR_INSTANTIATE);
     try std.testing.expectEqual(@as(usize, 0x3B1420), k.RVA_EFFECT_PREDICATE);
     try std.testing.expect(k.RVA_EFFECT_DONOR_EXECUTE != k.RVA_EFFECT_PREDICATE);
+    try std.testing.expect(k.RVA_EFFECT_DONOR_INSTANTIATE != k.RVA_EFFECT_DONOR_EXECUTE);
     const text_end: usize = 0x2392000;
     try std.testing.expect(k.RVA_EFFECT_DONOR_EXECUTE < text_end);
+    try std.testing.expect(k.RVA_EFFECT_DONOR_INSTANTIATE < text_end);
     try std.testing.expect(k.RVA_EFFECT_PREDICATE < text_end);
 }
