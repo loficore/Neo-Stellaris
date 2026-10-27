@@ -9,8 +9,9 @@
 // Target: RVA 0xCC4220 (offsets.keyword_reg.RVA_SHIM_WITNESS_EXECUTE, referenced here, never
 // redefined) — §71 pinned it offline as the `slot[2]` (`ExecuteActual`) of vtable `0x25460F0`,
 // whose slot[1] is still base Execute `0x1D08520`. So it sits at the SAME dispatch slot as the
-// family's donor `0x3AFD30` and witness `0x3B01A0` while its vtable is NOT one of the five
-// family tables (§57.2 观测 4) — that difference is the whole point of this guard.
+// family's WITNESS `0x3B01A0` (also slot[2]); the donor `0x3AFD30` is one slot earlier, at
+// slot[1] = the `[vptr+0x08]` Execute override. What differs is the TABLE: `0x25460F0` is not
+// one of the five family tables (§57.2 观测 4) — that difference is the whole point of this guard.
 //
 // 只读: the recording path never writes engine memory, never modifies registers or arguments,
 // and always forwards to the original — 但「不转发」不等于「不装」: install is the same gated

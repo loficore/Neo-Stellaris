@@ -6724,9 +6724,12 @@ target 0xe9b580 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
 target 0xe96e90 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
 ```
 
-⇒ 「族外」的**准确含义**是:「**派发位相同,表不同**」—— 每把 shim 都是自己那张 vtable 的 **slot[2]**
-(`ExecuteActual`),而 slot[1] 就是 base Execute `0x1D08520`,与 donor 靶 `0x3AFD30`、证人靶 `0x3B01A0`
-**同一个派发位**;差别只在 vtable 不属于家族那五张。
+⇒ 「族外」的**准确含义**是:「**派发位与证人相同,表不同**」—— 每把 shim 都是自己那张 vtable 的 **slot[2]**
+(`ExecuteActual`,`[vptr+0x10]`),而 slot[1] 就是 base Execute `0x1D08520`。
+**槽位要分开写**(2026-10-27 终审更正,本节读数未受影响):证人靶 `0x3B01A0` 也在 slot[2],与这七把 shim
+是**同一个派发位**;而 donor 靶 `0x3AFD30` 在 **slot[1]**(`[vptr+0x08]`,Execute 的覆写,donor_exec_probe.zig
+头注释自述)—— 它比 shim 早一槽,**不是**同一个派发位。所以「族外」差的不是派发位而是**表**:七张 vtable
+既不在家族五张里,也不是 base Execute 的 slot[2]。
 
 **这一条同时给出两个方向的界**:
 - 正面:`calls>0` 能证明「一个 vtable 派发的 `ExecuteActual` 真的执行了」,形状与家族内证人**可比** —— 这正是 §57.4

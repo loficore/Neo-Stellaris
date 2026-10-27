@@ -1426,7 +1426,7 @@ RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.
 3. **「N 次」不是「per-system」**:§13 的 2,090 是那次场景的读数,原话要求先用**换场景/换银河大小**做相关性
    (`correlate … before claiming it`)。复采同场景只算重复确认,不算判据达成。
 4. **模块名跟着注入走**:`DLL_NAME` 在 `execspy.js` 里是 RPC 解析导出的依据,驱动把 `NS_LIVE_DLL` 的
-   basename 以 `NS_DLL_NAME` 注入(`execspy.py`);只改 `-` 路径而不改它 ⇒ 装进去的是 A、找的是 B,报
+   basename 以 `NS_DLL_NAME` 注入(`execspy.py`);只改 `NS_LIVE_DLL` 而不改它 ⇒ 装进去的是 A、找的是 B,报
    `stellaris_quickjs.dll is not loaded`。
 
 **顺序:本工具压最后**(窗口计划 Task 10)。它是唯一武装 `base Execute` detour 的一发,之后任何 `[self+0]`

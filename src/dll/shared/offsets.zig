@@ -234,8 +234,9 @@ pub const keyword_reg = struct {
     /// structures §13 (c1_validation §71): the first of the seven exec shims that each ran
     /// exactly 2,090 times in the 2026-09-29 census — the out-of-family witness target. §71
     /// pinned it offline: it is the `slot[2]` (`ExecuteActual`) of vtable `0x25460F0`, whose
-    /// slot[1] is still base Execute, so it sits at the SAME dispatch slot as
-    /// `0x3AFD30`/`0x3B01A0` while its vtable is NOT one of the five family tables.
+    /// slot[1] is still base Execute. Same dispatch slot as the WITNESS `0x3B01A0` (slot[2]);
+    /// the donor `0x3AFD30` is one slot earlier (slot[1], `[vptr+0x08]`). What differs is the
+    /// table: `0x25460F0` is NOT one of the five family tables.
     /// 2,090 is the static counterpart of that one earlier reading, not a standing fact (§74).
     pub const RVA_SHIM_WITNESS_EXECUTE: usize = 0xCC4220;
 

@@ -12,9 +12,9 @@ never fault the host).
 
 WHY THIS TARGET.  §71 pinned the target offline: ``0xCC4220`` is the ``slot[2]``
 (``ExecuteActual``) of vtable ``0x25460F0``, whose slot[1] is still base Execute
-``0x1D08520`` — the SAME dispatch slot as the family's donor ``0x3AFD30`` and witness
-``0x3B01A0``, while its vtable is NOT one of the five family tables (that intersection is
-empty; §71.3).  The family's own two instruments came back silent (§67/§69/§70), and a
+``0x1D08520`` — the SAME dispatch slot as the family's WITNESS ``0x3B01A0`` (also slot[2];
+the donor ``0x3AFD30`` is one slot earlier, slot[1] = the ``[vptr+0x08]`` Execute override),
+while its vtable is NOT one of the five family tables (that intersection is empty; §71.3).  The family's own two instruments came back silent (§67/§69/§70), and a
 silent family-internal probe cannot separate "the family is not executing" from "the family
 executes but never through that helper" (§57.2 观测 4).  A guard on a table-dispatched
 executor that is *outside* those five tables is the independent witness §57.4's third tier
@@ -29,9 +29,12 @@ explicit per-session naming from the user — the authorization table in ``docs/
 The offline plan writes and statically verifies this file only; nothing here runs it.
 
 GATE ORDER (pinned, do not reorder).  ``resolve_pid → resolve_base_address → sha 门 →
-gate_module(NEEDED_EXPORTS) → Layout → Reset → SetMask → Install → 轮询 Stats → Drain →
-write_tsv → finally: Uninstall → Verify → settle → assert_game_alive``.  Each arrow is a real
-dependency, not style:
+gate_module(NEEDED_EXPORTS) → Layout → Reset → SetMask → Install → 轮询 Stats →
+write_tsv(meta only) → Drain → write_tsv(rows) → finally: Uninstall → Verify → settle →
+assert_game_alive``.  The artifact is written **twice**: once from the counters before the ring
+is touched, once with the drained rows — a torn drain must never erase a reading that was
+already in hand (§56 lost a whole stdout to an ssh reset).  Each arrow is a real dependency,
+not style:
 
 * ``resolve_base_address`` runs before injection and resolves ``stellaris.exe``, because the
   shot's provenance (base + image size) is what makes every recorded RVA readable afterwards.
@@ -738,11 +741,15 @@ def run(pid, exe_base, dll_path, dll_sha, mask, poll_s, settle_s, out_path):
         if not installed_ok:
             print(
                 f"VERDICT: detour_unavailable rc={rc_install} — "
-                + ("-2/-4 mean this process is already spoken for; -2 具体是本 guard "
+                + ("-5 means the 24-byte prologue at 0xCC4220 does NOT match: that is a "
+                   "TARGET READ WRONG finding, not a machine-time problem — stop, keep the "
+                   "evidence, do NOT retry and do NOT switch targets in this window"
+                   if rc_install == -5 else
+                   "-2/-4 mean this process is already spoken for; -2 具体是本 guard "
                    "已装过或 predicate 还 armed（后者会把我们自己的 vtable 造成假 "
                    "tier 2，所以模块直接拒装）。take a FRESH game process, this shot "
                    "does not retry"
-                   if rc_install in (-2, -4, -5) else
+                   if rc_install in (-2, -4) else
                    "read the export's code table in exports.zig")
             )
             return 1

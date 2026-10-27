@@ -971,10 +971,17 @@ def partition_cells(cells, exe_base=None, image_end=None):
     """Bucket depth-2 cells by plausibility and image span BEFORE joining them.
 
     §68.4's two prerequisites.  ``plausible_user_ptr`` is the same gate the DLL
-    uses, so a cell whose pointer the guard could never read is not a "lead" —
-    and a scalar like ``0x100000000`` is neither a user pointer nor a module
-    address, so it lands in ``implausible`` and never reaches the lineage join
-    (those two §68 edges were exactly one scalar and one static table).
+    uses, so a cell whose pointer the guard could never read is not a "lead" and
+    never reaches the lineage join.  Bucket membership follows the GATE, not what
+    the value looks like: ``0x100000000`` (the §68 scalar edge) PASSES
+    ``plausible_user_ptr`` — the ceiling is ``0x7FFF_FFFF_0000`` — so it is a
+    plausible pointer OUTSIDE the image (``user_ptr_out_of_image``), not
+    ``implausible``.  Only sub-``0x10000`` / unaligned / above-ceiling values, and
+    cells with no candidates at all, land in ``implausible``.  In production that
+    is mostly what it collects, because ``follow_object`` already filters
+    candidates through the same gate before queueing them: ``d2_implausible``
+    counts cells that were never leads (mostly unreadable ones), and must not be
+    read as "scalars we discarded".
 
     A cell is assigned by its candidates: any implausible pointer makes the cell
     ``implausible`` (it is not something we can follow), otherwise any pointer
