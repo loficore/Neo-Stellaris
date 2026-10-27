@@ -1151,8 +1151,10 @@ Task 3 的 6 条判读 + 终修的 5 条 + 1 条写序保护),无游戏、无 Wi
 ### `scripts/c2_witness_probe.py [dll] [--mask 0] [--poll-s 120] [--settle-s 2] [--out C:/temp/c4_witness_probe.tsv]`
 
 donor 一族的**兄弟仪器**:同一族、同一张五表、另一个槽位。它是 §57.4 第三档所要求的**哨兵证人** ——
-一次 shot 一个进程,**本计划只把它写好并静态验证,从未运行**(运行需要本次会话内点名,见 `docs/roadmap.md`
-的授权表)。默认 DLL `C:\temp\sqjs_c4.dll`,argv 与 donor 逐字同形。
+一次 shot 一个进程。**已运行过两窗**(2026-10-27 取证卷 §69:20 s 频率窗 + 120 s 正式窗,同一进程
+pid 15500,两窗均 `calls=0`/`no_calls_inconclusive`,产物 `evidence/logs/witness_probe_4_4_4.tsv` 与
+`witness_freq_4_4_4.tsv`);运行需要本次会话内点名,见 `docs/roadmap.md`
+的授权表。默认 DLL `C:\temp\sqjs_c4.dll`,argv 与 donor 逐字同形。
 
 **它与 donor 的关系(两条,先读这段再读下面)**:
 
