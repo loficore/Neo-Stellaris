@@ -44,6 +44,21 @@ Task 2's fix round 2 adds two more fences:
 * the start-time provider seam refuses a non-callable, instead of quietly
   degrading the lock's generation check to nothing.
 
+Task 3's fences, one per plan requirement:
+
+* only ``IN_GAME_RUNNING`` can issue a lease (spec §6 rule 1) — every other
+  state is refused;
+* a lease is single-use: the second ``consume`` of the same id is ``False``;
+* an armed guard whose lease expired reads as ``RESTORE_INCOMPLETE`` on the
+  next call (spec §6 rule 4 / §11-5's lazy evaluation — no ticker exists);
+* an ``unknown`` classifier reading refuses the gate and issues **no** lease;
+* the gate's check order is pinned observably (the first refusal is the one
+  that is spoken; the later steps never run);
+* the lease fingerprint pins only the fields spec §6 names, so a tick that
+  moves a tick-volatile field does not invalidate an untouched world;
+* a lease and its armed guard survive a save/load round trip (spec §3: the
+  state must outlive the one-shot Windows process).
+
 No shot, no pixel, no Windows: every fixture is a dict in, a tuple out; the
 only files touched are the ones under ``tmp_path``.
 """
@@ -710,3 +725,380 @@ def test_provider_setter_refuses_a_non_callable():
     set_process_start_time_provider(None)
     set_process_start_time_provider(lambda pid: f"gen-{pid}")
     set_process_start_time_provider(None)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: 租约、惰性 RESTORE_INCOMPLETE、综合门 assert_ready
+#
+# 与 Task 2 的围栏同一条规矩：新名字在每个测试里**函数内** import，每条围栏
+# 各自失败，而不是一次 collection error。
+# ---------------------------------------------------------------------------
+
+
+def _arm_a_consumed_lease(store, now, *, guard="shim"):
+    """走一遍生产路径 ``acquire → consume → arm``，但租约在 ``now`` 时已过期。
+
+    为什么必须是**已消费**的租约：生产上 install 之后就是 consume 再 arm，所以
+    armed 表里记的那张租约永远是 ``consumed=1`` 的。若 ``expired_while_armed``
+    认为「消费过的租约不算数」，这条围栏会空过而生产上永远判不出
+    ``RESTORE_INCOMPLETE``。
+
+    返回那张租约。
+    """
+    from world_state import LEASE_TTL_S, acquire, arm, consume
+
+    issued = now - LEASE_TTL_S - 1
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard=guard, state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64, now=issued)
+        assert lease is not None
+        assert consume(store, lease["lease_id"], issued) is True
+        arm(store, guard, lease["lease_id"], (4242, "t0"), issued)
+        store.save()
+    return lease
+
+
+def test_lease_requires_running_state(tmp_path):
+    """只有 ``IN_GAME_RUNNING`` 能签发租约（spec §6 规则 1）—— 其它状态一律 None。"""
+    from world_state import LEASE_TTL_S, STATES, Store, acquire
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    # 对照组：running ⇒ 签发。没有它，下面的 None 可以因为「本来就什么都签不出」而空过。
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64, now=now)
+        store.save()
+    assert lease is not None
+    # 租约带齐 spec §6 点名的字段。
+    for field in ("lease_id", "action", "guard", "ttl_s", "fingerprint", "issued_at"):
+        assert field in lease, field
+    assert lease["action"] == "install"
+    assert lease["guard"] == "shim"
+    assert lease["fingerprint"] == "f" * 64
+    assert lease["ttl_s"] == LEASE_TTL_S == 30
+    # issued_at 与 now 同一个钟（浮点 epoch）—— 本模块里所有时间都是浮点；
+    # spec §6 的示例写 ISO 字符串，偏离说明在报告里。
+    assert isinstance(lease["issued_at"], float)
+    assert lease["issued_at"] == now
+
+    # running 之外的每一个状态都签不出租约 —— 穷举，不抽样。
+    for state in STATES:
+        if state == "IN_GAME_RUNNING":
+            continue
+        with store.locked(timeout_s=1.0):
+            refused = acquire(store, "install", guard="shim", state=state,
+                              fingerprint="f" * 64, now=now)
+            assert refused is None, state
+
+    # 拒发不留痕：表里只有对照组那一张。
+    assert len(store.data["leases"]) == 1
+
+
+def test_lease_second_consume_is_false(tmp_path):
+    """租约用后作废：二次消费 False（spec §6 规则 1），未知 id 与过期租约也是。"""
+    from world_state import LEASE_TTL_S, Store, acquire, consume
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64, now=now)
+        store.save()
+    assert lease is not None
+    lease_id = lease["lease_id"]
+
+    with store.locked(timeout_s=1.0):
+        assert consume(store, lease_id, now + 1) is True
+        store.save()
+    # 第二次：同一次 install 只认一张租约。
+    with store.locked(timeout_s=1.0):
+        assert consume(store, lease_id, now + 2) is False
+        store.save()
+    # 没签发过的 id：认不出来就不许动。
+    with store.locked(timeout_s=1.0):
+        assert consume(store, "no-such-lease", now + 2) is False
+
+    # 过期的租约也不能被兑现（到期的授权就是作废）。
+    with store.locked(timeout_s=1.0):
+        second = acquire(store, "install", guard="witness", state="IN_GAME_RUNNING",
+                         fingerprint="f" * 64, now=now + 10)
+        store.save()
+    assert second is not None
+    with store.locked(timeout_s=1.0):
+        assert consume(store, second["lease_id"], now + 10 + LEASE_TTL_S) is False
+
+
+def test_expired_lease_while_armed_forces_restore_incomplete(tmp_path):
+    """armed 且租约过期 ⇒ 下一次调用读出 ``RESTORE_INCOMPLETE``（spec §6 规则 4 / §11-5）。
+
+    没有 ticker：一次性进程不会自己醒来判过期，判定发生在**有人问**的时候。
+    """
+    from world_state import (
+        LEASE_TTL_S,
+        Store,
+        acquire,
+        arm,
+        expired_while_armed,
+        unarm,
+    )
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64, now=now)
+        assert lease is not None
+        arm(store, "shim", lease["lease_id"], (4242, "t0"), now)
+        store.save()
+
+    # 还没到点：什么都不报。
+    assert expired_while_armed(store, now + LEASE_TTL_S - 1) is None
+    # issued_at + ttl <= now ⇒ 返回那个 guard 名。
+    assert expired_while_armed(store, now + LEASE_TTL_S) == "shim"
+    assert expired_while_armed(store, now + LEASE_TTL_S + 1) == "shim"
+
+    # unarm 之后不再报 —— 所以每个驱动的卸载路径都必须调它。
+    with store.locked(timeout_s=1.0):
+        unarm(store, "shim", now + LEASE_TTL_S + 1)
+        store.save()
+    assert expired_while_armed(store, now + LEASE_TTL_S + 1) is None
+    # 对没 arm 过的 guard 是无害的（幂等），卸载路径可以放心重复调。
+    unarm(store, "never-armed", now + LEASE_TTL_S + 1)
+
+
+def test_assert_ready_refuses_unknown_pause(tmp_path):
+    """``unknown`` 一律落阻塞侧：综合门拒绝，且**一张租约都不签**。"""
+    from world_state import Store, assert_ready
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    probe = dict(CLEAN_PROBE, pause={"state": "unknown", "red_px": 61, "green_px": 40})
+    with store.locked(timeout_s=1.0):
+        ok, why = assert_ready(store, "install", guard="shim",
+                               probe_evidence=probe, now=now)
+        store.save()
+    assert ok is False
+    assert why and "BLOCKED_WITH_EVIDENCE" in why
+    # 拒发不许留下租约 —— 租约是注入的凭据。
+    assert store.data["leases"] == {}
+
+    # 对照组：读数干净 ⇒ 放行，并真签出一张租约（否则上面那条可以因为空表而空过）。
+    with store.locked(timeout_s=1.0):
+        ok, lease_id = assert_ready(store, "install", guard="shim",
+                                    probe_evidence=CLEAN_PROBE, now=now)
+        store.save()
+    assert ok is True
+    assert lease_id in store.data["leases"]
+
+
+def test_assert_ready_check_order_is_pinned(tmp_path, monkeypatch):
+    """综合门的顺序必须可观测地钉住：blocked → expired_while_armed → infer_state → acquire。
+
+    钉法：把**后面的**步骤换成会抛异常的桩。前一步已经拒绝的话，那个桩根本
+    不会被调用 —— 于是「顺序」成了可观测的事实（桩没炸 + 理由是前一步的），
+    而不是「实现里恰好这么写」的注释。之所以不用「计数被调了几次」，是因为
+    调用次数属于实现细节，而「先拒绝的先说话」是行为。
+    """
+    from world_state import Store, assert_ready, block
+
+    now = 1_700_000_000.0
+
+    def boom(*args, **kwargs):
+        raise AssertionError("这一步不该被跑到：前面的检查已经拒绝了")
+
+    def clean_gate(store, **kwargs):
+        return assert_ready(store, "install", guard="shim",
+                            probe_evidence=CLEAN_PROBE, now=now)
+
+    # (1) 两条检查都会拒绝（封锁在先、armed 过期在后）⇒ 理由必须是**先**那条。
+    store = Store.load(tmp_path / "blocked.json")
+    with store.locked(timeout_s=1.0):
+        block(store, "install", {"reason": "over budget"}, now)
+        store.save()
+    _arm_a_consumed_lease(store, now)
+    with monkeypatch.context() as m:
+        m.setattr(store_module, "infer_state", boom)
+        m.setattr(store_module, "acquire", boom)
+        with store.locked(timeout_s=1.0):
+            ok, why = clean_gate(store)
+    assert ok is False
+    assert "blocked" in why.lower(), why
+    assert "RESTORE_INCOMPLETE" not in why, why
+
+    # (2) 只剩 armed 过期 ⇒ 理由换它，而且 infer_state/acquire 依然没被跑到。
+    store = Store.load(tmp_path / "expired.json")
+    _arm_a_consumed_lease(store, now)
+    with monkeypatch.context() as m:
+        m.setattr(store_module, "infer_state", boom)
+        m.setattr(store_module, "acquire", boom)
+        with store.locked(timeout_s=1.0):
+            ok, why = clean_gate(store)
+    assert ok is False
+    assert "RESTORE_INCOMPLETE" in why, why
+
+    # (3) 前两条都过 ⇒ 轮到 infer_state：读数 unknown 在这一层被拒。
+    store = Store.load(tmp_path / "unknown.json")
+    probe = dict(CLEAN_PROBE, pause={"state": "unknown", "red_px": 61, "green_px": 40})
+    with monkeypatch.context() as m:
+        m.setattr(store_module, "acquire", boom)   # acquire 是最后一步：不许先跑
+        with store.locked(timeout_s=1.0):
+            ok, why = assert_ready(store, "install", guard="shim",
+                                   probe_evidence=probe, now=now)
+    assert ok is False
+    assert "BLOCKED_WITH_EVIDENCE" in why, why
+
+    # (4) 三道都过 ⇒ acquire 真的跑了，租约真的签了。
+    store = Store.load(tmp_path / "clean.json")
+    with store.locked(timeout_s=1.0):
+        ok, lease_id = clean_gate(store)
+        store.save()
+    assert ok is True
+    assert lease_id in store.data["leases"]
+
+
+def test_only_one_unexpired_lease_outstanding(tmp_path):
+    """同一时刻只允许一张未过期的租约：用掉或到期之后才签得出下一张。"""
+    from world_state import LEASE_TTL_S, Store, acquire, consume
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    with store.locked(timeout_s=1.0):
+        first = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64, now=now)
+        store.save()
+    assert first is not None
+
+    # 第一张还在手上 ⇒ 第二张拒。
+    with store.locked(timeout_s=1.0):
+        assert acquire(store, "install", guard="witness", state="IN_GAME_RUNNING",
+                       fingerprint="f" * 64, now=now + 1) is None
+    # 用掉第一张之后，它就不再是 outstanding ⇒ 签得出第二张。
+    with store.locked(timeout_s=1.0):
+        assert consume(store, first["lease_id"], now + 2) is True
+        second = acquire(store, "install", guard="witness", state="IN_GAME_RUNNING",
+                         fingerprint="f" * 64, now=now + 3)
+        store.save()
+    assert second is not None
+    with store.locked(timeout_s=1.0):
+        assert acquire(store, "install", guard="donor", state="IN_GAME_RUNNING",
+                       fingerprint="f" * 64, now=now + 4) is None
+    # 到期的租约也不再是 outstanding。
+    with store.locked(timeout_s=1.0):
+        third = acquire(store, "install", guard="donor", state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64,
+                        now=now + 3 + LEASE_TTL_S + 1)
+        store.save()
+    assert third is not None
+
+
+def test_consumed_lease_while_armed_still_expires(tmp_path):
+    """生产路径 acquire → consume → arm：**已消费**的租约过期后照样判 RESTORE_INCOMPLETE。
+
+    而且综合门读到它就要拒绝，一张新租约都不许签。
+    """
+    from world_state import Store, assert_ready, expired_while_armed
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+    lease = _arm_a_consumed_lease(store, now)
+
+    assert expired_while_armed(store, now) == "shim"
+    assert store.data["leases"][lease["lease_id"]]["consumed"] is True
+
+    with store.locked(timeout_s=1.0):
+        ok, why = assert_ready(store, "install", guard="shim",
+                               probe_evidence=CLEAN_PROBE, now=now)
+        store.save()
+    assert ok is False
+    assert "RESTORE_INCOMPLETE" in why, why
+    # 拒绝时表里只有那一张已过期的租约 —— 没签出新的。
+    assert len(store.data["leases"]) == 1
+
+
+def test_lease_fingerprint_pins_only_the_spec_fields(tmp_path):
+    """租约指纹只钉 spec §6 点名的字段（hwnd, pause, console, window, N）。
+
+    ``evidence_fingerprint`` 钉的是**整份证据**，含 tick 间会变的
+    ``prev_option_count`` 与 ``reason``；拿它当租约指纹，第 N tick 签的租约在
+    第 N+1 tick 就会自己作废 —— 世界没变也拒，那是假的 fail-closed。
+    """
+    from world_state import evidence_fingerprint, infer_state, lease_fingerprint
+
+    a = dict(CLEAN_PROBE, prev_option_count=0)
+    b = dict(CLEAN_PROBE, prev_option_count=3)
+    _, ev_a = infer_state(a)
+    _, ev_b = infer_state(b)
+    # 整份证据的指纹：会变（那个字段在证据里）。
+    assert evidence_fingerprint(ev_a) != evidence_fingerprint(ev_b)
+    # 租约指纹：不变。
+    assert lease_fingerprint(ev_a) == lease_fingerprint(ev_b)
+    assert len(lease_fingerprint(ev_a)) == 64
+
+    # 真的读数变了 ⇒ 租约指纹必须变（spec §6 规则 3 的前提）。
+    moved = dict(CLEAN_PROBE, prev_option_count=0,
+                 pause={"state": "playing", "red_px": 62, "green_px": 40})
+    assert lease_fingerprint(infer_state(moved)[1]) != lease_fingerprint(ev_a)
+    # N（option_count）也在指纹里。
+    window_5 = {"kind": "choice", "gold_px": 40, "row_count": 5,
+                "option_count": 5, "bbox": [1, 2, 3, 4]}
+    window_4 = dict(window_5)
+    window_4["option_count"] = 4
+    base = dict(CLEAN_PROBE, prev_option_count=0, window=window_5)
+    other = dict(CLEAN_PROBE, prev_option_count=0, window=window_4)
+    assert lease_fingerprint(infer_state(base)[1]) != lease_fingerprint(infer_state(other)[1])
+    # 窗口 hwnd 变了 ⇒ 变。
+    assert lease_fingerprint(infer_state(dict(base, hwnd=1))[1]) != lease_fingerprint(infer_state(base)[1])
+
+
+def test_lease_and_armed_survive_save_and_load(tmp_path):
+    """租约与 armed 都必须活过进程（spec §3：Windows 侧是一次性进程）。"""
+    from world_state import (
+        LEASE_TTL_S,
+        Store,
+        acquire,
+        arm,
+        consume,
+        expired_while_armed,
+    )
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64, now=now)
+        assert lease is not None
+        arm(store, "shim", lease["lease_id"], (4242, "t0"), now)
+        store.save()
+
+    reloaded = Store.load(path)
+    assert lease["lease_id"] in reloaded.data["leases"]
+    assert reloaded.data["armed"]["shim"]["lease_id"] == lease["lease_id"]
+    # 重载之后这张租约还能被消费（盘上记的就是它）。
+    with reloaded.locked(timeout_s=1.0):
+        assert consume(reloaded, lease["lease_id"], now + 1) is True
+        reloaded.save()
+    # 重载之后的 armed 也能被读成过期。
+    assert expired_while_armed(reloaded, now + LEASE_TTL_S + 1) == "shim"
+
+    # 旧文件（没有 leases/armed 两键）必须被补成空表，而不是读不出来。
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({"version": 1, "state": None,
+                                  "attempts": {"by_identity": {}, "global": {}},
+                                  "blocks": {}}), encoding="utf-8")
+    old = Store.load(legacy)
+    assert old.data["leases"] == {}
+    assert old.data["armed"] == {}

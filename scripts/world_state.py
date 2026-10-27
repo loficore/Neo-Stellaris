@@ -4,15 +4,17 @@ into data and a code gate.
 This module is **pure logic plus a file store**: cross-platform, zero
 win32/PIL/numpy imports, zero import-time side effects (no file is created, no
 log truncated, no screenshot taken), so it can be unit-tested offline.  It does
-**not** collect probe readings (that is ``scripts/windows/world_probe.py``),
-issue leases (Task 3), or expose a CLI (Task 5).  It answers exactly three
-questions:
+**not** collect probe readings (that is ``scripts/windows/world_probe.py``) or
+expose a CLI (Task 5).  It answers exactly four questions:
 
 1. which state do the current probe readings mean — ``infer_state(probe)``;
 2. may this state move to that state by this action — ``may(from, to, action)``;
 3. may this action be attempted at all right now — the attempt budget
    (``record_attempt`` / ``blocked``) and the evidence-gated way out of a
-   block (``block`` / ``unblock``).
+   block (``block`` / ``unblock``);
+4. may this action be attempted **at all**, right now, in front of the game —
+   the lease layer (``acquire`` / ``consume`` / ``arm`` / ``unarm``) and the
+   one gate that combines everything (``assert_ready``).
 
 The state lives in one JSON file beside one lock file (``Store``) because the
 Windows side is a one-shot process: nothing that must survive may live in
@@ -50,6 +52,7 @@ import json
 import os
 import secrets
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -94,6 +97,13 @@ MAX_ATTEMPTS: dict[str, int] = {
 #: seconds (spec §7: 另一份 (action, window) 的全局计数，10 分钟滑动窗).  It is
 #: what outlives a relaunch — a new pid must not buy a fresh budget (§11-3).
 GLOBAL_WINDOW_S = 600
+
+#: How long a lease is valid, in seconds (spec §6: ``"ttl_s": 30``).  A lease
+#: is the permission to change the world once: it is issued against one
+#: reading of the world and it dies 30 seconds later whether it was used or
+#: not.  The constant, not the stored ``ttl_s``, is what expiry is computed
+#: from — a hand-edited state file must not be able to renew a lease.
+LEASE_TTL_S = 30
 
 #: Reserved marker for a transition that **none** of the five actions causes.
 #: It covers three different flavours, and none of them is commandable by an
@@ -276,12 +286,52 @@ def infer_state(probe: dict) -> tuple[str, dict]:
 
 
 def evidence_fingerprint(evidence: dict) -> str:
-    """The sha256 of the canonicalised JSON of ``evidence`` — what a lease pins.
+    """The sha256 of the canonicalised JSON of ``evidence`` — what a block pins.
 
     Canonical means sorted keys, no whitespace, UTF-8: two probes that read the
     same must fingerprint the same, on any platform and any Python build.
     """
-    payload = json.dumps(evidence, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return _canonical_sha256(evidence)
+
+
+def lease_fingerprint(evidence: dict) -> str:
+    """The sha256 of spec §6's lease fingerprint: ``(hwnd, pause, console, window, N)``.
+
+    Spec §6 pins a lease to the **world**, not to the whole evidence document:
+    「fingerprint 不符（窗口/控制台/暂停在签发后变了）⇒ 拒绝」.  So the hashed
+    fields are exactly the ones §6 names — the window handle, the three
+    classifier sections, and the option count N.
+
+    This is a **second** constructor, not a replacement: ``evidence_fingerprint``
+    pins the whole evidence (including ``prev_option_count`` and ``reason``),
+    which is what a *block* wants — the evidence of the blocked moment, whole.
+    A lease cannot want that: those two fields move every tick, so a lease
+    issued at tick N would die at tick N+1 with the world untouched — a
+    fail-closed refusal that is not closed against anything.
+
+    The input is either shape this module has: the R4 probe reading or
+    ``infer_state``'s evidence output (both carry ``hwnd`` / ``pause`` /
+    ``console`` / ``window``).
+    """
+    window = evidence.get("window")
+    window = window if isinstance(window, dict) else {}
+    subset = {
+        "hwnd": evidence.get("hwnd"),
+        "pause": evidence.get("pause"),
+        "console": evidence.get("console"),
+        "window": window,
+        "option_count": window.get("option_count"),
+    }
+    return _canonical_sha256(subset)
+
+
+def _canonical_sha256(document: Any) -> str:
+    """The sha256 of the canonicalised JSON of ``document``.
+
+    Canonical means sorted keys, no whitespace, UTF-8: two readings that are
+    the same must hash the same, on any platform and any Python build.
+    """
+    payload = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -408,7 +458,12 @@ class Store:
          "attempts": {"by_identity": {"<pid>|<start_time>": {"<action>": counter}},
                       "global": {"<action>": counter}},
          "blocks": {"<action>": {"nonce": ..., "blocked_at": ...,
-                                 "attempts": ..., "evidence_fingerprint": ...}}}
+                                 "attempts": ..., "evidence_fingerprint": ...}},
+         "leases": {"<lease_id>": {"lease_id": ..., "action": ..., "guard": ...,
+                                  "ttl_s": ..., "fingerprint": ...,
+                                  "issued_at": ..., "consumed": bool}},
+         "armed": {"<guard>": {"lease_id": ..., "identity": [pid, start_time],
+                               "armed_at": ...}}}
 
     A counter is ``{"attempts": int, "first_t": float, "last_t": float}`` — the
     value shape spec §7 pins.  The global counter also carries ``times``: the
@@ -817,7 +872,253 @@ def unblock(store: Store, nonce: str, evidence_path: str,
     return True, f"unblocked {action}"
 
 
-# --- the pieces the four above are made of ---------------------------------
+# ---------------------------------------------------------------------------
+# Leases: issue, consume, arm — and the lazy RESTORE_INCOMPLETE (spec §6)
+# ---------------------------------------------------------------------------
+
+
+def acquire(store: Store, action: str, *, guard: str | None, state: str,
+            fingerprint: str, now: float) -> dict | None:
+    """Issue a lease for one world-changing action; ``None`` if it cannot.
+
+    Two gates, both from spec §6 rule 1 (「只有 ``IN_GAME_RUNNING`` 能签发；
+    一次 install 只认一张租约」):
+
+    * ``state`` must be ``IN_GAME_RUNNING`` — every other state is a premise
+      that is not currently true;
+    * no other **unexpired** lease may be outstanding — one installer at a time.
+
+    A refusal is the **return value**, not an exception: the caller asked
+    "may I?", and the honest answer is ``None``.
+
+    The returned dict is the lease, carrying spec §6's fields: ``lease_id``
+    (a uuid4), ``action``, ``guard``, ``ttl_s``, ``fingerprint``,
+    ``issued_at`` — plus ``consumed``, which ``consume`` flips.
+
+    ``issued_at`` is a **float on the same clock as ``now``** (wall-clock
+    seconds).  Spec §6's example writes an ISO string, but every other time
+    value in this module is a float epoch and ``now`` is a float: one file
+    with two clocks would make 「is it expired?」 a string-parsing question.
+
+    This function only mutates ``store.data``.  The caller persists, inside
+    ``with store.locked():`` (R16) — a lease that is not on disk does not
+    outlive the process that issued it, and on the Windows side every process
+    is a one-shot process (spec §3).
+    """
+    if state != "IN_GAME_RUNNING":
+        return None
+    if _outstanding_lease(store, now) is not None:
+        return None
+    lease = {
+        "lease_id": str(uuid.uuid4()),
+        "action": action,
+        "guard": guard,
+        "ttl_s": LEASE_TTL_S,
+        "fingerprint": fingerprint,
+        "issued_at": _timestamp(now, "now"),
+        "consumed": False,
+    }
+    store.data["leases"][lease["lease_id"]] = lease
+    return lease
+
+
+def consume(store: Store, lease_id: str, now: float) -> bool:
+    """Mark ``lease_id`` used; ``True`` only for the first, unexpired use.
+
+    Spec §6 rule 1: 「用后标记 ``consumed``」 — the second consume of the same
+    id is ``False``, and so is an id that no lease carries or that has already
+    expired.  An unknown id is never a licence to proceed.
+
+    A consumed lease is **marked**, not deleted: ``expired_while_armed`` still
+    needs its ``issued_at`` to decide whether an armed guard's lease died.
+    """
+    lease = store.data["leases"].get(lease_id)
+    if not isinstance(lease, dict):
+        return False
+    if lease.get("consumed"):
+        return False
+    if _lease_expired(lease, now):
+        return False
+    lease["consumed"] = True
+    lease["consumed_at"] = _timestamp(now, "now")
+    return True
+
+
+def arm(store: Store, guard: str, lease_id: str, identity: tuple[int, str],
+        now: float) -> None:
+    """Record that ``guard`` is installed on the strength of ``lease_id``.
+
+    This is spec §5's ``armed[]`` — the record that makes the world state
+    remember what is still screwed in.  ``identity`` is the **game** process's
+    ``(pid, process_start_time)`` (spec §7), stored as a two-element list:
+    JSON has no tuples, and a list is what comes back after a round trip.
+
+    There is no ticker in a one-shot process, so nothing polls this table.
+    Instead the next call that reads it performs the check lazily — see
+    ``expired_while_armed`` (spec §11-5).
+
+    The caller persists inside ``with store.locked():`` (R16).
+    """
+    store.data["armed"][guard] = {
+        "lease_id": lease_id,
+        "identity": [identity[0], identity[1]],
+        "armed_at": _timestamp(now, "now"),
+    }
+
+
+def unarm(store: Store, guard: str, now: float) -> None:
+    """Drop ``guard``'s armed record — its uninstall is done.
+
+    **Every driver's uninstall path must call this.**  An armed record does not
+    age out on its own; it is only ever read, and it is read as
+    ``RESTORE_INCOMPLETE`` the moment its lease is older than
+    ``LEASE_TTL_S``.  Leaving it behind is therefore not a harmless leftover:
+    it is a standing false accusation of an incomplete restore (spec §6
+    rule 4 / §11-5: 「宁可误判不可漏判」 — misjudging is the safe direction,
+    so the record stays until it is affirmatively dropped).
+
+    Idempotent: an unarmed guard that is unarm-ed again is a no-op, so a
+    driver may call it from its cleanup path without checking first.
+
+    ``now`` is in the signature for symmetry with ``arm`` — every function
+    that touches this table takes the same clock — and records nothing: the
+    entry itself is deleted.
+    """
+    store.data["armed"].pop(guard, None)
+
+
+def expired_while_armed(store: Store, now: float) -> str | None:
+    """Which guard is installed with a lease that has run out, or ``None``?
+
+    This is spec §6 rule 4 and §11-5's lazy evaluation, in one function:
+    there is no ticker, so a lease expiring while a guard is still installed
+    must be discovered **the next time anyone asks the state** — and that
+    reading must be ``RESTORE_INCOMPLETE``, because a restore that did not
+    verify is exactly the state this machine exists to refuse.
+
+    The criterion is ``issued_at + LEASE_TTL_S <= now`` on the lease the guard
+    names.  A guard whose lease record cannot be found counts as expired: an
+    unreadable premise is a broken premise, and spec §5's stance is
+    「宁可误判不可漏判」.
+    """
+    for guard, entry in store.data["armed"].items():
+        lease_id = entry.get("lease_id") if isinstance(entry, dict) else None
+        lease = store.data["leases"].get(lease_id) if isinstance(lease_id, str) else None
+        if not isinstance(lease, dict) or _lease_expired(lease, now):
+            return guard
+    return None
+
+
+def assert_ready(store: Store, action: str, *, guard: str | None,
+                 probe_evidence: dict, now: float) -> tuple[bool, str]:
+    """The combined gate: may ``action`` be attempted right now?
+
+    Returns ``(ok, reason_or_lease_id)``.  On refusal the second element is a
+    human-readable reason and **no lease is issued**; on success it is the
+    lease id.
+
+    Four checks, in this order, first failure wins:
+
+    1. **blocked** — the attempt budget or a block marker (spec §7);
+    2. **expired_while_armed** — a guard installed whose lease ran out, which
+       is ``RESTORE_INCOMPLETE`` (spec §6 rule 4 / §11-5);
+    3. **infer_state** must come out ``IN_GAME_RUNNING`` — an ``unknown`` /
+       ``undecided`` / ``None`` reading lands on the blocking side (spec §5),
+       so an unreadable classifier can never pass this gate;
+    4. **acquire** — only now, with all three premises true, is a lease issued.
+
+    ``probe_evidence`` is the **probe reading** in the R4 shape — the same
+    thing ``infer_state`` takes (``pause`` / ``console`` / ``window`` sections
+    plus ``raw`` and ``pid`` / ``hwnd``), *not* ``infer_state``'s evidence
+    output (Ruling R17).
+
+    Before ``infer_state`` runs, the store's own verdicts are folded into the
+    readings: the block flag and the armed-expired verdict, so the state that
+    comes out agrees with the gate's own verdicts instead of contradicting
+    them (both facts are checked again by steps 1 and 2; composing them here
+    keeps the two answers from ever disagreeing).
+
+    The identity-scoped half of ``blocked()`` is **not** consulted: this
+    signature carries no ``(pid, process_start_time)``, and inventing one from
+    the probe's pid plus a host start-time query would make the gate's verdict
+    depend on whether this host can read it (R15's silent-degradation trap).
+    The sticky halves are consulted — the block marker and the global window —
+    and the identity tally is enforced at ``record_attempt``, which does
+    receive the identity.
+
+    The caller persists the lease, inside ``with store.locked():`` (R16).
+    """
+    marker = blocked(store, action, now)
+    if marker is not None:
+        return False, (f"{action} is blocked: {marker['attempts']} attempts on "
+                       f"record (max {MAX_ATTEMPTS[action]})")
+
+    expired_guard = expired_while_armed(store, now)
+    if expired_guard is not None:
+        return False, (f"RESTORE_INCOMPLETE: guard {expired_guard!r} is armed and "
+                       f"its lease expired (ttl {LEASE_TTL_S}s) — uninstall "
+                       f"verified? else unarm it")
+
+    probe = dict(probe_evidence)
+    probe["blocked"] = (marker is not None) or bool(probe_evidence.get("blocked"))
+    probe["restore_incomplete"] = ((expired_guard is not None)
+                                   or bool(probe_evidence.get("restore_incomplete")))
+    state, evidence = infer_state(probe)
+    if state != "IN_GAME_RUNNING":
+        return False, (f"state is {state}, not IN_GAME_RUNNING: "
+                       f"{evidence.get('reason', '')}")
+
+    lease = acquire(store, action, guard=guard, state=state,
+                    fingerprint=lease_fingerprint(evidence), now=now)
+    if lease is None:
+        return False, ("no lease issued: another unexpired lease is already "
+                       "outstanding")
+    return True, lease["lease_id"]
+
+
+# --- the pieces the budget functions above are made of ---------------------
+
+
+def _timestamp(value: Any, where: str) -> float:
+    """A timestamp as a float; a value we cannot read is a loud error.
+
+    The lease table stores timestamps as floats so that one file carries one
+    clock (``now`` is wall-clock seconds everywhere in this module).  A
+    timestamp we cannot read is not a timestamp of zero — it is a bug in the
+    caller, and it must say so rather than become a plausible number.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{where} is {value!r}, not a number") from exc
+
+
+def _outstanding_lease(store: Store, now: float) -> dict | None:
+    """The lease that is neither expired nor consumed, or ``None``.
+
+    That is what "one lease at a time" (spec §6 rule 1) means: a lease that
+    was used up, or that has run out, no longer holds the world.
+    """
+    for lease in store.data["leases"].values():
+        if isinstance(lease, dict) and not lease.get("consumed") \
+                and not _lease_expired(lease, now):
+            return lease
+    return None
+
+
+def _lease_expired(lease: dict, now: float) -> bool:
+    """Has this lease run out — ``issued_at + LEASE_TTL_S <= now``?
+
+    The constant is used, never the stored ``ttl_s``: the stored value is
+    what was issued (spec §6's field, and what the CLI prints), while expiry
+    must not be readable out of the file, or a hand-edited state file would
+    renew its own leases.  A lease whose ``issued_at`` cannot be read is
+    expired — an unreadable premise is a broken premise.
+    """
+    issued_at = lease.get("issued_at")
+    if isinstance(issued_at, bool) or not isinstance(issued_at, (int, float)):
+        return True
+    return issued_at + LEASE_TTL_S <= now
 
 def _require_counted(action: str) -> None:
     """The budget exists for the five world-changing actions only (spec §7).
@@ -963,7 +1264,8 @@ def _fresh_state() -> dict:
     """A store that has never been saved: no state, no attempts, no blocks."""
     return {"version": STATE_VERSION, "state": None,
             "attempts": {"by_identity": {}, "global": {}},
-            "blocks": {}}
+            "blocks": {},
+            "leases": {}, "armed": {}}
 
 
 def _normalize(data: dict) -> dict:
@@ -975,7 +1277,9 @@ def _normalize(data: dict) -> dict:
     data.setdefault("state", None)
     data.setdefault("attempts", {})
     data.setdefault("blocks", {})
-    for key in ("attempts", "blocks"):
+    data.setdefault("leases", {})
+    data.setdefault("armed", {})
+    for key in ("attempts", "blocks", "leases", "armed"):
         if not isinstance(data[key], dict):
             raise ValueError(f"the state file's {key!r} is not an object")
     for key in ("by_identity", "global"):
@@ -984,6 +1288,8 @@ def _normalize(data: dict) -> dict:
             raise ValueError(f"the state file's attempts.{key} is not an object")
     _validate_counters(data["attempts"])
     _validate_markers(data["blocks"])
+    _validate_leases(data["leases"])
+    _validate_armed(data["armed"])
     return data
 
 
@@ -1007,6 +1313,44 @@ def _validate_markers(blocks: dict) -> None:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"the state file's {where}.{key} is {value!r}, "
                                  f"not a number")
+
+
+def _validate_leases(leases: dict) -> None:
+    """Refuse a lease we cannot read — at load time, not at first use.
+
+    Expiry compares the lease's ``issued_at`` against the clock, and the
+    fingerprint is what spec §6's rule 3 is checked against later; a lease
+    missing either would raise deep inside the gate, long after the file was
+    read.  Refusing it at the door says what is wrong with the file.
+    """
+    for lease_id, lease in leases.items():
+        where = f"leases[{lease_id!r}]"
+        if not isinstance(lease, dict):
+            raise ValueError(f"the state file's {where} is not an object")
+        for key in ("issued_at", "ttl_s"):
+            value = lease.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"the state file's {where}.{key} is {value!r}, "
+                                 f"not a number")
+        fingerprint = lease.get("fingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint:
+            raise ValueError(f"the state file's {where}.fingerprint is missing")
+
+
+def _validate_armed(armed: dict) -> None:
+    """Refuse an armed record we cannot read — at load time.
+
+    ``expired_while_armed`` resolves every armed entry through its
+    ``lease_id``; an entry without one cannot be resolved, and it must not
+    wait for a ``KeyError`` inside the gate to say so.
+    """
+    for guard, entry in armed.items():
+        where = f"armed[{guard!r}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"the state file's {where} is not an object")
+        lease_id = entry.get("lease_id")
+        if not isinstance(lease_id, str) or not lease_id:
+            raise ValueError(f"the state file's {where}.lease_id is missing")
 
 
 def _validate_counters(attempts: dict) -> None:
