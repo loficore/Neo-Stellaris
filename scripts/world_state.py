@@ -366,7 +366,18 @@ def set_process_start_time_provider(provider: Callable[[int], Any] | None) -> No
 
     This is a **seam**, not a dependency: the module stays importable and
     testable on any host, with or without a provider.
+
+    A provider that is not callable is refused **here**, with a
+    ``TypeError``: a non-callable would be swallowed by the ``except
+    Exception`` in ``_process_start_time`` and the lock's generation check
+    would go **inert silently** — exactly the failure mode Ruling R15
+    exists to avoid.  ``None`` is the only other accepted value: it
+    uninstalls the provider.
     """
+    if provider is not None and not callable(provider):
+        raise TypeError(
+            f"process start-time provider must be callable or None, "
+            f"got {type(provider).__name__}")
     global _PROCESS_START_TIME_PROVIDER
     _PROCESS_START_TIME_PROVIDER = provider
 
@@ -446,6 +457,10 @@ class Store:
         has no lock to take: modelling a crashed writer, or a deliberate
         forensic write to a file nobody else is writing.  It means "write
         without the lock; I know what I am doing".
+
+        The state file's directory is created if it is missing — here and on
+        the lock path (see ``locked()``): a fresh host has no ``C:\\temp``
+        yet, and the write must not die on the way there.
         """
         if not unsafe and self.lock_path not in _HELD_LOCKS:
             raise RuntimeError(
@@ -482,6 +497,11 @@ class Store:
         than waited on, so a crashed holder cannot wedge the one-shot process.
         A live owner is waited for up to ``timeout_s``; after that a
         ``TimeoutError`` — the CLI turns that into exit code 4, 「锁僵死」.
+
+        The state file's directory is created **before** the lock file is
+        taken: the lock file lives in that directory, so on a fresh host
+        (``C:\\temp`` need not exist) the very first write would otherwise
+        die in ``os.open`` with a bare ``FileNotFoundError``.
         """
         key = self.lock_path
         depth = _HELD_LOCKS.get(key, 0)
@@ -502,10 +522,38 @@ class Store:
             _HELD_LOCKS.pop(key, None)
             self._release()
 
+    def _ensure_directory(self) -> None:
+        """Create the state file's own directory, if it is not there yet.
+
+        The lock file (``ns_world.lock``) lives in the state file's directory,
+        so the directory must exist **before** ``os.open`` builds the lock —
+        on a fresh host ``C:\\temp`` need not exist, and the first write must
+        not die with a bare ``FileNotFoundError`` before ``save()`` runs.
+
+        A bare filename (no directory part) is left alone: ``os.makedirs("")``
+        would raise.  A directory that cannot be created is reported as the
+        module's own loud ``RuntimeError``, not as a stray ``OSError`` from
+        deep inside the lock.
+        """
+        directory = os.path.dirname(self.path)
+        if not directory:
+            return
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"{self.path}: cannot create the state directory "
+                f"({exc})") from exc
+
     def _acquire(self, timeout_s: float) -> None:
         """Create the lock file, or take it over from an owner that is gone."""
         deadline = time.monotonic() + max(timeout_s, 0.0)
         while True:
+            # The lock file lives in the state file's own directory, so that
+            # directory must exist before the lock file can be created —
+            # otherwise the first write on a fresh host dies in os.open with
+            # a bare FileNotFoundError, before save() ever gets a chance.
+            self._ensure_directory()
             try:
                 fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             except FileExistsError:

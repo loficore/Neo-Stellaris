@@ -36,6 +36,14 @@ Task 2's fix round adds four more fences, one per finding:
   without holding the lock raises;
 * a corrupt budget never reads as "no attempts".
 
+Task 2's fix round 2 adds two more fences:
+
+* the state file's directory is created **before** the lock file, so the
+  very first write on a fresh host (``C:\\temp`` need not exist) does not
+  die in ``os.open``;
+* the start-time provider seam refuses a non-callable, instead of quietly
+  degrading the lock's generation check to nothing.
+
 No shot, no pixel, no Windows: every fixture is a dict in, a tuple out; the
 only files touched are the ones under ``tmp_path``.
 """
@@ -635,3 +643,70 @@ def test_lock_is_reentrant_safe_and_steals_dead_owner(tmp_path):
     finally:
         child.kill()
         child.wait()
+
+
+def test_lock_creates_the_state_directory_before_taking_the_lock(tmp_path):
+    """全新机器上的第一次写盘不能死在 os.open（复审发现 A）。
+
+    锁文件住在状态文件自己的目录里，而目录在 fresh host 上可能根本不存在
+    （生产路径是 ``C:\\temp\\ns_world.json``，``C:\\temp`` 不必存在）。
+    若取锁时不先建目录，``os.open`` 会抛裸的 ``FileNotFoundError`` ——
+    一个连模块自己那套清楚的 ``RuntimeError`` 都不是的错误，状态机连
+    「第一次尝试」都记不下来。
+    """
+    from world_state import Store
+
+    path = tmp_path / "sub" / "ns_world.json"
+    assert not path.parent.exists(), "前置条件：目录此刻还不存在"
+
+    store = Store.load(path)
+    # 目录不存在时，load 不许有任何副作用（spec §3）。
+    assert not path.parent.exists(), "load 不得建目录"
+
+    # 取锁 + 写盘，全程不需要 unsafe=True。
+    with store.locked(timeout_s=1.0):
+        store.data["state"] = "IN_GAME_RUNNING"
+        store.save()
+
+    assert path.exists(), "锁路径必须把目录建出来并落盘"
+    assert Store.load(path).data["state"] == "IN_GAME_RUNNING"
+    assert not (path.parent / "ns_world.lock").exists(), "锁必须释放"
+
+
+def test_lock_works_with_a_bare_filename_path(tmp_path, monkeypatch):
+    """裸文件名（没有目录部分）不能让 os.makedirs("") 抛异常。
+
+    ``os.path.dirname("ns_world.json")`` 是空串；建目录时必须跳过空目录，
+    否则 ``makedirs("")`` 会抛 FileNotFoundError。
+    """
+    from world_state import Store
+
+    monkeypatch.chdir(tmp_path)
+    store = Store.load("ns_world.json")
+    assert os.path.dirname(store.lock_path) == "", "前置条件：锁路径没有目录部分"
+
+    with store.locked(timeout_s=1.0):
+        store.save()
+
+    assert (tmp_path / "ns_world.json").exists()
+    assert not (tmp_path / "ns_world.lock").exists(), "锁必须释放"
+
+
+def test_provider_setter_refuses_a_non_callable():
+    """provider 挂载点必须拒绝不可调用的东西（复审发现 B）。
+
+    一个不可调用的 provider 会被 ``_process_start_time`` 里的
+    ``except Exception`` 吞掉，代际检查就**静默地**失效了 —— 那正是
+    R15 要防的失效模式。宁可当场 TypeError。
+    """
+    from world_state import set_process_start_time_provider
+
+    with pytest.raises(TypeError):
+        set_process_start_time_provider("not callable")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        set_process_start_time_provider(42)  # type: ignore[arg-type]
+
+    # None 仍然是「卸掉 provider」，不是一个错误。
+    set_process_start_time_provider(None)
+    set_process_start_time_provider(lambda pid: f"gen-{pid}")
+    set_process_start_time_provider(None)
