@@ -1401,6 +1401,38 @@ just game stop | quit
     ⇒ 「这张证据图能不能读」不是传输方式的函数,是**那个 id 会不会再出现**的函数;取 `text:*` 可以 scp,
     取 `geom:*` 要预期半写,判定得靠可解码的那一份。别把半写读成「daemon 写坏了图」。
 
+### `scripts/execspy.py [observe_seconds] [--uninstall-only]` —— §13 shim census 的复采通道
+
+**用法**:Windows 侧跑 `python C:\temp\execspy.py 60`(默认 45 s)。它把 DLL 装进正在跑的游戏、等
+`base Execute` 真的安静下来再 install、观测指定秒数后打印 `stats` / shim histogram / 抽样记录,最后 uninstall 并
+`verify`。`--uninstall-only` 跳过 install/观测,只拆一把已经装上的 detour(游戏先暂停,再跑一次)。
+
+**它读谁的字节**:histogram 是**我们 DLL 的 `exec_hook` 记的**,不是 Frida 记的 —— `execspy.js` 的 `hist`
+RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.js:2`);Frida 自己的
+`Interceptor` 在这条通道里只有一个用途:install 之前当**独立的静默探针**(`spy()`,那时 DLL 的计数器还不存在)。
+所以 §13 那 3,900 行计数与后来任何一次复采,判读者都是**同一份 DLL 侧记录器**,这一点决定了「换了 DLL 字节还能不能
+并排读」的答案:能并排**讨论**,不能并排**比对**(见陷阱 4 与窗口计划的 Review Focus 5)。
+
+**DLL 路径**:`NS_LIVE_DLL` 覆盖,缺省仍是 `C:\ns\stellaris_quickjs.dll` —— 这一族与证人/donor 那族的
+`C:\temp\sqjs_c4.dll` 是两份字节,两次读数之间的差可能来自靶子也可能来自字节本身。
+
+**判读陷阱(本地编号 1–4)**:
+
+1. **`hist_overflow > 0` ⇒ 计数不完整**,这次的任何「N distinct shims」都是**截断假象**(§13 第一轮
+   315,302 次调用就是溢出那一轮,structures :374-382)。出现它就把读数当环境样本记,不写 per-system 结论。
+2. **装与拆都要热路径静默窗口**:install 与 uninstall 各改写同一段 16 字节 `base Execute` 而游戏线程正在执行它。
+   驱动的等待是 `game is RUNNING → polling for silence`(靠 DLL 自己的 `calls` 计数器判静默);等待失败时它**停在
+   已装状态**并退出,不要在这时强行拆或 FreeLibrary。
+3. **「N 次」不是「per-system」**:§13 的 2,090 是那次场景的读数,原话要求先用**换场景/换银河大小**做相关性
+   (`correlate … before claiming it`)。复采同场景只算重复确认,不算判据达成。
+4. **模块名跟着注入走**:`DLL_NAME` 在 `execspy.js` 里是 RPC 解析导出的依据,驱动把 `NS_LIVE_DLL` 的
+   basename 以 `NS_DLL_NAME` 注入(`execspy.py`);只改 `-` 路径而不改它 ⇒ 装进去的是 A、找的是 B,报
+   `stellaris_quickjs.dll is not loaded`。
+
+**顺序:本工具压最后**(窗口计划 Task 10)。它是唯一武装 `base Execute` detour 的一发,之后任何 `[self+0]`
+join 读数都会来自一个热路径归我们所有的进程 —— 那一刻起证人/donor/scope 的 `[self+0]` 都不再干净。
+`hist_overflow == 0` 是这一发的硬门。
+
 ### `scripts/windows/popup_*.py` —— 弹窗身份三件套
 
 名单是**数据,不是代码**:放行哪些弹窗改 `C:/temp/ns_popup_allowlist.json`,监督器不热加载,改完

@@ -14,7 +14,11 @@ Exemptions are added by naming the file in the rule function's docstring,
 never by ``xfail`` — xfail hides the drift that motivated the fence.
 """
 
-import os, re, sys, pathlib
+import importlib
+import os
+import pathlib
+import re
+import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = pathlib.Path(__file__).resolve().parent
 REPO = SCRIPTS.parent
@@ -305,9 +309,8 @@ def test_live_scripts_are_out_of_scope_for_the_env_var_rule():
         assert live not in offenders
 
 def test_version_suffix_rule_accepts_game_version_tokens_only(tmp_path):
-    for name, dirty in (("body2.py", True), ("fs3.py", True), ("spy7.js", True),
-                        ("misc.py", True), ("scan444.py", False),
-                        ("anchor444.js", False), ("thunkarrays.py", False)):
+    for name in ("body2.py", "fs3.py", "spy7.js", "misc.py",
+                 "scan444.py", "anchor444.js", "thunkarrays.py"):
         (tmp_path / name).write_text("")
     hits = {v.split(":")[0] for v in violates_version_suffix(sorted(tmp_path.glob("*.*")))}
     assert hits == {"body2.py", "fs3.py", "spy7.js", "misc.py"}
@@ -349,7 +352,8 @@ def test_living_docs_script_references_resolve():
     assert dangling_script_refs(docs) == []
 
 def test_dangling_rule_fires_on_a_moved_script(tmp_path):
-    (tmp_path / "docs").mkdir(); (tmp_path / "scripts").mkdir()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "gone.py").touch()
     (tmp_path / "docs" / "a.md").write_text("run `python3 scripts/nowhere.py`\n")
     hits = dangling_script_refs([tmp_path / "docs" / "a.md"])
@@ -378,15 +382,14 @@ def test_hardcoded_rva_rule_flags_a_rvas_dict(tmp_path):
 def test_no_hardcoded_rva_dict_anywhere_in_the_maintained_tree():
     assert violates_hardcoded_rvas(top_level_scripts(SCRIPTS)) == []
 
-import importlib
-
 def test_c2_test_sanity_resolves_rvas_from_the_reparsed_table():
     m = importlib.import_module("c2_test_sanity")
     exports = {"C2Sanity": 0x1234, "C2Init": 0x5678}
     assert m.resolve_targets(exports, ("C2Sanity", "C2Init")) == exports
     try:
         m.resolve_targets(exports, ("C2Sanity", "C2Gone"))
-        assert False, "a stale export name must raise, not dispatch a guessed address"
+        raise AssertionError(
+            "a stale export name must raise, not dispatch a guessed address")
     except KeyError as exc:
         assert "C2Gone" in str(exc)
 
@@ -484,3 +487,27 @@ def test_stray_rule_flags_a_backslash_named_file(tmp_path):
 
 def test_real_scripts_tree_has_no_stray_windows_paths():
     assert stray_windows_literal_paths(SCRIPTS) == []
+
+
+# ---------------------------------------------------------------------------
+# Review Focus 2 (window plan 2026-10-27-live-window-out-of-family-witness):
+# the B2 census must run LAST in a window, because it arms the base-Execute
+# detour and every later [self+0] join reading would come from a process whose
+# hot path we own.  The statement lives in the tool's own doc section — this
+# fence keeps it from being deleted by a later tidy-up.
+# ---------------------------------------------------------------------------
+
+def test_census_runs_last_ordering_note():
+    text = (REPO / "docs" / "offline-tooling.md").read_text(encoding="utf-8")
+    heading = next((ln for ln in text.splitlines()
+                    if ln.startswith("### ") and "scripts/execspy.py" in ln), None)
+    assert heading is not None, "execspy 没有文档节(AGENTS 要求每个维护中工具有一节)"
+    start = text.index(heading)
+    end = text.find("\n### ", start + len(heading))
+    section = text[start:] if end < 0 else text[start:end]
+    assert "顺序" in section, "文档节必须写顺序声明"
+    assert "压最后" in section or "最后" in section
+    assert "hist_overflow" in section, "文档节必须写 hist_overflow==0 硬门"
+    # The DLL module NAME is baked into execspy.js too — a driver that only
+    # parameterized the Python path would load one file and look for another.
+    assert "execspy.js" in section and "模块名" in section

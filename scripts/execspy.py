@@ -14,6 +14,7 @@ Install and uninstall both rewrite the same 16 bytes of the engine's hottest fun
 each one waits for a window where base Execute is silent (game paused).
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -22,7 +23,14 @@ import frida
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-DLL = r'C:\ns\stellaris_quickjs.dll'
+# NS_LIVE_DLL lets a window point the census at the bytes under test. Two cautions,
+# both load-bearing: (1) a whole-file DLL sha is provenance, not code identity — a
+# reading taken with C:\temp\sqjs_c4.dll may be DISCUSSED next to one taken with
+# C:\ns\stellaris_quickjs.dll but never compared against it; (2) the module NAME is
+# what execspy.js resolves exports by, so the basename is pushed into the script
+# below (a driver that only changed this path would load one file and look for
+# another).
+DLL = os.environ.get('NS_LIVE_DLL', r'C:\ns\stellaris_quickjs.dll')
 JS = r'C:\ns\execspy.js'
 INJECTOR = r'C:\ns\inject.exe'
 
@@ -39,7 +47,17 @@ pid = procs[0].pid
 print(f'pid={pid}  observe={seconds}s')
 
 sess = dev.attach(pid)
-script = sess.create_script(open(JS, encoding='utf-8').read())
+try:
+    with open(JS, encoding='utf-8') as fh:
+        js_source = fh.read()
+except OSError as exc:
+    sys.exit(f'cannot read {JS}: {exc}')
+# The module name travels with the injection: execspy.js resolves exports with
+# Process.findModuleByName, so an NS_LIVE_DLL of C:\temp\sqjs_c4.dll needs the JS
+# to look for sqjs_c4.dll (review finding, 2026-10-27).
+js_source = ('var NS_DLL_NAME = ' + json.dumps(os.path.basename(DLL)) + ';\n'
+             + js_source)
+script = sess.create_script(js_source)
 script.on('message', lambda m, d: print('MSG:', json.dumps(m)[:400]))
 script.load()
 api = script.exports_sync
