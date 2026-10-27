@@ -28,6 +28,18 @@ Two rules are not negotiable (spec §5):
   ``bright_px`` / ``gold_px`` / ``row_count`` / ``option_count`` / ``bbox``),
   not only the verdict — a verdict cannot be re-graded into a threshold later
   (spec §10).
+
+One host fact is not in this module: how to read a **process's start time**
+on Windows.  Spec §7 names the source — the CIM creation date — and spec
+§11-4 makes the start time the *generation* half of the lock's owner
+identity (the same pid can come back as a different process).  This module
+must stay pure (no win32 imports, cross-platform, offline-testable), so it
+cannot ask Windows itself.  Instead it exposes a **provider seam**:
+``set_process_start_time_provider(fn)`` installs a callable that answers
+"when did this pid start?", and ``_process_start_time`` consults it before
+falling back to the Linux ``/proc`` parse.  With no provider installed,
+Windows degrades to **liveness-only** — a recycled pid is not detected by
+generation, and a stale lock has to be cleared by hand (loud, not silent).
 """
 
 from __future__ import annotations
@@ -38,7 +50,7 @@ import json
 import os
 import secrets
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 #: The 11 states of spec §5, in the order the spec lists them.
@@ -312,6 +324,53 @@ STATE_VERSION = 1
 #: somewhere else (spec §3: ``ns_world.json`` 与 ``ns_world.lock`` 并排).
 _LOCK_FILE_NAME = "ns_world.lock"
 
+#: The sections a complete probe reading carries, and the raw counts each one
+#: must hold (spec §10: 探针证据必须记**原始计数**而不是只记判词).  This is
+#: the shape ``unblock`` demands of an evidence file: the nonce alone is not
+#: evidence (spec §7: 唯一被接受的解封证据是 ``ns_world.py probe --out`` 生成
+#: 的文件，含 ``block_nonce`` 与**当时的完整探针读数**).
+_PROBE_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pause", ("red_px", "green_px")),
+    ("console", ("bright_px",)),
+    ("window", ("gold_px", "row_count", "option_count")),
+)
+
+#: The installed provider for a process's start time, or ``None``.
+#:
+#: spec §7 names the source — the CIM creation date — but this module has to
+#: stay pure (no win32 imports, cross-platform, offline-testable), so it
+#: cannot ask Windows itself.  The Windows side installs the query here
+#: (``world_probe.process_identity``, wired up by the CLI); with no provider
+#: installed, ``_process_start_time`` falls back to the Linux ``/proc`` parse
+#: and, where there is no ``/proc``, to ``None`` — which degrades the lock's
+#: generation check to liveness-only (spec §11-4's 代际不符即抢占 is then
+#: inert on Windows, and a stale lock waits out the timeout instead).
+_PROCESS_START_TIME_PROVIDER: Callable[[int], Any] | None = None
+
+
+def set_process_start_time_provider(provider: Callable[[int], Any] | None) -> None:
+    """Install (or, with ``None``, remove) the process start-time provider.
+
+    The provider is called with a pid and answers "when did this process
+    start?" — the **generation** half of spec §7's
+    ``process_identity = (pid, process_start_time)``.  It returns a stable
+    token for that process (the CIM creation date on the Windows side), or
+    ``None`` when it cannot be read.  The same token must come back for the
+    same process and a different one for a recycled pid: that difference is
+    what lets the lock tell "the holder is gone" from "the holder is
+    another process wearing its pid".
+
+    The token is stored in the lock file and compared against a freshly
+    obtained one, so a provider that returns a constant would make every
+    lock look like a different generation.
+
+    This is a **seam**, not a dependency: the module stays importable and
+    testable on any host, with or without a provider.
+    """
+    global _PROCESS_START_TIME_PROVIDER
+    _PROCESS_START_TIME_PROVIDER = provider
+
+
 #: Locks this process holds, by lock path: path -> depth.  A module-level
 #: registry rather than an attribute of one ``Store``, so two ``Store`` objects
 #: on the same path inside one process cannot deadlock each other.  There are
@@ -370,12 +429,29 @@ class Store:
         target = str(path) if path is not None else DEFAULT_STATE_PATH
         return cls(target, _read_state(target))
 
-    def save(self) -> None:
+    def save(self, *, unsafe: bool = False) -> None:
         """Write ``.data`` back to the state file, atomically.
 
         Readers do not take the lock (spec §3), so the file is replaced rather
         than rewritten in place: a reader must never see half a document.
+
+        **The write must happen under the lock.**  A store whose path this
+        process does not currently hold the lock on is refused: saving it
+        would silently overwrite whatever a concurrent process recorded since
+        this store was loaded — the double-spend the lock exists to prevent,
+        and one that produces no error at all.  So mutate and save inside
+        ``with store.locked():``.
+
+        ``unsafe=True`` is the named escape hatch for the case that genuinely
+        has no lock to take: modelling a crashed writer, or a deliberate
+        forensic write to a file nobody else is writing.  It means "write
+        without the lock; I know what I am doing".
         """
+        if not unsafe and self.lock_path not in _HELD_LOCKS:
+            raise RuntimeError(
+                f"{self.path}: refusing to save without the single-writer "
+                f"lock — mutate and save inside `with store.locked():` "
+                f"(pass unsafe=True to write anyway)")
         directory = os.path.dirname(self.path)
         tmp = f"{self.path}.tmp"
         try:
@@ -525,9 +601,16 @@ def record_attempt(store: Store, action: str, identity: tuple[int, str],
     one is what survives a relaunch — a new pid must not buy a fresh budget
     (spec §11-3).
 
+    ``identity`` is spec §7's ``process_identity = (pid, process_start_time)``
+    of the **game** process — the one the action is aimed at, not the caller.
+    A game restart therefore starts that tally over, while the global window
+    keeps the block sticky.
+
     Raises ``Blocked`` when the action is already blocked, and counts nothing
     in that case: the refused attempt is not an attempt.  The return value is
-    the identity-scoped count after the increment.
+    the **identity-scoped** count after the increment — the game process's own
+    tally — not the global one, which is the number of attempts by every
+    process inside the window.
 
     ``now`` is wall-clock seconds (``time.time()``): the unblock check
     compares ``blocked_at`` against a file's mtime, and that only makes sense
@@ -569,7 +652,7 @@ def blocked(store: Store, action: str, now: float, *,
     that refuses the action).
 
     Without an ``identity`` only the global window is consulted; with one,
-    both this process's tally and the global window are.
+    both the **game** process's own tally and the global window are.
     """
     _require_counted(action)
     marker = store.data["blocks"].get(action)
@@ -612,15 +695,29 @@ def unblock(store: Store, nonce: str, evidence_path: str,
             now: float) -> tuple[bool, str]:
     """Clear the block ``nonce`` names — but only for machine-made evidence.
 
-    Four checks, first failure wins (spec §7):
+    Five checks, first failure wins (spec §7):
 
     1. the evidence file exists;
     2. it is not empty and is valid JSON;
     3. it carries a ``block_nonce`` equal to ``nonce``;
-    4. its mtime is later than the block's ``blocked_at``.
+    4. it carries a **complete probe reading** — the ``pause`` / ``console`` /
+       ``window`` sections, each a dict, with the raw counts in place
+       (``pause.red_px`` / ``green_px``, ``console.bright_px``,
+       ``window.gold_px`` / ``row_count`` / ``option_count``);
+    5. its mtime is later than the block's ``blocked_at``.
 
-    A hand-written or ``touch``\\ ed file fails: it carries no matching nonce.
-    Check 4 needs the block's own ``blocked_at``, so a nonce no block carries
+    Check 4 is what makes the nonce worth something.  The nonce is **not** a
+    secret: it sits in the plain-JSON state file, and ``blocked()`` hands it
+    back to every caller — so a hand-written twelve-byte
+    ``{"block_nonce": "..."}`` with a fresh mtime satisfies checks 1, 2, 3 and
+    5, and the agent could brush every block off with it.  spec §7 fixes what
+    the accepted evidence *is*: 「唯一被接受的解封证据是 ``ns_world.py probe
+    --out <该路径>`` 生成的文件（含 ``block_nonce`` 与**当时的完整探针读数**）」
+    — the nonce **and** the complete probe reading taken at the time.  Check 4
+    is that definition, enforced; the file must be shown to be the right
+    artifact before its timestamp is trusted.
+
+    Check 5 needs the block's own ``blocked_at``, so a nonce no block carries
     is refused as well.
 
     On success the block is cleared **and** that action's counters are reset —
@@ -646,6 +743,11 @@ def unblock(store: Store, nonce: str, evidence_path: str,
     if document.get("block_nonce") != nonce:
         return False, (f"evidence block_nonce {document.get('block_nonce')!r} "
                        f"does not match the block {nonce!r}")
+    missing = _missing_probe_readings(document)
+    if missing:
+        return False, (f"evidence file carries no complete probe reading "
+                       f"(missing: {', '.join(missing)}) — a nonce alone is "
+                       f"not evidence")
     action = None
     marker = None
     for name, candidate in store.data["blocks"].items():
@@ -712,11 +814,17 @@ def _global_count(counter: dict | None, now: float) -> int:
 
 
 def _identity_count(store: Store, action: str, identity: tuple[int, str]) -> int:
-    """How many attempts *this* process has made with this action.
+    """How many attempts of ``action`` **the game process** has made.
 
-    Not windowed: the sliding window is the global counter's (spec §7).  Within
-    one process the tally is what it is — a block stays a block until someone
-    unblocks it with evidence.
+    ``identity`` is spec §7's ``process_identity = (pid, process_start_time)``
+    of the **game** process — not of whichever process happens to be asking.
+    That is what makes a game restart reset this tally (a new pid, a new
+    start time) while the global window keeps the block sticky: the two
+    scopes move for different reasons, on purpose.
+
+    Not windowed: the sliding window is the global counter's (spec §7).
+    Within one identity the tally is what it is — a block stays a block until
+    someone unblocks it with evidence.
     """
     per_action = store.data["attempts"]["by_identity"].get(_identity_key(identity))
     if not per_action:
@@ -733,6 +841,43 @@ def _attempts_now(store: Store, action: str, now: float) -> int:
         if counter:
             counts.append(_count(counter["attempts"]))
     return max(counts)
+
+
+def _missing_probe_readings(document: dict) -> list[str]:
+    """What a complete probe reading in ``document`` lacks (empty = complete).
+
+    The R4 shape: the ``pause`` / ``console`` / ``window`` sections, each a
+    dict, carrying the raw counts spec §10 insists on — ``pause.red_px`` /
+    ``green_px``, ``console.bright_px``, ``window.gold_px`` / ``row_count`` /
+    ``option_count``.  A section that is not a dict, or a count that is
+    missing or not a number, is reported by name so the refusal says what
+    was wrong with the file.
+
+    The sections are looked for at the top level first and, failing that,
+    under a ``probe`` key — the evidence file is the probe reading plus the
+    nonce, and Task 5's CLI may lay it out either way.  Both shapes have to
+    carry the complete reading; neither is a way around it.
+
+    ``bbox`` is deliberately not required: it is a rectangle or ``None``, and
+    its absence is a normal reading, not a defect.
+    """
+    readings = document
+    if not any(isinstance(document.get(section), dict)
+               for section, _ in _PROBE_SECTIONS):
+        nested = document.get("probe")
+        if isinstance(nested, dict):
+            readings = nested
+    missing: list[str] = []
+    for section, counts in _PROBE_SECTIONS:
+        values = readings.get(section)
+        if not isinstance(values, dict):
+            missing.append(section)
+            continue
+        for count in counts:
+            value = values.get(count)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                missing.append(f"{section}.{count}")
+    return missing
 
 
 def _reset_counters(store: Store, action: str) -> None:
@@ -789,7 +934,81 @@ def _normalize(data: dict) -> dict:
         data["attempts"].setdefault(key, {})
         if not isinstance(data["attempts"][key], dict):
             raise ValueError(f"the state file's attempts.{key} is not an object")
+    _validate_counters(data["attempts"])
+    _validate_markers(data["blocks"])
     return data
+
+
+def _validate_markers(blocks: dict) -> None:
+    """Refuse a block marker we cannot read — at load time, not at first use.
+
+    ``blocked()`` reports the marker's nonce, timestamp and count; a marker
+    that is missing one of them would raise a ``KeyError`` deep inside a
+    budget check, long after the file was loaded.  Refusing it at the door
+    says what is wrong with the file instead.
+    """
+    for action, marker in blocks.items():
+        where = f"blocks[{action!r}]"
+        if not isinstance(marker, dict):
+            raise ValueError(f"the state file's {where} is not an object")
+        nonce = marker.get("nonce")
+        if not isinstance(nonce, str) or not nonce:
+            raise ValueError(f"the state file's {where}.nonce is not a nonce")
+        for key in ("blocked_at", "attempts"):
+            value = marker.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"the state file's {where}.{key} is {value!r}, "
+                                 f"not a number")
+
+
+def _validate_counters(attempts: dict) -> None:
+    """Refuse a budget we cannot read — at load time, not at first use.
+
+    A count that is not a number is a corrupt budget, and a corrupt budget
+    that reads as "no attempts" is exactly the hole an agent would brush its
+    budget through.  So the file is checked the moment it is read, rather
+    than when somebody happens to ask about one action.
+    """
+    for identity, per_action in attempts["by_identity"].items():
+        if not isinstance(per_action, dict):
+            raise ValueError(
+                f"the state file's attempts.by_identity[{identity!r}] "
+                f"is not an object")
+        for action, counter in per_action.items():
+            _check_counter(counter, f"attempts.by_identity[{identity!r}][{action!r}]")
+    for action, counter in attempts["global"].items():
+        _check_counter(counter, f"attempts.global[{action!r}]")
+
+
+def _check_counter(counter: Any, where: str) -> None:
+    """One stored counter must be readable as a count of attempts.
+
+    The count itself must be a number (a hand-edited ``"5"`` is a number
+    written as text, not a count); the timestamps must be numbers too — the
+    sliding window is computed from them.
+    """
+    if not isinstance(counter, dict):
+        raise ValueError(f"the state file's {where} is not an object")
+    count = counter.get("attempts")
+    if isinstance(count, bool) or not isinstance(count, int):
+        raise ValueError(f"the state file's {where}.attempts is {count!r}, "
+                         f"not a count")
+    for key in ("first_t", "last_t"):
+        value = counter.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"the state file's {where}.{key} is {value!r}, "
+                             f"not a timestamp")
+    times = counter.get("times")
+    if times is None:
+        return
+    if not isinstance(times, list):
+        raise ValueError(f"the state file's {where}.times is not a list")
+    for value in times:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"the state file's {where}.times holds {value!r}, "
+                             f"which is not a timestamp")
 
 
 def _unlink(path: str) -> bool:
@@ -811,13 +1030,33 @@ def _process_start_time(pid: int) -> str | None:
     """``pid``'s start time as the kernel records it, or ``None`` where this
     host cannot read it.
 
-    Linux: ``/proc/<pid>/stat`` field 22 (``starttime``).  That is the
-    *generation* half of spec §11-4 — the same pid can come back as a
-    different process, and only the start time tells the two apart.  Windows
-    has no ``/proc``, and reaching for the Win32 API here would put platform
-    code in a module that has to import cleanly everywhere, so it returns
-    ``None`` there and the liveness check alone decides.
+    The **generation** half of spec §11-4: the same pid can come back as a
+    different process, and only the start time tells the two apart.
+
+    Three sources, in order:
+
+    1. the installed provider (see ``set_process_start_time_provider``) —
+       the Windows side's CIM creation date, which is what spec §7 names;
+    2. Linux: ``/proc/<pid>/stat`` field 22 (``starttime``);
+    3. ``None`` — nothing else this host can read.
+
+    With no provider installed, Windows has no ``/proc`` and so answers
+    ``None``: the lock's generation check is inert there and the lock
+    degrades to **liveness-only** (a stale lock waits out the timeout and
+    the CLI reports exit code 4 「锁僵死」 — loud, not silent).
+
+    The value is returned as text, because it is stored in the lock file as
+    JSON and compared against a freshly obtained one.
     """
+    provider = _PROCESS_START_TIME_PROVIDER
+    if provider is not None:
+        try:
+            value = provider(pid)
+        except Exception:
+            return None
+        if value is None:
+            return None
+        return str(value)
     try:
         with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as fh:
             fields = fh.read().rsplit(") ", 1)[-1].split()
