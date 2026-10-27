@@ -1,15 +1,23 @@
 """world_state — the pure world-state machine: turn "is the premise still true?"
 into data and a code gate.
 
-This module is **pure functions only**: cross-platform, zero win32/PIL/numpy
-imports, zero import-time side effects (no file is created, no log truncated,
-no screenshot taken), so it can be unit-tested offline.  It does **not** collect
-probe readings (that is ``scripts/windows/world_probe.py``), persist or lock
-state (Task 2), issue leases (Task 3), or expose a CLI (Task 5).  It answers
-exactly two questions:
+This module is **pure logic plus a file store**: cross-platform, zero
+win32/PIL/numpy imports, zero import-time side effects (no file is created, no
+log truncated, no screenshot taken), so it can be unit-tested offline.  It does
+**not** collect probe readings (that is ``scripts/windows/world_probe.py``),
+issue leases (Task 3), or expose a CLI (Task 5).  It answers exactly three
+questions:
 
 1. which state do the current probe readings mean — ``infer_state(probe)``;
-2. may this state move to that state by this action — ``may(from, to, action)``.
+2. may this state move to that state by this action — ``may(from, to, action)``;
+3. may this action be attempted at all right now — the attempt budget
+   (``record_attempt`` / ``blocked``) and the evidence-gated way out of a
+   block (``block`` / ``unblock``).
+
+The state lives in one JSON file beside one lock file (``Store``) because the
+Windows side is a one-shot process: nothing that must survive may live in
+memory only (spec §3).  The lock covers the read-modify-write of that json and
+nothing else — never a screenshot, never a probe (spec §11-4).
 
 Two rules are not negotiable (spec §5):
 
@@ -24,8 +32,13 @@ Two rules are not negotiable (spec §5):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
+import secrets
+import time
+from collections.abc import Iterator
 from typing import Any
 
 #: The 11 states of spec §5, in the order the spec lists them.
@@ -53,11 +66,37 @@ ACTIONS: tuple[str, ...] = (
     "uninstall",
 )
 
-#: Reserved marker for a transition that **no** of the five actions causes: it is
-#: a state change the probe observed, or a state change only a signed-evidence
-#: ``unblock`` may cause.  Such a transition is not commandable by an action, so
-#: its action slot accepts this marker only — ``may(f, t, "install")`` must not
-#: be able to talk the machine into a transition that an install cannot cause.
+#: The attempt budget of each world-changing action (spec §7, exact values).
+#: ``status`` / ``probe`` / ``assert-ready`` / ``lease`` are deliberately absent:
+#: they never change the world, so counting them would let the agent's own
+#: polling loop block itself (spec §11-6).
+MAX_ATTEMPTS: dict[str, int] = {
+    "click_option": 2,
+    "unpause": 3,
+    "console_close": 3,
+    "install": 1,
+    "uninstall": 3,
+}
+
+#: The sliding window of the **global** (cross-process) attempt counter, in
+#: seconds (spec §7: 另一份 (action, window) 的全局计数，10 分钟滑动窗).  It is
+#: what outlives a relaunch — a new pid must not buy a fresh budget (§11-3).
+GLOBAL_WINDOW_S = 600
+
+#: Reserved marker for a transition that **none** of the five actions causes.
+#: It covers three different flavours, and none of them is commandable by an
+#: action, so the action slot accepts this marker only — ``may(f, t, "install")``
+#: must not be able to talk the machine into a transition an install cannot
+#: cause:
+#:
+#: * a state change the probe observed (most of the edges);
+#: * a state change only a signed-evidence ``unblock`` may cause — the two edges
+#:   out of ``BLOCKED_WITH_EVIDENCE``, and only a nonce-carrying evidence file
+#:   may take them (``unblock`` is not one of the five actions);
+#: * a guard's uninstall that did not verify — ``GUARD_ARMED →
+#:   RESTORE_INCOMPLETE`` — which is a failure observed, not a successful
+#:   ``uninstall`` (so ``may(GUARD_ARMED, RESTORE_INCOMPLETE, "uninstall")`` is
+#:   ``False``).
 NO_ACTION = "probe"
 
 #: spec §5's transition table, copied row by row (10 rows → 21 edges).  Each row
@@ -236,7 +275,10 @@ def evidence_fingerprint(evidence: dict) -> str:
 
 def _raw_counts(probe: dict) -> dict[str, Any]:
     """The raw counts of a probe: its ``raw`` section, overridden by the counts
-    the three sections carry (R4 puts the counts in the sections).
+    the three sections carry — the counts live in the section that measured
+    them (``pause``: ``red_px`` / ``green_px``; ``console``: ``bright_px``;
+    ``window``: ``gold_px`` / ``row_count`` / ``option_count`` / ``bbox``), so a
+    section's own value wins over whatever a caller put in ``raw``.
 
     A count that was not measured is **not** written as 0 — an absent key means
     "not measured", while a 0 means "measured zero".
@@ -251,3 +293,597 @@ def _raw_counts(probe: dict) -> dict[str, Any]:
             if key in section:
                 raw[key] = section[key]
     return raw
+
+
+# ---------------------------------------------------------------------------
+# Persistence: one JSON state file, one lock file beside it (spec §3)
+# ---------------------------------------------------------------------------
+
+#: The state file the Windows side writes.  ``NS_WORLD_STATE`` lets that side
+#: point it elsewhere without editing code; reading it at import is not a side
+#: effect (no file is touched, nothing is created).
+DEFAULT_STATE_PATH: str = os.environ.get("NS_WORLD_STATE") or r"C:\temp\ns_world.json"
+
+#: The state file's schema version.  A file with any other version is refused
+#: rather than guessed at.
+STATE_VERSION = 1
+
+#: The lock file's name — always in the state file's own directory, never
+#: somewhere else (spec §3: ``ns_world.json`` 与 ``ns_world.lock`` 并排).
+_LOCK_FILE_NAME = "ns_world.lock"
+
+#: Locks this process holds, by lock path: path -> depth.  A module-level
+#: registry rather than an attribute of one ``Store``, so two ``Store`` objects
+#: on the same path inside one process cannot deadlock each other.  There are
+#: no threads here (spec §3), so the process is the unit of ownership.
+_HELD_LOCKS: dict[str, int] = {}
+
+#: How long to wait between attempts to take the lock, and how long a lock file
+#: whose owner cannot be read is given before it is treated as garbage.
+_LOCK_POLL_S = 0.05
+_LOCK_GRACE_S = 2.0
+
+
+class Store:
+    """The state file: one JSON document, loaded, mutated under a lock, saved.
+
+    The document is ``.data`` — a plain, mutable dict on purpose: the lease
+    table and the armed guards (Task 3) live in it, so a copy-on-read view
+    would silently drop what a caller wrote.
+
+    The layout is::
+
+        {"version": 1,
+         "state": <spec §5 state name, or null until one is observed>,
+         "attempts": {"by_identity": {"<pid>|<start_time>": {"<action>": counter}},
+                      "global": {"<action>": counter}},
+         "blocks": {"<action>": {"nonce": ..., "blocked_at": ...,
+                                 "attempts": ..., "evidence_fingerprint": ...}}}
+
+    A counter is ``{"attempts": int, "first_t": float, "last_t": float}`` — the
+    value shape spec §7 pins.  The global counter also carries ``times``: the
+    timestamps of the attempts still inside the window, which is what makes the
+    window slide.  ``attempts`` / ``first_t`` / ``last_t`` are recomputed from
+    that list, so the list is the single source of truth.
+    """
+
+    def __init__(self, path: str, data: dict) -> None:
+        self.path = str(path)
+        self.data = data
+
+    @property
+    def lock_path(self) -> str:
+        """The lock file: the state file's own directory, ``ns_world.lock``.
+
+        On the Windows side that is ``C:\\temp\\ns_world.lock`` (spec §3).
+        """
+        return os.path.join(os.path.dirname(self.path), _LOCK_FILE_NAME)
+
+    @classmethod
+    def load(cls, path: str | os.PathLike | None = None) -> Store:
+        """Read the state file; a missing file is a fresh, not-yet-saved store.
+
+        Loading creates nothing (spec §3: import and load have no side
+        effects) and never guesses: a corrupt file raises instead of reading as
+        an empty budget — an unreadable budget must not read as "no attempts".
+        """
+        target = str(path) if path is not None else DEFAULT_STATE_PATH
+        return cls(target, _read_state(target))
+
+    def save(self) -> None:
+        """Write ``.data`` back to the state file, atomically.
+
+        Readers do not take the lock (spec §3), so the file is replaced rather
+        than rewritten in place: a reader must never see half a document.
+        """
+        directory = os.path.dirname(self.path)
+        tmp = f"{self.path}.tmp"
+        try:
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self.data, fh, ensure_ascii=False, sort_keys=True, indent=2)
+                fh.write("\n")
+            os.replace(tmp, self.path)
+        except OSError as exc:
+            # Loud, not silent: a state file that cannot be written must stop the
+            # caller, never look like a budget that was never spent.
+            raise RuntimeError(f"{self.path}: cannot save state ({exc})") from exc
+
+    @contextlib.contextmanager
+    def locked(self, timeout_s: float = 5.0) -> Iterator[Store]:
+        """Hold the single-writer lock around a read-modify-write of the json.
+
+        The lock covers exactly that — never a screenshot, never a probe
+        (spec §11-4).  While it is held, ``.data`` is re-read from disk: that
+        read is the first half of the read-modify-write, so a write another
+        process made in the meantime is not lost.  Mutate inside the block and
+        call ``save()`` inside it too.
+
+        Reentrant: nesting ``locked()`` on the same path is a no-op, not a
+        self-deadlock.  An owner that is gone (its pid no longer exists) or
+        whose generation (its start time) does not match is **stolen** rather
+        than waited on, so a crashed holder cannot wedge the one-shot process.
+        A live owner is waited for up to ``timeout_s``; after that a
+        ``TimeoutError`` — the CLI turns that into exit code 4, 「锁僵死」.
+        """
+        key = self.lock_path
+        depth = _HELD_LOCKS.get(key, 0)
+        if depth:
+            _HELD_LOCKS[key] = depth + 1
+            try:
+                yield self
+            finally:
+                _HELD_LOCKS[key] -= 1
+            return
+        self._acquire(timeout_s)
+        _HELD_LOCKS[key] = 1
+        try:
+            if os.path.exists(self.path):
+                self.data = _read_state(self.path)
+            yield self
+        finally:
+            _HELD_LOCKS.pop(key, None)
+            self._release()
+
+    def _acquire(self, timeout_s: float) -> None:
+        """Create the lock file, or take it over from an owner that is gone."""
+        deadline = time.monotonic() + max(timeout_s, 0.0)
+        while True:
+            try:
+                fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                if self._steal_if_stale():
+                    continue
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"{self.lock_path} stayed locked for {timeout_s}s "
+                        f"(owner: {_owner_text(self.lock_path)})") from None
+                time.sleep(_LOCK_POLL_S)
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"pid": os.getpid(),
+                           "start_time": _process_start_time(os.getpid())}, fh)
+            return
+
+    def _steal_if_stale(self) -> bool:
+        """Take the lock file over if its owner is gone; report whether to retry.
+
+        spec §11-4: 持有者已消失或代际不符即抢占.  The generation is the
+        owner's start time: the same pid can come back as a different process,
+        and only the start time tells the two apart.
+        """
+        try:
+            with open(self.lock_path, encoding="utf-8") as fh:
+                raw = fh.read()
+        except FileNotFoundError:
+            return True          # it vanished under us — just try again
+        except OSError:
+            return False         # unreadable: treat it as held, not as free
+        if not self._owner_is_gone(raw):
+            return False
+        try:
+            os.unlink(self.lock_path)
+        except FileNotFoundError:
+            return True          # someone else took it — retry
+        except OSError:
+            return False
+        return True
+
+    def _owner_is_gone(self, raw: str) -> bool:
+        """Is the owner the lock file names gone (or of another generation)?"""
+        owner = None
+        try:
+            owner = json.loads(raw)
+        except ValueError:
+            owner = None
+        if not isinstance(owner, dict):
+            # A lock file we cannot read names no owner.  A fresh one belongs
+            # to a holder that has created it and not yet written it down, so
+            # give it a moment; an old one is garbage and is taken over.
+            return _age(self.lock_path) > _LOCK_GRACE_S
+        pid = owner.get("pid")
+        if not isinstance(pid, int) or pid <= 0:
+            return True           # no usable owner recorded
+        recorded = owner.get("start_time")
+        actual = _process_start_time(pid)
+        if recorded is not None and actual is not None and recorded != actual:
+            return True           # the pid was recycled: another generation
+        if pid == os.getpid() and self.lock_path not in _HELD_LOCKS:
+            # Our own pid, but this process does not hold the lock: a release
+            # that could not unlink its file.  Left behind it would block every
+            # later acquire until someone deleted it by hand, so take it over.
+            return True
+        return not _owner_alive(pid)
+
+    def _release(self) -> None:
+        """Drop the lock file — only we can be holding it, so nobody stole it."""
+        _unlink(self.lock_path)
+
+
+class Blocked(Exception):
+    """Raised when an action's attempt budget is already spent.
+
+    ``action`` is the action that was refused and ``attempts`` is the count
+    that refuses it — the same number ``blocked()`` reports (the count has
+    reached ``MAX_ATTEMPTS[action]``).
+    """
+
+    def __init__(self, action: str, attempts: int) -> None:
+        super().__init__(f"{action}: {attempts} attempts recorded "
+                         f"(max {MAX_ATTEMPTS.get(action)}) — blocked")
+        self.action = action
+        self.attempts = attempts
+
+
+def record_attempt(store: Store, action: str, identity: tuple[int, str],
+                   now: float) -> int:
+    """Count one attempt of a world-changing action; return the new count.
+
+    Two counters move (spec §7): one keyed by ``(process_identity, action)``
+    and one global one for ``action`` inside ``GLOBAL_WINDOW_S``.  The global
+    one is what survives a relaunch — a new pid must not buy a fresh budget
+    (spec §11-3).
+
+    Raises ``Blocked`` when the action is already blocked, and counts nothing
+    in that case: the refused attempt is not an attempt.  The return value is
+    the identity-scoped count after the increment.
+
+    ``now`` is wall-clock seconds (``time.time()``): the unblock check
+    compares ``blocked_at`` against a file's mtime, and that only makes sense
+    on one clock.
+    """
+    _require_counted(action)
+    refused = blocked(store, action, now, identity=identity)
+    if refused is not None:
+        raise Blocked(action, refused["attempts"])
+
+    per_action = store.data["attempts"]["by_identity"].setdefault(
+        _identity_key(identity), {})
+    counter = per_action.get(action)
+    if counter is None:
+        counter = per_action[action] = {"attempts": 0, "first_t": now, "last_t": now}
+    counter["attempts"] = _count(counter["attempts"]) + 1
+    counter["last_t"] = now
+
+    global_counter = store.data["attempts"]["global"].get(action)
+    if global_counter is None:
+        global_counter = store.data["attempts"]["global"][action] = {
+            "attempts": 0, "first_t": now, "last_t": now, "times": []}
+    times = sorted([t for t in global_counter.get("times") or ()
+                    if now - t < GLOBAL_WINDOW_S] + [now])
+    global_counter["times"] = times
+    global_counter["attempts"] = len(times)
+    global_counter["first_t"] = times[0]
+    global_counter["last_t"] = times[-1]
+    return _count(counter["attempts"])
+
+
+def blocked(store: Store, action: str, now: float, *,
+            identity: tuple[int, str] | None = None) -> dict | None:
+    """Is ``action`` blocked right now?  Return the block, or ``None``.
+
+    The returned dict has exactly three keys: ``nonce`` and ``blocked_at`` (the
+    block ``block()`` recorded — ``None`` while the action is merely over
+    budget and no evidence has been asked for yet) and ``attempts`` (the count
+    that refuses the action).
+
+    Without an ``identity`` only the global window is consulted; with one,
+    both this process's tally and the global window are.
+    """
+    _require_counted(action)
+    marker = store.data["blocks"].get(action)
+    if marker is not None:
+        return {"nonce": marker["nonce"], "blocked_at": marker["blocked_at"],
+                "attempts": marker["attempts"]}
+    counts = [_global_count(store.data["attempts"]["global"].get(action), now)]
+    if identity is not None:
+        counts.append(_identity_count(store, action, identity))
+    over = [count for count in counts if count >= MAX_ATTEMPTS[action]]
+    if not over:
+        return None
+    return {"nonce": None, "blocked_at": None, "attempts": max(over)}
+
+
+def block(store: Store, action: str, evidence: dict, now: float) -> str:
+    """Put ``action`` behind evidence and return the nonce that clears it.
+
+    The nonce is 16 random bytes, hex-encoded.  It goes into the evidence file
+    the CLI writes (``ns_block_<nonce>.json``) — this function does not create
+    that file (Task 5 does), and it does not save the state either: the caller
+    persists inside ``store.locked()``.
+
+    The evidence itself stays in the append-only file; the state keeps only
+    its fingerprint, so the two can be tied together without copying evidence
+    into mutable state.
+    """
+    _require_counted(action)
+    nonce = secrets.token_hex(16)
+    store.data["blocks"][action] = {
+        "nonce": nonce,
+        "blocked_at": now,
+        "attempts": _attempts_now(store, action, now),
+        "evidence_fingerprint": evidence_fingerprint(evidence),
+    }
+    return nonce
+
+
+def unblock(store: Store, nonce: str, evidence_path: str,
+            now: float) -> tuple[bool, str]:
+    """Clear the block ``nonce`` names — but only for machine-made evidence.
+
+    Four checks, first failure wins (spec §7):
+
+    1. the evidence file exists;
+    2. it is not empty and is valid JSON;
+    3. it carries a ``block_nonce`` equal to ``nonce``;
+    4. its mtime is later than the block's ``blocked_at``.
+
+    A hand-written or ``touch``\\ ed file fails: it carries no matching nonce.
+    Check 4 needs the block's own ``blocked_at``, so a nonce no block carries
+    is refused as well.
+
+    On success the block is cleared **and** that action's counters are reset —
+    otherwise the very next attempt would re-block immediately and 「解封」 would
+    be cosmetic.  Other actions' counters are untouched.
+    """
+    path = str(evidence_path)
+    if not os.path.isfile(path):
+        return False, f"evidence file not found: {path}"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        return False, f"evidence file unreadable: {exc}"
+    if not text.strip():
+        return False, f"evidence file is empty: {path}"
+    try:
+        document = json.loads(text)
+    except ValueError as exc:
+        return False, f"evidence file is not valid JSON: {exc}"
+    if not isinstance(document, dict):
+        return False, "evidence file is not a JSON object"
+    if document.get("block_nonce") != nonce:
+        return False, (f"evidence block_nonce {document.get('block_nonce')!r} "
+                       f"does not match the block {nonce!r}")
+    action = None
+    marker = None
+    for name, candidate in store.data["blocks"].items():
+        if candidate.get("nonce") == nonce:
+            action, marker = name, candidate
+            break
+    if action is None or marker is None:
+        return False, f"no block recorded with nonce {nonce!r}"
+    blocked_at = marker["blocked_at"]
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError as exc:
+        return False, f"evidence file cannot be read ({exc})"
+    if not mtime > blocked_at:
+        return False, (f"evidence mtime {mtime} is not later than "
+                       f"blocked_at {blocked_at}")
+    del store.data["blocks"][action]
+    _reset_counters(store, action)
+    return True, f"unblocked {action}"
+
+
+# --- the pieces the four above are made of ---------------------------------
+
+def _require_counted(action: str) -> None:
+    """The budget exists for the five world-changing actions only (spec §7).
+
+    ``status`` / ``probe`` / ``assert-ready`` / ``lease`` never change the
+    world; counting them would let the agent's polling loop block itself
+    (spec §11-6).  A caller that passes one has a bug, not a budget.
+    """
+    if action not in MAX_ATTEMPTS:
+        raise ValueError(f"{action!r} is not a world-changing action; only "
+                         f"{sorted(MAX_ATTEMPTS)} are ever counted")
+
+
+def _identity_key(identity: tuple[int, str]) -> str:
+    """The key of one process identity: ``<pid>|<start_time>``.
+
+    The pid comes first and is a number, so the separator cannot be
+    ambiguous: no two identities share a key.
+    """
+    pid, start_time = identity
+    return f"{pid}|{start_time}"
+
+
+def _count(value: Any) -> int:
+    """An attempt counter's stored value, as an int.
+
+    The file is ours, but a hand-edited one must not turn into a silent zero:
+    a count that cannot be read is a corrupt budget, and a corrupt budget has
+    to be loud — read as "no attempts" it would be the brush hole itself.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"the state file's attempt count {value!r} is not a number") from exc
+
+
+def _global_count(counter: dict | None, now: float) -> int:
+    """How many attempts of the global counter are still inside the window."""
+    if not counter:
+        return 0
+    return len([t for t in counter.get("times") or () if now - t < GLOBAL_WINDOW_S])
+
+
+def _identity_count(store: Store, action: str, identity: tuple[int, str]) -> int:
+    """How many attempts *this* process has made with this action.
+
+    Not windowed: the sliding window is the global counter's (spec §7).  Within
+    one process the tally is what it is — a block stays a block until someone
+    unblocks it with evidence.
+    """
+    per_action = store.data["attempts"]["by_identity"].get(_identity_key(identity))
+    if not per_action:
+        return 0
+    counter = per_action.get(action)
+    return _count(counter["attempts"]) if counter else 0
+
+
+def _attempts_now(store: Store, action: str, now: float) -> int:
+    """The highest attempt count on record for ``action`` right now."""
+    counts = [_global_count(store.data["attempts"]["global"].get(action), now)]
+    for per_action in store.data["attempts"]["by_identity"].values():
+        counter = per_action.get(action)
+        if counter:
+            counts.append(_count(counter["attempts"]))
+    return max(counts)
+
+
+def _reset_counters(store: Store, action: str) -> None:
+    """Forget one action's counters — both scopes — and leave the rest alone."""
+    store.data["attempts"]["global"].pop(action, None)
+    identities = store.data["attempts"]["by_identity"]
+    for key, per_action in list(identities.items()):
+        per_action.pop(action, None)
+        if not per_action:
+            del identities[key]
+
+
+def _read_state(path: str) -> dict:
+    """Read the state document; a missing file is a fresh (unsaved) store."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return _fresh_state()
+    if not raw.strip():
+        raise ValueError(f"{path} is empty — refusing to read it as an empty budget")
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f"{path} is not valid JSON ({exc})") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} does not hold a JSON object")
+    version = data.get("version")
+    if version != STATE_VERSION:
+        raise ValueError(f"{path}: version {version!r} is not {STATE_VERSION}")
+    return _normalize(data)
+
+
+def _fresh_state() -> dict:
+    """A store that has never been saved: no state, no attempts, no blocks."""
+    return {"version": STATE_VERSION, "state": None,
+            "attempts": {"by_identity": {}, "global": {}},
+            "blocks": {}}
+
+
+def _normalize(data: dict) -> dict:
+    """Fill in the parts this module owns that the file happens not to have.
+
+    A file written by an earlier shape still has to be readable — but a file
+    whose containers are not containers is refused, not guessed at.
+    """
+    data.setdefault("state", None)
+    data.setdefault("attempts", {})
+    data.setdefault("blocks", {})
+    for key in ("attempts", "blocks"):
+        if not isinstance(data[key], dict):
+            raise ValueError(f"the state file's {key!r} is not an object")
+    for key in ("by_identity", "global"):
+        data["attempts"].setdefault(key, {})
+        if not isinstance(data["attempts"][key], dict):
+            raise ValueError(f"the state file's attempts.{key} is not an object")
+    return data
+
+
+def _unlink(path: str) -> bool:
+    """Remove a file, tolerating one that is already gone.
+
+    Returns whether it is gone.  A file that could not be removed (a lock
+    file left behind by a release that failed) is recoverable — the next
+    acquire sees our own pid with no lock held and takes it over — so this
+    never raises: it must not fire out of a ``finally``.
+    """
+    try:
+        os.unlink(path)
+    except OSError:
+        return False
+    return True
+
+
+def _process_start_time(pid: int) -> str | None:
+    """``pid``'s start time as the kernel records it, or ``None`` where this
+    host cannot read it.
+
+    Linux: ``/proc/<pid>/stat`` field 22 (``starttime``).  That is the
+    *generation* half of spec §11-4 — the same pid can come back as a
+    different process, and only the start time tells the two apart.  Windows
+    has no ``/proc``, and reaching for the Win32 API here would put platform
+    code in a module that has to import cleanly everywhere, so it returns
+    ``None`` there and the liveness check alone decides.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as fh:
+            fields = fh.read().rsplit(") ", 1)[-1].split()
+        return fields[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _owner_alive(pid: int) -> bool:
+    """Is ``pid`` a process that exists right now?
+
+    Doubt is read as "alive": stealing a live owner's lock would break the
+    single writer, while waiting on a dead one only costs the timeout.
+    """
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    """Windows liveness, without ``os.kill`` — on Windows ``os.kill(pid, 0)``
+    is ``TerminateProcess``, which would kill the very owner we are asking
+    about.  ``OpenProcess`` asks the question instead; ``ctypes`` is stdlib and
+    is imported here so this module stays import-clean and dependency-free on
+    every host.
+    """
+    try:
+        import ctypes
+        # The kernel32 entry points are resolved *before* the call: a symbol
+        # lookup in between would reset the thread's last-error code, which is
+        # exactly what tells "no such pid" from "access denied".
+        kernel32 = ctypes.cdll.LoadLibrary("kernel32")
+        open_process = kernel32.OpenProcess
+        close_handle = kernel32.CloseHandle
+        last_error = kernel32.GetLastError
+        open_process.restype = ctypes.c_void_p
+        close_handle.argtypes = [ctypes.c_void_p]
+        handle = open_process(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if handle:
+            close_handle(handle)
+            return True
+        # 87 is ERROR_INVALID_PARAMETER: OpenProcess reports it for a pid that
+        # does not exist.  Anything else (5 = ACCESS_DENIED) means it is there.
+        return last_error() != 87
+    except Exception:
+        return True
+
+
+def _age(path: str) -> float:
+    """How many seconds ago the file was last written (inf if it is gone)."""
+    try:
+        return time.time() - os.path.getmtime(path)
+    except OSError:
+        return float("inf")
+
+
+def _owner_text(path: str) -> str:
+    """The lock file's raw content, for the timeout message."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read().strip()[:200] or "an empty lock file"
+    except OSError:
+        return "unknown"
