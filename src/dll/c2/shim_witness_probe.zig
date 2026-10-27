@@ -69,7 +69,7 @@ pub const EXPECTED_CODE: [24]u8 = [24]u8{
 pub const Entry = extern struct {
     valid: u8 = 0,
     matched: u8 = 0, // 1 + classifyShim's index; 0 = not one of the seven tables
-    pad0: [2]u8 = [_]u8{0} ** 2,
+    pad0: [2]u8 = .{ 0, 0 },
     self_vtable_rva: u32 = 0,
     caller_rva: u32 = 0,
     self_ptr: u64 = 0,

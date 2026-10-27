@@ -726,6 +726,83 @@ export fn C4WitnessProbeReset() callconv(.c) void {
     c2_witness_probe.reset();
 }
 
+// ---------------------------------------------------------------------------
+// C4 forensics: read-only OUT-OF-FAMILY exec-shim witness (0xCC4220, structures §13 / §71)
+//
+// Thin fold layer only: every export calls shim_witness_probe.zig and maps its
+// errors to the negative codes the driver's docstring documents. No judgement
+// lives here. 本 guard 的状态是 shim_witness_probe.zig 私有的,和 donor/证人互不相干。
+// ---------------------------------------------------------------------------
+
+/// 安装错误码折叠表(纯函数,测试逐档点名;导出只转调它)。0 OK | -1 其它 |
+/// -2 该进程已装好本 guard 或 predicate detour 还 armed(§57.4:[self+0] 会指向我们
+/// DLL 的 vtable,这种状态下读数不能要)| -3 stellaris.exe 未找到 | -4 目标已被 hook
+/// | -5 指纹不符 | -6 patch 过宽。一进程一次 install 额度,所以 -2 不重试。
+fn shimInstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.AlreadyInstalled, error.PatchActive => -2,
+        error.ModuleNotFound => -3,
+        error.AlreadyHooked => -4,
+        error.UnexpectedPrologue => -5,
+        error.PatchTooWide => -6,
+        else => -1,
+    };
+}
+
+/// 卸载折叠表:-7 = RestoreIncomplete,其余 -1。同 witness 段。
+fn shimUninstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.RestoreIncomplete => -7,
+        else => -1,
+    };
+}
+
+/// 只记录 §13 那七把 2,090 次 shim 的族外证人(`0xCC4220`)。码表见 shimInstallCode。
+export fn C4ShimProbeInstall() callconv(.c) i32 {
+    c2_shim_probe.install() catch |err| return shimInstallCode(err);
+    return 0;
+}
+
+/// 采样掩码。任何 u64 都是合法值,故**没有非法值档**:恒返回 0。
+/// mask=0 是「每条都落环」的有语义取值,不是错误。
+export fn C4ShimProbeSetMask(mask: u64) callconv(.c) i32 {
+    c2_shim_probe.setSampleMask(mask);
+    return 0;
+}
+
+/// 0 = 引擎字节已验证还原。-7 = RestoreIncomplete:还原没成功,不要信任该进程,
+/// 且**绝不 FreeLibrary**。未安装时是 no-op。
+export fn C4ShimProbeUninstall() callconv(.c) i32 {
+    c2_shim_probe.uninstall() catch |err| return shimUninstallCode(err);
+    return 0;
+}
+
+/// 原样透传模块的有符号约定:0 一致 | -1 装着但 hook 丢了 | -2 已卸但引擎字节不符 |
+/// -3 本进程从未解析到目标。
+export fn C4ShimProbeVerify() callconv(.c) i32 {
+    return c2_shim_probe.verify();
+}
+
+/// 六个布局词:[48, 64, 256, mask_lo, mask_hi, version]。Stats 是 64 B(7 张表),
+/// 与 donor/证人的 56 不同 —— 驱动的 LAYOUT 门就靠这一格认出是第几把 guard。
+export fn C4ShimProbeLayout(out: [*]u32) callconv(.c) u32 {
+    return c2_shim_probe.layoutInto(out);
+}
+
+export fn C4ShimProbeStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_shim_probe.statsInto(out[0..512]));
+}
+
+export fn C4ShimProbeDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_shim_probe.drainInto(out);
+}
+
+/// 清计数 + 环 + mask + 镜像窗口;不卸载 hook(带活补丁清 calls 会把采样分母
+/// 悄悄重置回 0)。因此必须在 Install 之前调用。
+export fn C4ShimProbeReset() callconv(.c) void {
+    c2_shim_probe.reset();
+}
+
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.
 /// Tests reading the donor vtable addresses byte-by-byte.
 export fn C2Diag() callconv(.c) i32 {
@@ -1110,4 +1187,31 @@ test "DLL entry points are inert off Windows" {
     if (comptime builtin.os.tag == .windows) return;
     try std.testing.expectEqual(@as(usize, 0), gameModuleBase());
     try std.testing.expectEqual(@as(u32, 0), C1Run());
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 (plan 2026-10-27-live-window-out-of-family-witness): the install code
+// table gets a pure function so every tier can be named by a test. The exports
+// themselves only fold through it — no judgement lives in the export bodies.
+// ---------------------------------------------------------------------------
+
+test "C4ShimProbeInstall folds every install error to its documented code" {
+    try std.testing.expectEqual(@as(i32, -2), shimInstallCode(error.AlreadyInstalled));
+    try std.testing.expectEqual(@as(i32, -2), shimInstallCode(error.PatchActive));
+    try std.testing.expectEqual(@as(i32, -3), shimInstallCode(error.ModuleNotFound));
+    try std.testing.expectEqual(@as(i32, -4), shimInstallCode(error.AlreadyHooked));
+    try std.testing.expectEqual(@as(i32, -5), shimInstallCode(error.UnexpectedPrologue));
+    try std.testing.expectEqual(@as(i32, -6), shimInstallCode(error.PatchTooWide));
+    try std.testing.expectEqual(@as(i32, -1), shimInstallCode(error.DetourUnavailable));
+    try std.testing.expectEqual(@as(i32, -1), shimInstallCode(error.Unsupported));
+    // Off Windows the real export takes the Unsupported branch — that is the only
+    // tier the Linux host can reach, and it must fold to -1 (not to a false 0).
+    if (comptime builtin.os.tag != .windows) {
+        try std.testing.expectEqual(@as(i32, -1), C4ShimProbeInstall());
+    }
+}
+
+test "C4ShimProbeUninstall folds RestoreIncomplete to -7 and nothing else" {
+    try std.testing.expectEqual(@as(i32, -7), shimUninstallCode(error.RestoreIncomplete));
+    try std.testing.expectEqual(@as(i32, -1), shimUninstallCode(error.OutOfMemory));
 }
