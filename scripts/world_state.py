@@ -295,31 +295,44 @@ def evidence_fingerprint(evidence: dict) -> str:
 
 
 def lease_fingerprint(evidence: dict) -> str:
-    """The sha256 of spec §6's lease fingerprint: ``(hwnd, pause, console, window, N)``.
+    """The sha256 of spec §6's lease fingerprint: the world's **identity**.
 
-    Spec §6 pins a lease to the **world**, not to the whole evidence document:
-    「fingerprint 不符（窗口/控制台/暂停在签发后变了）⇒ 拒绝」.  So the hashed
-    fields are exactly the ones §6 names — the window handle, the three
-    classifier sections, and the option count N.
+    Exactly five things are hashed (spec §6 rule 3 names them):
+
+    * ``hwnd`` — the world instance (a restarted game has a different one);
+    * ``pause.state`` / ``console.state`` / ``window.kind`` — the three
+      classifier verdicts;
+    * ``window.option_count`` — the N.
+
+    The **raw counts are deliberately not in it**.  Spec §6 rule 3 says the
+    mismatch means 「窗口/控制台/暂停**变了**」 — the *classification* changed,
+    not the pixels: the pause icon pulses every frame, so a fingerprint over
+    ``red_px`` would refuse every call made seconds after the lease was
+    issued, with the world untouched.  The counts stay in the evidence and in
+    the jsonl (spec §10); the fingerprint's job is identity, not measurement.
 
     This is a **second** constructor, not a replacement: ``evidence_fingerprint``
-    pins the whole evidence (including ``prev_option_count`` and ``reason``),
-    which is what a *block* wants — the evidence of the blocked moment, whole.
-    A lease cannot want that: those two fields move every tick, so a lease
-    issued at tick N would die at tick N+1 with the world untouched — a
-    fail-closed refusal that is not closed against anything.
+    pins the whole evidence (including the raw counts, ``prev_option_count``
+    and ``reason``), which is what a *block* wants — the evidence of the
+    blocked moment, whole.  A lease cannot want that: those fields move every
+    tick, so a lease issued at tick N would die at tick N+1 with the world
+    untouched — a fail-closed refusal that is not closed against anything.
 
     The input is either shape this module has: the R4 probe reading or
     ``infer_state``'s evidence output (both carry ``hwnd`` / ``pause`` /
     ``console`` / ``window``).
     """
+    pause = evidence.get("pause")
+    pause = pause if isinstance(pause, dict) else {}
+    console = evidence.get("console")
+    console = console if isinstance(console, dict) else {}
     window = evidence.get("window")
     window = window if isinstance(window, dict) else {}
     subset = {
         "hwnd": evidence.get("hwnd"),
-        "pause": evidence.get("pause"),
-        "console": evidence.get("console"),
-        "window": window,
+        "pause": {"state": pause.get("state")},
+        "console": {"state": console.get("state")},
+        "window": {"kind": window.get("kind")},
         "option_count": window.get("option_count"),
     }
     return _canonical_sha256(subset)
@@ -904,7 +917,22 @@ def acquire(store: Store, action: str, *, guard: str | None, state: str,
     ``with store.locked():`` (R16) — a lease that is not on disk does not
     outlive the process that issued it, and on the Windows side every process
     is a one-shot process (spec §3).
+
+    ``action`` must be one of the five world-changing actions: a lease is
+    spec §6's "one install may claim one lease" credential, and a 30-second
+    lease handed to ``status`` would block every other lease for 30 seconds.
+    ``fingerprint`` must be a non-empty string — a lease pinned to nothing
+    pins nothing (spec §6 rule 3), and an empty one is exactly the value the
+    load-time validator refuses, i.e. a state file we would then be unable to
+    read back.  Both are programming errors, so both raise rather than
+    return ``None``.
     """
+    _require_counted(action)
+    if not isinstance(fingerprint, str) or not fingerprint:
+        raise ValueError(
+            f"the lease for {action!r} needs a non-empty fingerprint, "
+            f"got {fingerprint!r} (spec §6 rule 3: a lease is pinned to one "
+            f"reading of the world)")
     if state != "IN_GAME_RUNNING":
         return None
     if _outstanding_lease(store, now) is not None:
@@ -958,7 +986,15 @@ def arm(store: Store, guard: str, lease_id: str, identity: tuple[int, str],
     ``expired_while_armed`` (spec §11-5).
 
     The caller persists inside ``with store.locked():`` (R16).
+
+    ``lease_id`` must be a non-empty string: an armed record that names no
+    lease is unreadable, and the load-time validator refuses it — so accepting
+    one here would write a state file this module itself cannot read back.
+    A programming error, so it raises rather than returning silently.
     """
+    if not isinstance(lease_id, str) or not lease_id:
+        raise ValueError(
+            f"arm({guard!r}) needs a non-empty lease_id, got {lease_id!r}")
     store.data["armed"][guard] = {
         "lease_id": lease_id,
         "identity": [identity[0], identity[1]],
@@ -1017,41 +1053,68 @@ def assert_ready(store: Store, action: str, *, guard: str | None,
     human-readable reason and **no lease is issued**; on success it is the
     lease id.
 
-    Four checks, in this order, first failure wins:
+    Six checks, in this order, first failure wins:
 
-    1. **blocked** — the attempt budget or a block marker (spec §7);
+    1. **blocked** — the block marker, the global window, and the **probe's
+       pid's** identity tally (spec §7).  The identity half is deliberately
+       **not** windowed, so it outlives the global window; a probe that
+       carries no pid cannot be checked at all, and the gate refuses rather
+       than silently falling back to the window-only answer (fail closed).
     2. **expired_while_armed** — a guard installed whose lease ran out, which
        is ``RESTORE_INCOMPLETE`` (spec §6 rule 4 / §11-5);
     3. **infer_state** must come out ``IN_GAME_RUNNING`` — an ``unknown`` /
        ``undecided`` / ``None`` reading lands on the blocking side (spec §5),
        so an unreadable classifier can never pass this gate;
-    4. **acquire** — only now, with all three premises true, is a lease issued.
+    4. **complete raw counts** — the probe must carry the readings ``unblock``
+       demands (spec §10), or the lease would pin bare verdicts;
+    5. **fingerprint** — the live reading must agree with the lease that
+       authorises this action (spec §6 rule 3): the **outstanding** lease for
+       ``(action, guard)``, and the lease ``guard`` is **armed** against.  A
+       mismatch refuses with **both** fingerprints in the reason and issues
+       nothing; an outstanding lease that matches *is* the authorisation — it
+       is consumed (single use) and handed back;
+    6. **acquire** — only now, with every premise true, is a fresh lease issued.
 
     ``probe_evidence`` is the **probe reading** in the R4 shape — the same
     thing ``infer_state`` takes (``pause`` / ``console`` / ``window`` sections
     plus ``raw`` and ``pid`` / ``hwnd``), *not* ``infer_state``'s evidence
     output (Ruling R17).
 
-    Before ``infer_state`` runs, the store's own verdicts are folded into the
-    readings: the block flag and the armed-expired verdict, so the state that
-    comes out agrees with the gate's own verdicts instead of contradicting
-    them (both facts are checked again by steps 1 and 2; composing them here
-    keeps the two answers from ever disagreeing).
+    Steps 1 and 2 run **before** ``infer_state``, and each of them returns
+    outright when the store disagrees with the caller.  So by the time
+    ``infer_state`` runs, the store has nothing left to fold into the
+    readings: the ordering already guarantees the two answers agree, and the
+    caller's own ``blocked`` / ``restore_incomplete`` flags — the only ones
+    ``infer_state`` still sees — are refused by step 3 anyway.
 
-    The identity-scoped half of ``blocked()`` is **not** consulted: this
-    signature carries no ``(pid, process_start_time)``, and inventing one from
-    the probe's pid plus a host start-time query would make the gate's verdict
-    depend on whether this host can read it (R15's silent-degradation trap).
-    The sticky halves are consulted — the block marker and the global window —
-    and the identity tally is enforced at ``record_attempt``, which does
-    receive the identity.
+    The identity half of the budget is read from the **state file alone**:
+    ``_identity_key`` is ``<pid>|<start_time>``, and the probe carries the
+    pid (the R4 shape), so the count for that pid is recoverable without
+    asking the host anything.  Asking the host for a start time would put
+    R15's silent-degradation trap back into the verdict; this does not.
 
     The caller persists the lease, inside ``with store.locked():`` (R16).
     """
+    _require_counted(action)
+
+    pid = probe_evidence.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int):
+        return False, (f"the probe carries no usable pid (got {pid!r}) — the "
+                       f"identity-scoped attempt count cannot be checked, and "
+                       f"an unchecked budget is not a budget (fail closed)")
+
     marker = blocked(store, action, now)
     if marker is not None:
         return False, (f"{action} is blocked: {marker['attempts']} attempts on "
                        f"record (max {MAX_ATTEMPTS[action]})")
+
+    identity_attempts = _identity_count_for_pid(store, action, pid)
+    if identity_attempts >= MAX_ATTEMPTS[action]:
+        return False, (f"{action} is blocked for this game process (pid {pid}): "
+                       f"{identity_attempts} attempts on record "
+                       f"(max {MAX_ATTEMPTS[action]}) — the identity tally is "
+                       f"not windowed, so it outlives the {GLOBAL_WINDOW_S}s "
+                       f"global window")
 
     expired_guard = expired_while_armed(store, now)
     if expired_guard is not None:
@@ -1059,17 +1122,59 @@ def assert_ready(store: Store, action: str, *, guard: str | None,
                        f"its lease expired (ttl {LEASE_TTL_S}s) — uninstall "
                        f"verified? else unarm it")
 
-    probe = dict(probe_evidence)
-    probe["blocked"] = (marker is not None) or bool(probe_evidence.get("blocked"))
-    probe["restore_incomplete"] = ((expired_guard is not None)
-                                   or bool(probe_evidence.get("restore_incomplete")))
-    state, evidence = infer_state(probe)
+    state, evidence = infer_state(probe_evidence)
     if state != "IN_GAME_RUNNING":
         return False, (f"state is {state}, not IN_GAME_RUNNING: "
                        f"{evidence.get('reason', '')}")
 
+    missing = _missing_probe_readings(probe_evidence)
+    if missing:
+        return False, (f"the probe carries no complete raw reading (missing: "
+                       f"{', '.join(missing)}) — a verdict without its counts is "
+                       f"not evidence, and a lease would pin bare verdicts "
+                       f"(spec §10)")
+
+    live = lease_fingerprint(evidence)
+
+    # (i) The outstanding lease for this action: it is the authorisation, so it
+    # must be the one the live reading agrees with.  A match consumes it and
+    # hands it back (one lease, one use).
+    outstanding = _outstanding_lease_for(store, action, guard, now)
+    if outstanding is not None:
+        pinned = outstanding.get("fingerprint")
+        if pinned != live:
+            return False, (f"fingerprint mismatch: the outstanding lease "
+                           f"{outstanding.get('lease_id')!r} for {action!r} is "
+                           f"pinned to {pinned!r}, the live reading is {live!r} "
+                           f"(spec §6 rule 3) — no lease issued")
+        if not consume(store, outstanding["lease_id"], now):
+            return False, (f"the outstanding lease "
+                           f"{outstanding.get('lease_id')!r} for {action!r} could "
+                           f"not be consumed — no lease issued")
+        return True, outstanding["lease_id"]
+
+    # (ii) The lease this guard is armed against: a guard installed against
+    # another world must not license a new action here.
+    if guard is not None:
+        entry = store.data["armed"].get(guard)
+        if isinstance(entry, dict):
+            armed_id = entry.get("lease_id")
+            armed_lease = (store.data["leases"].get(armed_id)
+                           if isinstance(armed_id, str) else None)
+            pinned = (armed_lease.get("fingerprint")
+                      if isinstance(armed_lease, dict) else None)
+            if not isinstance(pinned, str) or not pinned:
+                return False, (f"guard {guard!r} is armed but its lease's "
+                               f"fingerprint cannot be read — no lease issued")
+            if pinned != live:
+                return False, (f"fingerprint mismatch: guard {guard!r} is armed "
+                               f"against lease {armed_id!r} pinned to {pinned!r}, "
+                               f"the live reading is {live!r} (spec §6 rule 3) — "
+                               f"the world changed since it was installed; no "
+                               f"lease issued")
+
     lease = acquire(store, action, guard=guard, state=state,
-                    fingerprint=lease_fingerprint(evidence), now=now)
+                    fingerprint=live, now=now)
     if lease is None:
         return False, ("no lease issued: another unexpired lease is already "
                        "outstanding")
@@ -1103,6 +1208,28 @@ def _outstanding_lease(store: Store, now: float) -> dict | None:
         if isinstance(lease, dict) and not lease.get("consumed") \
                 and not _lease_expired(lease, now):
             return lease
+    return None
+
+
+def _outstanding_lease_for(store: Store, action: str, guard: str | None,
+                            now: float) -> dict | None:
+    """The outstanding lease that authorises ``action`` for ``guard``, or ``None``.
+
+    Scoped to **one** action and **one** guard: a lease issued for
+    ``install`` is not the authorisation for an ``uninstall``, and a lease
+    issued for another guard belongs to another world.  A lease that is
+    consumed or expired is not outstanding at all — it must not trigger a
+    fingerprint comparison, or a used-up lease would refuse every later,
+    perfectly legal action (spec §6 rule 3 is about a *live* authorisation).
+    """
+    for lease in store.data["leases"].values():
+        if not isinstance(lease, dict):
+            continue
+        if lease.get("action") != action or lease.get("guard") != guard:
+            continue
+        if lease.get("consumed") or _lease_expired(lease, now):
+            continue
+        return lease
     return None
 
 
@@ -1180,6 +1307,31 @@ def _identity_count(store: Store, action: str, identity: tuple[int, str]) -> int
         return 0
     counter = per_action.get(action)
     return _count(counter["attempts"]) if counter else 0
+
+
+def _identity_count_for_pid(store: Store, action: str, pid: int) -> int:
+    """How many attempts of ``action`` **any** process wearing ``pid`` has made.
+
+    ``_identity_key`` is ``<pid>|<start_time>``, so every key starting with
+    ``<pid>|`` belongs to that pid — however many generations of the process
+    have worn it.  The gate has only the pid (the probe carries no start
+    time), so it takes the **max** over those keys: the most any generation
+    of this pid has spent.  The start-time-scoped answer stays with
+    ``_identity_count`` / ``record_attempt``, which do receive the identity.
+
+    Like the identity tally itself, this is **not** windowed — the sliding
+    window belongs to the global counter (spec §7), so this count outlives
+    it and must be consulted separately.
+    """
+    prefix = f"{pid}|"
+    counts = [0]
+    for key, per_action in store.data["attempts"]["by_identity"].items():
+        if not isinstance(key, str) or not key.startswith(prefix):
+            continue
+        counter = per_action.get(action) if isinstance(per_action, dict) else None
+        if counter:
+            counts.append(_count(counter["attempts"]))
+    return max(counts)
 
 
 def _attempts_now(store: Store, action: str, now: float) -> int:

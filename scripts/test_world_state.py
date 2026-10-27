@@ -59,6 +59,24 @@ Task 3's fences, one per plan requirement:
 * a lease and its armed guard survive a save/load round trip (spec §3: the
   state must outlive the one-shot Windows process).
 
+Task 3's fix round 1 adds fences, one per finding:
+
+* the lease fingerprint is **compared** at the gate (spec §6 rule 3): a guard
+  armed against another world, or an outstanding lease pinned to another
+  world, refuses with **both** fingerprints in the reason and issues nothing;
+* an outstanding lease that *matches* is the authorization — consumed and
+  returned, single use; one that is merely expired or consumed is not
+  outstanding and triggers no comparison;
+* the gate sees the **identity** half of the budget: the probe pid's tally is
+  not windowed, so it outlives the global window, and a probe with no pid
+  fails closed instead of falling back to the window-only answer;
+* a lease is pinned to a complete raw reading, not to bare verdicts (spec
+  §10) — the same completeness ``unblock`` demands;
+* ``acquire`` refuses an action that is not one of the five world-changing
+  ones, and an empty fingerprint / lease id is refused **at write time**;
+* a hand-edited ``ttl_s`` cannot extend a lease — expiry comes from the
+  constant.
+
 No shot, no pixel, no Windows: every fixture is a dict in, a tuple out; the
 only files touched are the ones under ``tmp_path``.
 """
@@ -70,6 +88,7 @@ import os
 import pathlib
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 
@@ -1046,10 +1065,16 @@ def test_lease_fingerprint_pins_only_the_spec_fields(tmp_path):
     assert lease_fingerprint(ev_a) == lease_fingerprint(ev_b)
     assert len(lease_fingerprint(ev_a)) == 64
 
-    # 真的读数变了 ⇒ 租约指纹必须变（spec §6 规则 3 的前提）。
+    # 反面（Ruling R19 改的字段集）：只有**原始计数**动了、判词没动 ⇒ 指纹不变。
+    # 暂停图标每帧都在脉动，按像素比会让签发后每一秒的调用都假失败 ——
+    # spec §6 规则 3 说的是分类「变了」，不是像素。
     moved = dict(CLEAN_PROBE, prev_option_count=0,
                  pause={"state": "playing", "red_px": 62, "green_px": 40})
-    assert lease_fingerprint(infer_state(moved)[1]) != lease_fingerprint(ev_a)
+    assert lease_fingerprint(infer_state(moved)[1]) == lease_fingerprint(ev_a)
+    # 三个判词（pause.state / console.state / window.kind）才在指纹里。
+    paused = dict(CLEAN_PROBE, prev_option_count=0,
+                  pause={"state": "paused", "red_px": 61, "green_px": 40})
+    assert lease_fingerprint(infer_state(paused)[1]) != lease_fingerprint(ev_a)
     # N（option_count）也在指纹里。
     window_5 = {"kind": "choice", "gold_px": 40, "row_count": 5,
                 "option_count": 5, "bbox": [1, 2, 3, 4]}
@@ -1102,3 +1127,410 @@ def test_lease_and_armed_survive_save_and_load(tmp_path):
     old = Store.load(legacy)
     assert old.data["leases"] == {}
     assert old.data["armed"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Task 3 修复轮 1：租约指纹真的被比对 + 门看得见身份计数（§6 规则 3 / §7）
+#
+# 同一个规矩：新名字在每个测试里**函数内** import，每条围栏各自失败，
+# 而不是一次 collection error。
+# ---------------------------------------------------------------------------
+
+
+def test_lease_fingerprint_pins_the_verdicts_not_the_pixels(tmp_path):
+    """租约指纹只钉**判词**：暂停图标每帧都在脉动，拿像素比会假失败。
+
+    spec §6 规则 3 说的是「窗口/控制台/暂停**变了**」——变的是分类，不是像素。
+    所以指纹里是 ``hwnd`` + ``pause.state`` + ``console.state`` +
+    ``window.kind`` + ``window.option_count``（N），一个原始计数都不许进。
+    """
+    from world_state import evidence_fingerprint, infer_state, lease_fingerprint
+
+    base = dict(CLEAN_PROBE, prev_option_count=0)
+    _, ev_base = infer_state(base)
+    fp_base = lease_fingerprint(ev_base)
+    assert len(fp_base) == 64
+
+    # 三个判词各钉一遍：任何一个变了，指纹必须变。
+    for changed in (
+        dict(base, pause={"state": "paused", "red_px": 61, "green_px": 40}),
+        dict(base, console={"state": "open", "bright_px": 300}),
+        dict(base, window={"kind": "choice", "gold_px": 40, "row_count": 5,
+                           "option_count": 5, "bbox": [1, 2, 3, 4]}),
+    ):
+        assert lease_fingerprint(infer_state(changed)[1]) != fp_base
+
+    # hwnd 变了 ⇒ 变了（游戏重启换的就是它）。
+    assert lease_fingerprint(infer_state(dict(base, hwnd=0xDEAD))[1]) != fp_base
+    # N（option_count）变了 ⇒ 变了。
+    five = dict(base, window={"kind": "none", "gold_px": 0, "row_count": 0,
+                              "option_count": 5, "bbox": None})
+    four = dict(base, window={"kind": "none", "gold_px": 0, "row_count": 0,
+                              "option_count": 4, "bbox": None})
+    assert lease_fingerprint(infer_state(five)[1]) != lease_fingerprint(
+        infer_state(four)[1])
+
+    # 反面：**只有原始计数**动了、判词没动 ⇒ 租约指纹不许变。
+    # 这就是「暂停图标每帧脉动」那个坑：按像素比，签发后每一秒的调用都假失败。
+    pulsing = dict(base,
+                   pause={"state": "playing", "red_px": 62, "green_px": 40},
+                   console={"state": "closed", "bright_px": 999},
+                   window={"kind": "none", "gold_px": 7, "row_count": 3,
+                           "option_count": 0, "bbox": [1, 2, 3, 4]})
+    assert lease_fingerprint(infer_state(pulsing)[1]) == fp_base
+    # 而整份证据的指纹照旧变 —— 原始计数该留在证据里（spec §10）。
+    assert evidence_fingerprint(infer_state(pulsing)[1]) != evidence_fingerprint(
+        ev_base)
+
+
+def test_assert_ready_refuses_a_guard_armed_against_another_world(tmp_path):
+    """armed 的那个世界已经不是眼前这个世界了 ⇒ 拒绝，且**两个指纹都打出来**。
+
+    spec §6 规则 3：「fingerprint 不符（窗口/控制台/暂停在签发后变了）⇒ 拒绝，
+    并把两个指纹都打印出来」。这里的具体洞：guard 在世界 A 上装好，游戏重启
+    （新 hwnd），旧租约已消费所以不算 outstanding，门于是签了一张新租约 ——
+    给一个已经死掉的进程的凭据。
+    """
+    from world_state import (
+        Store,
+        acquire,
+        arm,
+        assert_ready,
+        consume,
+        lease_fingerprint,
+    )
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    old_world = dict(CLEAN_PROBE, hwnd=0x1A0B2)
+    new_world = dict(CLEAN_PROBE, hwnd=0xDEAD)
+    old_fp = lease_fingerprint(old_world)
+    new_fp = lease_fingerprint(new_world)
+    assert old_fp != new_fp
+
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint=old_fp, now=now)
+        assert lease is not None
+        assert consume(store, lease["lease_id"], now) is True
+        arm(store, "shim", lease["lease_id"], (4242, "t0"), now)
+        store.save()
+
+    # 租约还没到期 ⇒ RESTORE_INCOMPLETE 那一步不响；世界却已经换了。
+    assert store_module.expired_while_armed(store, now + 1) is None
+
+    with store.locked(timeout_s=1.0):
+        ok, why = assert_ready(store, "install", guard="shim",
+                               probe_evidence=new_world, now=now + 1)
+        store.save()
+    assert ok is False
+    assert old_fp in why, why
+    assert new_fp in why, why
+    # 一张新租约都不许签 —— 签了就是给死进程发凭据。
+    assert len(store.data["leases"]) == 1
+
+
+def test_assert_ready_refuses_a_stale_outstanding_lease(tmp_path):
+    """手上那张租约钉的是另一个世界 ⇒ 门自己拒（不是 acquire 拒）。
+
+    spec §6 规则 3。理由里必须带着**两个**指纹 —— 只说「有别的租约 outstanding」
+    等于没告诉人哪儿对不上。
+    """
+    from world_state import Store, acquire, assert_ready, lease_fingerprint
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    stale_fp = lease_fingerprint(dict(CLEAN_PROBE, hwnd=0xBAD))
+    live_fp = lease_fingerprint(CLEAN_PROBE)
+    assert stale_fp != live_fp
+
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint=stale_fp, now=now)
+        store.save()
+    assert lease is not None
+
+    with store.locked(timeout_s=1.0):
+        ok, why = assert_ready(store, "install", guard="shim",
+                               probe_evidence=CLEAN_PROBE, now=now + 1)
+        store.save()
+    assert ok is False
+    assert stale_fp in why, why
+    assert live_fp in why, why
+    # 拒绝时不能签出第二张。
+    assert len(store.data["leases"]) == 1
+
+
+def test_assert_ready_consumes_a_matching_outstanding_lease(tmp_path):
+    """指纹对得上 ⇒ 手上那张就是授权：消费掉它，把它交回去（单次使用）。"""
+    from world_state import Store, acquire, assert_ready, lease_fingerprint
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    fp = lease_fingerprint(CLEAN_PROBE)
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint=fp, now=now)
+        store.save()
+    assert lease is not None
+
+    with store.locked(timeout_s=1.0):
+        ok, lease_id = assert_ready(store, "install", guard="shim",
+                                    probe_evidence=CLEAN_PROBE, now=now + 1)
+        store.save()
+    assert ok is True
+    # 就是原来那张授权，不是新签的一张。
+    assert lease_id == lease["lease_id"]
+    assert store.data["leases"][lease_id]["consumed"] is True
+
+    # 单次使用：它已被消费，下一次过门拿到的是**另一张**新租约。
+    with store.locked(timeout_s=1.0):
+        ok, second = assert_ready(store, "install", guard="shim",
+                                  probe_evidence=CLEAN_PROBE, now=now + 2)
+        store.save()
+    assert ok is True
+    assert second != lease_id
+
+
+def test_assert_ready_ignores_a_consumed_or_expired_lease(tmp_path):
+    """已消费 / 已过期的租约不是 outstanding ⇒ 不触发指纹比较。
+
+    否则「比较」会变成误拒：一张用掉的老租约不该把后来的合法动作全挡上。
+    """
+    from world_state import (
+        LEASE_TTL_S,
+        Store,
+        acquire,
+        assert_ready,
+        consume,
+        lease_fingerprint,
+    )
+
+    now = 1_700_000_000.0
+    other_fp = lease_fingerprint(dict(CLEAN_PROBE, hwnd=0xBAD))
+    assert other_fp != lease_fingerprint(CLEAN_PROBE)
+
+    # (a) 已消费。
+    store = Store.load(tmp_path / "consumed.json")
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint=other_fp, now=now)
+        assert lease is not None
+        assert consume(store, lease["lease_id"], now) is True
+        store.save()
+    with store.locked(timeout_s=1.0):
+        ok, fresh = assert_ready(store, "install", guard="shim",
+                                 probe_evidence=CLEAN_PROBE, now=now + 1)
+        store.save()
+    assert ok is True
+    assert fresh != lease["lease_id"]
+
+    # (b) 已过期。
+    store = Store.load(tmp_path / "expired.json")
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint=other_fp, now=now)
+        store.save()
+    assert lease is not None
+    with store.locked(timeout_s=1.0):
+        ok, fresh = assert_ready(store, "install", guard="shim",
+                                 probe_evidence=CLEAN_PROBE,
+                                 now=now + LEASE_TTL_S + 1)
+        store.save()
+    assert ok is True
+    assert fresh != lease["lease_id"]
+
+
+def test_assert_ready_refuses_when_the_identity_tally_is_at_max(tmp_path):
+    """门必须看得见**身份**计数：它没有窗，比全局窗活得久。
+
+    install 的上限是 1。t0 记了一次之后，全局窗在 t0+601 已经滑出（全局计数
+    归零），但身份计数还是 1 —— 只看全局窗的门会在这时放行并发一张租约。
+    """
+    from world_state import (
+        GLOBAL_WINDOW_S,
+        MAX_ATTEMPTS,
+        Store,
+        assert_ready,
+        blocked,
+        record_attempt,
+    )
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    t0 = 1_700_000_000.0
+    identity = (CLEAN_PROBE["pid"], "t0")
+
+    with store.locked(timeout_s=1.0):
+        assert record_attempt(store, "install", identity, t0) == 1
+        store.save()
+
+    now = t0 + GLOBAL_WINDOW_S + 1
+    # 对照：只看全局窗的话，这时候 install 是「没封」的。
+    assert blocked(store, "install", now) is None
+
+    with store.locked(timeout_s=1.0):
+        ok, why = assert_ready(store, "install", guard="shim",
+                               probe_evidence=CLEAN_PROBE, now=now)
+        store.save()
+    assert ok is False
+    assert "install" in why, why
+    assert str(CLEAN_PROBE["pid"]) in why, why
+    assert str(MAX_ATTEMPTS["install"]) in why, why
+    # 一张租约都不许签。
+    assert store.data["leases"] == {}
+
+
+def test_assert_ready_refuses_a_probe_without_a_pid(tmp_path):
+    """探针没有 pid ⇒ 门**fail closed**：不许悄悄退化成「只看全局窗」。
+
+    身份计数是这个 pid 的账；没有 pid 就查不了，查不了就不许放行。
+    """
+    from world_state import Store, assert_ready
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    probe = dict(CLEAN_PROBE)
+    probe.pop("pid")
+    with store.locked(timeout_s=1.0):
+        ok, why = assert_ready(store, "install", guard="shim",
+                               probe_evidence=probe, now=now)
+        store.save()
+    assert ok is False
+    assert "pid" in why, why
+    assert store.data["leases"] == {}
+
+    # 对照组：带 pid 的同一份读数放行（否则上面那条可以因为空表而空过）。
+    with store.locked(timeout_s=1.0):
+        ok, lease_id = assert_ready(store, "install", guard="shim",
+                                    probe_evidence=CLEAN_PROBE, now=now)
+        store.save()
+    assert ok is True
+    assert lease_id in store.data["leases"]
+
+
+def test_assert_ready_requires_complete_probe_readings(tmp_path):
+    """门也要完整的原始计数 —— 和 ``unblock`` 要的是同一份完整度。
+
+    只带判词的读数会让门签出一张「钉着裸判词」的租约：那不是证据。
+    """
+    from world_state import Store, assert_ready, infer_state
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    bare = dict(CLEAN_PROBE,
+                pause={"state": "playing"},
+                console={"state": "closed"},
+                window={"kind": "none"})
+    # 对照：这份读数确实能被 infer_state 读成 running —— 所以拒绝必须来自
+    # 「完整性」这一关，而不是碰巧落到了阻塞侧。
+    assert infer_state(bare)[0] == "IN_GAME_RUNNING"
+
+    with store.locked(timeout_s=1.0):
+        ok, why = assert_ready(store, "install", guard="shim",
+                               probe_evidence=bare, now=now)
+        store.save()
+    assert ok is False
+    assert "red_px" in why, why
+    assert "option_count" in why, why
+    assert store.data["leases"] == {}
+
+
+def test_acquire_refuses_a_non_world_changing_action(tmp_path):
+    """``acquire`` 只认五个改变世界的动作。
+
+    租约是「一次 install 只认一张」的凭据；给 ``status`` 签一张 30 秒的租约，
+    等于让 agent 自己的轮询把后面所有租约堵死 30 秒。
+    """
+    from world_state import Store, acquire
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    with store.locked(timeout_s=1.0):
+        with pytest.raises(ValueError) as caught:
+            acquire(store, "status", guard=None, state="IN_GAME_RUNNING",
+                    fingerprint="f" * 64, now=now)
+        store.save()
+    assert "world-changing" in str(caught.value)
+    assert store.data["leases"] == {}
+
+
+def test_empty_fingerprint_and_lease_id_are_refused_at_write_time(tmp_path):
+    """空指纹 / 空租约 id 在**写的时候**就拒 —— 不许写出自己读不回来的盘。"""
+    from world_state import Store, acquire, arm
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    # 两个字段都要能容下「不是字符串」这种坏值 —— 校验的是值本身。
+    bad_fingerprints: list[Any] = ["", None]
+    bad_lease_ids: list[Any] = ["", None]
+
+    with store.locked(timeout_s=1.0):
+        for bad in bad_fingerprints:
+            with pytest.raises(ValueError):
+                acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint=bad, now=now)
+        for bad in bad_lease_ids:
+            with pytest.raises(ValueError):
+                arm(store, "shim", bad, (4242, "t0"), now)
+        store.save()
+
+    assert store.data["leases"] == {}
+    assert store.data["armed"] == {}
+    # 盘上也没有半截记录。
+    reloaded = Store.load(path)
+    assert reloaded.data["leases"] == {}
+    assert reloaded.data["armed"] == {}
+
+
+def test_a_hand_edited_ttl_cannot_extend_a_lease(tmp_path):
+    """手改盘上的 ``ttl_s`` 不能续命 —— 到期是从**常量**算的。
+
+    声明说「过期按常量算，不看存下来的 ttl_s」；这条围栏让它不只是声明。
+    """
+    from world_state import LEASE_TTL_S, Store, acquire
+
+    path = tmp_path / "ns_world.json"
+    store = Store.load(path)
+    now = 1_700_000_000.0
+
+    with store.locked(timeout_s=1.0):
+        lease = acquire(store, "install", guard="shim", state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64, now=now)
+        store.save()
+    assert lease is not None
+    lease_id = lease["lease_id"]
+
+    # 篡改：把 ttl_s 改成 600 秒并存回去。
+    tampered = Store.load(path)
+    with tampered.locked(timeout_s=1.0):
+        tampered.data["leases"][lease_id]["ttl_s"] = 600
+        tampered.save()
+    assert Store.load(path).data["leases"][lease_id]["ttl_s"] == 600
+
+    # TTL 内（29 秒）：还 outstanding，签不出第二张。
+    check = Store.load(path)
+    with check.locked(timeout_s=1.0):
+        assert acquire(check, "install", guard="witness", state="IN_GAME_RUNNING",
+                       fingerprint="f" * 64, now=now + LEASE_TTL_S - 1) is None
+    # 一到 30 秒：过期 —— 600 秒的篡改不作数。
+    with check.locked(timeout_s=1.0):
+        fresh = acquire(check, "install", guard="witness", state="IN_GAME_RUNNING",
+                        fingerprint="f" * 64, now=now + LEASE_TTL_S)
+        check.save()
+    assert fresh is not None
+    assert fresh["lease_id"] != lease_id
