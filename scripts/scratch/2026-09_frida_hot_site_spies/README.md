@@ -35,7 +35,7 @@
 | `body8.py` | 按手算 base `0x7ff74b345270` 读字节并 disasm（ASLR 现场的一次性对账） |
 | `caller_dis.py` | disasm caller `1d7ce0` 与 wrapper `89fdb0` |
 | `callers444.py` | `GetScriptedEffect 89f960` / `GetScriptedTrigger 8a0450` 的调用方 |
-| `regfn.py` | disasm `d150a0` 60 条 + `d152c0` 上下文 —— §15 证伪「master registrar」那一枪 |
+| `regfn.py` | disasm `d150a0` 60 条 + `d152c0` 上下文 —— §15 证伪「master registrar」那次 shot |
 | `kv2.py` | keyword 数组 heap dump，逐槽标注「是否落在镜像内」+ vtable 槽 |
 | `kvinspect.py` | `base`/`globals`/`kwtable`/`vtbl` 四联读，看 keyword 表头与 `33720E8` |
 | `missstr.py` | 站点字符串 + `325f5c8` / `32611c8` / `33746e8` 三个全局的裸字节 |

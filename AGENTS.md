@@ -9,13 +9,13 @@ registration pipeline and identify extension points for new effects/triggers.
 **Binary / game data 的路径、sha256、`NS_STELLARIS_EXE` 覆盖方式,以及 `evidence/` 产物的生产者**:
 `docs/offline-tooling.md` 的「前置条件」。
 
-**文档地图 —— 本文件只放约束与索引。论证、逐枪读数、判读陷阱都不在这里:**
+**文档地图 —— 本文件只放约束与索引。论证、逐次 shot 读数、判读陷阱都不在这里:**
 
 | 内容 | 位置 |
 |---|---|
 | 取证 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
 | 取证 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证 §24–§68(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两枪 §58–§59、零枪帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 首枪只读采样=静默窗口 §67、scope 深跟读第二枪=修正仪器后第一发 `scope_candidate`(§56 误配仪器下已 14 条命中)且两条边非血缘 §68) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 取证 §24–§68(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两次 shot §58–§59、零 shot 帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 第一次 shot 只读采样=静默窗口 §67、scope 深跟读第二次 shot=修正仪器后第一发 `scope_candidate`(§56 误配仪器下已 14 条命中)且两条边非血缘 §68) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
 | 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
 | 阶段状态、前置、授权级别 | `docs/roadmap.md` |
@@ -52,11 +52,11 @@ registration pipeline and identify extension points for new effects/triggers.
 7. **禁止热路径 detour `0x5350D0`** — 它是某个类的虚属性 getter,**detour 价值 = 0**(§28.5)。
 8. **实机看到「host 死了」,先按「我们自己的产物 trip」排除**(§45)。出货的 DLL 是 **Debug** 构建
    (`build.zig` 的 `standardOptimizeOption(.{})` 默认),safety check 就编译在跑进 host 的代码里,
-   一次 trip → `abort()` → 退出码 **3** → host 被杀。零游戏判别器(不要枪、不要点名):
+   一次 trip → `abort()` → 退出码 **3** → host 被杀。零游戏判别器(不需要 shot、不需要点名):
    `scripts/c2_selfabort_repro.py`(把出货字节装进自己的子进程,读回 §46 的环形记录器 `MFREC`)与
    `scripts/dll_ubsan_site.py`(用 `.pdata` + UBSan 记录把 panic 钉到源文件行号)。
    **该机制与运行时指针值无关**(§47:报告里的指针操作数是 fallback `offsetof` 的编译期常量 0),
-   所以 allocator 形状 / 记录器数据都不能当判别器。§48 的修复已实施,并有实机证据(§49 一枪、§50 压测)。
+   所以 allocator 形状 / 记录器数据都不能当判别器。§48 的修复已实施,并有实机证据(§49 一次 shot、§50 压测)。
    `header-only` 改动可能命中 Zig 缓存(`compile … cached`、sha 不变),重建后先核 compile 状态与 sha。
 
 ## Evidence Collection
@@ -67,6 +67,10 @@ All analysis artifacts go to `evidence/` at project root:
 
 **Naming convention**: `<component>_<finding>.md`。取证卷与 `evidence/logs/` **按 basename 记录出处,
 追加不改写**;改名等于让取证记录指向不存在的文件。
+
+**2026-10-27 术语对译**:全库把中文比喻「枪」一族改成 `shot`(口径与对译表在 `docs/roadmap.md` 的术语行)。
+那次改动**只换措辞** —— 读数、判词、§编号、artifact 名一律未动;人对实机动作的原话引文逐字保留,
+所以取证卷与日志的引号里仍能看到那个字。
 
 ## scripts/ 命名与目录约定
 
@@ -152,7 +156,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x1D08520` arg2 | **调用方内联构造的 0x20 B 执行深度帧**:`+8` 是调用深度计数,`+0x10` 是 helper;**不是** scope 对象 | §26 §53 |
 | `0x3B1330` | effect `[vptr+0x70]` base impl = 递归 parse(子向量在 `[obj+0x10]`/`[obj+0x1c]*8`) | §24.4.2 |
 | `0x3B1420` | effect `[vptr+0x98]` base impl = **bool 谓词**,不是 parse(§52 的 detour 点) | §23.1 §52 |
-| `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写;**首枪只读采样已打 = §67**:`calls=0`/120 s 静默,verdict `no_calls_inconclusive`(该档不含 §57.4 第三档资格,安静只读作「没观测到」) | §52 §67 |
+| `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写;**第一次 shot 只读采样已打 = §67**:`calls=0`/120 s 静默,verdict `no_calls_inconclusive`(该档不含 §57.4 第三档资格,安静只读作「没观测到」) | §52 §67 |
 | `0x2606FE0` | donor effect vtable,25 槽可复制(slot[1]=Execute、slot[2]=instantiate、slot[19]=谓词) | §52 |
 | `0x89F960` / `0x8A0450` | `GetScriptedEffect` / `GetScriptedTrigger` — **不是 getter**;唯一副作用是重复定义告警 | §27 |
 | `0x1C91C30` | 上述重复告警走的 logger | §27 |

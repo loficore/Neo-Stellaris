@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """exec_frame_sites —— 按字节反解 CEffect::Execute 调用点的**真实站点**,不是 -5 估值。
 
-背景(§59.7):实机枪记录的是**返回 RVA**。旧产物把 `return_rva - 5` 当站点写进
+背景(§59.7):实机 shot 记录的是**返回 RVA**。旧产物把 `return_rva - 5` 当站点写进
 caller 行,于是 3 B 的 `call qword ptr [rax+8]`(每一次 vtable 槽派发都是这个形状)
 的站点被画进前一条指令中间,census join 落空,`func=-` 被误读成「没人调用」。
 `c2_scope_probe.py` 已把 caller 行键改为返回 RVA、`-5` 降级为 `est_site=`;**精确站点由本工具离线反解**:

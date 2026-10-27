@@ -6,7 +6,7 @@
 两份,回调看到的 `st` 与 `JS_NewRuntime2` 那次不是同一份」。
 
 这一批**只有笔记,没有脚本**。两件工具在 Task 2 已经升为受维护的顶层工具,读回与符号化都用它们:
-`scripts/c2_selfabort_repro.py`(Windows 侧 `C:/temp/c2_selfabort_repro.py`,零枪、零游戏、零 dispatch:
+`scripts/c2_selfabort_repro.py`(Windows 侧 `C:/temp/c2_selfabort_repro.py`,零 shot、零游戏、零 dispatch:
 它只用 `ctypes` 把**我们自己的 DLL**装进脚本自己拥有的子进程)与 `scripts/dll_ubsan_site.py`(纯离线读文件)。
 
 | 文件 | 当时在回答哪个问题 |
@@ -32,7 +32,7 @@ python3 scripts/dll_ubsan_site.py zig-out/bin/stellaris_quickjs.dll func 0x18000
 `evidence/logs/c2_mfrecords_4_4_4.log`。判定表落到**第四行**:三条候选都被数据判掉,候选表不完整,
 C2 阻塞,下一步归人,不归 Task 4。
 
-**零枪、零游戏、零 dispatch**:`stellaris.exe` 未被启动、未被接触;§44 的单发授权未被使用,也未 rehearsal。
+**零 shot、零游戏、零 dispatch**:`stellaris.exe` 未被启动、未被接触;§44 的单发授权未被使用,也未 rehearsal。
 
 **不作为接口维护**:可以失效,但别在新结论上重犯这一批已经踩到并避开的口径错误 ——
 (1) 环形记录器的 `st` **任何两条不同**在健康运行时也成立(`quickjs.c:2070` 是栈上的 `JSMallocState`,

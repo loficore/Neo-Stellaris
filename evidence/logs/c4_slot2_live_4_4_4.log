@@ -1,4 +1,4 @@
-# C4 slot[2] 判别枪 —— 实机一枪(2026-10-24)
+# C4 slot[2] 判别 shot —— 实机一次 shot(2026-10-24)
 # 本轮全部命令行逐条原样记录,含失败的与误用的。
 
 ## 1. launcher(把游戏带到可见桌面)
@@ -53,10 +53,10 @@ A 框是**按窗口宽高取比例**算的(`_console_box` `:603-609`)—— 两�
 {"event": "console_sent", "chars": 148, "opened": false, "t": "2026-10-24T13:04:38"}
 
 `12:52:00 open=true px=7013` 是载入局里另一块屏幕把 A 框点亮的那类读数 ——
-§54.10 记下的正是这个坑,它发生在枪之前,不是枪的观测。
-枪只用了两条 console 命令(预检 + 判别),无 `console_refused`,无 `console_clipboard_failed`。
+§54.10 记下的正是这个坑,它发生在 shot 之前,不是 shot 的观测。
+shot 只用了两条 console 命令(预检 + 判别),无 `console_refused`,无 `console_clipboard_failed`。
 
-## 5. 判别枪
+## 5. 判别 shot
 
     $ just win "python C:/temp/c4_wiring_probe.py --mode slot2 --dll C:/temp/sqjs_c4.dll --save C:/temp/stellaris_2226.sav --json C:/temp/c4_wiring_result.json"
 
@@ -150,14 +150,14 @@ A 框是**按窗口宽高取比例**算的(`_console_box` `:603-609`)—— 两�
 其余:`effect_id = 68637 = 0x10c1d`,
 `layout = [0x1, 0x0, 0xd28, 0x800, 0x3b0, 0x100, 0x8, 0x100]`。
 
-## 7. 枪后的 daemon 状态记录(清理判据)
+## 7. shot 后的 daemon 状态记录(清理判据)
 
     $ ssh Windows_Jiaolong "powershell -NoProfile -Command (Get-Content C:/temp/ns_game_status.json -Raw)"
 
 {"pid":13364,"hwnd":458820,"state":"paused_no_window","note":"paused_no_window","want":"playing","policy":"first","red":132,"green":0,"handled":0,"window":{"bright":0.089,"gold":4994,"rows":13,"bbox":null},"speed_sha":null,"shot":"C:\\temp\\ns_game_shot.png","console_open":true,"console_px":2315,"console_forced":false,"last_cmd":"console effect every_system = { log = \"C4_SLOT2START_13364_[This.GetName]\" neo_action = { log = \"NEO_CHOKE_EFFECT_[This.GetName]\" set_name = \"NEO_CHOKE\" } }","updated":"2026-10-24T13:13:36","epoch":1792818816.973}
 
 pid 13364 仍在,`console_open=true px=2315`(§54.10 校准的"开"值),`console_forced=false`。
-**控制台是枪留下的现场,没有去关它** —— 关它要再发一次输入,不属于这一枪的判据。
+**控制台是 shot 留下的现场,没有去关它** —— 关它要再发一次输入,不属于这次 shot 的判据。
 
 ## 8. 产物 sha256(local ↔ remote 逐条相等)
 
@@ -174,7 +174,7 @@ pid 13364 仍在,`console_open=true px=2315`(§54.10 校准的"开"值),`console
 | (gated,不在仓库) | `C:/temp/stellaris_2226.sav` | `6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e` |
 
 两个落在结果 json 里的字段 `dll_sha` / `save_sha` 与上表逐字相同。
-`c2_harness.py` 是注入通道的驱动侧,这一枪没有重新上传它(枪前只重取了一次哈希)。
+`c2_harness.py` 是注入通道的驱动侧,这次 shot 没有重新上传它(shot 前只重取了一次哈希)。
 
 ## 9. 传输层的坑(如实记录,与判读无关)
 

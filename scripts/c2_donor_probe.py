@@ -16,7 +16,7 @@ which is why this probe exists and what it replaces there.
 USAGE.  ``python3 scripts/c2_donor_probe.py [dll] [--mask 0] [--poll-s 120]
 [--settle-s 2] [--out C:/temp/c4_donor_probe.tsv]``
 
-AUTHORIZATION.  This is a LIVE shot (一枪): it injects into the running game and
+AUTHORIZATION.  This is a LIVE shot (一次 shot): it injects into the running game and
 therefore needs an explicit per-session naming from the user — the authorization
 table in ``docs/roadmap.md`` — and THIS PLAN DOES NOT RUN IT.  Nothing in the
 offline plan executes this file; it is written and statically verified only.

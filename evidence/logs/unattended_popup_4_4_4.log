@@ -58,7 +58,7 @@ launcher 日志里没有 `step=diagnosis` 的 `LAUNCHER_CLICK` 事件(该事件�
 (`ocr_ms_total` 之后一直是 27134.894,后面 384 次边缘全部 `ocr_status=budget_spent`)。
 
 「向人买下的停摆秒数」这条按 brief 要求原样进日志,并附方法失效声明: 计划设想用
-「OCR 那次 tick 前后两行 supervisor 日志的时间差」量停摆,但**边沿触发的第一枪前面没有 popup 行可比**
+「OCR 那次 tick 前后两行 supervisor 日志的时间差」量停摆,但**边沿触发的第一次 shot 前面没有 popup 行可比**
 (它前一行的时间戳是 18:49:44 的一条 `command`,中间是空闲)⇒ 本场停摆秒数只能读 `ms` = **27.135 s**。
 顺带取到真实 tick 周期: 有窗时相邻 popup 三元组间隔 **≈ 2.2–2.5 s**(不是计划假设的 0.8 s),
 所以 27 s 停摆 ≈ 丢 11–12 拍。

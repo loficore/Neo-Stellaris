@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""queue_dispatchers —— §60.7-1「谁经队列派发」的三条离线口径(零枪)。
+"""queue_dispatchers —— §60.7-1「谁经队列派发」的三条离线口径(零 shot)。
 
 口径(读数逐字对齐 §60.5/§60.6,不可自行重推):
   A 对齐 qword 扫描 —— exe 各 CNT_INITIALIZED_DATA(chars & 0x40)段里找
