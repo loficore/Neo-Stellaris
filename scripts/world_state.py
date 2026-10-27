@@ -175,6 +175,26 @@ def may(from_state: str, to_state: str, action: str) -> bool:
     return (from_state, to_state, action) in _ALLOWED
 
 
+def legal_actions(state: str) -> tuple[str, ...]:
+    """The world-changing actions the transition table allows from ``state``.
+
+    Read off the table, not off a second list that could drift from it: an
+    action is legal here when some edge leaves ``state`` **and** that edge
+    names the action.  The probe-driven edges (``NO_ACTION``) contribute
+    nothing — which is the point: the table says what a *command* may do,
+    and the state changes a probe observes are not commands.
+
+    Unknown states answer with an empty tuple, not an exception: the table
+    is consulted for "what may I do here", and "nowhere" is a complete
+    answer.
+    """
+    out: list[str] = []
+    for from_state, _to_state, action in TRANSITIONS:
+        if from_state == state and action in ACTIONS and action not in out:
+            out.append(action)
+    return tuple(out)
+
+
 def infer_state(probe: dict) -> tuple[str, dict]:
     """Infer the current state from probe readings; return ``(state, evidence)``.
 
@@ -782,6 +802,32 @@ def blocked(store: Store, action: str, now: float, *,
     if not over:
         return None
     return {"nonce": None, "blocked_at": None, "attempts": max(over)}
+
+
+def block_state(store: Store, action: str, now: float, *,
+                pid: int | None = None) -> dict | None:
+    """The block record for ``action`` right now, or ``None``.
+
+    Three things can block an action (spec §7): a block marker somebody
+    recorded with evidence, the global sliding window, and the identity
+    tally of the game process.  This answers all three in one place, so a
+    caller does not have to know which half of the budget it is looking at
+    — and, more importantly, does not have to *reimplement* the answer and
+    get it wrong.
+
+    ``pid`` is the **game** process's pid.  With it, that process's
+    identity tally counts too.  Without it only the marker and the global
+    window are consulted: a caller that cannot name the game must not claim
+    the identity half is clear.
+    """
+    marker = blocked(store, action, now)
+    if marker is not None:
+        return marker
+    if pid is not None:
+        count = _identity_count_for_pid(store, action, pid)
+        if count >= MAX_ATTEMPTS[action]:
+            return {"nonce": None, "blocked_at": None, "attempts": count}
+    return None
 
 
 def block(store: Store, action: str, evidence: dict, now: float) -> str:

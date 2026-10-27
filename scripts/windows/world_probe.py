@@ -38,6 +38,10 @@ not talk to the state file — that is ``world_state``'s job, and the CLI
 (``ns_world.py``) is the only thing allowed to drive both.
 """
 
+# ``world_state`` lives one directory up in the repo and beside this
+# module on the wire (C:\\temp), so a bare import is not resolvable by a
+# static checker; it IS resolvable at run time on both sides.
+# pyright: reportMissingImports=false
 from __future__ import annotations
 
 import hashlib
@@ -234,8 +238,7 @@ def assert_install_ready(guard: str, *, state_path: str | None = None,
     the CLI's ``assert-ready`` subcommand runs.
     """
     import game_supervisor as gs
-
-    import world_state as ws  # pyright: ignore[reportMissingImports]
+    import world_state as ws
 
     pid, hwnd = gs.find_game()
     if not pid or not hwnd:
