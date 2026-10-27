@@ -26,7 +26,9 @@ import json
 import os
 import sys
 
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+# Pyright types sys.stdout as TextIO (no reconfigure) even though the real object is a
+# TextIOWrapper — the same idiom every driver in this tree uses. Annotation only.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[union-attr]
 
 from c2_scope_probe import load_vtable_map
 
