@@ -882,7 +882,11 @@ def follow_roots(reader, exe_base, image_end, vtables, entries, *,
     return objects, root_stats
 
 
-DEPTH2_PER_SOURCE = 8
+# 27 = §68.4 的算术:那次判读拿到 followed=8 / capped=19(self 支),capped 的那 19 个
+# 地址**没被问过**,所以同一形状的下一次 shot 只会再撞同一个天花板。预算抬到 8+19=27 就是
+# 把那 19 个问完;代价是一发多约 19 次 × 8 字读 + VirtualQueryEx,120 s 窗内可完成
+# (§59.9/§68 的实测吞吐)。这个数是判据不是调参:证据格写「那 19 个问完了/仍没问完」。
+DEPTH2_PER_SOURCE = 27
 
 D2_VERDICTS = ("depth2_known_vtable_hit", "lineage_edge_found",
                "depth2_unreadable", "no_depth2_planned", "no_depth2_lead")
@@ -963,6 +967,47 @@ def follow_depth2(reader, exe_base, image_end, vtables, objects, *,
     return d2_objects, stats
 
 
+def partition_cells(cells, exe_base=None, image_end=None):
+    """Bucket depth-2 cells by plausibility and image span BEFORE joining them.
+
+    §68.4's two prerequisites.  ``plausible_user_ptr`` is the same gate the DLL
+    uses, so a cell whose pointer the guard could never read is not a "lead" —
+    and a scalar like ``0x100000000`` is neither a user pointer nor a module
+    address, so it lands in ``implausible`` and never reaches the lineage join
+    (those two §68 edges were exactly one scalar and one static table).
+
+    A cell is assigned by its candidates: any implausible pointer makes the cell
+    ``implausible`` (it is not something we can follow), otherwise any pointer
+    inside the module makes it ``user_ptr_in_image``, otherwise it is
+    ``user_ptr_out_of_image`` — still plausible, just outside the image, which is
+    a different observation and must not be merged into the first bucket.
+
+    Bounds default to ``None``: without them the only test available is the cell's
+    own ``ptr_rva`` (None = outside the module), because a fabricated RVA turns a
+    heap address into a false module hit.
+    """
+    buckets = {"user_ptr_in_image": [], "user_ptr_out_of_image": [],
+               "implausible": []}
+    for cell in cells:
+        candidates = cell.get("candidates", [])
+        if not candidates:
+            buckets["implausible"].append(cell)
+            continue
+        if any(not plausible_user_ptr(cand.get("ptr")) for cand in candidates):
+            buckets["implausible"].append(cell)
+            continue
+        in_image = False
+        for cand in candidates:
+            ptr = cand["ptr"]
+            if exe_base is not None and image_end is not None:
+                in_image = in_image or (exe_base <= ptr < image_end)
+            else:
+                in_image = in_image or (cand.get("ptr_rva") is not None)
+        key = "user_ptr_in_image" if in_image else "user_ptr_out_of_image"
+        buckets[key].append(cell)
+    return buckets
+
+
 def find_shared_cells(objects):
     """Values that appear as a candidate under two or more distinct base roots.
 
@@ -1028,15 +1073,19 @@ def _format_shared(shared):
     return f"n={len(shared)} " + ";".join(parts)
 
 
-def d2_meta_rows(d2_stats, verdict_d2, shared):
-    """The six keys the depth-2 reading needs to survive a lost stdout.
+def d2_meta_rows(d2_stats, verdict_d2, shared, d2_implausible=0):
+    """The seven keys the depth-2 reading needs to survive a lost stdout.
 
     The three budget keys come first on purpose: without ``planned`` and
     ``capped`` next to ``followed``, a short depth-2 list reads as an absence
-    rather than as a budget that did not finish asking.
+    rather than as a budget that did not finish asking.  ``d2_implausible`` is the
+    third bucket ``partition_cells`` splits off: cells that were never leads
+    (scalars, unreadable pointers) and therefore cannot be counted as "asked and
+    found nothing" — without it, a smaller ``followed`` number reads as an absence.
     """
     return {
         "depth2_per_source": DEPTH2_PER_SOURCE,
+        "d2_implausible": d2_implausible,
         "d2_planned_by_source": _by_source(d2_stats, "planned_by_source"),
         "d2_followed_by_source": _by_source(d2_stats, "followed_by_source"),
         "d2_capped_by_source": _by_source(d2_stats, "capped_by_source"),
@@ -1289,7 +1338,12 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                 d2_objects, d2_stats = follow_depth2(
                     reader, exe_base, image_end, vtables, objects
                 )
-                shared = find_shared_cells(list(objects) + list(d2_objects))
+                buckets = partition_cells(list(objects) + list(d2_objects),
+                                          exe_base, image_end)
+                shared = find_shared_cells(
+                    buckets["user_ptr_in_image"]
+                    + buckets["user_ptr_out_of_image"])
+                d2_implausible = len(buckets["implausible"])
                 verdict_d2 = classify_depth2(
                     d2_objects, shared,
                     sum(d2_stats["planned_by_source"].values()))
@@ -1422,7 +1476,8 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                     "region_verdicts": _region_verdicts(regions),
                     "verdict": verdict,
                 }
-                meta.update(d2_meta_rows(d2_stats, verdict_d2, shared))
+                meta.update(d2_meta_rows(d2_stats, verdict_d2, shared,
+                                         d2_implausible))
                 rows = write_tsv(out_path, summary, meta=meta)
                 print(f"[scope] wrote {rows} rows to {out_path}")
 

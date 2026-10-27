@@ -778,13 +778,18 @@ root_unreadable / **region** 七类行)。
 **深跟读口径(`plan_depth2` / `follow_depth2` / `find_shared_cells` / `classify_depth2`)**:
 depth-1 每行的 `candidates[*]["ptr"]` 当作**再下一层的根**,再走一遍同一个 `follow_object`(深跟读里不新写任何
 一次 `read_memory`,失败读照旧是 `unreadable` 而不是 0 —— 陷阱 5),行标签是 `"<基源>.d2"`,两层永不相认。
-**预算仍按源给**(`DEPTH2_PER_SOURCE = 8`,把 `.d2` 折回基源计源,四源各 8),而且**depth-1 已经读过的地址不算
+**预算仍按源给**(`DEPTH2_PER_SOURCE = 27`,把 `.d2` 折回基源计源,四源各 27;27 = §68.4 那次判读的
+`followed=8` + `capped=19`,抬预算就是为了把自我支那 19 个没问过的地址问完),而且**depth-1 已经读过的地址不算
 线索**:每个根的 `self_ptr` 与 `ctx_words[1]` 本来就在 `objects` 的 `root` 字段里,计划阶段直接跳过(`already`),
 同一个地址也只计划一次。**预算的三种花费分开记账** —— `planned_by_source` / `followed_by_source` /
 `capped_by_source`,进 `#meta` 的 `d2_planned_by_source` / `d2_followed_by_source` /
 `d2_capped_by_source` 与 `depth2_per_source`;第四个计数 `deduped_by_source` **只在 stdout 的逐源行里,
-`d2_meta_rows` 不把它写进 `#meta`**(六键是固定的),所以引用去重数必须标出处是 stdout,不能声称可从
-TSV 读回。缺前面那几个键,产物里一条短的深度 2
+`d2_meta_rows` 不把它写进 `#meta`**(七键是固定的),所以引用去重数必须标出处是 stdout,不能声称可从
+TSV 读回。第七个键是 `d2_implausible`:深跟读的候选先按 `plausible_user_ptr` + 镜像界分三档
+(`partition_cells`,§68.4 前置 ①),`implausible` 那一档**根本不进跨源连线**,只作为计数落进 `#meta` ——
+少了它,`followed` 变小就分不清「问过但没东西」与「那些候选压根不是用户指针」。
+注意 `0x100000000` 这种标量**过得了** `plausible_user_ptr`(门槛上界 `0x7FFF_FFFF_0000`),它落的是
+「界外」那一档,不是 `implausible`。缺前面那几个键,产物里一条短的深度 2
 列表就退化成「那些槽没东西」的误读,这正是 §56.4 那次把预算耗尽读成负结论的同一形状。
 区域仪器(`region` 行)现在吃**两层的根**(`collect_region_addrs`),`source=` 保留各层自己的标签。
 **跨源共享(`find_shared_cells`)**按**候选值**分组,只保留出现在 **≥2 个不同基源**的值,行是
