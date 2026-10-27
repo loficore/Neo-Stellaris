@@ -6794,3 +6794,114 @@ $ python3 scripts/scratch/2026-10_c4_sentinel_window/pin_prologue.py cc4220 24
 
 Task 2 抄 §71.1 的 24 B 串 + 七张 vtable,Task 4 抄同一串做围栏常量(不运行时读盘)。Task 8 的两发实机窗是本节
 唯一的实机后续;若 `verdict` 落非证据档,分档措辞归 §72,本节不改写。
+
+## §72 族外证人第一次正读:`0xCC4220` 120 s 内 `calls=2016`、`h0=2016`(表首 `0x25460F0`)、`unmatched=0` ⇒ `shim_hit_named` —— 一个**族外派发位**的执行体确实在跑(2026-10-27,点名 ×2)
+
+**授权级别**：同一窗口两段点名。第一段「**开始吧**」= 起进程 + 载入;第二段「**继续正式窗,接受『引擎在跑』由
+supervisor 读数作证**」= 频率窗 + 正式窗两发。本段含这两发 `0xCC4220` 只读 shot,**不含**族内重打、scope、census。
+
+### §72.1 进程、字节与上线门
+
+- pid **30260**,hwnd 461052,`exe_base=0x7ff7a6030000`、`image_size=0x3927000`(与 §70 同一份 exe)。
+- 上线字节 `C:\temp\sqjs_c4.dll`,sha256 `17c2b8251d7e7faeec92481d27d963b7f73ed5cde51203426279c720aff1e840`
+  (= 本场 `zig-out/bin/stellaris_quickjs.dll`;81 个导出,`C4ShimProbe*` 八名齐)。**整文件 sha 只当出处。**
+- 主机侧驱动对账(§70.6 的规矩,覆盖前做):`c2_witness_probe.py` = `9254c512…` = git HEAD;
+  `c2_scope_probe.py` = `9cca999f…` = `fcadef2`(§68 那一窗);`execspy.js` = `7f1a9405…` = `b47da01^` ——
+  **三份都对得上已记录的 git 版本**,不是未记录的现场改动 ⇒ 覆盖不丢东西,无需先拉回副本。本窗口新上传
+  `c2_shim_probe.py` = `791f3a8e…`、`execspy.py` = `1b535ad5…`;四份文件的 `Get-FileHash` 与本地逐字相同。
+- 覆盖前的旧 DLL 是 `6613e324…`(§69/§70 那两发的字节)。**两份字节的读数不可逐位比对**,只能并排讨论。
+
+### §72.2 环境读数、launcher 样本,以及一条仪器缺陷(控制台吃键)
+
+- `just awake check` → `STATE=serving DESKTOP=unlocked detail=Default age=2.5s pid=5624 session=1/1`。
+- `just game status` → `STATUS=no_game`(无遗留进程)。
+- **计划 Task 7 Step 5 的 `just launch --continuelastsave` 是笔误**:`launch_stellaris.py` 没有这个旗标(它走
+  `steam://rungameid/281990`),会直接 `unrecognized arguments`。改发裸 `just launch`,而**游戏自己的命令行**确实带
+  `--continuelastsave`(由 Paradox launcher 加),所以 §69.1 的机制复现:一次就落在战役内(日期 2300.07.25)。
+- launcher 三档样本(§92 那条线用):`inner_exit code=0` ⇒ **本轮无 23 样本**;但点击轨迹值得记 —— attempt 1/2 用的是
+  `rect=(-32000,-32000,-31763,-31961)` 的**屏外矩形**(`owns_foreground=None` 然后 `False`),attempt 3 才拿到
+  `rect=(-11,0,2153,1020)`、`owns_foreground=True` 并 handoff 成功。即「窗口矩形还没准备好就去点」是本轮的真实形态。
+- **新缺陷(判读陷阱 9 的补充)**:任何 UI 交互(`just game shot`、点击)都会因失焦让 Stellaris **自己暂停**;而
+  **游戏内控制台开着会吃掉空格键** —— `ns_game_log.jsonl` 17:04:14 有 `console_observed open=true px=1300`,那段时间
+  `just game unpause` 静默无效、`status` 一直读 `paused note=paused_no_window`。可用的纪律:
+  **`just game console_close`(或先查控制台)→ `status` 读到 `playing` → 立刻装,中间不碰 UI**。本节两发的入场
+  读数就是这样拿到的(见下),不是「pause 了却以为在跑」。这不推翻 §59.1 证伪的「控制台 ⇒ 暂停」,那是**另一条**
+  因果句。
+
+### §72.3 频率窗(`--poll-s 20`)
+
+```
+[shim] LAYOUT entry=48 stats=64 ring=256 mask=0 version=1
+[shim] C4ShimProbeInstall rc=0
+STATS: calls=0 samples=0 invalid_self=0 unmatched=0 h0=0 h1=0 h2=0 h3=0 h4=0 h5=0 h6=0 patch_size=15 installed=1 mask=0
+VERDICT: no_calls_inconclusive
+[shim] C4ShimProbeUninstall rc=0 / verify=0 / host alive
+```
+
+20 s 静默。**这一发不是判据**,它的用途是「这靶子在当前场景到底跑不跑」——同一进程里紧接着的正式窗给出了相反的
+读数(§72.4),所以两发并排读才是本窗口最有信息量的一对:**靶子不是死的,静默是窗口内的分布问题**。
+
+### §72.4 正式窗(120 s,本段判决来源)—— 原始读数
+
+```
+STATS: calls=2016 samples=2016 invalid_self=0 unmatched=0 h0=2016 h1=0 h2=0 h3=0 h4=0 h5=0 h6=0 patch_size=15 installed=1 mask=0
+VERDICT: shim_hit_named 表首=0x25460f0
+[shim] unmatched 分区(证人侧,计数侧不可分):unmatched_rows=0 rva_zero=0 in_image=0 at_or_above_image=0
+[shim] the ring wrapped at 256 records: …
+[shim] C4ShimProbeUninstall rc=0
+[shim] verify=0
+[shim] host alive
+```
+
+`#meta` 首行逐字(产物 = `evidence/logs/shim_probe_4_4_4.tsv`):
+
+```
+#meta exe_base=0x7ff7a6030000 image_size=0x3927000 image_end=0x7ff7a9957000 dll=sqjs_c4.dll dll_sha256=17c2b8251d7e7faeec92481d27d963b7f73ed5cde51203426279c720aff1e840 target_rva=0xcc4220 mask=0x0 poll_s=120.0 layout=entry=48 stats=64 ring=256 mask=0 version=1 calls=2016 samples=2016 entries=256 tiers=h0=2016/h1=0/h2=0/h3=0/h4=0/h5=0/h6=0/unmatched=0/invalid_self=0 verdict=shim_hit_named named_table=0x25460f0 install_rc=0 stats=calls=2016 samples=2016 invalid_self=0 unmatched=0 h0=2016 h1=0 h2=0 h3=0 h4=0 h5=0 h6=0 patch_size=15 installed=1 mask=0 unmatched_rows=0 rva_zero=0 in_image=0 at_or_above_image=0
+```
+
+环里 256 条(全部 `matched=1`、`table_index=0`、`table_rva=0x25460f0`):
+
+| 字段 | distinct | 读数 | 含义 |
+|---|---|---|---|
+| `self_vtable_rva` | **1** | `0x25460f0` | 七张表里只用了族外表序第一张,与 `h0=2016`/其余 `h*=0` 一致 |
+| `caller_rva` | **1** | `0x1d0857a` | = **base Execute `0x1D08520` + 0x5A** ⇒ 调用点是 base Execute 体内那一发 `call [rax+0x10]`(§10 的口径),不是外来直调 |
+| `self_ptr` | **256** | 256 个互不相同 | 抽样到的 256 条各是不同对象(环只有 256 槽,`2016` 次里这段被覆盖) |
+| `ctx_ptr` | **1** | `0xee7fd00` | 全程一个 ctx |
+| `a3` | **1** | `0x1` | 恒定 |
+| `a4` | **1** | `0x7ff7a81b7bd4` | = `exe_base + 0x1817bd4`,模块内代码地址(与 §53.5 对证人靶 `arg4` 的读法同形) |
+
+时间形状:进度行每 10 s 一条,**前 6 条全 0,第 7 条起 2016 并保持到窗末** ⇒ 一次突发落在窗口第 60–70 s 之间,
+之后 50 s 平在 2016,没有第二次。
+
+### §72.5 这份读数的有界含义(三条诚实条款,写死)
+
+1. **它证到的是**:一个**族外 vtable**(`0x25460F0`)的 slot[2] `ExecuteActual` 在这 120 s 里**真的执行了 2,016 次**,
+   派发点是 base Execute 体内 `+0x5A` 那一发。这是 §57.4 第三档一直缺的「**执行确实发生**」形态的**正面证人**,
+   而且它的 `unmatched=0`/`invalid_self=0` 让「这条 trace 是我们自己的读数」这一层也站得住(不是 ring 空转)。
+2. **它没说**:
+   - **不是 per-system**:`2,016` 与 §13 那份 2026-09-29 的 `2,090` 数量级相近,但**场景不同**(那次是另一个存档/时段),
+     相关性(`§13 :425` 的 `correlate … before claiming it`)是 §74 的事。本节不写「同一集合走了一遍」以外的任何循环语义。
+   - **不是对家族的表态**:本节读的是 `0x25460F0`,与 `0x3AFD30`/`0x3B01A0` 那五张表无关;家族那边是否执行,本发**一个字都没说**。
+   - **不是身份判据**:七张表命中 = 形状判据(§57.5 第 2 条);「命中表 0」不等于「这个类是 X」。
+3. **新增未排除项**:一次突发 + 其余 110 s 静默这一形态,至少三种读法分不开 ——
+   (a) 某个一次性遍历(载入后/事件结算)确实只走一遍;(b) 该遍历发生在别的 tick 节奏上、本窗只碰上一轮;
+   (c) 该执行体只在特定状态下被走到,而本窗 100 s 的静止期里状态没到。本仪器不区分这三者。
+   另:§72.3 的 20 s 静默与 §72.4 的突发**同进程**且相邻 40 s 内,说明「安静」在本靶上是**窗口内分布**的现象,
+   不是存在性现象 —— 以后任何「本仪器安静」的说法都必须带上窗口长度与突发时刻。
+
+### §72.6 复现命令行
+
+```bash
+# 前置:just game console_close → just game status 读到 STATUS=playing(中间不碰 UI)
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "python C:\\temp\\c2_shim_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 20  --settle-s 2 --out C:/temp/c4_shim_freq.tsv"    # 频率窗
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "python C:\\temp\\c2_shim_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 120 --settle-s 2 --out C:/temp/c4_shim_probe.tsv"  # 正式窗
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_shim_probe.tsv evidence/logs/shim_probe_4_4_4.tsv
+```
+
+### §72.7 移交
+
+- 条件性第三发(同进程族内 slot[2] 重打,`witness_shot.cmd`)的**触发条件已经满足**(本发 `calls>0`),但它是新的一次
+  install ⇒ 要另一次点名。它的价值是把「族外确实在跑」(本节)与「族内是否在跑」摆进同一个进程的两窗。
+- **§74 的 B2 复采**(`census_run.cmd`,压最后)仍未打;本窗口的 `2016` 与它要复采的七把 shim 计数是两条不同的
+  读数口径,不要混。
+- scope(Task 9)未打;§68.8 表第 ② 行原样保留。
