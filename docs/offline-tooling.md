@@ -41,7 +41,7 @@ then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不�
 **当前基线(2026-10-26 issue #18 win32-link 计划实施,任务 5 复测于 commit `78fd294`)**:
 `zig build test --summary all` → `Build Summary: 29/29 steps succeeded; 599/599 tests passed`,退出码 **0** ——
 **failed 步归零**。上面 Host caveat 那句「1 个 failed 是环境事实」的判读**已被本次实施作废**:exports 根
-在宿主 target 上不再引用 kernel32(comptime 守卫,本计划四枪 `a48965e`/`92bfdf3`/`0b09863`/`78fd294`),
+在宿主 target 上不再引用 kernel32(comptime 守卫,本计划四次 shot `a48965e`/`92bfdf3`/`0b09863`/`78fd294`),
 现在真跑;裁定 **P15 那条「这一步记为绿」自此不再需要**(P15 文本住在不入库的私有归档,此处不复述)。
 上段的全部数字(`24/27; 314/314`、`22/25 … 296/296`、`293/293`/`272/272`、GLIBC 旧叙述)保留为历史读数,
 追加不改写。这条基线的完整判读:
@@ -148,7 +148,7 @@ PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 `slot_hits()` 按候选的 `vtable_rva` **回到镜像里重读前 8 槽**逐个比对(不是只看产物带出的 `slot0..slot2`),
 `lea_sites_to()` 把 `rip_refs()` 那条 modrm 判定推广到**整个 `.text`**,返回指令起始 RVA。接口一律 **RVA**
 (与 `AGENTS.md` 索引、下限图、候选集同口径),命令行里不出现带 image base 的数。`--candidates` 默认读
-`vtable_candidates_all_4_4_4.txt`,所以不必在枪机上重跑 `all_vtables`。
+`vtable_candidates_all_4_4_4.txt`,所以不必在 shot 宿主机上重跑 `all_vtables`。
 
 **判读陷阱:`--who-tables` 那张「命中 N 张表」的表,不能拿来证明「引擎复制了表」。** 两个独立原因,
 每一个都足以让这条推断作废(§57 就是在核这一条):
@@ -157,7 +157,7 @@ PE 解析 + capstone 反汇编(rip 操作数已解析)与 RTTI/vtable 普查。
 ② **靶子若是共用实现,命中数就正比于「继承它的兄弟类个数」,与复制无关** —— `0x3AFD30`(donor 表 slot[1]
 的 Execute 覆写)在镜像里以静态 qword 出现 **538** 次,`0x3B01A0` **454** 次。
 收紧到「前四槽与目标表逐槽相等」把 7,832 压到 5,这一步是有用的枚举,但**仍分不出「另一份表」与
-「同基类未覆写前四槽的兄弟类」** —— 两者在字节上就是同一串。要判身份,得问运行时 `[self+0]`(§57 的下一枪)。
+「同基类未覆写前四槽的兄弟类」** —— 两者在字节上就是同一串。要判身份,得问运行时 `[self+0]`(§57 的下一次 shot)。
 `--who-lea` 另有两条边界:它只认 `48/4C 8D|8B mod=00 rm=101` 这一种编码(不认绝对立即数寻址,也不认
 `.rdata` 里的静态持有),而**站点数 0 不等于没人用** —— `0x3B01A0` 就是 0 站点,因为它只以静态槽值存在。
 
@@ -171,7 +171,7 @@ rip-relative operand with the RVA it resolves to; this is what pinned the descri
 要按函数边界读,先 `pdata.py <rva>` 取区间,再传**指令条数**(`a <= 0xFF`)或传**长度** `end-start`。
 本函数边界一律以 `.pdata` 为准,不要靠 `int3` 填充猜结尾。
 
-**`--end=<rva>` / `--len=<n>` 是自 §59.9 起才有的显式形式**(§59.9 那条「往上定帧构造点」的零枪路线要按真边界取区间),
+**`--end=<rva>` / `--len=<n>` 是自 §59.9 起才有的显式形式**(§59.9 那条「往上定帧构造点」的零 shot 路线要按真边界取区间),
 **取证卷里旧命令一律按旧语义复现** —— 上面那个 `>0xFF` 启发式没有被改写,只是搬进了可测的纯函数 `parse_range`;
 裸数字口径、头一行 `; <exe>  <sec> RVA 0x…  (N insns)` 的条数、rip 注解写法全部不变
 (`scripts/test_disrva.py` 钉语义;影子副本基准用**已冻结的改动前修订** `git show 02eb551:scripts/disrva.py`(= 本分支第一次动 `disrva.py` 之前的那个提交,`git log --oneline -1 488b1fc^` 与它相同)逐字节钉输出 —— 意图是「重跑旧实现,输出与改动前逐字节相同」;**基准不写 `HEAD`**,合并之后 `git show HEAD:scripts/disrva.py` 就是新实现自己,自比自恒等,这条钉会静默失效)。
@@ -192,11 +192,11 @@ rip-relative operand with the RVA it resolves to; this is what pinned the descri
 `src/dll/scripted/keyword_registry_golden.zig` (56 vectors the Zig builder is tested against).
 This is how §18's "byte-for-byte identical" claim became a measurement: **9,863/9,863 agree, 0 divergences**.
 
-## 离线重问实机 artifact(读已入库产物,不读 exe、不起进程、不要枪)
+## 离线重问实机 artifact(读已入库产物,不读 exe、不起进程、不需要 shot)
 
 ### `scripts/scope_reclassify.py [--tsv PATH] [--floor PATH] [--all PATH] [--json PATH]`
 
-**把同一批 scope 候选问两张 vtable 集**:§56 那发只读采样枪留下的
+**把同一批 scope 候选问两张 vtable 集**:§56 那发只读采样 shot 留下的
 `evidence/logs/scope_probe_v2_4_4_4.tsv` 的 99 条 `object` 行,同时对着 1,805 条下限集
 (`ceffect_vtable_map_4_4_4.txt`,**import `c2_scope_probe.load_vtable_map` 复用**,不重写解析)和
 172,296 条形状集(`vtable_candidates_all_4_4_4.txt`,`rttibatch.py --all-vtables`)分四桶:
@@ -226,7 +226,7 @@ vtable 集合里(两张集都只扫 `.rdata`),所以「新集一条都没加」�
 ### `scripts/exec_frame_sites.py --probe <tsv> [--census <tsv>] [--out <tsv>]`
 
 **重读 exe 字节、按字节反解 shot 记录的真实 call site —— 不是 `-5` 估值。** 背景在 §59.7 与下面
-`c2_scope_probe` 一节的 CALLERS 口径:枪记的是**返回 RVA**,`E8 rel32` 是 5 B,而每一次 vtable 槽
+`c2_scope_probe` 一节的 CALLERS 口径:shot 记的是**返回 RVA**,`E8 rel32` 是 5 B,而每一次 vtable 槽
 派发(`call qword ptr [rax+8]`)只有 3 B;把 `ret-5` 当站点会把 mem 形状的点画进前一条指令中间,
 census join 落空,`func=-` 于是被误读成「没人调用」。`c2_scope_probe.py` 的 caller 行键已降回返回 RVA,本工具是「精确
 反解」的另一半。**exe 候选链 import `disrva.resolve_exe`**(同一份 `NS_STELLARIS_EXE` 口径,不复制
@@ -582,10 +582,10 @@ type='JSMallocBlockHeader'`,`record_rva=0x5ab430 loaded_at=0x18000bd8c` —— �
 
 ### `scripts/c2_selfabort_repro.py <dll_path>`(Windows 侧;§45 的自检器)
 
-把出货字节装进**本脚本自己拥有的**子 python,按实机那枪的门序跑 `C2Sanity` → `C2DiagQJSInto`,
+把出货字节装进**本脚本自己拥有的**子 python,按实机那次 shot 的门序跑 `C2Sanity` → `C2DiagQJSInto`,
 零游戏、零注入、零 dispatch:子进程若在没人碰它的情况下以退出码 3 死掉、且 witness 文本与实机逐字
 相同,"host 死了"这件事就与 `stellaris.exe` 无关。修复循环的形状(§45.4):**每改一次 QuickJS/
-allocator 就重跑这一条命令**,不需要第二支枪。
+allocator 就重跑这一条命令**,不需要第二次 shot。
 
 ```
 scp scripts/c2_selfabort_repro.py Windows_Jiaolong:C:/temp/     # 单文件,无裸名 import 依赖
@@ -634,7 +634,19 @@ python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码
    `VERDICT: inconclusive`,它对"这份产物会不会自杀"**什么都没证明**,不要当成阴性结果读
    (判据是纯函数 `child_loaded_the_dll`,120 s 超时也走同一条 `inconclusive` 形状)。
 
-### `scripts/c2_exec_probe.py [dll]` — C4 执行路径实机一枪
+### 实机点名 shot 的上线前置（两条，§67 踩过；对 `c2_exec_probe.py` / `c2_scope_probe.py` / `c2_donor_probe.py` 三个 shot 工具通用）
+
+1. **上线证明 = 覆盖 + 哈希对账，不是「远端有这个文件」**。`ren`(以及 `Copy-Item` 不带 `-Force`)在
+   目标已存在时**静默失败**，长度照样非 0 ⇒ 「远端有文件且有长度」证明不了上线的是本场字节。正确动作：
+   `Copy-Item -Force` 之后 `Get-FileHash`(或 `certutil -hashfile`)取远端 sha，与本地 `zig-out/bin/`
+   产物的 sha256 逐字对上，才允许执行 shot；对不上一律停手，因为 #meta 里那个 `dll_sha256=` 只是出处、
+   不做相等断言(每次重链都换)。整文件 sha 相同也不代表代码身份相同，反过来也一样 —— 这道门防的是
+   「把上一场那份旧 DLL 注入进去」。
+2. **argv 里的 DLL 必须是绝对路径**。ssh argv 写相对名(`sqjs_c4.dll`)时，目标进程 `LoadLibraryA`
+   按**游戏自己的 cwd** 解析，返回 NULL，驱动在任何注入之前拒掉(退出码 1、`nothing was injected`)，
+   install 额度未耗但读数全无。`.cmd` 与手写命令都要钉成 `C:\temp\sqjs_c4.dll`。
+
+### `scripts/c2_exec_probe.py [dll]` — C4 执行路径实机一次 shot
 
 把 C1 注册的 effect token 走完 C4 执行链:谓词 detour 把实例的 `[obj+0]` 换成 DLL vtable,
 base-Execute 探针合成**一次** instantiate,slot[1] 经 `C2ExecCall` 进固定 JS 脚本,脚本返回哨兵
@@ -643,7 +655,7 @@ last_rc/last_value`)与 `C2ExecProbeStatsInto`(探针与谓词:`calls/fired/ctx_
 pred_patched/chain/verified`)。两个 buffer 都是**有界轮询**(1 s 间隔、120 s 上限),判读取 `C2ExecDisarm` **之前**的 live 快照
 (`Disarm` 会把 C 桥的 `token` 清零,清理后的快照不可判),轮询中间值仍不看。
 
-**一枪一进程**:`C1Run`/`C2Init`/`C2ExecInstall`/`C2ExecProbeInstall` 每个都只派发一次,重跑必须
+**一次 shot 一个进程**:`C1Run`/`C2Init`/`C2ExecInstall`/`C2ExecProbeInstall` 每个都只派发一次,重跑必须
 重开游戏。清理段(`finally`)顺序固定:先 `C2ExecProbeUninstall` 让探针 inert,再
 `C2ExecProbeVerify`(0 = base-Execute 字节已还原),`SETTLE_S` 之后 `C2ExecDisarm`(`-1` = C 桥锁忙,
 最多重试 5 次)。任何一步报 `-6`/非 0 都**绝不 `FreeLibrary`**。
@@ -680,7 +692,7 @@ token id、`@returnAddress()` 的**返回 RVA**(记的是调用指令的下一�
 自己的类);两者是两件事,后者**故意不喂给 `classify()`**。RVA 一律界在 `[exe_base, exe_base+SizeOfImage)`
 (`SizeOfImage` 从活进程 PE 头读:`e_lfanew` 在 `+0x3C`,`SizeOfImage` 在 NT 头 `+0x50`),界外不产生 RVA。
 **这条取代了旧判据**:
-`X=[ctx+0x30] → S=[X+8] → id=[S+8] / obj=[S+0x20]` 那条链已由 c1_validation **§53.3 第二枪证伪**
+`X=[ctx+0x30] → S=[X+8] → id=[S+8] / obj=[S+0x20]` 那条链已由 c1_validation **§53.3 第二次 shot 证伪**
 (`+0x30` 不属于 0x20 字节的帧,读到的「id/object」是 `add rsp,0x28` 一类指令字节),链仍然照旧跟、照旧写进
 TSV,但**不再进任何 verdict**。
 
@@ -696,13 +708,13 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
         [--out C:/temp/c4_scope_probe.tsv] [--census ...] [--id-names ...] [--vtables ...]
 ```
 
-`--vtables` 指向的那份表**必须在开枪机上存在**(Windows 侧要上传,见「前置条件」),表缺失或解析出 0 条时
-脚本在**注入之前**就退出:判据挂在一个空集合上,那一枪无论怎么打都只会得到 `no_scope_candidate`。
+`--vtables` 指向的那份表**必须在 shot 宿主机上存在**(Windows 侧要上传,见「前置条件」),表缺失或解析出 0 条时
+脚本在**注入之前**就退出:判据挂在一个空集合上,那次 shot 无论怎么打都只会得到 `no_scope_candidate`。
 
 轮询一直采样到 `--poll-s` 截止(不是拿到第一个样本就停),环形记录保留最后 256 条;
 `--poll-s` 太短只会让样本变稀,不会让判读变快。
 
-**一枪一进程**:`C2ScopeProbeInstall` 每个进程只派发一次,`exec_hook` 已被占用时返回 `-2`(单 detour
+**一次 shot 一个进程**:`C2ScopeProbeInstall` 每个进程只派发一次,`exec_hook` 已被占用时返回 `-2`(单 detour
 约束),**不重试** —— 看到 `-2` 换一个新游戏进程,不要在同进程里绕。其余安装码:`-3` 模块未找到、
 `-4` 该地址已被别的 detour 占据、`-5` 序言不匹配、`-6` patch 太宽、`-1` 其他安装失败。清理段(`finally`)顺序固定:
 `C2ScopeProbeUninstall` → `C2ScopeProbeVerify`(0 = 引擎字节已还原)→ 等 `--settle-s` → 断言 host 存活。
@@ -710,7 +722,7 @@ python3 scripts/c2_scope_probe.py [dll] [--poll-s 120] [--settle-s 2] \
 (只有本次 install 真的返回过 0 才这样判;本次根本没装上时,verify 读到 `-1`/`-3` 属正常,
 驱动打 `verify=<n> (not installed this run)`)。
 卸载走的是仓库共用的 detour 原语(`detour.zig` 的 `removeHook`):`VirtualProtect` 把 16 字节 patch
-逐字节写回,**不暂停线程、也不检查有没有线程正处在那段字节里**。这是 §52 那一枪同样继承的残余竞态,
+逐字节写回,**不暂停线程、也不检查有没有线程正处在那段字节里**。这是 §52 那次 shot 同样继承的残余竞态,
 驱动侧造不出「静默窗口」(跑着的战役每秒数千次调用);host 恰在清理瞬间死掉时,先归因于 detour
 卸载而不是采样器,并按 §45 排除我们自己的产物。
 
@@ -743,7 +755,7 @@ census 于是 join 不上而报 `func=-` —— 那读法是「估值不是它�
 root_unreadable / **region** 七类行)。
 `meta` 行在最前面,带 `exe_base`、`image_end`、`image_size`、`dll_sha256`、`vtable_map_count`、`layout`、
 `stats`、`per_source_follow`,四根的 `followed_by_source`/`implausible_by_source`/`capped_by_source`/
-`withheld_by_source`、三个命中计数,以及区域仪器的 `regions_queried`/`region_verdicts`。**这不是装饰**:§56 那一枪的 stdout 被一次 ssh 重置整段吃掉,而旧 TSV
+`withheld_by_source`、三个命中计数,以及区域仪器的 `regions_queried`/`region_verdicts`。**这不是装饰**:§56 那次 shot 的 stdout 被一次 ssh 重置整段吃掉,而旧 TSV
 里没有这些数,事后无从区分「某个根读到但没有命中」与「那个根根本没被读」,于是把一次预算耗尽读成了一条
 负结论(陷阱 5)。判据现在住在带判词的 artifact 里。
 
@@ -763,7 +775,36 @@ root_unreadable / **region** 七类行)。
 就补出了 `__alignment1`(offsets 0/8/16/24/32/36/40,`sizeof`=48);**把那个 padding 字段也写出来会多插
 4 字节,`State` 读到的其实是 `Protect` 的槽**。
 
-**十一条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 / §59 实机与离线复算取到的,读 verdict 之前先看):**
+**深跟读口径(`plan_depth2` / `follow_depth2` / `find_shared_cells` / `classify_depth2`)**:
+depth-1 每行的 `candidates[*]["ptr"]` 当作**再下一层的根**,再走一遍同一个 `follow_object`(深跟读里不新写任何
+一次 `read_memory`,失败读照旧是 `unreadable` 而不是 0 —— 陷阱 5),行标签是 `"<基源>.d2"`,两层永不相认。
+**预算仍按源给**(`DEPTH2_PER_SOURCE = 8`,把 `.d2` 折回基源计源,四源各 8),而且**depth-1 已经读过的地址不算
+线索**:每个根的 `self_ptr` 与 `ctx_words[1]` 本来就在 `objects` 的 `root` 字段里,计划阶段直接跳过(`already`),
+同一个地址也只计划一次。**预算的三种花费分开记账** —— `planned_by_source` / `followed_by_source` /
+`capped_by_source`,进 `#meta` 的 `d2_planned_by_source` / `d2_followed_by_source` /
+`d2_capped_by_source` 与 `depth2_per_source`;第四个计数 `deduped_by_source` **只在 stdout 的逐源行里,
+`d2_meta_rows` 不把它写进 `#meta`**(六键是固定的),所以引用去重数必须标出处是 stdout,不能声称可从
+TSV 读回。缺前面那几个键,产物里一条短的深度 2
+列表就退化成「那些槽没东西」的误读,这正是 §56.4 那次把预算耗尽读成负结论的同一形状。
+区域仪器(`region` 行)现在吃**两层的根**(`collect_region_addrs`),`source=` 保留各层自己的标签。
+**跨源共享(`find_shared_cells`)**按**候选值**分组,只保留出现在 **≥2 个不同基源**的值,行是
+`{"value","value_rva","sites":[(source, root, off)]}`,汇总进 meta 的 `shared_cells`
+(`n=0`,或 `n=<条数> 0x<值>(rva=<hex|->)[源@0x根+0x偏移,…];…`)。这就是把 §59.6 那对
+(`helper` 的 `+0x10` 与 `self` 的 `+0x28` 都给出 `0x2ddc2c90`)的问法机械化;**同源两个槽同值不算共享**,
+它只说那个对象里有两个字段相等。`value_rva` 只在值落在镜像内才给,界外保留绝对值(与本节开头
+「RVA 一律界在 `[exe_base, image_end)`」同一条:把堆地址压成 `rva=0` 会伪造一次镜像命中)。
+`VERDICT_D2` 是另一条固定阶梯,`classify_depth2` 按此**判定优先顺序**走出:`no_depth2_planned` →
+`depth2_unreadable` → `depth2_known_vtable_hit` → `lineage_edge_found` → `no_depth2_lead`。
+**这个顺序不是取证资格顺序**;有取证资格的只有 `depth2_known_vtable_hit` 与
+`lineage_edge_found` 两档(`EVIDENCE_D2_VERDICTS`,在 `D2_VERDICTS` 枚举里排在**头两元**)。
+**证据档也不自动等于血缘**:两档都在候选值/候选 vptr 上机械判定,而 `find_shared_cells`
+**不筛 `plausible_user_ptr`** —— 一个标量形状的值(如 §68.3 第一条 `0x100000000` = `1<<32`)同现多处
+就能连成边并把 `verdict_d2` 抬到 `lineage_edge_found`;读这一档必须逐条连同 `rva=` 与值的形状一起读,
+见判读陷阱 12。
+**它与 `classify()` 的六档不同义、不合并**:后者回答「depth-1 的根有没有交出已知类」并决定退出码,一字未改;
+前者只回答「再下一层有没有线索」,不进退出码,也不参与任何旧判据。
+
+**十二条判读陷阱(§53.4 / §54.8.4 / §56.8 / §58 / §59 实机与离线复算取到的,读 verdict 之前先看):**
 
 1. **`no_scope_candidate` 的口径是「不在已知集合内」,不是「不是对象」。** 那 1,805 个 vtable 只包含 slot[1]
    仍是 base Execute 的类,**覆写了 Execute 的类一个都不在**(structures §14 + pipeline §17)。所以这一判读
@@ -807,10 +848,10 @@ root_unreadable / **region** 七类行)。
 9. **`no_calls` 先读「有没有弹窗」,再读代码。** 预检 `ns_scope_pre.py` 走调试控制台,而**预检本身不暂停
    游戏**(实测:控制台开着时 `red=0 / green=200` ⇒ `state=playing`,§59.1 更正了 §58.3 的因果句)。
    真正暂停游戏的是预检期间弹出来的**事件窗**——它自己会暂停(监督器判读陷阱 4),而 `dialog_unknown`
-   这种没归过类的窗口不会被 `dismiss` 收掉。§58 那一枪就是这样:预检通过后没回头确认窗口已关、状态回
+   这种没归过类的窗口不会被 `dismiss` 收掉。§58 那次 shot 就是这样:预检通过后没回头确认窗口已关、状态回
    `playing`,烧掉 pid 13132 的「一进程一次安装」额度换来一个 `calls=0`。所以**「已载入且已解除暂停」这条
-   前置的读数必须紧邻开枪取**(`state=playing` 是判据,`console_open` 不是),预检与开枪之间隔多久这条就作废多久。
-   同理:`regions_queried=0` 与四桶全 0 在这种枪里是**同一件事的四个写法**,不能读成「区域仪器判了 0 个」
+   前置的读数必须紧邻执行 shot 取**(`state=playing` 是判据,`console_open` 不是),预检与执行 shot 之间隔多久这条就作废多久。
+   同理:`regions_queried=0` 与四桶全 0 在这种 shot 里是**同一件事的四个写法**,不能读成「区域仪器判了 0 个」
    或「形状集没命中」;而 `scope_reclassify.py` 的 `undecidable_no_rva == 0` 这条验收在零行 artifact 上
    **恒真**,零行时它不证明任何事 —— **有行的时候它也不该被当成验收**:v4 的 16 条 object 行里 15 条
    `vptr` 根本不在镜像内(那是 `0x0`/`0x102`/`0x4000000040` 这种值),界外留 `-` 正是 bounds 修复要显示的
@@ -845,15 +886,29 @@ root_unreadable / **region** 七类行)。
     `none` 是要带进取证卷的 datum,不是负结论;`ambiguous` 同理 —— 它是字节里真实存在的重叠,
     照原样进卷,不替他选一个候选。
 
+12. **两个证据档说「有线索」,永远不说「是血缘/是对象」;三个负档更弱。** 先说负档:
+    `no_depth2_lead` 与 `depth2_unreadable` 都不说「更深一层没有对象」。前者只说「这一层交出的候选值,
+    没有一个落进那 1,805 个已知 vtable,也没有一个值跨两个基源共享」;而那张表**是下限不是类数**
+    (structures §14:覆写了 Execute 的类一个都不在里面),所以「不在集合内」永远推不出「不是对象」。
+    后者更弱,它是**仪器的陈述**(`reader` 对这一批地址一个 qword 都没拿到),对内存里有什么不说话。
+    同一形状也管 `no_depth2_planned`:那一档是「depth-1 没交出任何新地址」,不是「对象里没有成员指针」。
+    五档里只有 `depth2_known_vtable_hit` 与 `lineage_edge_found` 有取证资格(`EVIDENCE_D2_VERDICTS`),
+    其余三档写进卷里时只能作为「本次这一发问到什么程度」的说明句。
+    **资格档也有它的弱形,不能只读那一行判决词**:`find_shared_cells` 按候选值分组且**不筛
+    `plausible_user_ptr`**,所以一个**标量**同现多处就能连成边 ⇒ `lineage_edge_found` 可能是
+    「同一份计数在多处出现」而不是两个对象共享一个成员(§68.3 第一条 `0x100000000` = `1<<32` 就是这样
+    一档里的一条边);`depth2_known_vtable_hit` 同理只说「解出来的值落在 floor map 里」,它不说那个 root
+    就是 scope。所以读这两个档时必须**逐条**连同 `rva=`、值的形状、界内/界外一起读,判决词本身不是结论。
+
 **宿主死了先跑 §45 的两个离线工具**(`scripts/c2_selfabort_repro.py` + `scripts/dll_ubsan_site.py`)
 排除我们自己的产物,再谈引擎。
 
 ### `scripts/c4_wiring_probe.py [--mode capture|slot2] [--dll PATH] [--save PATH] [--json PATH] [--supervisor-log PATH] [--allow-drift]`
 
-C4 接线驱动,一枪一进程。`--mode capture`(默认):跑 `capture` 找 `ctx`/`a3` 里承载 system id 的列,
+C4 接线驱动,一次 shot 一个进程。`--mode capture`(默认):跑 `capture` 找 `ctx`/`a3` 里承载 system id 的列,
 `apply` 把该列喂给 QuickJS 的 787 分数表(tier 阈值 100/200),tier ≥ 1 的 70 个系统 chain donor
 Execute 应用 `log`/`set_name`。**capture 只读**(RPM 采样 + 环形记录),整条 apply 路径里唯一的引擎
-写入是引擎自己的 donor Execute。`--mode slot2`(§54.6 判别枪):**预检 → install → 一次 armed 的
+写入是引擎自己的 donor Execute。`--mode slot2`(§54.6 判别 shot):**预检 → install → 一次 armed 的
 `every_system` pass**,读 slot[2] 只读计数器(`C4Slot2StatsInto`,`<QQ>` 16 B:计数 + 转发目标),
 verdict ∈ {`slot2_counted`(787 ⇒ base Execute 经我们的副本 slot[2] 派发)、`slot2_zero`(0 ⇒ donor
 vptr 副本/克隆,不经我们的 vtable)、`slot2_body_not_executed`(body 没跑满 783,计数没有意义)、
@@ -868,7 +923,7 @@ vptr 副本/克隆,不经我们的 vtable)、`slot2_body_not_executed`(body 没�
 **前置**:supervisor 必须已在 Windows 机上跑着(见下一节)。驱动先写 `want paused` 并等到状态
 `paused`(状态文件超过 5 s 未更新按「没在跑」判),然后才注入。**console 命令都经 supervisor
 的 `console` 动词**(剪贴板 + 按键),条数按模式定:`--mode capture` **三条**(预检 + capture +
-apply),`--mode slot2` **两条**(预检 + 判别枪)—— 两种模式都含那条预检;不直接对游戏发键。
+apply),`--mode slot2` **两条**(预检 + 判别 shot)—— 两种模式都含那条预检;不直接对游戏发键。
 控制台键是**开关**,而命令执行完面板不关(2026-10-23 实机),所以 supervisor 自己记
 `console_open`:首条命令按一下打开,其余每条只清行、粘贴、回车;换进程时这个标记复位。
 
@@ -876,13 +931,13 @@ apply),`--mode slot2` **两条**(预检 + 判别枪)—— 两种模式都含那
 effect every_system = { log = "C4_PREFLIGHT_<pid>_[This.GetName]" }             # 预检，应得 783 行
 effect every_system = { log = "C4_CAPSTART_<pid>_[This.GetName]" neo_action = { … } }   # capture 哨兵
 effect every_system = { log = "C4_APPSTART_<pid>_[This.GetName]" neo_action = { … } }   # apply 哨兵
-effect every_system = { log = "C4_SLOT2START_<pid>_[This.GetName]" neo_action = { … } } # slot2 判别枪哨兵
+effect every_system = { log = "C4_SLOT2START_<pid>_[This.GetName]" neo_action = { … } } # slot2 判别 shot 哨兵
 ```
 
 > 哨兵与预检共用 `[This.GetName]` 的 783 行去重形状，但带 pid 与相位：capture/apply 的哨兵在
 > 同一会话里互不冒充。3 s 内没有被 supervisor 消费 → `console_send_failed`；0 行 → `*_not_delivered`；
 > 非 783 行 → `*_sentinel_mismatch`。宽限取 3 s,是因为 supervisor 的 serve 循环是 0.8 s、读命令前
-> 还要做像素截图 —— 投递失败现在会中止整枪,1 s 会把健康通道误判成坏通道。
+> 还要做像素截图 —— 投递失败现在会中止整个 shot,1 s 会把健康通道误判成坏通道。
 
 **谓词计数器**：`C4PredStatsInto` 是 `<QQII>` 24 B（calls, patched, last_token, installed）；驱动取
 capture 前后的**增量**，不是绝对值 —— `pred_patched` 是进程累计值，预检的 effect 也会进 detour。
@@ -929,7 +984,7 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 **前置门二 — 控制台信念必须来自观测**(`console_gate`,与 `supervisor_ready` 并列,见 §54.10):
 `_wait_ready` 在发出第一条 console 命令之前同时要求 supervisor 状态 `paused` + 新鲜(>5 s 按没在跑判)
 **和** console 门通过。`console_gate` 只接受**判决性**观测:`console_open` 为 `True` 或 `False` 都放行
-—— 首条命令之后面板常开,要求 `False` 会拒掉每一个多命令枪;键**缺失或 `None`** 拒成
+—— 首条命令之后面板常开,要求 `False` 会拒掉每一个多命令 shot;键**缺失或 `None`** 拒成
 `console_state_unknown`(键缺失 = daemon 早于像素通道,那是猜测不是观测);`console_forced` 为真值拒成
 `console_belief_pinned`(钉住的信念不算观测)。两条拒绝的 detail 带 `console_open=` / `console_px=` /
 `console_forced=` 三个实际值(`_wait_gate_detail`;整条状态记录都读不到时三者都是 `-`),读一眼就知道
@@ -939,9 +994,9 @@ apply 的 70 行 marker 同理(3 s 静默后再等 15 s,取最大值)。
 **写命令之前**捕获的字节偏移起,读 daemon 自己的事件日志尾(默认
 `SUPERVISOR_LOG = r"C:\temp\ns_game_log.jsonl"`,`--supervisor-log` 可覆盖)至多
 `CONSOLE_RECEIPT_TIMEOUT_S = 2.0` 秒。偏移取在写之前,否则上一条命令的旧 `console_refused` 会中止
-一发本来健康的枪;日志**stat 不到**(共享争用 / AV 扫描)时偏移记 `None`,直接跳过回执轮询 ——
+一发本来健康的 shot;日志**stat 不到**(共享争用 / AV 扫描)时偏移记 `None`,直接跳过回执轮询 ——
 读不到就退回 0 等于「从头分类整个文件」,会把上一条命令甚至上一轮运行的拒收算到这条健康命令头上,
-而 `_slot2_phase` 那一枪发生在注入之后,烧掉的是游戏进程。`console_refused` /
+而 `_slot2_phase` 那次 shot 发生在注入之后,烧掉的是游戏进程。`console_refused` /
 `console_clipboard_failed` 当场中止,把 daemon 记的 `reason` 放进 result 的 `detail`(daemon 没记
 reason 时落命令原文,`reason or text`);窗口内真出现 `console_sent` 才由它返回。**但健康的命令通常
 不是靠 `console_sent` 返回的** —— daemon 的成功行要按完 `console_key_plan` 的全部键才写:
@@ -951,7 +1006,7 @@ reason 时落命令原文,`reason or text`);窗口内真出现 `console_sent` �
 **读不到回执不算失败,它是健康投递的默认形状,不是回执丢了** —— 静默到点即返回,日志轮转/读不出同样
 按 `no_receipt` 吞掉,投递的终判仍是 783 行哨兵;§55 读一个 2 s 的静默返回时不要去找「缺失的成功回执」。
 这一条把 §54.9 那种「命令被静默拒绝、30 s 后才以零输出暴露」变成 2 s 内的具名失败:窗口只会缩短一个
-已知失败,永远不会推迟一发健康的枪(预批次的代码在 `.seen` 之后就立即返回)。
+已知失败,永远不会推迟一发健康的 shot(预批次的代码在 `.seen` 之后就立即返回)。
 
 **verdict 表**(驱动按顺序判,先命中的胜出):**装载前**的结论(`supervisor_*`、
 `console_state_unknown`/`console_belief_pinned`、`campaign_*`、`dll_exports_missing`、`game_not_running`、
@@ -1001,8 +1056,8 @@ reason 时落命令原文,`reason or text`);窗口内真出现 `console_sent` �
 清理段固定:`SetMode(0)` → `C4WireDisarm`(`-1` 锁忙最多重试 6 次 × 0.5 s;6 次仍 `-1` 记为
 benign,`0`/`-1` 都算清理成功)→ `assert_game_alive`。**绝不 `FreeLibrary`** — patch 过的 effect
 对象持有 DLL 内的 vtable 副本。只有 verdict `ok` 且清理成功(host 存活、disarm 是 `0`/`-1`)退出码
-才是 0;disarm 抛异常时 verdict 降为 `cleanup_incomplete`。**装载前中止的枪没有清理段可跑**
-(进程里既没有 DLL,也没有 detour),退出码同样是 1,但进程保持可用 —— 别把这种 1 读成「烧了一枪」。
+才是 0;disarm 抛异常时 verdict 降为 `cleanup_incomplete`。**装载前中止的 shot 没有清理段可跑**
+(进程里既没有 DLL,也没有 detour),退出码同样是 1,但进程保持可用 —— 别把这种 1 读成「烧了一次 shot」。
 
 判读纯函数(`decode_records` / `_wire_stats` / `_scored_stats`、`pack_spec`/`unpack_spec`、
 `column_sequences`/`find_scope_column`、`classify_capture`/`classify_apply` 等)由
@@ -1010,7 +1065,7 @@ benign,`0`/`-1` 都算清理成功)→ `assert_game_alive`。**绝不 `FreeLibra
 
 ### `scripts/c2_donor_probe.py [dll] [--mask 0] [--poll-s 120] [--settle-s 2] [--out C:/temp/c4_donor_probe.tsv]`
 
-donor 一族的只读采样枪(§57.4 点名的那个靶子),一枪一进程。**本计划只把它写好并静态验证,从未运行** ——
+donor 一族的只读采样 shot(§57.4 点名的那个靶子),一次 shot 一个进程。**本计划只把它写好并静态验证,从未运行** ——
 它是实机工具,运行需要本次会话内点名(`docs/roadmap.md` 的授权表)。默认 DLL `C:\temp\sqjs_c4.dll`。
 
 **它读谁的字节**:DLL 侧 detour 挂在 `0x3AFD30`(`offsets.keyword_reg.RVA_EFFECT_DONOR_EXECUTE`,
@@ -1027,9 +1082,9 @@ assert_game_alive`。每根箭头是真依赖:`resolve_base_address` 在注入**
 (#meta 里那句「RVA 相对于哪个界」的出处);`gate_module` 用 `list_exports` 从**文件**里核
 `NEEDED_EXPORTS`,缺一个就不注入 —— 晚一步发现昨天那份 DLL,进程里就多一份永远卸不掉的映射。
 `Reset` 清计数/环/mask 但**不卸载 hook**,所以必须排在 `Install` 之前(带着活补丁清 `calls`
-等于悄悄把采样分母调回 0)。`sha 门`比的是「这一枪要注入的是哪个文件」:整文件 sha **不是代码身份**
+等于悄悄把采样分母调回 0)。`sha 门`比的是「这次 shot 要注入的是哪个文件」:整文件 sha **不是代码身份**
 (上面实测过每次重链都换、`.text` 一字节没动),所以这道门是**打印并记进 #meta + 读不到就拒**,
-不是拿钉死的常数做相等断言 —— 后者会在每次重建后杀掉每一发合法的枪。
+不是拿钉死的常数做相等断言 —— 后者会在每次重建后杀掉每一发合法的 shot。
 
 **依赖码**:`C4DonorProbeInstall` `0` / `-2`(本进程已装好,**或 predicate detour 还 armed**)/
 `-3` stellaris.exe 未找到 / `-4` 目标已被 hook / `-5` 指纹不符 / `-6` patch 过宽 / `-1` 其余。
@@ -1061,7 +1116,7 @@ assert_game_alive`。每根箭头是真依赖:`resolve_base_address` 在注入**
 2. **`[self+0]` 命中我们 DLL 的 vtable,说明 predicate 在跑,不是命中家族。** predicate detour 把实例化对象的
    `[child+0]` 指向我们在 DLL 里的 vtable 副本,那种状态下每个读数都落在五表之外,会被记成 `unmatched` ——
    一个**假的 tier 2**。所以模块在 `preflightChecks` 里直接拒绝该状态(这就是 `-2` 的第二种成因),
-   驱动对此不重试、只要新进程。这也是为什么这条枪与 predicate/slot2 那把**不能同进程共跑**。
+   驱动对此不重试、只要新进程。这也是为什么这次 shot 与 predicate/slot2 那两次**不能同进程共跑**。
    另有**两类**会造成同一个假 tier 2,一并记下:落在图像内的 **code-address `[self+0]`**(`0x3AFD30` 静态
    qword 出现 538 次却只承认 5 张表),以及 `toRva`→0 的**图像外读数**(含 64 MiB 窗口内、真实 `SizeOfImage`
    之外那 ~6.8 MiB 尾巴)——两者都进同一个 `unmatched` 计数。所以 tier 2 只是**接力**:`#meta` 的 image span
@@ -1074,16 +1129,16 @@ assert_game_alive`。每根箭头是真依赖:`resolve_base_address` 在注入**
    数出来的是证人的样本量,不是发生过的调用数。
 
 **它替代了 `0x1D08520` 那一族采样面的哪一段**:§57 观测 6 确立「这一族**一张都不从 base Execute 进**」
-(`0x1D08520` 只是没覆写 slot[1] 的那些类的默认体),于是 §54–§56 三把挂在 `0x1D08520` 上的枪
+(`0x1D08520` 只是没覆写 slot[1] 的那些类的默认体),于是 §54–§56 那三次挂在 `0x1D08520` 上的 shot
 (`c2_scope_probe.py` 的 `calls`/`delta`/`valid`)对 donor-shaped 这一族**没有覆盖**:既不能证明这一族被执行,
 也不能证明没被执行。本工具接的就是那一段覆盖缺口 —— **「这一族到底进不进虚 Execute」这个问题从此归它问**,
-`c2_scope_probe.py` 继续只回答「base Execute 的调用者是谁」(§59)。两张枪的读数不同源,不能互相引用
+`c2_scope_probe.py` 继续只回答「base Execute 的调用者是谁」(§59)。两次 shot 的读数不同源,不能互相引用
 (§55.4 未排除第 1 条:base Execute 派发点的 `r8`/`r9` 是上一调用者的 scratch,而这里 `r8` **是**第三个参数)。
 
 TSV 首行是 `#meta`,带 `exe_base`、`image_size`、注入那份 DLL 的 `sha256`、`mask`、`calls`、
 `tiers=h0=/…/unmatched=/invalid_self=` 逐档读数、`verdict` 与 `named_table`,终修之后还带环记录的
 image span 三分区(`unmatched_rows`/`rva_zero`/`in_image`/`at_or_above_image`)与 drain 失败时的
-`entries_error=` —— artifact 是 stdout 丢了之后还能活下来的那份(§56 那一枪整段 stdout 被一次 ssh reset
+`entries_error=` —— artifact 是 stdout 丢了之后还能活下来的那份(§56 那次 shot 整段 stdout 被一次 ssh reset
 吃掉,判据依赖的数跟着没了)。因此 `run()` **先写 meta-only artifact 再 drain**:一次坏 drain 只许留下
 `entries_error`,不许吃掉已经拿到的读数(这一条写序由 `test_run_writes_the_artifact_before_it_drains_the_ring`
 钉住)。
@@ -1091,7 +1146,7 @@ image span 三分区(`unmatched_rows`/`rva_zero`/`in_image`/`at_or_above_image`)
 判读纯函数(`decode_layout` / `decode_entry` / `decode_stats` / `verdict_for` / `table_rvas` /
 `write_tsv` / `partition_unmatched` / `build_meta`,常量 `VERDICTS` / `NEEDED_EXPORTS`)由
 `python3 -m pytest scripts/test_c2_donor_probe.py -q` 覆盖(**14 条**:Task 2 的两条权威围栏 +
-Task 3 的 6 条判读 + 终修的 5 条 + 1 条写序保护),无游戏、无 Windows API、零枪。
+Task 3 的 6 条判读 + 终修的 5 条 + 1 条写序保护),无游戏、无 Windows API、零 shot。
 
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
@@ -1102,7 +1157,7 @@ Task 3 的 6 条判读 + 终修的 5 条 + 1 条写序保护),无游戏、无 Wi
 宿主侧经根目录 `justfile` 调用(`NS_WIN_HOST` 可覆盖主机名):
 
 ```
-just deploy                  # scp game_supervisor.py + launch_stellaris.py 到 C:/temp/
+just deploy                  # scp scripts/windows/ 的 7 个维护中脚本到 C:/temp/(含 popup_geometry.py:game_supervisor.py 第 25 行 import 它,漏了就 ModuleNotFoundError)
 just launch                  # 经 Steam 拉起游戏(launcher 点击 + 30 s 观察窗,启动后仍是暂停)
 just game start              # schtasks 拉起守护进程,见到状态心跳才返回
 just game status             # 一行摘要:state/note/pid/hwnd/age/want/policy/handled/cmd/speed
@@ -1169,7 +1224,7 @@ just game stop | quit
    `console_open` 为假时)→ 64 个退格 → Ctrl+V → Enter,**不发收尾反引号**。两条实机事实
    (2026-10-23):控制台键是**开关**,开着的面板被再按一下会**关掉**;命令执行完面板**不关**。
    不做状态记录时,同一会话的第二条命令的「开面板」那一下会把面板关掉,退格/粘贴/回车全打进游戏,
-   命令一行都不执行(实测 783 条哨兵 0 行 —— 这正是 C4 首枪 `capture_not_delivered` 的机制)。
+   命令一行都不执行(实测 783 条哨兵 0 行 —— 这正是 C4 第一次 shot `capture_not_delivered` 的机制)。
    所以 supervisor 用 `console_open` 记状态:首条命令按一下打开,之后只清行、粘贴、回车;换游戏
    进程时复位,人工看屏后可 `console_sync open|closed` 校正。64 个退格清输入行残留,退格 20 ms/个、
    其余 80 ms/个。`focus(hwnd)` 3 s 内拿不到前台就写 `console_refused`(不按键);剪贴板失败写
@@ -1178,7 +1233,7 @@ just game stop | quit
    数效果 marker 用驱动里的 `count_marker_lines`(只数同时含 `Log effect, file:` 与 marker 的行,
    控制台回显匹配不上)。
 
-   **`console_open` 是三值信念,不是布尔**(`True` 开 / `False` 关 / `None` 未知)。第二枪暴露的
+   **`console_open` 是三值信念,不是布尔**(`True` 开 / `False` 关 / `None` 未知)。第二次 shot 暴露的
    不是「键序不对」,是**按键之前无人观测面板真的开着**:21:40:00 那条 `opened=true` 出 783 行,
    之后三条 `opened=false` 全 0 行,而这段时间 supervisor 日志里**一个事件都没有**(见 §54.9)——
    被按下的一次是 serve 循环自动补的 pause 空格,它把空格**打进开着的面板**,游戏因此永不暂停、
@@ -1186,7 +1241,7 @@ just game stop | quit
    现在的三条不变量:
    - **未知就拒绝**:`console_send_plan` 遇到 `None` 不猜奇偶,写 `console_refused` +
      `reason=console_state_unknown`,一个键都不按、剪贴板都不碰;只有 `console_sync` 或新进程能
-     把 `None` 抬成已知值。宁可在日志里响一声,也不要一发静默的 0 行枪。
+     把 `None` 抬成已知值。宁可在日志里响一声,也不要一发静默的 0 行 shot。
    - **碰过游戏就作废**:任何发给游戏的输入 —— `speed`、`click`、`dismiss`、自动点选项
      (`click_row`)、自动关窗 (`click_close`) —— 之后立刻 `console_open = None`。点在游戏区可能
      关掉或夺走面板焦点,而 daemon 看不见。`shot` 只截图像素,不作废。
@@ -1230,7 +1285,7 @@ just game stop | quit
     控制台窗,再怀疑检测器。同批次一条同族读数:`just game shot` 在游戏被切到后台时给 141 B 的退化图,
     切回前台给 1,134,993 B 的有效截图 —— 与批次 1 那张「356×59 全黑」不是同一个机制(那条是 hwnd 拿不到
     有效矩形,这条是窗被最小化/切走),但都读成「屏幕上没有东西」。
-11. **ssh 长连接会在长跑的实机驱动跑完之前被重置,那之后 stdout 全丢**。枪的 artifact 若只在结尾
+11. **ssh 长连接会在长跑的实机驱动跑完之前被重置,那之后 stdout 全丢**。shot 的 artifact 若只在结尾
     打印(判词、Verify rc、host alive),就取不回来了。所以实机驱动的关键状态要能被**事后独立读回**:
     `scope_probe` 的 `installed` 是实时 bool、`verified` 是 `verify()` 的实时返回值(不是闩锁),
     配一次 `C2ScopeProbeStatsInto` 双读(`calls` 两秒不涨 = 热路径已还原)就把「Uninstall 跑过、引擎
@@ -1256,7 +1311,7 @@ just game stop | quit
     一次 12 行裁片在 tick 内共 27,134.9 ms(扣加载 ⇒ 预测量 ≈ 19.6 s ≈ 基准线的 1.98 倍,刚好没到「两倍算异常」),
     一扇窗的首次真识别就把 `POPUP_OCR_BUDGET_MS = 24 s` 用光。节拍: 有窗时相邻 popup 三元组实测
     **≈ 2.2–2.5 s 一组**(不是这里写的 0.8 s),所以一次询问 ≈ 丢 11–12 拍。另外「用前后两行日志的时间差
-    量停摆」这个设想在**边沿触发的第一枪**上用不了 —— 它前面没有 popup 行可比,只能读 `ms` 字段。
+    量停摆」这个设想在**边沿触发的第一次 shot**上用不了 —— 它前面没有 popup 行可比,只能读 `ms` 字段。
     **2026-10-25 批次 2 的第三组样本把「每行 0.7 s」这个斜率也撤掉**:三组同机同 `DEVICE=cpu` 同未缩小裁片
     —— 12 行 27,134.894 ms(批次 1)、14 行 36,810.77 ms(批次 1)、**12 行 42,885.37 ms(批次 2,
     `text:2188ca0b`)**。同样 12 行相差 **58%** ⇒ 固定+线性那个模型只能当量级,不能当预测;**能当判据的只有
@@ -1326,7 +1381,7 @@ just game stop | quit
   (879, 555) ⇒ 这台机无边框全屏,原点在 ±1 px 内是 (0,0)。**没有这一步,量出来的点没有坐标系。**
 - 三个模块的分工:`popup_identity.py`(指纹与名单解析)、`popup_guard.py`(判据与熔断,阈值只在这定义)、
   `popup_ocr.py`(引擎唯一出口)。前两个 stdlib-only,Linux 上就能 `import` 并跑测试;`popup_ocr` 只在
-  Windows 宿主上跑得动(surya + torch CPU 轮子),但它的**加载成本现在有了实机数字**:2026-10-25 首枪
+  Windows 宿主上跑得动(surya + torch CPU 轮子),但它的**加载成本现在有了实机数字**:2026-10-25 第一次 shot
   `python C:\temp\popup_ocr.py warm` 量到 `STATUS=ok MS≈6.1 s`(两个 predictor 构造 + 权重读盘,torch 的
   pynvml FutureWarning 也在其中)—— 计划里那个「≈1.0 s」是更早 spike 只量构造、权重已被另一进程暖过的
   数,**不要**再拿它估无人值守的启动停摆。`warm|<png>` CLI 就是为这条测量存在的(Task 6 不开 daemon 也能
@@ -1367,7 +1422,7 @@ just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
 1. **它只掐空闲链**。人工 `Win+L`、别人远程操作、以后新增的组策略锁都不在能力范围内;`check` 报
    `locked` 时**先想人,不要想守护坏了**。守护也绝不在 secure desktop 合成输入、不尝试解锁、不猜口令。
 2. **`unreadable_denied` ≠ 锁**。它是 `OpenInputDesktop` 被 DACL 拒(`err=5`,detail 形如
-   `err=5 sessions=1/1`);判决按保守方向走「不可开枪」,但根因可能是进程不够权限而非桌面被锁 ——
+   `err=5 sessions=1/1`);判决按保守方向走「不可执行 shot」,但根因可能是进程不够权限而非桌面被锁 ——
    两个名字分开就是为了不让人去查一个不存在的锁。同一族里还有 `err=1`:那是**会话不对**,
    `OpenInputDesktop` 只看得到调用方自己会话的输入桌面,而 ssh 起的进程在 session 0,那里没有
    控制台输入桌面可开(实机 2026-10-24:`h=None gle=1`);`desktop_detail` 里出现 `sessions=-1/1`
@@ -1404,11 +1459,11 @@ just awake serve --interval 5.0 --assert-every 25.0 --stop-after-s 0
    父链 `svchost → cmd → pythonw` 把「不在 WinSta0」和「权限不够」两种归因**都排除**了。
    ⇒ 本文件的开头那句「唤醒要求登录 ⇒ 桌面变成 `Winlogon`」是 Windows 的事实,**不是我们能读到的事实**:
    `desktop_locked` 这个 verdict 在这台机上从未被任何一次真锁产生,`desktop_gate` 在锁屏期间返回 `ok`,
-   所以开枪通道的第一道门与 launcher 的 exit 25 都**拦不住一次锁屏下的键盘注入**。
+   所以执行 shot 通道的第一道门与 launcher 的 exit 25 都**拦不住一次锁屏下的键盘注入**。
    `err=5` 在这两次锁里只以「一拍的 blip」出现(4 组 `err=5 → Default` 对,组内间隔恰好 5 s),
    锁着的整段时间变更日志**零新增** ⇒ 「锁屏 ⇒ 至少一条 err=5」与「读到 err=5 ⇒ 正在锁屏」两头都不能当判据。
 
-**与开枪的关系:**`c4_wiring_probe._flow` 的**第一道门**读 `ns_awake_status.json`,
+**与执行 shot 的关系:**`c4_wiring_probe._flow` 的**第一道门**读 `ns_awake_status.json`,
 `keep_awake_gate` 的六个 verdict —— `keep_awake_absent|keep_awake_stopped|keep_awake_stale|
 desktop_locked|desktop_unreachable|desktop_unobserved` —— 一律中止,且中止发生在为游戏写
 `want paused` **之前**(连 launcher 的 22 都不用花)。两端唯一的耦合是两个字符串:状态文件的
@@ -1420,11 +1475,11 @@ desktop_locked|desktop_unreachable|desktop_unobserved` —— 一律中止,且�
 仍会被记成 22/23,而那正是 exit 23 至今判不下去的原因。`--keep-awake-status` 的默认值是
 `keep_awake.STATUS_PATH`,不是第二份 `C:\temp\...` 字面量。
 
-两处判决函数(`keep_awake.desktop_gate` 与 `c4_wiring_probe.keep_awake_gate`)**各留一份是刻意的**:开枪通道
+两处判决函数(`keep_awake.desktop_gate` 与 `c4_wiring_probe.keep_awake_gate`)**各留一份是刻意的**:执行 shot 通道
 是 `C:/temp/<name>.py` 线上契约的一部分,不能因为 launcher 侧要读同一个文件就获得一个 import 关系。代价有两条,
 都记在这里:(1) 状态窗口 `STATUS_MAX_AGE_S` 在 `keep_awake.py:50` 与 `c4_wiring_probe.py:499` 各有一份字面量
 `15.0`,**本计划不合并** —— 合并意味着给线上契约加一条跨模块依赖;(2) launcher 侧把 `screensaver`/
-`wrong_session`/`unknown_name` 归进 `desktop_unreachable`,而开枪通道把它们留在 `desktop_unobserved`。
+`wrong_session`/`unknown_name` 归进 `desktop_unreachable`,而执行 shot 通道把它们留在 `desktop_unobserved`。
 两者都拒绝,区别只在诊断:桌面被**读到**但不是 `unlocked` 的三种状态,在 launcher 这一侧是「可达性已知为否」,
 `desktop_unobserved` 因此只留给 `DESKTOP_STATES` 以后新增、这个名字还不认识的状态。
 
@@ -1475,7 +1530,7 @@ python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbba0 40       #
 
 **判读陷阱:**
 1. **反汇编证明的是「被检查的是哪个表达式」,永远不是运行时值。** 它读得出 `js_rc` 的
-   `test rdx,rdx` 在 `add rcx,-8` 之前、测的是原始指针;它证明不了那一枪里 `rdx` 是不是 NULL。
+   `test rdx,rdx` 在 `add rcx,-8` 之前、测的是原始指针;它证明不了那次 shot 里 `rdx` 是不是 NULL。
 2. **`#0x...` 是 image-base-relative 的 RVA,不是 VA**;rip 目标按 `address + size + disp` 算,不是从
    指令起点算。
 3. **clang 的「减 8」可能是 `add reg,-8`**:本产物里 `container_of` 的 header 偏移是 `48 83 c1 f8`

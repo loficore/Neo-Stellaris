@@ -882,6 +882,180 @@ def follow_roots(reader, exe_base, image_end, vtables, entries, *,
     return objects, root_stats
 
 
+DEPTH2_PER_SOURCE = 8
+
+D2_VERDICTS = ("depth2_known_vtable_hit", "lineage_edge_found",
+               "depth2_unreadable", "no_depth2_planned", "no_depth2_lead")
+
+# Only two rungs of the depth-2 ladder carry evidence. The other three are
+# statements about this instrument, not about the engine.
+EVIDENCE_D2_VERDICTS = ("depth2_known_vtable_hit", "lineage_edge_found")
+
+
+def _base_source(source):
+    """Fold ``"<x>.d2"`` back to ``"<x>"`` so the budget is counted per root."""
+    return source[:-3] if source.endswith(".d2") else source
+
+
+def _plan_depth2_with_stats(objects, per_source, already):
+    """(plan, stats) for the second dereference layer, budget PER base source."""
+    if already is None:
+        already = {obj["root"] for obj in objects}
+    stats = {
+        "planned_by_source": {s: 0 for s in FOLLOW_SOURCES},
+        "followed_by_source": {s: 0 for s in FOLLOW_SOURCES},
+        "capped_by_source": {s: 0 for s in FOLLOW_SOURCES},
+        "deduped_by_source": {s: 0 for s in FOLLOW_SOURCES},
+    }
+    planned = []
+    seen = set(already)
+    for obj in objects:
+        if obj.get("unreadable"):
+            continue
+        base = _base_source(obj["source"])
+        if base not in stats["planned_by_source"]:
+            continue
+        for cand in obj.get("candidates", []):
+            addr = cand["ptr"]
+            if addr in seen:
+                stats["deduped_by_source"][base] += 1
+                continue
+            if stats["planned_by_source"][base] >= per_source:
+                stats["capped_by_source"][base] += 1
+                continue
+            seen.add(addr)
+            stats["planned_by_source"][base] += 1
+            planned.append((addr, base))
+    return planned, stats
+
+
+def plan_depth2(objects, *, per_source=DEPTH2_PER_SOURCE, already=None):
+    """Queue each depth-1 candidate pointer as a second-layer root.
+
+    The budget is per base source and never shared: a shared cap is
+    indistinguishable in the artifact from "those slots held nothing", which is
+    how §56.4 came to report zero arg3/arg4 observations. Addresses already read
+    at depth 1 (``already``, and by default every row's own root) are not leads,
+    and an address planned once is not planned again.
+    """
+    planned, _ = _plan_depth2_with_stats(objects, per_source, already)
+    return planned
+
+
+def follow_depth2(reader, exe_base, image_end, vtables, objects, *,
+                  per_source=DEPTH2_PER_SOURCE):
+    """Dereference the planned second-layer roots through ``follow_object``.
+
+    No read happens here that ``follow_object`` does not itself do, and a failed
+    read stays ``unreadable`` rather than becoming zero — an unreadable word and
+    a word that holds 0 are different observations (判读陷阱 5). Each row is
+    labelled ``"<base source>.d2"`` so the two layers cannot be merged later.
+    """
+    _check_image(exe_base, image_end)
+    planned, stats = _plan_depth2_with_stats(objects, per_source, None)
+    d2_objects = []
+    for addr, base in planned:
+        d2_objects.append(
+            follow_object(reader, exe_base, image_end, vtables, addr,
+                          source=f"{base}.d2")
+        )
+        stats["followed_by_source"][base] += 1
+    return d2_objects, stats
+
+
+def find_shared_cells(objects):
+    """Values that appear as a candidate under two or more distinct base roots.
+
+    This is the §59.6 lineage question (``self`` root ``0x7feb00+0x28`` and
+    ``helper`` root ``0x7fe960+0x10`` both yielding ``0x2ddc2c90``) asked
+    mechanically: a value two slots of the SAME root hold says nothing about
+    sharing, so distinctness is counted on the base source, not on the row.
+    ``value_rva`` is only given when the value lies inside the module — outside
+    it the absolute value is kept, because a fabricated RVA turns a heap
+    address into a false module hit.
+    """
+    by_value = {}
+    for obj in objects:
+        base = _base_source(obj["source"])
+        for cand in obj.get("candidates", []):
+            by_value.setdefault(cand["ptr"], []).append(
+                (base, obj["root"], cand["offset"], cand.get("ptr_rva")))
+    rows = []
+    for value, sites in by_value.items():
+        if len({source for source, _, _, _ in sites}) < 2:
+            continue
+        rows.append({
+            "value": value,
+            "value_rva": sites[0][3],
+            "sites": [(source, root, off) for source, root, off, _ in sites],
+        })
+    return rows
+
+
+def classify_depth2(d2_objects, shared, planned_total):
+    """Fixed ladder, deliberately separate from ``classify()``.
+
+    ``classify()`` answers "did a depth-1 root hand us a known class"; this
+    answers "did the layer below hand us anything". Merging them would make it
+    impossible to tell which gate changed between two shots. There is no rung
+    for "the deeper layer holds no objects": the vtable map is a floor, so the
+    most this instrument can say when nothing matched is ``no_depth2_lead``.
+    """
+    if planned_total == 0:
+        return "no_depth2_planned"
+    if d2_objects and all(obj.get("unreadable") for obj in d2_objects):
+        return "depth2_unreadable"
+    for obj in d2_objects:
+        for cand in obj.get("candidates", []):
+            if cand.get("known"):
+                return "depth2_known_vtable_hit"
+    if shared:
+        return "lineage_edge_found"
+    return "no_depth2_lead"
+
+
+def _format_shared(shared):
+    """One artifact-safe line per lineage edge (no tabs, no newlines)."""
+    if not shared:
+        return "n=0"
+    parts = []
+    for row in shared:
+        sites = ",".join(
+            f"{source}@0x{root:x}+0x{off:x}" for source, root, off
+            in row["sites"])
+        parts.append(
+            f"0x{row['value']:x}(rva={_hex_or_dash(row['value_rva'])})[{sites}]")
+    return f"n={len(shared)} " + ";".join(parts)
+
+
+def d2_meta_rows(d2_stats, verdict_d2, shared):
+    """The six keys the depth-2 reading needs to survive a lost stdout.
+
+    The three budget keys come first on purpose: without ``planned`` and
+    ``capped`` next to ``followed``, a short depth-2 list reads as an absence
+    rather than as a budget that did not finish asking.
+    """
+    return {
+        "depth2_per_source": DEPTH2_PER_SOURCE,
+        "d2_planned_by_source": _by_source(d2_stats, "planned_by_source"),
+        "d2_followed_by_source": _by_source(d2_stats, "followed_by_source"),
+        "d2_capped_by_source": _by_source(d2_stats, "capped_by_source"),
+        "verdict_d2": verdict_d2,
+        "shared_cells": _format_shared(shared),
+    }
+
+
+def collect_region_addrs(objects, d2_objects):
+    """Both layers' roots as ``(addr, source)`` for ``region_rows``.
+
+    The source stays the row's own label (``self`` vs ``self.d2``) because a
+    region verdict is only readable as "the root this candidate came from at
+    this layer brought us here".
+    """
+    return [(obj["root"], obj["source"])
+            for obj in list(objects) + list(d2_objects)]
+
+
 def follow_contexts(pid, entries):
     """Follow the chain for each distinct usable ctx, at most MAX_FOLLOW.
 
@@ -1032,6 +1206,11 @@ def _cleanup(pid, base, exports, installed_ok, settle_s):
     return restore_ok
 
 
+# Two verdicts, two questions, never merged: ``VERDICT`` (classify + exit code)
+# answers "did a depth-1 root hand us a known class" and its semantics are frozen
+# by §59/§62/§63 — changing it would make this shot incomparable with the shots
+# already in the卷. ``VERDICT_D2`` (classify_depth2) answers "did the layer below
+# hand us a lead", and no rung of it means "the deeper layer holds no objects".
 def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
         exe_base):
     needed = (
@@ -1107,10 +1286,17 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                 objects, root_stats = follow_roots(
                     reader, exe_base, image_end, vtables, entries
                 )
+                d2_objects, d2_stats = follow_depth2(
+                    reader, exe_base, image_end, vtables, objects
+                )
+                shared = find_shared_cells(list(objects) + list(d2_objects))
+                verdict_d2 = classify_depth2(
+                    d2_objects, shared,
+                    sum(d2_stats["planned_by_source"].values()))
                 # Region census while the memory is still there: a root that
                 # reads as a plausible 48-bit value is still not an address
                 # until the kernel says a region covers it (§56.8's open item).
-                region_addrs = [(obj["root"], obj["source"]) for obj in objects]
+                region_addrs = collect_region_addrs(objects, d2_objects)
                 region_addrs += [(ctx, "ctx") for ctx in chains]
                 regions = region_rows(
                     lambda info: classify_region(info, exe_base, image_end),
@@ -1121,6 +1307,7 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                     entries, stats, chains, census, id_names, objects=objects
                 )
                 summary["regions"] = regions
+                summary["objects"] += d2_objects
                 verdict = classify(summary)
                 capped = sum(root_stats["capped_by_source"].values())
 
@@ -1177,7 +1364,7 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                     f"ids={summary['ids']}"
                 )
                 print(
-                    f"[scope] roots={len(summary['objects'])} "
+                    f"[scope] roots={len(objects)} "
                     f"known_vtable_hits={summary['known_vtable_hits']} "
                     f"member_vtable_hits={summary['member_vtable_hits']} "
                     f"unknown_ptr_hits={summary['unknown_ptr_hits']} "
@@ -1192,6 +1379,15 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                         f"capped={root_stats['capped_by_source'][source]} "
                         f"withheld={root_stats['withheld_by_source'][source]}"
                     )
+                for source in FOLLOW_SOURCES:
+                    print(
+                        f"[scope] depth2 {source}: "
+                        f"planned={d2_stats['planned_by_source'][source]} "
+                        f"followed={d2_stats['followed_by_source'][source]} "
+                        f"capped={d2_stats['capped_by_source'][source]} "
+                        f"deduped={d2_stats['deduped_by_source'][source]}"
+                    )
+                print(f"[scope] shared_cells={_format_shared(shared)}")
                 meta = {
                     "exe_base": f"0x{exe_base:x}",
                     "image_end": f"0x{image_end:x}",
@@ -1226,12 +1422,14 @@ def run(pid, dll_path, poll_s, settle_s, out_path, census, id_names, vtables,
                     "region_verdicts": _region_verdicts(regions),
                     "verdict": verdict,
                 }
+                meta.update(d2_meta_rows(d2_stats, verdict_d2, shared))
                 rows = write_tsv(out_path, summary, meta=meta)
                 print(f"[scope] wrote {rows} rows to {out_path}")
 
                 print(f"VERDICT: {verdict}")
                 if verdict in VERDICT_DIAGNOSIS:
                     print(VERDICT_DIAGNOSIS[verdict])
+                print(f"VERDICT_D2: {verdict_d2}")
                 rc = exit_code_for(verdict)
     finally:
         if base is None:

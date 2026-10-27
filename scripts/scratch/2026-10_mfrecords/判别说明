@@ -36,7 +36,7 @@
 结果:84 次真实子进程跑里 5 次带数据(log (6) 末尾的总账)。所有带数据的跑都以**同一组 8 个 RVA**、
 同一句 witness、returncode 3 死掉 —— 造成可读性的并发没有改变被读的行为。
 
-零枪核对:整个过程只有 `ssh … python C:\temp\c2_selfabort_repro.py …`。没有 CreateRemoteThread、
+零 shot 核对:整个过程只有 `ssh … python C:\temp\c2_selfabort_repro.py …`。没有 CreateRemoteThread、
 没有注入、没有 hook/patch、没有碰 `stellaris.exe`(它甚至没被这些命令从磁盘打开)。
 
 ----------------------------------------------------------------------------------------

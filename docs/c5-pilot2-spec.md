@@ -1,6 +1,6 @@
 # docs/c5-pilot2-spec.md — C5 试点二 spec(全局图度量,待 5 项裁定)
 
-本文是 C5 的 spec:**零枪**产物(无 launch/inject/install/Frida/process,只读 TSV 与本地解包游戏数据)。
+本文是 C5 的 spec:**零 shot**产物(无 launch/inject/install/Frida/process,只读 TSV 与本地解包游戏数据)。
 它的任务是把 5 项待裁定决策写成**可裁定**的形态,并修正 roadmap 段1 例子句在判据上的失实之处(§0)。
 它**不是**实现计划:算法本体与字段读取都不在本文(见 §4)。
 
@@ -235,8 +235,8 @@ docstring 策略),同样被裁定③的 trigger 口径牵动。
   不伪造(`AGENTS.md` 约束 5)。
 - **不 patch 静态表。** 不动 `0x337B400` 描述符数组与名字池;走运行时 mint + BST insert 全链(`AGENTS.md`
   配方,Phase A 结论)。
-- **不在本 spec 里承诺实机成本。** 枪预算与点名归各在飞计划的 Global Constraints(roadmap 段2 的口径);
-  本文档零枪。
+- **不在本 spec 里承诺实机成本。** shot 预算与点名归各在飞计划的 Global Constraints(roadmap 段2 的口径);
+  本文档零 shot。
 - **不含算法本体与实现步骤。** 5 项裁定未定、星系句柄来源未观测、星连边运行时形态未观测、galaxy map
   文件未拷 —— 实施计划等这四件事收齐再写。
 - **不新增 QuickJS `extern fn` 绑定。** 段5 决策未变,`src/dll/exports.zig:351-353` 的禁令未放宽(§65
@@ -246,7 +246,7 @@ docstring 策略),同样被裁定③的 trigger 口径牵动。
 
 1. **donor 探针先给出「执行到底进不进这一族」。** `scripts/c2_donor_probe.py`(DLL 侧
    `C4DonorProbe{Install,SetMask,Uninstall,Verify,Layout,StatsInto,DrainInto,Reset}`)已建好、已过门,
-   **从未运行**(本任务零枪)。它的 verdict 值域是**五档**,不是四档:
+   **从未运行**(本任务零 shot)。它的 verdict 值域是**五档**,不是四档:
    `donor_family_hit_named`、`donor_family_hit_unknown_table`(只有这两档 EVIDENCE_VERDICTS 回答关于引擎代码
    的问题)、`no_calls_inconclusive`、`instrument_broken`、`counter_desync`(后三档是环境/仪器读数)。
    禁令照旧:它给出的任何读数都**不许读成「不经这一族」** —— §57.4 第三档要「哨兵 body 等齐(执行确实发生)
@@ -257,7 +257,7 @@ docstring 策略),同样被裁定③的 trigger 口径牵动。
    §63 判队列派发方 = `dispatchers_partial`(限于 `call [reg+0x28]` 直接形态口径),§66 判两段形态 =
    `two_stage_dispatchers_partial`(**105 对**,86 承载函数;计划草稿的 132 构造不出,§66.4 记了漂移),
    两个判决词不同义、不合并,且两节都没回答「谁是 scope」。§2 里三条 `未观测` 都挂在这条线上。
-3. **一次 galaxy map 文件的拷贝(文件拷贝,不是枪)。** 本地解包数据只有 `common/` + `events/` 共
+3. **一次 galaxy map 文件的拷贝(文件拷贝,不是 shot)。** 本地解包数据只有 `common/` + `events/` 共
    **2,186** 个文件(本会话 `find | wc -l` 实测);`tar -tzf /var/lofibass_ssd/data/stellaris/4.4.4/gamedata.tar.gz
    | grep -iE "galaxy|generated_shape"` 本会话实测无命中 —— 星连边那张静态图不在本地。等价边表的另一条
    来源是存档侧(`scripts/save_hypergraph.py`,读玩家 `.sav`;判读陷阱与传输口径见 `docs/offline-tooling.md`

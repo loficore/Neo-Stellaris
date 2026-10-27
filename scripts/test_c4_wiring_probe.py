@@ -594,7 +594,7 @@ def test_wait_ready_waits_for_the_observation_not_just_for_paused(monkeypatch):
 
 
 def test_wait_ready_timeout_with_a_decisive_reread_is_not_a_verdict(monkeypatch):
-    # 契约是两值的:verdict_or_None,None 才是「可以开枪」。超时分支的复读专属于慢启动
+    # 契约是两值的:verdict_or_None,None 才是「可以执行 shot」。超时分支的复读专属于慢启动
     # —— 环境在最后一个轮询间隔里变成 paused + 判决性观测;此时把字符串 "ok" 当
     # verdict 交回,调用方会 raise _Abort("ok"),result json 里 "verdict": "ok" 与
     # 退出码 1 并存,是自相矛盾的证据。时钟按 _fake_sleeps 的形状走,让循环靠
@@ -660,7 +660,7 @@ def test_classify_console_receipt_survives_a_torn_line():
 def test_send_console_or_abort_aborts_with_the_refusal_reason(monkeypatch):
     # 本任务的核心不变量:回执 offset 必须在写命令**之前**取 —— tail 里上一条
     # 命令的 console_refused 靠字节位置排除,取晚了会把拒收算到本条头上,或把
-    # 一发健康的枪拦死。events 钉顺序,reads 钉读回用的正是写前取到的那个值。
+    # 一发健康的 shot 拦死。events 钉顺序,reads 钉读回用的正是写前取到的那个值。
     events = []
     offset_before_write = 0x1234  # 非 0、可区分的哨兵值:忽略返回值的实现会露馅
     monkeypatch.setattr(mod, "_file_size_or_none",
@@ -691,7 +691,7 @@ def test_send_console_or_abort_skips_the_receipt_when_the_log_cannot_be_stat(mon
     # _file_size 的 0-on-OSError 在读取回执这一处等于「从头分类整个文件」:一次瞬时
     # 的 stat 失败(Windows 上的共享争用 / AV 扫描,文件本身仍可读)会让上一条命令
     # 甚至上一轮运行的 console_refused 中止这条健康命令 —— 正是写前偏移要排除的
-    # 误归因,而 _slot2_phase 那一枪发生在注入之后,烧掉的是游戏进程。判据两条:
+    # 误归因,而 _slot2_phase 那次 shot 发生在注入之后,烧掉的是游戏进程。判据两条:
     # 不中止,而且根本没去读 tail。
     reads = []
 

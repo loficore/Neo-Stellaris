@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""queue_dispatchers_two_stage —— §63 口径边界外的两段形态派发方(零枪,离线)。
+"""queue_dispatchers_two_stage —— §63 口径边界外的两段形态派发方(零 shot,离线)。
 
 问题:§63 判的是 `call [reg+0x28]` 直接形态(= `dispatchers_partial`,限于该口径);
 `mov reg,[obj+0x28]; call reg` 两段形态不在其口径内。本节把那条边界补上。
