@@ -1600,6 +1600,65 @@ handoff_never_fired|inconclusive`。**退出码不因它改变**,读回失败(`G
 launcher 仍没推进」,**不**说「Continue 按钮在别处」;这一档要成为结论得等实机那一次(离线无从知道
 CEF 把按钮画在哪)。
 
+### `scripts/windows/ns_world.py` —— 世界状态机的唯一入口
+
+窗口纪律过去写在散文里(判读陷阱、「装之前先确认」),而绕过它不报错:2026-10-27 一个窗口内绕过三次
+(`STATUS=paused note=paused_no_window` 被当事实、`policy=first` 去点一个不是选项窗的东西、
+`just game stop` 的语义是**退出游戏**却被当成「停 daemon」用掉一个进程)。这个工具把「证明」变成
+数据、把「消费」变成代码门。
+
+纯状态机在 `scripts/world_state.py`(跨平台、零 win32、离线可单测);Windows 侧另有两半:
+`world_probe.py` 取一次读数(复用 `game_supervisor` 的分类器,**阈值一个不改**),`ns_world.py` 是 CLI。
+**agent 只读一行**:
+
+```
+STATE=<state> EVIDENCE=<k=v,...> NEXT=<a|b|c>
+```
+
+退出码 `0` 合法 / `2` 拒绝(前提不成立)/ `3` 阻塞(预算或证据挡着)/ `4` 锁僵死。
+`NEXT=` 直接来自转移表,留空就是「之后没有可做的事」,不是一个像状态的词。
+
+```
+just win "python C:/temp/ns_world.py status"                       # 报状态与合法下一步
+just win "python C:/temp/ns_world.py probe --out C:/temp/ev.json"  # 一次读数,可写成解封证据
+just win "python C:/temp/ns_world.py assert-ready --action install --guard shim"
+just win "python C:/temp/ns_world.py unblock --evidence C:/temp/ns_block_<nonce>.json --reason '…'"
+just win "python C:/temp/ns_world.py quit"     # 退游戏(转调 game_supervisor)
+just win "python C:/temp/ns_world.py abort --action click_option"  # 只记录「不再试」,**不动预算**
+just win "python C:/temp/ns_world.py pull"     # 把 C:/temp/ns_world.jsonl 拉回 evidence/logs/
+```
+
+状态与转移史都在 Windows 侧写(`C:\temp\ns_world.json` + `ns_world.jsonl`),Linux 侧只 `pull`:
+单写者,且 jsonl 与状态同源。
+
+**三个判读陷阱**
+
+1. **`YIELD_TO_LEASE` 是让路,不是故障。** daemon 每 tick 先问「有没有未过期租约」,有就整 tick 不动。
+   状态文件里 `state=yield_to_lease` 与日志里同名事件同时出现才叫让路;只有其中一个,说明有人在改
+   其中一侧的写法,而不是「daemon 卡了」。
+2. **一张过期的租约**不**让路,也不解封任何东西**:`expired_while_armed` 会把它读成
+   `RESTORE_INCOMPLETE`(spec §5 宁可误判不可漏判),所以装过 guard 之后**必须** `unarm`,否则
+   30 秒后每个动作都被这条"常驻指控"挡住。看到 `RESTORE_INCOMPLETE` 先查 `armed[]`,不要先怀疑探针。
+3. **`abort` 不是解封。** 它只写一行记录。唯一的解封入口是 `unblock --evidence`,而那份证据必须由
+   `probe --out` 产生:带完整读数(六个原始计数)**且**带那次阻塞的 nonce、且 mtime 晚于阻塞时刻。
+   手写或 `touch` 出来的文件必然缺 nonce —— 这是设计要的,不是麻烦。
+
+**黄金集读数**:`evidence/logs/world_state_labels_4_4_4.jsonl` 本版**未采集**(采集器
+`scripts/scratch/2026-10_world_state_labels/collect_labels.py` 已就绪:它拒绝无 `crop_sha256`、拒绝
+vocabulary 之外的判词、拒绝未知的原始计数)。为什么没采:那 20 帧要运行中的窗口,且判词按定义是
+**人**看一眼给的(spec §13.2);本次会话没有可用窗口,也不具备看图的条件 —— 硬写 20 行会得到一个
+「看起来像证据」的集合,而那个集合正是 §13 要防的东西。spec §13.3 本身也写明黄金集是**读数不是门**,
+不通过不阻塞 v1。
+
+**OCR 引擎读数**(`evidence/logs/ocr_swap_4_4_4.tsv`,spec §14):surya → rapidocr PP-OCR mobile。
+整块面板(带检测)632–945 ms;单文本带(只跑识别)79–121 ms。**50 ms 那条目标未达标**,
+旧引擎的一致率**量不到**(主机上的 `RecognitionPredictor` 不接受 `device=`,预换型调用形状直接
+TypeError,三行都是 text_len=0 的失败行)。`POPUP_OCR_BUDGET_MS` 由 24 000 重定为 2 000 ms
+(= 面板最坏实测的 3 倍),围栏把它钉在「实测 p95 × 3」以内。
+
+围栏:`scripts/test_world_state.py` 38 条、`scripts/test_world_probe_pure.py` 3 条、
+`scripts/test_popup_ocr_small.py` 3 条、`scripts/test_scripts_layout.py` 34 条(R-inject / R-verbs 两条新规则)。
+
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 
 `scripts/disrva.py` 与 `scripts/cap.py` 反汇编的是**游戏**:它们只收 RVA,自己去找 `stellaris.exe`

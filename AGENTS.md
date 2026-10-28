@@ -18,6 +18,7 @@ registration pipeline and identify extension points for new effects/triggers.
 | 取证 §24–§70(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两次 shot §58–§59、零 shot 帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 第一次 shot 只读采样=静默窗口 §67、scope 深跟读第二次 shot=修正仪器后第一发 `scope_candidate`(§56 误配仪器下已 14 条命中)且两条边非血缘 §68、同族 slot[2] 证人 shot 与载入窗口 §69、证人+donor 载入后重打与 spec §4 判决落点 §70) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
 | 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
+| world_state 窗口状态机(agent 唯一入口 `ns_world`、租约与惰性 `RESTORE_INCOMPLETE`、反刷预算、黄金集、OCR 换型读数) | `docs/offline-tooling.md` 的「scripts/windows/ns_world.py」一节 |
 | 阶段状态、前置、授权级别 | `docs/roadmap.md` |
 | `api/scope` 假偏移的逐条读点处置(16 行 `src/` + 1 行 `build.zig`)与 P15 绿定义 | `docs/scope-read-points.md` |
 | C5 试点二 spec:判据修订 + 5 项待裁定决策表 + 字段三档标签(**段1 的「交通要道」例子已被官方 `is_bottleneck_system` 覆盖,差异口径见 spec §0**) | `docs/c5-pilot2-spec.md` |
