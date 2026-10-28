@@ -539,13 +539,17 @@ export fn C4ScoredStatsInto(out: [*]u8) callconv(.c) i32 {
 
 export fn C4PredStatsInto(out: [*]u8) callconv(.c) i32 {
     return if (c2_predicate_hook.statsInto(out[0..c2_predicate_hook.STATS_SIZE]))
-        @intCast(c2_predicate_hook.STATS_SIZE) else 0;
+        @intCast(c2_predicate_hook.STATS_SIZE)
+    else
+        0;
 }
 
 /// Read-only: <QQ> = slot[2] entries, the donor target it forwards to.
 export fn C4Slot2StatsInto(out: [*]u8) callconv(.c) i32 {
     return if (c2_vtable.slot2StatsInto(out[0..c2_vtable.SLOT2_STATS_SIZE]))
-        @intCast(c2_vtable.SLOT2_STATS_SIZE) else 0;
+        @intCast(c2_vtable.SLOT2_STATS_SIZE)
+    else
+        0;
 }
 
 // ---------------------------------------------------------------------------
