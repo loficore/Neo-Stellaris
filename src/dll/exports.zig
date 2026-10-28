@@ -205,6 +205,7 @@ const chokepoint_table = @import("c2/chokepoint_table.zig");
 const c2_donor_probe = @import("c2/donor_exec_probe.zig");
 const c2_witness_probe = @import("c2/instantiate_witness_probe.zig");
 const c2_shim_probe = @import("c2/shim_witness_probe.zig");
+const c2_trigger_pred = @import("c2/trigger_pred_probe.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
@@ -805,6 +806,80 @@ export fn C4ShimProbeDrainInto(out: [*]u8) callconv(.c) u32 {
 /// 悄悄重置回 0)。因此必须在 Install 之前调用。
 export fn C4ShimProbeReset() callconv(.c) void {
     c2_shim_probe.reset();
+}
+
+// ---------------------------------------------------------------------------
+// C5 data plane (Task 3): the trigger-predicate read-only guard. Target is RVA
+// 0x349230 (§75) — the trigger `[vptr+0x80]` base implementation, called
+// `(self, X)`. Thin fold layer only: no judgement lives here, and this guard's
+// state is private to trigger_pred_probe.zig, so it can follow the other four
+// guards in one process.
+// ---------------------------------------------------------------------------
+
+/// 安装错误码折叠表(纯函数;导出只转调它)。0 OK | -1 其它 | -2 本 guard 已装或
+/// predicate detour 还 armed(§57.4:[self+0] 可能指向我们 DLL 的 vtable) | -3 未找到
+/// stellaris.exe | -4 目标已被 hook | -5 指纹不符 | -6 patch 过宽。
+/// 一进程一次 install 额度,所以 -2 不重试。
+fn trigPredInstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.AlreadyInstalled, error.PatchActive => -2,
+        error.ModuleNotFound => -3,
+        error.AlreadyHooked => -4,
+        error.UnexpectedPrologue => -5,
+        error.PatchTooWide => -6,
+        else => -1,
+    };
+}
+
+/// 卸载折叠表:-7 = RestoreIncomplete,其余 -1。
+fn trigPredUninstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.RestoreIncomplete => -7,
+        else => -1,
+    };
+}
+
+/// 只记录触发谓词基体(`0x349230`)的调用。码表见 trigPredInstallCode。
+export fn C4TrigPredInstall() callconv(.c) i32 {
+    c2_trigger_pred.install() catch |err| return trigPredInstallCode(err);
+    return 0;
+}
+
+/// 0 = 引擎字节已验证还原。-7 = RestoreIncomplete:不要信任该进程,且**绝不 FreeLibrary**。
+export fn C4TrigPredUninstall() callconv(.c) i32 {
+    c2_trigger_pred.uninstall() catch |err| return trigPredUninstallCode(err);
+    return 0;
+}
+
+/// 原样透传模块约定:0 一致 | -1 装着但 hook 丢了 | -2 已卸但引擎字节不符 | -3 从未解析到靶。
+export fn C4TrigPredVerify() callconv(.c) i32 {
+    return c2_trigger_pred.verify();
+}
+
+/// token 过滤器。允许安装后改值(它不是补丁目标,只决定哪些调用落进统计)。
+export fn C4TrigPredSetToken(token: u32) callconv(.c) i32 {
+    c2_trigger_pred.setToken(token);
+    return 0;
+}
+
+/// 六个布局词:[version, Entry size, RING_LEN, Stats size, target RVA, prologue length]。
+export fn C4TrigPredLayout(out: [*]u32) callconv(.c) u32 {
+    const words: *[6]u32 = @ptrCast(out);
+    return c2_trigger_pred.layoutInto(words);
+}
+
+export fn C4TrigPredStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_trigger_pred.statsInto(out[0..512]));
+}
+
+export fn C4TrigPredDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_trigger_pred.drainInto(out);
+}
+
+/// 清计数 + 环 + token + 镜像窗口;不卸载 hook(带活补丁清 calls 会把频率分母悄悄重置)。
+/// 因此必须在 Install 之前调用。
+export fn C4TrigPredReset() callconv(.c) void {
+    c2_trigger_pred.reset();
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.

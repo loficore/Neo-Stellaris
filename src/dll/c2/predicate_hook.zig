@@ -29,7 +29,7 @@ const PredFn = *const fn (child: u64, parent: u64) callconv(.c) bool;
 // detour.zig's 14-byte JMP takes the first 16 bytes (5+1+4+3+3), so the
 // conditional branch at 16..21 stays in place and the trampoline holds only
 // position-independent instructions — no relocation needed.
-const EXPECTED_CODE = [21]u8{
+pub const EXPECTED_CODE = [21]u8{
     0x48, 0x89, 0x5C, 0x24, 0x08, // mov [rsp+8], rbx
     0x57, // push rdi
     0x48, 0x83, 0xEC, 0x20, // sub rsp, 0x20
