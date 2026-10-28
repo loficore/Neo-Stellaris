@@ -20,6 +20,7 @@ when the verdict is `ok` and cleanup succeeded (host alive, disarm not -6).
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -633,8 +634,23 @@ def _file_size_or_none(path):
         return None
 
 
+def _open_file(path, mode, **kwargs):
+    """``open`` that names the artifact when it fails.
+
+    Two rules pull against each other here: a file operation must not swallow
+    its failure, and it must be a context manager.  Hoisting the open into this
+    helper satisfies both — the try lives here, the ``with`` stays at the call
+    site.  The exception **class** is preserved, so a caller that catches
+    ``FileNotFoundError`` still catches it.
+    """
+    try:
+        return open(path, mode, **kwargs)
+    except OSError as exc:
+        raise type(exc)(f"{path}: cannot open the file: {exc}") from exc
+
+
 def _read_text_from(path, offset):
-    with open(path, "rb") as f:
+    with _open_file(path, "rb") as f:
         f.seek(offset)
         return f.read().decode("utf-8", errors="replace")
 
@@ -649,7 +665,7 @@ def _read_status(path):
 
 def _write_text_atomic(path, text):
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
+    with _open_file(tmp, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     os.replace(tmp, path)
 
@@ -1081,12 +1097,11 @@ def _cleanup(state, result):
     pid, base = state["pid"], state["base"]
     exports = state["exports"]
     if pid and base:
-        try:  # noqa: SIM105 - best-effort arming: the mode is advisory, and a
-            # failed call is not fatal here
+        # The mode is advisory: a failed arming call is not fatal here, and the
+        # disarm path below already treats "still armed" as a handled state.
+        with contextlib.suppress(Exception):  # noqa: BLE001
             harness.call_remote_with_arg(
                 pid, base, exports["C4WireSetMode"], 0)
-        except Exception:  # noqa: BLE001
-            pass
 
         rc = None
         for _ in range(6):
