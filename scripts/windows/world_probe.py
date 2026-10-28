@@ -220,6 +220,33 @@ def _query_creation_date(pid: int) -> str | None:
     return value or None
 
 
+def gate_install(guard: str, *, state_path: str | None = None,
+                 now: float | None = None) -> str:
+    """Refuse the install unless the premise holds; return the lease id.
+
+    This is the shape the shot drivers call: it either returns a lease id or it
+    **stops the shot**.  The refusal is a ``SystemExit`` (exit code 2), so the
+    driver never reaches ``inject_dll`` — the whole point of the gate (spec §1:
+    「今天的失败模式就是『注入了再发现前提不成立』」).
+
+    The reason is printed with the reading it was made on, so the operator sees
+    what the machine saw, not only what it was told.
+
+    (This function was written for the drivers, then lost in a revert that also
+    removed unrelated lint churn; the fence did not notice because it only
+    checked that a gate *call* preceded the injection, never that the name
+    resolved.  R-gate-symbol now checks that.)
+    """
+    ok, reason = assert_install_ready(guard, state_path=state_path, now=now)
+    if not ok:
+        # Both halves matter: the message an operator reads, and the code a
+        # script branches on.  ``SystemExit(str)`` would print the message but
+        # exit 1, while the documented contract (and the CLI's) is 2 = refused.
+        print(f"REFUSED: {reason}", file=sys.stderr)
+        raise SystemExit(2)
+    return reason
+
+
 def assert_install_ready(guard: str, *, state_path: str | None = None,
                          now: float | None = None) -> tuple[bool, str]:
     """May this guard be installed right now?  ``(ok, reason_or_lease_id)``.

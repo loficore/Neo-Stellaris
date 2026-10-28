@@ -249,9 +249,9 @@ def violates_missing_roadmap_header(roadmap_path):
         if line.strip().startswith("|") and \
                 all(c in _roadmap_cells(line) for c in _ROADMAP_COLUMNS):
             return []
-    return [f"{name}: no table header carries all five column names "
-            f"{'|'.join(_ROADMAP_COLUMNS)} — the per-row checks of "
-            "violates_roadmap_shape would silently not run"]
+    return [(f"{name}: no table header carries all five column names "
+             f"{'|'.join(_ROADMAP_COLUMNS)} — the per-row checks of "
+             "violates_roadmap_shape would silently not run")]
 
 def violates_hardcoded_rvas(files):
     """R-rva: no hard-coded module-level ``RVAS`` dict literal in a maintained
@@ -475,9 +475,9 @@ def test_roadmap_header_fence_bites_and_the_real_header_is_policied(tmp_path):
     # header rule bites it; the real roadmap carries the five-name header.
     assert violates_roadmap_shape(p) == []
     assert violates_missing_roadmap_header(p) == [
-        "roadmap.md: no table header carries all five column names "
-        "阶段|状态|证据|计划|第一前置 — the per-row checks of "
-        "violates_roadmap_shape would silently not run"]
+        ("roadmap.md: no table header carries all five column names "
+         "阶段|状态|证据|计划|第一前置 — the per-row checks of "
+         "violates_roadmap_shape would silently not run")]
     assert violates_missing_roadmap_header(REPO / "docs" / "roadmap.md") == []
 
 def test_stray_rule_flags_a_backslash_named_file(tmp_path):
@@ -773,3 +773,84 @@ def test_ungated_verbs_is_the_seed_plus_the_named_extensions():
     allowed = set(PLAN_UNGAITED_SEED) | {"close", "quit", "start", "stop"}
     assert set(ws.UNGATED_VERBS) == allowed
     assert set(ws.UNGATED_VERBS).isdisjoint(ws.ACTIONS)
+
+
+# ---------------------------------------------------------------------------
+# Task 6 follow-up: R-gate-symbol.
+#
+# R-inject proves a gate *call* precedes every injection.  It cannot prove the
+# gate exists — and for a while it did not: `gate_install` was written for the
+# drivers, then lost in a revert that also removed unrelated lint churn, while
+# all fourteen drivers kept importing it.  Every fence stayed green and every
+# shot died on line one with ImportError, which only a live run revealed.
+# A textual check cannot close that; this one resolves the symbol.
+# ---------------------------------------------------------------------------
+
+_GATE_IMPORT_RE = re.compile(
+    r"^from (world_probe|world_state) import (\([^)]*\)|[^\n(]+)", re.MULTILINE)
+
+
+def _gate_modules():
+    """The two modules a driver may import a gate from, imported for real."""
+    import sys as _sys
+    for path in (SCRIPTS / "windows", SCRIPTS):
+        if str(path) not in _sys.path:
+            _sys.path.append(str(path))
+    import world_probe  # pyright: ignore[reportMissingImports]
+    import world_state
+    return {"world_probe": world_probe, "world_state": world_state}
+
+
+def violates_missing_gate_symbols(scripts_dir):
+    """R-gate-symbol: a driver must not import a gate name that does not exist.
+
+    Only names in ``world_state.GATE_ENTRY_POINTS`` are policed, so this rule
+    stays about the gate rather than about every import a driver makes.  A
+    missing name is reported with the module it was asked for, because "which
+    one is wrong" is the first question the reader has.
+    """
+    modules = _gate_modules()
+    gates = set(modules["world_state"].GATE_ENTRY_POINTS)
+    out = []
+    for path in sorted(scripts_dir.glob("*.py")):
+        src = path.read_text(encoding="utf-8", errors="replace")
+        for match in _GATE_IMPORT_RE.finditer(src):
+            module_name, names = match.group(1), match.group(2)
+            names = names.strip().strip("()")
+            for name in (n.strip().split(" as ")[0].strip()
+                         for n in names.split(",")):
+                if not name or name not in gates:
+                    continue
+                if not hasattr(modules[module_name], name):
+                    out.append(f"{path.name}: imports gate {name!r} from "
+                               f"{module_name}, which does not define it")
+    return out
+
+
+def test_gate_symbol_rule_flags_an_import_the_module_cannot_answer(
+        tmp_path, monkeypatch):
+    """The fence bites on exactly the bug a live run found.
+
+    The bug was ``gate_install`` imported from ``world_probe`` while that module
+    did not define it.  Every real gate name exists today, so the missing one is
+    invented here and added to the policed set — that keeps the rule's own test
+    honest instead of weakening the rule to match a happy tree.
+    """
+    world_state = _gate_modules()["world_state"]
+    monkeypatch.setattr(world_state, "GATE_ENTRY_POINTS",
+                        tuple(world_state.GATE_ENTRY_POINTS) + ("gate_ghost",))
+    (tmp_path / "shot.py").write_text(
+        "from world_probe import gate_install\n"
+        "from world_state import assert_ready\n"
+        "from world_probe import gate_ghost\n", encoding="utf-8")
+    hits = violates_missing_gate_symbols(tmp_path)
+    assert len(hits) == 1, hits
+    assert "gate_ghost" in hits[0] and "world_probe" in hits[0]
+    # the two that DO exist must not be reported.
+    assert not any("gate_install" in h for h in hits), hits
+    assert not any("assert_ready" in h for h in hits), hits
+
+
+def test_every_driver_gate_import_resolves():
+    """The real tree: every gate a driver imports is actually defined."""
+    assert violates_missing_gate_symbols(SCRIPTS) == []
