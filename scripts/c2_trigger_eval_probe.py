@@ -1,0 +1,807 @@
+#!/usr/bin/env python3
+"""c2_trigger_eval_probe.py — C5 数据面第二发:触发**求值**槽共用基体 `0x1A91A80` 的只读采样 shot。
+
+**这一发问的是什么**(§76.6 给的靶,§77 给了它的形状,不是「scope 是谁」):
+一个 trigger 在 `every_system` 的 limit 里被求值时,`[vptr+0x28]` 的共用实现被调**几次**,
+它拿到的 `ctx` 有**几个不同的值**,以及 `ctx` 上那两格已被代码证实的字段长什么样:
+
+  * `ctx+0x158` —— 类型标签(§77.1 ③:必须是 1 或 0x426);
+  * `ctx+0x278` —— 被当对象传给下一层(`lea rdx,[rbx+0x278]`),它的首 qword 若是 vtable,
+    一格读数就给出「那个子对象是什么类型」,不用再猜偏移链(§59/§73 已问完并判负)。
+
+两个方向都算读数:
+  * `ctx_per_system`      —— distinct ctx ≈ 星系数 ⇒ 每系统一个 ctx。
+  * `ctx_single`          —— distinct ctx == 1 ⇒ ctx 不是每系统一个(是别的什么东西)。
+  * `ctx_not_per_system`  —— distinct ctx 是别的正数 ⇒ 同上,但不是 1。
+
+**只读**:detour 恒转发原函数,不写引擎内存、不重指向 `[self+0]`、不改寄存器。
+`[self+0x38]`、`[self]`、`[ctx+0x158]`、`[ctx+0x278]` 是全部的引擎读。
+
+**verdict 值域**(`VERDICTS`):三档证据 + 五档环境。`no_calls` **不是**证据 —— 它只说
+「本窗口没观测到」,§57.4 的反面口径照旧。`instrument_broken` 优先于一切读数。
+`ctx_table_full` = 去重表满了 ⇒ `distinct_ctx` 只是下界 ⇒ 当次的分母判据作废(§77 诚实条款 ②)。
+
+**这一发不能说的**(写进 §78 时逐条保留):
+  1. `ctx_per_system` 不证明「ctx 就是那个系统对象」—— 它只说「ctx 每系统换一个」。
+  2. `ctx_single` / `ctx_not_per_system` 不证明「ctx 是什么」—— 只否掉「每系统一个」。
+  3. `sub_vtable_rva = 0` 是「我们认不出来」(该地址不在镜像内),不是「没有 vtable」(§77 诚实条款 ③)。
+
+用法与判读陷阱见 `docs/offline-tooling.md` 的同名一节;门序与码表见本文件 `main()` 与 `run()`。
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import struct
+import sys
+import time
+
+import c2_harness as harness
+
+DEFAULT_DLL = r"C:\temp\sqjs_c5.dll"
+DEFAULT_OUT = r"C:/temp/c4_trig_eval.tsv"
+# The supervisor's only command channel (`c4_wiring_probe.SUPERVISOR_CMD`,
+# `game_supervisor.CMD_PATH`).  Any other name is a file no daemon reads (§76.4).
+SUPERVISOR_CMD_NAME = "ns_game_cmd.txt"
+# The daemon reads ONE absolute path (`game_supervisor.CMD_PATH`), so the directory is
+# part of the channel too: a right-named file elsewhere is never consumed (review I-2).
+SUPERVISOR_CMD_DIR = "C:/temp"
+DEFAULT_CMD_FILE = "C:\\temp\\" + SUPERVISOR_CMD_NAME
+EXE_MODULE = "stellaris.exe"
+
+TARGET_RVA = 0x1A91A80       # offsets.keyword_reg.RVA_TRIGGER_EVAL (§77)
+ENTRY_SIZE = 48              # layoutInto word 1
+STATS_SIZE = 512             # fixed stats buffer the export writes into
+LAYOUT_WORDS = 6
+RING_LEN = 256
+LAYOUT_VERSION = 1
+PROLOGUE_LEN = 32            # the window ends inside the `E8 rel32` (§77.1 ①)
+
+STATS_KEYS = (
+    "calls",
+    "token_matched",
+    "distinct_ctx",
+    "dedupe_full",
+    "ctx_null",
+    "patch_size",
+    "installed",
+    "verify",
+    "last_token",
+    "last_tag",
+)
+
+VERDICTS = (
+    "ctx_per_system",
+    "ctx_single",
+    "ctx_not_per_system",
+    "ctx_table_full",
+    "token_absent",
+    "script_refused",
+    "instrument_broken",
+    "no_calls",
+)
+EVIDENCE_VERDICTS = VERDICTS[:3]
+
+# The denominator tolerance: `distinct_ctx` must be within 2% of the CURRENT campaign's
+# star count to read as "one ctx per system".  It is written down here once so no task
+# can invent its own (787 belongs to another save — §76 陷阱 3).
+SYSTEM_TOLERANCE = 0.02
+
+NEEDED_EXPORTS = (
+    "C2Sanity",
+    "C1Run",
+    "C4TrigEvalInstall",
+    "C4TrigEvalUninstall",
+    "C4TrigEvalVerify",
+    "C4TrigEvalSetToken",
+    "C4TrigEvalStatsInto",
+    "C4TrigEvalSetDrainCap",
+    "C4TrigEvalDrainInto",
+    "C4TrigEvalLayout",
+    "C4TrigEvalReset",
+)
+
+POLL_INTERVAL_S = 1.0
+POLL_TIMEOUT_S = 120.0
+SETTLE_S = 3.0
+SCRIPT_WAIT_S = 180.0  # game.log is buffered (§76.4): 30 s never saw the marker
+
+EXIT_OK = 0
+EXIT_NOT_EVIDENCE = 1
+EXIT_INSTRUMENT = 2
+
+
+# ---------------------------------------------------------------------------
+# Pure functions (host tests cover these; no Windows API)
+# ---------------------------------------------------------------------------
+
+
+def _signed32(raw):
+    raw &= 0xFFFF_FFFF
+    return raw - 0x1_0000_0000 if raw >= 0x8000_0000 else raw
+
+
+def parse_mask(text):
+    """Only 0 is legal: the guard records every matched call (the ring caps at RING_LEN),
+    so a non-zero mask would be a promise the DLL does not keep."""
+    value = int(str(text), 0)
+    if value != 0:
+        raise ValueError(
+            f"mask {value:#x} is not supported: this probe always records every "
+            "matched call (ring caps at RING_LEN), so only --mask 0 is honest"
+        )
+    return value
+
+
+def decode_layout(words):
+    if len(words) != LAYOUT_WORDS:
+        raise ValueError(f"layout needs {LAYOUT_WORDS} words, got {len(words)}")
+    return {
+        "version": words[0],
+        "entry_size": words[1],
+        "ring_len": words[2],
+        "stats_size": words[3],
+        "target_rva": words[4],
+        "prologue_len": words[5],
+    }
+
+
+def install_decision(words):
+    """Refuse before installing when the DLL's layout is not the one this driver parses."""
+    layout = decode_layout(words)
+    if layout["version"] != LAYOUT_VERSION:
+        return f"layout version {layout['version']} != {LAYOUT_VERSION}"
+    if layout["entry_size"] != ENTRY_SIZE:
+        return f"entry size {layout['entry_size']} != {ENTRY_SIZE}"
+    if layout["ring_len"] != RING_LEN:
+        return f"ring len {layout['ring_len']} != {RING_LEN}"
+    if layout["target_rva"] != TARGET_RVA:
+        return f"target rva {layout['target_rva']:#x} != {TARGET_RVA:#x}"
+    if layout["prologue_len"] != PROLOGUE_LEN:
+        return f"prologue len {layout['prologue_len']} != {PROLOGUE_LEN}"
+    return None
+
+
+C1_RESULT_LOG = r"C:\temp\c1_result.log"
+
+
+def parse_c1_result(text):
+    """`C1 OK: trigger_id=<N> effect_id=<M>` -> N, or 0.
+
+    Fallback for a process where `neo_effect` was already registered by an earlier DLL
+    copy: `C1Run` may then fold a duplicate-insert to a non-zero error and return 0, while
+    the token the engine minted is still the one in this log.
+    """
+    import re
+
+    match = re.search(r"trigger_id=(\d+)", text or "")
+    return int(match.group(1)) if match else 0
+
+
+def parse_stats(text):
+    """Parse the DLL's one-line k=v stats. Missing or unknown keys are an error, not a
+    defaulted zero — a stale DLL that lost a key must not read as 'that counter is 0'."""
+    pairs = {}
+    for token in text.split():
+        if "=" not in token:
+            raise ValueError(f"stats token {token!r} is not k=v")
+        key, _, raw = token.partition("=")
+        if key not in STATS_KEYS:
+            raise ValueError(f"unknown stats key {key!r}")
+        pairs[key] = int(raw, 0)
+    missing = [key for key in STATS_KEYS if key not in pairs]
+    if missing:
+        raise ValueError(f"stats line is missing {missing}")
+    return pairs
+
+
+def decode_entry(raw):
+    """The 48-byte Entry, field order pinned by the Zig source (§77.2 of the plan)."""
+    if len(raw) != ENTRY_SIZE:
+        raise ValueError(f"entry needs {ENTRY_SIZE} bytes, got {len(raw)}")
+    (valid, matched, _pad, token, ctx_tag, sub_vt, self_vt, occ,
+     ctx_ptr, a3, sub_obj) = struct.unpack("<BBHIIIIIQQQ", raw)
+    return {
+        "valid": valid,
+        "matched": matched,
+        "token": token,
+        "ctx_tag": ctx_tag,
+        "sub_vtable_rva": sub_vt,
+        "self_vtable_rva": self_vt,
+        "occurrences": occ,
+        "ctx_ptr": ctx_ptr,
+        "a3": a3,
+        "sub_obj": sub_obj,
+    }
+
+
+def verdict(stats, entries, systems, refused=False):
+    """One window's verdict. Order is pinned: instrument health, then refusal, then counts.
+
+    `systems` is the star count of the CURRENT campaign's edge table. It is a parameter,
+    never a constant — 787 belongs to a different save (see chokepoint_table.zig's SAVE_SHA256).
+
+    `distinct_ctx` is the number of DISTINCT ctx values seen. It is a **lower bound** once
+    the dedupe table overflowed, so that window cannot answer the denominator question at
+    all (`ctx_table_full`).
+    """
+    if stats.get("installed") != 1 or stats.get("verify") != 0:
+        return "instrument_broken"
+    if refused:
+        return "script_refused"
+    if stats.get("calls", 0) == 0:
+        return "no_calls"
+    if stats.get("token_matched", 0) == 0:
+        return "token_absent"
+    if systems <= 0:
+        raise ValueError("systems must be positive")
+    if stats.get("dedupe_full", 0) > 0:
+        # The table overflowed: `distinct_ctx` is only a lower bound, so the comparison
+        # against the star count would be a conclusion from a partial count.
+        return "ctx_table_full"
+    distinct = stats.get("distinct_ctx", 0)
+    if distinct == 1:
+        return "ctx_single"
+    if abs(distinct - systems) <= systems * SYSTEM_TOLERANCE:
+        return "ctx_per_system"
+    return "ctx_not_per_system"
+
+
+ARTIFACT_COLUMNS = (
+    "token",
+    "ctx_tag",
+    "sub_vtable_rva",
+    "self_vtable_rva",
+    "occurrences",
+    "ctx_ptr",
+    "a3",
+    "sub_obj",
+)
+
+
+def artifact_rows(entries):
+    """Header + one row per retained entry. Columnar on purpose: the join a human wants is
+    `sub_vtable_rva` against the known vtable map, so it must be its own column."""
+    rows = ["\t".join(ARTIFACT_COLUMNS)]
+    for e in entries:
+        rows.append(
+            "\t".join(
+                [
+                    f"{e['token']:d}",
+                    f"{e['ctx_tag']:#x}",
+                    f"{e['sub_vtable_rva']:#x}",
+                    f"{e['self_vtable_rva']:#x}",
+                    f"{e['occurrences']:d}",
+                    f"0x{e['ctx_ptr']:x}",
+                    f"0x{e['a3']:x}",
+                    f"0x{e['sub_obj']:x}",
+                ]
+            )
+        )
+    return rows
+
+
+def script_marker(script):
+    """The literal prefix this script will leave in game.log, or None.
+
+    The script's `log = "TS_NEO_[This.GetName]"` is substituted per system, so the literal
+    `[This.GetName]` never appears in the log: the marker must stop at the first `[`. Getting
+    this wrong makes every window read `script_refused` even when the script ran.
+    """
+    if 'log = "' not in script:
+        return None
+    literal = script.split('log = "', 1)[1].split('"', 1)[0]
+    return literal.split("[", 1)[0] or None
+
+
+def window_refused(window):
+    """Was this window's script refused by the engine?
+
+    The marker (`window["sent"]`) is the engine-side receipt; `delivered` is only the
+    transport ack. A delivered-but-unmarked script was refused (scope-type error, unknown
+    token) and must read `script_refused`, never `no_calls`.
+    """
+    return not window["sent"]
+
+
+def overall_verdict(per_window):
+    """First evidence verdict wins; otherwise the first window's."""
+    for _label, v in per_window:
+        if v in EVIDENCE_VERDICTS:
+            return v
+    return per_window[0][1] if per_window else "no_calls"
+
+
+def write_tsv(path, rows, meta):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        for key, value in meta.items():
+            f.write(f"# {key}\t{value}\n")
+        for row in rows:
+            f.write(row + "\n")
+    os.replace(tmp, path)
+
+
+def _format_delta(stats):
+    """`k=v` like the DLL's own line, so the meta stays machine-parseable."""
+    return " ".join(f"{k}={stats[k]}" for k in sorted(stats))
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha_gate(dll_path):
+    """Hash the exact file this shot will inject, or refuse before touching a process.
+
+    Prints and records rather than asserting a pinned constant: a whole-file DLL sha
+    changes on every relink, so it is provenance (which bytes ran), not code identity
+    (docs/offline-tooling.md).  Refusal is `SystemExit(2)` — this driver's pre-fire
+    refusals all exit 2 (same code as `gate_install`); donor's `sha_gate` raises
+    `SystemExit(str)`, which is exit 1, so do not read the two as one code.
+    """
+    if not os.path.isfile(dll_path):
+        print(
+            f"[trigeval] {dll_path} not found — upload the freshly built DLL first "
+            "(this script injects THIS file, so it must be the bytes under test)",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_INSTRUMENT)
+    digest = _sha256(dll_path)
+    print(
+        f"[trigeval] dll={dll_path} sha256={digest}\n"
+        f"[trigeval]   compare with `sha256sum zig-out/bin/stellaris_quickjs.dll` — "
+        "recorded in the #meta line so a failed upload is visible after the fact"
+    )
+    return digest
+
+
+def refuse_if_resident(dll_name, resident_base):
+    """Refuse when a module with this name is already mapped into the game.
+
+    `inject_dll` calls `LoadLibraryA` on the path, and the DLL is never unloaded
+    (AGENTS.md constraint 5), so a resident copy makes the loader hand back **that
+    image** while `sha_gate` hashed the file on disk.  The artifact would then attest
+    bytes that never ran (review I-1).  Two legitimate outs, both named in the message:
+    upload under a new name (the §76.7 `sqjs_c5.dll` trick) or shoot in a new process.
+    """
+    if resident_base is None:
+        return None
+    print(
+        f"[trigeval] {dll_name} is already mapped at 0x{resident_base:x} — LoadLibraryA "
+        "would reuse that image, so the sha256 recorded for this shot would attest a file "
+        "that never ran; upload under a new name or use a fresh game process",
+        file=sys.stderr,
+    )
+    raise SystemExit(EXIT_INSTRUMENT)
+
+
+def preflight_paths(script_file, cmd_file):
+    """Refuse before touching the process when the two paths cannot produce a reading.
+
+    Both failures cost a whole shot.  A mistyped `--script-file` is a traceback whose text
+    competes with the stdout loss in traps 8/11; a `--cmd-file` whose name or directory is
+    not the supervisor's one is a file no daemon reads — the 2026-10-28 window spent
+    2 x 180 s on `ns_cmd.txt` and read both windows as `script_refused` (§76.4).  Exit code
+    2 is this driver's pre-fire refusal code (same as `gate_install`).
+    """
+    if not os.path.isfile(script_file):
+        print(
+            f"[trigeval] --script-file {script_file} does not exist — the shot would arm "
+            "a token and never evaluate it; put one console script per line in that file",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_INSTRUMENT)
+    normalised = cmd_file.replace("\\", "/").rstrip("/").lower()
+    if os.path.basename(normalised) != SUPERVISOR_CMD_NAME:
+        print(
+            f"[trigeval] --cmd-file must end in {SUPERVISOR_CMD_NAME}: the supervisor only "
+            f"reads that name, so {cmd_file} is a file nothing will ever consume",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_INSTRUMENT)
+    if os.path.dirname(normalised) != SUPERVISOR_CMD_DIR.lower():
+        print(
+            f"[trigeval] --cmd-file must live in {SUPERVISOR_CMD_DIR}: the supervisor reads "
+            f"one absolute path, so {cmd_file} is never consumed either",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_INSTRUMENT)
+
+
+def build_meta(*, dll_path, dll_sha, module_base, systems, poll_s, settle_s,
+               overall, per_window, windows, final_text, cleanup,
+               trigger_token, layout, script_wait_s):
+    """Assemble the `#meta` dict written before the artifact's data rows.
+
+    Pure (no handles, no ctypes) so it is testable off-machine.  `dll` / `dll_sha256` /
+    `module_base` answer "which bytes, in which module copy" — the 2026-10-28 window had
+    `sqjs_c4.dll` and `sqjs_c5.dll` resident at once (§76.7), and a silently failed
+    upload otherwise reads exactly like a real reading.
+    """
+    return {
+        "target_rva": f"{TARGET_RVA:#x}",
+        "systems": systems,
+        "poll_s": poll_s,
+        "settle_s": settle_s,
+        "overall_verdict": overall,
+        "verdict_a": per_window[0][1] if per_window else "-",
+        "verdict_b": per_window[1][1] if len(per_window) > 1 else "-",
+        "verdict_poll": per_window[-1][1] if per_window else "-",
+        "stats_a_raw": windows[0]["text"].strip() if windows else "-",
+        "stats_a_delta": _format_delta(windows[0]["stats"]) if windows else "-",
+        "stats_b_raw": windows[1]["text"].strip() if len(windows) > 1 else "-",
+        "stats_b_delta": _format_delta(windows[1]["stats"]) if len(windows) > 1 else "-",
+        "stats_poll_delta": _format_delta(windows[-1]["stats"]) if windows else "-",
+        "stats_final": final_text.strip(),
+        "delivered_a": int(windows[0]["delivered"]) if windows else 0,
+        "delivered_b": int(windows[1]["delivered"]) if len(windows) > 1 else 0,
+        "marker_a": int(windows[0]["sent"]) if windows else 0,
+        "marker_b": int(windows[1]["sent"]) if len(windows) > 1 else 0,
+        "armed_a": windows[0]["token"] if windows else 0,
+        "armed_b": windows[1]["token"] if len(windows) > 1 else 0,
+        "script_wait_s": script_wait_s,
+        "uninstall_rc": cleanup["uninstall_rc"],
+        "verify_rc": cleanup["verify_rc"],
+        "host_alive": cleanup["host_alive"],
+        "trigger_token": trigger_token,
+        "layout": " ".join(f"{k}={v}" for k, v in layout.items()),
+        "dll": os.path.basename(dll_path.replace("\\", "/")),
+        "dll_sha256": dll_sha,
+        "module_base": f"0x{module_base:x}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Live path (Windows only; not exercised by the host tests)
+# ---------------------------------------------------------------------------
+
+
+def gate_module(pid, dll_path, needed):
+    """Check the export names in the FILE, gate the world state, then inject."""
+    exports = harness.list_exports(dll_path)
+    missing = [name for name in needed if name not in exports]
+    if missing:
+        raise SystemExit(
+            f"{dll_path} is missing {missing} — refusing to inject a DLL that cannot "
+            "answer this shot's calls (a stale upload would sample the wrong target)"
+        )
+
+    dll_name = os.path.basename(dll_path)
+    print(f"[trigeval] pid={pid}  dll={dll_path}")
+    # A same-name module already mapped means the loader will ignore this file.  Any
+    # resolve failure (not loaded, ambiguous, PowerShell) is left to the post-inject
+    # `resolve_base_address`, which is the authoritative one.
+    try:
+        resident = harness.resolve_base_address(pid, dll_name)
+    except RuntimeError:
+        resident = None
+    refuse_if_resident(dll_name, resident)
+    # The world-state gate (spec §1): a shot that cannot prove the premise must not inject.
+    from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+
+    gate_install("trigeval")
+    harness.inject_dll(pid, dll_path)
+    harness.assert_game_alive(pid)
+    base = harness.resolve_base_address(pid, dll_name)
+    print(f"[trigeval] {dll_name} base (64-bit): 0x{base:x}")
+
+    head = harness.read_memory(pid, base, 2)
+    assert head == b"MZ", f"Bad header at 0x{base:x}: {head!r}"
+    sanity = _signed32(harness.call_remote(pid, base, exports["C2Sanity"]))
+    assert sanity == 42, (
+        f"C2Sanity returned {sanity}, expected 42 — refusing to dispatch against "
+        "this module copy"
+    )
+    harness.assert_game_alive(pid)
+    print("[trigeval] C2Sanity == 42, game alive — dispatch authorized")
+    return base, exports
+
+
+_dispatched = set()
+
+
+def dispatch_once(pid, base, rva, name, arg=None):
+    """One install per process; a second would answer -2 and be misread as a verdict."""
+    if name in _dispatched:
+        raise RuntimeError(f"{name} was already dispatched in this session")
+    _dispatched.add(name)
+    if arg is None:
+        return _signed32(harness.call_remote(pid, base, rva))
+    return _signed32(harness.call_remote_with_arg(pid, base, rva, arg))
+
+
+def read_layout_words(pid, base, exports):
+    buf = harness.remote_alloc(pid, 32)
+    harness.call_remote_with_arg(pid, base, exports["C4TrigEvalLayout"], buf)
+    return struct.unpack("<6I", harness.read_memory(pid, buf, LAYOUT_WORDS * 4))
+
+
+def reset_probe(pid, base, exports):
+    harness.call_remote(pid, base, exports["C4TrigEvalReset"])
+    harness.assert_game_alive(pid)
+
+
+def arm_token(pid, base, exports, token):
+    rc = _signed32(harness.call_remote_with_arg(
+        pid, base, exports["C4TrigEvalSetToken"], token))
+    assert rc == 0, f"C4TrigEvalSetToken returned {rc}"
+    harness.assert_game_alive(pid)
+
+
+def install_probe(pid, base, exports):
+    rc = dispatch_once(pid, base, exports["C4TrigEvalInstall"], "C4TrigEvalInstall")
+    harness.assert_game_alive(pid)
+    return rc
+
+
+def read_stats(pid, base, exports, buf):
+    harness.call_remote_with_arg(pid, base, exports["C4TrigEvalStatsInto"], buf)
+    raw = harness.read_memory(pid, buf, STATS_SIZE)
+    text = raw.split(b"\x00", 1)[0].decode("ascii", "replace")
+    return parse_stats(text), text
+
+
+def drain_entries(pid, base, exports, buf):
+    """The DLL clamps to the capacity declared by `C4TrigEvalSetDrainCap`; allocate the ring."""
+    count = harness.call_remote_with_arg(pid, base, exports["C4TrigEvalDrainInto"], buf)
+    count = min(count & 0xFFFF_FFFF, RING_LEN)
+    if count == 0:
+        return []
+    blob = harness.read_memory(pid, buf, count * ENTRY_SIZE)
+    return [decode_entry(blob[i * ENTRY_SIZE:(i + 1) * ENTRY_SIZE]) for i in range(count)]
+
+
+def _read_seen(path):
+    try:
+        with open(path, encoding="ascii", errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _write_command_atomic(path, text):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def send_script(cmd_file, script, game_log, wait_s):
+    """Send one console script; return `(delivered, marker_seen)`.
+
+    `delivered` = the supervisor acknowledged the command file (its `.seen` key changed).
+    `marker_seen` = the script's own log line appeared — the **engine-side** receipt, and the
+    only signal that distinguishes "the script ran" from "the script was refused".
+
+    Both waits use the window's whole budget, not a fixed 3 s: the supervisor skips
+    `read_command` entirely while a world lease is held (`game_supervisor.py`'s
+    `yield_to_lease` branch `continue`s first), and the 2026-10-28 shot measured an eight-tick
+    deferral followed by a consume one second after release.
+    """
+    from c4_wiring_probe import GAME_LOG, _file_size_or_none, _read_text_from
+
+    log_path = os.path.expanduser(game_log or GAME_LOG)
+    offset = _file_size_or_none(log_path)
+    seen_path = os.path.splitext(cmd_file)[0] + ".seen"
+    before = _read_seen(seen_path)
+    _write_command_atomic(cmd_file, "console " + script + "\n")
+
+    deadline = time.time() + wait_s
+    delivered = False
+    while time.time() < deadline:
+        if _read_seen(seen_path) != before:
+            delivered = True
+            break
+        time.sleep(0.25)
+    if not delivered:
+        return False, False
+
+    marker = script_marker(script)
+    if marker is None:
+        return True, True
+    while time.time() < deadline:
+        try:
+            if marker in (_read_text_from(log_path, offset) or ""):
+                return True, True
+        except OSError:
+            pass
+        time.sleep(0.25)
+    return True, False
+
+
+def _cleanup(pid, base, exports, settle_s):
+    uninstall_rc = dispatch_once(pid, base, exports["C4TrigEvalUninstall"],
+                                 "C4TrigEvalUninstall")
+    verify_rc = _signed32(harness.call_remote(pid, base, exports["C4TrigEvalVerify"]))
+    alive = False
+    time.sleep(settle_s)
+    try:
+        harness.assert_game_alive(pid)
+        alive = True
+    except Exception:  # noqa: BLE001 — a dead host is a reading, not a crash
+        alive = False
+    if uninstall_rc == -7 or verify_rc != 0:
+        print("RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY", file=sys.stderr)
+    return {"uninstall_rc": uninstall_rc, "verify_rc": verify_rc, "host_alive": int(alive)}
+
+
+def run(pid, dll_path, dll_sha, scripts, systems, out_path, cmd_file, game_log,
+        poll_s, settle_s, script_wait_s=SCRIPT_WAIT_S):
+    base, exports = gate_module(pid, dll_path, NEEDED_EXPORTS)
+
+    layout = decode_layout(read_layout_words(pid, base, exports))
+    refusal = install_decision(
+        (layout["version"], layout["entry_size"], layout["ring_len"],
+         layout["stats_size"], layout["target_rva"], layout["prologue_len"]))
+    if refusal:
+        raise SystemExit(f"layout refuses install: {refusal}")
+
+    reset_probe(pid, base, exports)
+    rc = install_probe(pid, base, exports)
+    if rc != 0:
+        raise SystemExit(
+            f"C4TrigEvalInstall returned {rc} (0 ok | -2 already installed / predicate "
+            "armed | -3 no module | -4 already hooked | -5 prologue | -6 patch width) — "
+            "do not retry in this process"
+        )
+
+    cleanup = {"uninstall_rc": -999, "verify_rc": -999, "host_alive": 0}
+    try:
+        trigger_token = _signed32(harness.call_remote(pid, base, exports["C1Run"]))
+        print(f"[trigeval] C1Run trigger token = {trigger_token}")
+        if trigger_token <= 0:
+            try:
+                with open(C1_RESULT_LOG, encoding="utf-8", errors="replace") as f:
+                    trigger_token = parse_c1_result(f.read())
+            except OSError:
+                trigger_token = 0
+            print(f"[trigeval] C1Run returned {trigger_token} from the log fallback")
+
+        stats_buf = harness.remote_alloc(pid, STATS_SIZE)
+        baseline, baseline_text = read_stats(pid, base, exports, stats_buf)
+        print(f"[trigeval] baseline: {baseline_text.strip()}")
+
+        windows = []
+        previous = baseline
+        for label, script, token in scripts:
+            if token is None:
+                token = trigger_token
+            if token <= 0:
+                raise SystemExit(
+                    "C1Run did not return a trigger token — the DLL could not register "
+                    "neo_effect, so window A would arm a token nothing can match"
+                )
+            arm_token(pid, base, exports, token)
+            delivered, seen = send_script(cmd_file, script, game_log, script_wait_s)
+            stats, text = read_stats(pid, base, exports, stats_buf)
+            delta = dict(stats)
+            for key in ("calls", "token_matched", "distinct_ctx"):
+                delta[key] = stats[key] - previous[key]
+            previous = stats
+            windows.append({"label": label, "sent": seen, "delivered": delivered,
+                            "token": token, "stats": delta, "raw": stats, "text": text})
+            print(f"[trigeval] window {label}: delivered={delivered} marker={seen} "
+                  f"token={token} delta={delta} raw={text.strip()}")
+            if not delivered:
+                print("[trigeval] the daemon never acknowledged the command file — "
+                      "stopping before the next script overwrites it", file=sys.stderr)
+                break
+
+        deadline = time.time() + poll_s
+        while time.time() < deadline:
+            time.sleep(POLL_INTERVAL_S)
+        final_stats, final_text = read_stats(pid, base, exports, stats_buf)
+        poll_delta = dict(final_stats)
+        for key in ("calls", "token_matched", "distinct_ctx"):
+            poll_delta[key] = final_stats[key] - previous[key]
+        windows.append({"label": "poll", "sent": True, "delivered": True,
+                        "token": None, "stats": poll_delta, "raw": final_stats,
+                        "text": final_text})
+        print(f"[trigeval] poll window: delta={poll_delta} raw={final_text.strip()}")
+
+        per_window = []
+        for w in windows:
+            per_window.append(
+                (w["label"],
+                 verdict(w["stats"], [], systems, refused=window_refused(w)))
+            )
+        overall = overall_verdict(per_window)
+
+    finally:
+        cleanup = _cleanup(pid, base, exports, settle_s)
+
+    meta = build_meta(
+        dll_path=dll_path, dll_sha=dll_sha, module_base=base,
+        systems=systems, poll_s=poll_s, settle_s=settle_s, overall=overall,
+        per_window=per_window, windows=windows, final_text=final_text,
+        cleanup=cleanup, trigger_token=trigger_token, layout=layout,
+        script_wait_s=script_wait_s)
+    # Artifact first, drain second: a bad drain must not cost the stats line.
+    write_tsv(out_path, artifact_rows([]), meta)
+    try:
+        drain_buf = harness.remote_alloc(pid, RING_LEN * ENTRY_SIZE)
+        harness.call_remote_with_arg(pid, base, exports["C4TrigEvalSetDrainCap"],
+                                     RING_LEN * ENTRY_SIZE)
+        entries = drain_entries(pid, base, exports, drain_buf)
+    except Exception as err:  # noqa: BLE001 — entries are a witness, not the verdict
+        entries = []
+        meta["entries_error"] = repr(err)
+        print(f"[trigeval] drain failed: {err!r}", file=sys.stderr)
+    write_tsv(out_path, artifact_rows(entries), meta)
+    print(f"[trigeval] artifact: {out_path}  entries={len(entries)}  verdict={overall}")
+
+    if overall == "instrument_broken":
+        return EXIT_INSTRUMENT
+    return EXIT_OK if overall in EVIDENCE_VERDICTS else EXIT_NOT_EVIDENCE
+
+
+def _script_lines(path):
+    with open(path, encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip() and not line.startswith("#")]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("dll", nargs="?", default=DEFAULT_DLL)
+    parser.add_argument("--mask", default="0", help="only 0 is supported (see parse_mask)")
+    parser.add_argument("--poll-s", dest="poll_s", type=float, default=POLL_TIMEOUT_S,
+                        help="post-script observation window; frequency comes from calls")
+    parser.add_argument("--settle-s", dest="settle_s", type=float, default=SETTLE_S)
+    parser.add_argument("--systems", type=int, required=True,
+                        help="star count of the CURRENT campaign (Task 5's edge table); "
+                             "787 belongs to another save and must not be defaulted")
+    parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument("--cmd-file", dest="cmd_file", default=DEFAULT_CMD_FILE)
+    parser.add_argument("--game-log", dest="game_log", default=None)
+    parser.add_argument("--script-wait-s", dest="script_wait_s", type=float,
+                        default=SCRIPT_WAIT_S,
+                        help="how long to wait for the script's game.log marker; the log "
+                             "is buffered, so 30 s was measured to be too short (§76.4)")
+    parser.add_argument("--script-file", dest="script_file", default=None,
+                        help="file with one console script per line; line 1 uses the C1 "
+                             "trigger token, line 2 the official is_rim_system token")
+    parser.add_argument("--rim-token", dest="rim_token", type=int, default=18203,
+                        help="token of the official system-scoped trigger in line 2 "
+                             "(is_rim_system = 18203)")
+    args = parser.parse_args(argv)
+
+    try:
+        parse_mask(args.mask)
+    except ValueError as err:
+        print(f"[trigeval] {err}", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    if args.systems <= 0:
+        print(f"[trigeval] --systems must be positive, got {args.systems}", file=sys.stderr)
+        return EXIT_INSTRUMENT
+
+    if args.script_file is None:
+        print("[trigeval] --script-file is required for a shot: without a script the "
+              "predicate is never evaluated and the reading is meaningless", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    preflight_paths(args.script_file, args.cmd_file)
+    lines = _script_lines(args.script_file)
+    if not lines:
+        print("[trigeval] --script-file has no scripts", file=sys.stderr)
+        return EXIT_INSTRUMENT
+
+    dll_sha = sha_gate(args.dll)
+    pid = harness.resolve_pid(EXE_MODULE)
+    # Window A's token is only known after C1Run; None tells run() to use it.
+    scripts = [("neo_effect", lines[0], None)]
+    if len(lines) > 1:
+        scripts.append(("is_rim_system", lines[1], args.rim_token))
+    return run(pid, args.dll, dll_sha, scripts, args.systems, args.out, args.cmd_file,
+               args.game_log, args.poll_s, args.settle_s, args.script_wait_s)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
