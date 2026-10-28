@@ -1412,6 +1412,49 @@ system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**�
 并调 **`C4TrigPredSetDrainCap(10240)`** 声明容量(DLL 侧 clamp,未声明就返回 0 行)。`call_remote_with_arg`
 只能传一个寄存器,所以容量是 setter 而不是第二个实参。
 
+### `scripts/c2_trigger_eval_probe.py [dll] --systems N --script-file <path> [--poll-s 120] [--settle-s 3] [--script-wait-s 180] [--out C:/temp/c4_trig_eval.tsv] [--cmd-file C:/temp/ns_game_cmd.txt]`
+
+**第六把 guard,C5 数据面的第二发。** 靶是触发**求值**槽的共用基体 `0x1A91A80`(取证卷 §77):
+trigger 的 `[vptr+0x28]` 的共用实现,收 `(self, ctx, a3)`;`.rdata` 里 **352 个绝对地址**等于它。
+与第五把(`0x349230`,**谓词**槽)是**两个不同的槽**:谓词是实例化期检查,本槽是每次求值都走。
+
+**这一发问两个数**:被调**几次**(`calls`)、拿到的 `ctx` 有**几个不同的值**(`distinct_ctx`),
+外加 `ctx` 上那两格**已被代码证实**的字段:`ctx+0x158`(类型标签,§77.1 ③ 必须是 1 或 0x426)与
+`ctx+0x278`(被当对象传给下一层,`lea rdx,[rbx+0x278]`;它的首 qword 若是 vtable,一格读数就给出
+「那个子对象是什么类型」)。**不解引用第二层** —— §59/§73 已经证明「猜偏移链」这条路是死的。
+
+三个方向都算读数:`ctx_per_system`(distinct ≈ 星系数)、`ctx_single`(== 1)、
+`ctx_not_per_system`(别的正数)。`no_calls` / `token_absent` / `script_refused` /
+`ctx_table_full` / `instrument_broken` 都是环境档,**不是**证据。
+
+**门序**(照 §70.6 与兄弟驱动的家族纪律):`preflight_paths`(开火前两条拒绝,见下)→ `sha_gate`
+(**打印并记录**注入文件的 sha256,不断言固定常量;文件不在即 `exit 2`)→ `list_exports` 核文件里的
+十一个导出 → `refuse_if_resident`(同名模块已在进程里就拒绝)→ `gate_install`(world-state 门,
+注入前)→ `inject_dll` → `C2Sanity==42` → `C4TrigEvalLayout` 与驱动常量对账 → `C4TrigEvalReset` →
+`C4TrigEvalInstall` → `C1Run` 取 token → 每段 `SetToken` + 发脚本 + 读 delta → `--poll-s` 观测窗 →
+`C4TrigEvalUninstall` + `Verify` + settle + `assert_game_alive`。`Install` 返回 `-2` **不重试**;
+`-5`(指纹)是「靶读错」的发现,停手留证。
+
+**判读陷阱(本仪器专属,三条):**
+
+1. **`ctx_not_per_system` 不是「没有星系身份」,只是「ctx 不是每系统一个」。** 它否掉的只有「每系统
+   一个 ctx」这一条;ctx 到底是什么对象,这一发给不出答案。`ctx_single` 同理(它比
+   `ctx_not_per_system` 更强一点:全程只有一个 ctx)。
+2. **`sub_vtable_rva = 0` 是「我们认不出来」,不是「没有 vtable」。** `[ctx+0x278]` 落在镜像外时记 0
+   —— 那可能是堆对象,也可能我们算错了基址;读成「那个子对象没有类型」是过度解读。
+3. **`dedupe_full != 0` 时 `distinct_ctx` 只是**下界**,分母判据当次作废。** 去重表 1,024 槽满了以后,
+   新的 distinct ctx 不再计数(`distinct_ctx` 停在表里已有的数),verdict 落 `ctx_table_full`。
+   那一档的读数**不许**用来支持任何结论。
+
+**artifact**:`#meta` 在前(含 `overall_verdict` / `verdict_a` / `verdict_b` / `stats_*_delta` /
+`uninstall_rc` / `verify_rc` / `host_alive`,外加 **`dll` / `dll_sha256` / `module_base`**),
+然后是八列的行:`token ctx_tag sub_vtable_rva self_vtable_rva occurrences ctx_ptr a3 sub_obj`。
+`run()` **先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败。
+`dll_sha256` 是**注入路径上那个文件**的 sha,不是「跑着的镜像」—— 所以同名模块已映射时驱动直接拒绝
+(`refuse_if_resident`)。`--systems` **无默认值**:分母只从当前存档重建的边表来(787 属于另一场存档)。
+判读纯函数由 `python3 -m pytest scripts/test_c2_trigger_eval_probe.py -q` 覆盖(**18 条**),无游戏、
+无 Windows API、零 shot。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
