@@ -65,6 +65,11 @@ KEEP_AWAKE_STATUS = r"C:\temp\ns_awake_status.json"
 SHOT = r"C:\temp\ns_game_shot.png"
 JSON = r"C:\temp\c4_wiring_result.json"
 
+#: ``resolve_base_address`` raises this when the module is absent;
+#: the loader path treats it as "inject", any other message as
+#: "something is wrong, stop".
+NOT_LOADED_FRAGMENT = "is " + "not loaded"
+
 WIRE_KEYS = ["mode", "records", "dropped", "calls", "resolved", "unresolved",
              "tier0", "tier1", "tier2", "js_err", "chain", "last_id", "last_tier",
              "armed_token", "spec_blob", "spec_deref", "spec_off_a", "spec_off_b",
@@ -253,7 +258,8 @@ def _check_offsets(blob, deref, off_a, off_b):
 
 def pack_spec(blob, deref, off_a, off_b):
     if not isinstance(blob, int) or not isinstance(deref, int):
-        raise ValueError("blob/deref must be integers")
+        # The callers pin ValueError for a malformed spec, so it stays one.
+        raise ValueError("blob/deref must be integers")  # noqa: TRY004
     _check_offsets(blob, deref, off_a, off_b)
     return blob | (deref << 8) | (off_a << 16) | (off_b << 32)
 
@@ -466,8 +472,13 @@ def supervisor_ready(rec, now, max_age_s=5.0):
     state = rec.get("state")
     if state in ("no_game", "stopped"):
         return "supervisor_not_running"
+    # Named first so the `None` case is explicit: a status file written before
+    # the epoch landed is "not ready", not a course-correction of float(None).
+    epoch = rec.get("epoch")
+    if epoch is None:
+        return "supervisor_not_running"
     try:
-        age = now - float(rec.get("epoch"))
+        age = now - float(epoch)
     except (TypeError, ValueError):
         return "supervisor_not_running"
     if age > max_age_s:
@@ -894,7 +905,7 @@ def _flow(args, result, state):
     try:
         base = harness.resolve_base_address(pid, module)
     except RuntimeError as exc:
-        if "is not loaded" not in str(exc):
+        if NOT_LOADED_FRAGMENT not in str(exc):
             raise _Abort("stale_module", str(exc))
         try:
             # The world-state gate (spec §1): a shot that cannot prove the premise
@@ -1070,10 +1081,11 @@ def _cleanup(state, result):
     pid, base = state["pid"], state["base"]
     exports = state["exports"]
     if pid and base:
-        try:
+        try:  # noqa: SIM105 - best-effort arming: the mode is advisory, and a
+            # failed call is not fatal here
             harness.call_remote_with_arg(
                 pid, base, exports["C4WireSetMode"], 0)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
 
         rc = None
@@ -1081,8 +1093,8 @@ def _cleanup(state, result):
             try:
                 rc = _signed32(harness.call_remote(
                     pid, base, exports["C4WireDisarm"]))
-            except Exception:
-                rc = None
+            except Exception:  # noqa: BLE001 - a failed disarm means "still
+                rc = None       # armed", which the caller already handles
                 break
             if rc != -1:
                 break
@@ -1165,7 +1177,8 @@ def main(argv=None):
         _flow(args, result, state)
     except _Abort as exc:
         result["verdict"], result["detail"] = exc.verdict, exc.detail
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - the verdict IS the report: a
+        # crash anywhere in the flow is a probe_error, not a traceback
         result["verdict"], result["detail"] = "probe_error", repr(exc)
     finally:
         _cleanup(state, result)
