@@ -7403,3 +7403,119 @@ X 的形态是**解析上下文**,与 effect 侧 `0x3B01A0` 拿到的是同一�
 - 新 guard 的靶与指纹:`0x349230` + 32 B(`EXPECTED_CODE`),见 `src/dll/c2/trigger_pred_probe.zig`。
 - 下一发的问题:谓词被调几次、X 的 vtable/区域长什么样 —— 判据与 verdict 值域见
   `docs/offline-tooling.md` 的 `c2_trigger_pred_probe.py` 一节。
+
+## §76 触发谓词第一发:装拆干净、`calls` ≈ 9,800/s,但 `+0x80` 在 787 次求值里只被调 **11** 次且 X 恒为 **0x80** ⇒ 谓词是实例化期检查,不是每次求值(2026-10-28,点名 ×1)
+
+**授权级别**:点名(2026-10-28 本会话内授权「打这一发」)。一进程一次 install 额度 —— pid 3604,本发之后
+该进程的 trigpred guard 已拆净(`Uninstall rc=0`、`Verify rc=0`),但**同一进程不再重打**(纪律见 §57.5)。
+
+**这一发问的是什么**:§75 留下的那个数 —— 一个 trigger 放进 `every_system` 的 `limit` 之后,谓词槽
+`+0x80`(`0x349230`)被调几次、每次的第 2 实参 X 长什么样。判据与 verdict 值域见
+`docs/offline-tooling.md` 的 `c2_trigger_pred_probe.py` 一节。
+
+**产物**:`evidence/logs/c5_trig_pred_4_4_4.tsv`(20 行 `#meta` + 表头 + **11 行**)。
+
+### §76.1 门与清理(硬门逐条)
+
+```
+layout   version=1 entry_size=40 ring_len=256 stats_size=40 target_rva=0x349230 prologue_len=32
+inject   sqjs_c5.dll sha256 = 59A97C02…B819461C(与本地 zig-out/bin 逐字对上)
+gate     IN_GAME_RUNNING(pause=playing console=closed window=none)
+install  rc=0   premise: 32 B 指纹,前 21 B 与 0x3B1420 相同、偏移 26 = 0x70
+C1Run    trigger_token=68636(进程里早已注册,与 C:/temp/c1_result.log 一致)
+uninstall rc=0  verify rc=0  host alive = 1
+```
+
+### §76.2 三个数,按读数说
+
+| 键 | 值 | 出处 |
+|---|---|---|
+| `calls`(谓词基体的调用总数) | 1,467,771(≈ **9,800/s**,窗口约 150 s) | `stats_final` |
+| `token_matched`(= `[self+0x38] == 18203`) | **11** | `stats_final` |
+| 脚本实际求值的系统数 | 787(`every_system`),其中 **78** 个 `is_rim_system` 为真并写了 `TS_RIM_<名>` | `game.log`: `MARKER_TS_RIM=78` |
+
+artifact 的 11 行**逐行同形**:
+
+```
+token	self_ptr	self_vtable_rva	x_ptr	x_vtable_rva
+18203	0x1ea57b430	0x26938f8	0x80	0x0
+18203	0x1c6731e20	0x26938f8	0x80	0x0
+…(共 11 行,self_ptr 有 7 个不同值,self_vtable_rva 全 = 0x26938F8,x_ptr 全 = 0x80)
+```
+
+`0x26938F8` 是 `is_rim_system` 的 vtable(`vtable.py 0x26938f8` 读出 slot[9] 引用
+`IS_RIM_SYSTEM_TRIGGER`,slot[16] 也是 `0x349230`)—— 所以 detour 确实抓的是 trigger,不是别的东西。
+
+### §76.3 判决:**谓词不是每次求值**
+
+787 次 `limit` 求值,谓词只被调 **11** 次;11 次里 X 全等于 `0x80`(小常量,不是指针,`x_vtable_rva=0`)。
+
+- **形状与 §54 的 effect 侧同源**:§54 那次 206,695 次谓词调用里,armed token 只匹配 **1** 次。
+- 所以 `+0x80` 是**实例化期**的 scope 检查:`if (!X) true; y = self->[+0x70](); return X != y` —— X 是
+  一个 scope/类型掩码,不是被求值的对象。
+- **verdict 按读数 = `predicate_instantiate_once`**(不是 `predicate_per_system`)。驱动自己在 artifact 里
+  写的是 `script_refused`,理由是「marker 30 s 内没出现」;那两格是**驱动口径**的问题,见 §76.4。
+  本节以读数为准,并把这个分歧原样留在案:**同一份 artifact 上,`overall_verdict` 与
+  `stats_final/last_token` 打架**,下一发之前必须先修驱动的口径(§76.4 第 2 条)。
+
+### §76.4 三条通道/驱动缺陷(都实测到了,都还没修)
+
+1. **`game.log` 是缓冲写的,30 s 等不到 marker。** 驱动 `SCRIPT_WAIT_S = 30`;实测 RIM 的 78 条 marker
+   在**约 2 分钟后**才落盘(`GAME_LOG size=1606 → 10101`)。⇒ 两段的 `sent_*` 全 0,但它们**不是**
+   `script_refused` 的证据,只是「30 s 内没看见」。
+2. **verdict 只看两个窗口,丢掉了 poll 窗。** 11 次匹配全部落在 `--poll-s 120` 那一段
+   (`stats_b_raw` 时 `token_matched=0`,`stats_final` 才 11)。驱动把 poll 窗只记进 `stats_final`、
+   不参与 `verdict()` ⇒ 一次「脚本晚到」被读成了「脚本没跑」。
+3. **NEO 段的命令从未被守护进程消费。** supervisor 的 `ns_game_log.jsonl` 里**只有一条 `command` 事件**
+   (RIM,`21:39:50`),没有 NEO 的;`game.log` 里 `TS_NEO=0`。而驱动在 `_send_console` 返回 False 之后
+   仍然写下一条命令,**把还没被消费的 NEO 命令覆盖掉了**(`ns_game_cmd.txt` 里最后只剩 RIM)。
+   NEO 是否**本身**会失败(scope 类型)仍未验证 —— 它没被送到。
+
+### §76.5 对 §75 的修正(append-only,不改写 §75)
+
+§75.5 写的是「X 的形态是解析上下文」,依据是 donor 的 **slot[5]**(求值槽 `0x1B183B0`)把第 2 实参
+喂给名字构造器 `0x1D0C9F0`。本节实测的 X 来自 **slot[16]**(谓词槽),它是 `0x80` —— 一个常量。
+
+⇒ **§75.5 那条结论只适用于求值槽的第 2 实参,不能推广到谓词槽。** 两个槽的实参不是同一个东西:
+- 谓词槽 `+0x80`:第 2 实参是**小常量**(本节实测 `0x80`);
+- 求值槽 `+0x28`:第 2 实参是 `ctx`,donor 把它当解析上下文用(§75.5 的读数)。
+
+§75.6 的「不能说的」因此要加一条:**不能说「谓词拿到的 X 是 scope 或解析上下文」** —— 它是掩码量。
+
+### §76.6 下一靶(零 shot,已定形)
+
+`is_rim_system` 的 vtable `0x26938F8` 的 **slot[5] (+0x28) = `0x1A91A80`**,而 `.rdata` 里等于它的
+qword 有 **352** 个 ⇒ 它也是一个**共用基体**,且是**每次求值**走的那一个(§75 读数 3:
+`0x34A01B call [rax+0x28]`,实参 `rcx=self, rdx=r13, r8=[rbp+0x7f]`)。它的头部:
+
+```
+01a91a8f  mov  rdi, rcx        ; self
+01a91a92  mov  rsi, r8         ; a3
+01a91a95  add  rcx, 0x78       ; &self[0x78]
+01a91a99  mov  rbx, rdx        ; ctx
+01a91a9c  call 0x1A918E0
+01a91aa1  mov  rax, [rdi]
+01a91aa4  lea  rdx, [rbx + 0x278]   ; ctx + 0x278
+```
+
+⇒ 下一发把 detour 从 `0x349230` 换到 **`0x1A91A80`**,记 `(self, ctx, a3)`;要问的是
+「ctx 或 `ctx+0x278` 上有没有星系的身份」。这是**新仪器**(新靶、新指纹、新 Entry 字段),
+不在本计划内 —— 归下一份计划,判据与授权级由它自己写。
+
+### §76.7 复现命令
+
+```bash
+just game cmd status        # 清掉上一次的 quit,否则新 daemon 起来就退出
+just game start
+just game unpause
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py status"     # -> IN_GAME_RUNNING
+just win "python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_trigger_pred_probe.py \
+  C:/temp/sqjs_c5.dll --systems 787 --script-file C:/temp/ts_scripts.txt --poll-s 120 \
+  --out C:/temp/c4_trig_pred.tsv"
+scp Windows_Jiaolong:C:/temp/c4_trig_pred.tsv evidence/logs/c5_trig_pred_4_4_4.tsv
+```
+
+`sqjs_c5.dll` 是本发的模块名(**不是** `sqjs_c4.dll`):pid 3604 里 `sqjs_c4.dll` 已被早前会话装载,
+`scp` 覆盖被占用文件实测失败(dest open: Failure),所以本发换名装载同一份字节(sha 逐字相同)。
+**这也意味着该进程里两个模块副本同时在**,后续任何 `[self+0]` join 读数都要先确认不是 `sqjs_c4` 那份
+(本 guard 不读 `[self+0]` 做判据,只读 `[self+0x38]` 的 token,所以本节不受影响)。

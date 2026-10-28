@@ -1,0 +1,31 @@
+# target_rva	0x349230
+# systems	787
+# poll_s	120.0
+# settle_s	3.0
+# overall_verdict	script_refused
+# verdict_a	script_refused
+# verdict_b	script_refused
+# stats_a_raw	calls=16652 token_matched=0 samples=0 x_null=0 patch_size=16 installed=1 verify=0 last_token=0
+# stats_a_delta	{'calls': 16570, 'token_matched': 0, 'samples': 0, 'x_null': 0, 'patch_size': 16, 'installed': 1, 'verify': 0, 'last_token': 0}
+# stats_b_raw	calls=27532 token_matched=0 samples=0 x_null=0 patch_size=16 installed=1 verify=0 last_token=0
+# stats_b_delta	{'calls': 10880, 'token_matched': 0, 'samples': 0, 'x_null': 0, 'patch_size': 16, 'installed': 1, 'verify': 0, 'last_token': 0}
+# stats_final	calls=1467771 token_matched=11 samples=11 x_null=0 patch_size=16 installed=1 verify=0 last_token=18203
+# sent_a	0
+# sent_b	0
+# uninstall_rc	0
+# verify_rc	0
+# host_alive	1
+# trigger_token	68636
+# layout	version=1 entry_size=40 ring_len=256 stats_size=40 target_rva=3445296 prologue_len=32
+token	self_ptr	self_vtable_rva	x_ptr	x_vtable_rva
+18203	0x1ea57b430	0x26938f8	0x80	0x0
+18203	0x1c6731e20	0x26938f8	0x80	0x0
+18203	0x1c6735d90	0x26938f8	0x80	0x0
+18203	0x1c6732d70	0x26938f8	0x80	0x0
+18203	0x1c6731bf0	0x26938f8	0x80	0x0
+18203	0x1c1736d00	0x26938f8	0x80	0x0
+18203	0x1c2aae8b0	0x26938f8	0x80	0x0
+18203	0x1c6731e20	0x26938f8	0x80	0x0
+18203	0x1c6735d90	0x26938f8	0x80	0x0
+18203	0x1c6732d70	0x26938f8	0x80	0x0
+18203	0x1c6731bf0	0x26938f8	0x80	0x0

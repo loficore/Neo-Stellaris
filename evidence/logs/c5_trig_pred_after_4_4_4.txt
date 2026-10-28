@@ -1,0 +1,60 @@
+ssh Windows_Jiaolong python C:/temp/probe_logs.py
+GAME_LOG	C:\Users\13229\Documents\Paradox Interactive\Stellaris\logs\game.log	size=10101	mtime=1793194978
+TAIL_LINES	99
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_希姆博客
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_珀耳修斯
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_佛洛伦·格劳
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_艾丽莎
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_达拉斯塔
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_扎达尔
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_菲德罗斯
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_法拉送
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_特迪亚拉
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_爱帕特拉巴恩
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_特洛帕拉姆
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_普恩特拉兹
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_科伦萨
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_木达斯特拉姆
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_虚梁三
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_迪瑞斯
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_依芙儿
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_威斯尔
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_达尔
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_尾宿五
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_奥加斯
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_乌斯卡布斯
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_塔玛扬
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_奥比西克
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_诺维托夫
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_左卡尔
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_奥巴索斯
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_星宿一
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_诺德罗
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_阿布德拉德
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_加洛斯
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_室宿二
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_尼莫兰
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_克拉奇
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_安得赞斯
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_苏尔
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_恩克夫
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_乌沙米娜利亚
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_福林加
+HIT	[21:39:54][effect_impl.cpp:21978]: [2232.3.26] Log effect, file:  line: 1. TS_RIM_图比克
+HIT_COUNT	78
+MARKER_TS_NEO	0
+MARKER_TS_RIM	78
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:42"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:42"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:43"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:44"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:45"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:46"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:46"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:47"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:48"}
+SUP	{"event": "YIELD_TO_LEASE", "lease": "9daa0015-dfd7-496e-aca1-8596934465e7", "t": "2026-10-28T21:39:49"}
+SUP	{"event": "command", "line": "console effect every_system = { limit = { is_rim_system = yes } log = \"TS_RIM_[This.GetName]\" }", "t": "2026-10-28T21:39:50"}
+SUP	{"event": "console_sent", "chars": 87, "opened": true, "t": "2026-10-28T21:39:54"}
+FILE	C:\temp\ns_cmd.txt	console effect every_system = { limit = { is_rim_system = yes } log = "TS_RIM_[This.GetName]" }
+FILE_ERROR	C:\temp\ns_cmd.seen	FileNotFoundError(2, 'No such file or directory')

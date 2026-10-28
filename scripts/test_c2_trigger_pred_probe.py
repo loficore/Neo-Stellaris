@@ -19,6 +19,7 @@ from c2_trigger_pred_probe import (
     decode_entry,
     decode_layout,
     install_decision,
+    overall_verdict,
     parse_c1_result,
     parse_mask,
     parse_stats,
@@ -239,6 +240,26 @@ def test_c1_result_fallback_reads_the_minted_trigger_token():
     assert parse_c1_result("C1 OK: trigger_id=68636 effect_id=68637\n") == 68636
     assert parse_c1_result("C1 trigger FAIL: error=5\n") == 0
     assert parse_c1_result("") == 0
+
+
+def test_overall_verdict_lets_the_poll_window_win():
+    """§76.4 item 2: the script landed after the marker wait, so only the poll window saw it."""
+    assert overall_verdict([
+        ("neo_effect", "script_refused"),
+        ("is_rim_system", "script_refused"),
+        ("poll", "predicate_instantiate_once"),
+    ]) == "predicate_instantiate_once"
+
+
+def test_overall_verdict_prefers_the_first_evidence_window():
+    assert overall_verdict([
+        ("a", "predicate_instantiate_once"),
+        ("b", "predicate_per_system"),
+    ]) == "predicate_instantiate_once"
+
+
+def test_overall_verdict_falls_back_to_the_first_window():
+    assert overall_verdict([("a", "token_absent"), ("b", "no_calls")]) == "token_absent"
 
 
 def test_cmd_file_default_is_the_supervisor_channel():

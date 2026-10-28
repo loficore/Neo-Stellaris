@@ -82,7 +82,7 @@ NEEDED_EXPORTS = (
 POLL_INTERVAL_S = 1.0
 POLL_TIMEOUT_S = 120.0
 SETTLE_S = 3.0
-SCRIPT_WAIT_S = 30.0
+SCRIPT_WAIT_S = 180.0  # game.log is buffered (§76.4): 30 s never saw the marker
 
 EXIT_OK = 0
 EXIT_NOT_EVIDENCE = 1
@@ -239,6 +239,18 @@ def artifact_rows(entries):
     return rows
 
 
+def overall_verdict(per_window):
+    """First evidence verdict wins; otherwise the first window's.
+
+    The poll window counts: a script the game only processes after the marker wait lands
+    there, and reading only the scripted windows turns that into `script_refused` (§76.4).
+    """
+    for _label, v in per_window:
+        if v in EVIDENCE_VERDICTS:
+            return v
+    return per_window[0][1] if per_window else "no_calls"
+
+
 def write_tsv(path, rows, meta):
     directory = os.path.dirname(path)
     if directory:
@@ -369,20 +381,22 @@ def send_script(cmd_file, script, game_log, wait_s):
     log_path = os.path.expanduser(game_log or GAME_LOG)
     offset = _file_size_or_none(log_path)
     if not _send_console(cmd_file, script):
-        return False
+        # The daemon never acknowledged. Do NOT write the next script: an unconsumed
+        # command file gets overwritten, and the window silently never runs (§76.4 item 3).
+        return False, False
     marker = script_marker(script)
     if marker is None:
-        return True
+        return True, True
     deadline = time.time() + wait_s
     while time.time() < deadline:
         if offset is not None:
             try:
                 if marker in (_read_text_from(log_path, offset) or ""):
-                    return True
+                    return True, True
             except OSError:
                 pass
         time.sleep(0.25)
-    return False
+    return True, False
 
 
 def _cleanup(pid, base, exports, settle_s):
@@ -401,7 +415,7 @@ def _cleanup(pid, base, exports, settle_s):
 
 
 def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
-        poll_s, settle_s):
+        poll_s, settle_s, script_wait_s=SCRIPT_WAIT_S):
     base, exports = gate_module(pid, dll_path, NEEDED_EXPORTS)
 
     layout = decode_layout(read_layout_words(pid, base, exports))
@@ -445,30 +459,40 @@ def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
                     "neo_effect, so window A would arm a token nothing can match"
                 )
             arm_token(pid, base, exports, token)
-            sent = send_script(cmd_file, script, game_log, SCRIPT_WAIT_S)
+            delivered, seen = send_script(cmd_file, script, game_log, script_wait_s)
             stats, text = read_stats(pid, base, exports, stats_buf)
             delta = dict(stats)
             for key in ("calls", "token_matched", "x_null"):
                 delta[key] = stats[key] - previous[key]
             previous = stats
-            windows.append({"label": label, "sent": sent, "stats": delta,
-                            "raw": stats, "text": text})
-            print(f"[trigpred] window {label}: sent={sent} delta={delta} raw={text.strip()}")
+            windows.append({"label": label, "sent": seen, "delivered": delivered,
+                            "token": token, "stats": delta, "raw": stats, "text": text})
+            print(f"[trigpred] window {label}: delivered={delivered} marker={seen} "
+                  f"token={token} delta={delta} raw={text.strip()}")
+            if not delivered:
+                print("[trigpred] the daemon never acknowledged the command file — "
+                      "stopping before the next script overwrites it", file=sys.stderr)
+                break
 
         deadline = time.time() + poll_s
         while time.time() < deadline:
             time.sleep(POLL_INTERVAL_S)
         final_stats, final_text = read_stats(pid, base, exports, stats_buf)
-        print(f"[trigpred] final stats: {final_text.strip()}")
+        poll_delta = dict(final_stats)
+        for key in ("calls", "token_matched", "x_null"):
+            poll_delta[key] = final_stats[key] - previous[key]
+        windows.append({"label": "poll", "sent": True, "delivered": True,
+                        "token": None, "stats": poll_delta, "raw": final_stats,
+                        "text": final_text})
+        print(f"[trigpred] poll window: delta={poll_delta} raw={final_text.strip()}")
 
         per_window = []
         for w in windows:
             per_window.append(
                 (w["label"],
-                 verdict(w["stats"], [], systems, refused=not w["sent"]))
+                 verdict(w["stats"], [], systems, refused=not w["delivered"]))
             )
-        evidence = [v for _l, v in per_window if v in EVIDENCE_VERDICTS]
-        overall = evidence[0] if evidence else per_window[0][1]
+        overall = overall_verdict(per_window)
 
     finally:
         cleanup = _cleanup(pid, base, exports, settle_s)
@@ -481,13 +505,20 @@ def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
         "overall_verdict": overall,
         "verdict_a": per_window[0][1] if per_window else "-",
         "verdict_b": per_window[1][1] if len(per_window) > 1 else "-",
+        "verdict_poll": per_window[-1][1] if per_window else "-",
         "stats_a_raw": windows[0]["text"].strip() if windows else "-",
         "stats_a_delta": str(windows[0]["stats"]) if windows else "-",
         "stats_b_raw": windows[1]["text"].strip() if len(windows) > 1 else "-",
         "stats_b_delta": str(windows[1]["stats"]) if len(windows) > 1 else "-",
+        "stats_poll_delta": str(windows[-1]["stats"]) if windows else "-",
         "stats_final": final_text.strip(),
-        "sent_a": int(windows[0]["sent"]) if windows else 0,
-        "sent_b": int(windows[1]["sent"]) if len(windows) > 1 else 0,
+        "delivered_a": int(windows[0]["delivered"]) if windows else 0,
+        "delivered_b": int(windows[1]["delivered"]) if len(windows) > 1 else 0,
+        "marker_a": int(windows[0]["sent"]) if windows else 0,
+        "marker_b": int(windows[1]["sent"]) if len(windows) > 1 else 0,
+        "armed_a": windows[0]["token"] if windows else 0,
+        "armed_b": windows[1]["token"] if len(windows) > 1 else 0,
+        "script_wait_s": script_wait_s,
         "uninstall_rc": cleanup["uninstall_rc"],
         "verify_rc": cleanup["verify_rc"],
         "host_alive": cleanup["host_alive"],
@@ -528,6 +559,10 @@ def main(argv=None):
     parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--cmd-file", dest="cmd_file", default=DEFAULT_CMD_FILE)
     parser.add_argument("--game-log", dest="game_log", default=None)
+    parser.add_argument("--script-wait-s", dest="script_wait_s", type=float,
+                        default=SCRIPT_WAIT_S,
+                        help="how long to wait for the script's game.log marker; the log "
+                             "is buffered, so 30 s was measured to be too short (§76.4)")
     parser.add_argument("--script-file", dest="script_file", default=None,
                         help="file with one console script per line; line 1 uses the C1 "
                              "trigger token, line 2 the official is_rim_system token")
@@ -557,7 +592,7 @@ def main(argv=None):
     if len(lines) > 1:
         scripts.append(("is_rim_system", lines[1], args.rim_token))
     return run(pid, args.dll, scripts, args.systems, args.out, args.cmd_file,
-               args.game_log, args.poll_s, args.settle_s)
+               args.game_log, args.poll_s, args.settle_s, args.script_wait_s)
 
 
 if __name__ == "__main__":
