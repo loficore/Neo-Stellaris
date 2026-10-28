@@ -19,6 +19,7 @@ from c2_trigger_pred_probe import (
     decode_entry,
     decode_layout,
     install_decision,
+    parse_c1_result,
     parse_mask,
     parse_stats,
     script_marker,
@@ -232,6 +233,12 @@ def test_script_marker_stops_before_the_scope_substitution():
     assert script_marker('effect every_system = { log = "TS_NEO_[This.GetName]" }') == "TS_NEO_"
     assert script_marker('effect every_system = { log = "TS_RIM" }') == "TS_RIM"
     assert script_marker("effect every_system = { }") is None
+
+
+def test_c1_result_fallback_reads_the_minted_trigger_token():
+    assert parse_c1_result("C1 OK: trigger_id=68636 effect_id=68637\n") == 68636
+    assert parse_c1_result("C1 trigger FAIL: error=5\n") == 0
+    assert parse_c1_result("") == 0
 
 
 def test_every_inject_site_is_gated():

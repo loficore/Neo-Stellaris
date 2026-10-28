@@ -140,6 +140,22 @@ def install_decision(words):
     return None
 
 
+C1_RESULT_LOG = r"C:\temp\c1_result.log"
+
+
+def parse_c1_result(text):
+    """`C1 OK: trigger_id=<N> effect_id=<M>` -> N, or 0.
+
+    Fallback for a process where `neo_effect` was already registered by an earlier DLL
+    copy: `C1Run` may then fold a duplicate-insert to a non-zero error and return 0, while
+    the token the engine minted is still the one in this log.
+    """
+    import re
+
+    match = re.search(r"trigger_id=(\d+)", text or "")
+    return int(match.group(1)) if match else 0
+
+
 def parse_stats(text):
     """Parse the DLL's one-line k=v stats. Missing or unknown keys are an error, not a
     defaulted zero — a stale DLL that lost a key must not read as 'that counter is 0'."""
@@ -402,50 +418,60 @@ def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
             "do not retry in this process"
         )
 
-    trigger_token = _signed32(harness.call_remote(pid, base, exports["C1Run"]))
-    print(f"[trigpred] C1Run trigger token = {trigger_token}")
+    cleanup = {"uninstall_rc": -999, "verify_rc": -999, "host_alive": 0}
+    try:
+        trigger_token = _signed32(harness.call_remote(pid, base, exports["C1Run"]))
+        print(f"[trigpred] C1Run trigger token = {trigger_token}")
+        if trigger_token <= 0:
+            try:
+                with open(C1_RESULT_LOG, encoding="utf-8", errors="replace") as f:
+                    trigger_token = parse_c1_result(f.read())
+            except OSError:
+                trigger_token = 0
+            print(f"[trigpred] C1Run returned {trigger_token} from the log fallback")
 
-    stats_buf = harness.remote_alloc(pid, STATS_SIZE)
-    baseline, baseline_text = read_stats(pid, base, exports, stats_buf)
-    print(f"[trigpred] baseline: {baseline_text.strip()}")
+        stats_buf = harness.remote_alloc(pid, STATS_SIZE)
+        baseline, baseline_text = read_stats(pid, base, exports, stats_buf)
+        print(f"[trigpred] baseline: {baseline_text.strip()}")
 
-    windows = []
-    previous = baseline
-    for label, script, token in scripts:
-        if token is None:
-            token = trigger_token
-        if token <= 0:
-            raise SystemExit(
-                "C1Run did not return a trigger token — the DLL could not register "
-                "neo_effect, so window A would arm a token nothing can match"
+        windows = []
+        previous = baseline
+        for label, script, token in scripts:
+            if token is None:
+                token = trigger_token
+            if token <= 0:
+                raise SystemExit(
+                    "C1Run did not return a trigger token — the DLL could not register "
+                    "neo_effect, so window A would arm a token nothing can match"
+                )
+            arm_token(pid, base, exports, token)
+            sent = send_script(cmd_file, script, game_log, SCRIPT_WAIT_S)
+            stats, text = read_stats(pid, base, exports, stats_buf)
+            delta = dict(stats)
+            for key in ("calls", "token_matched", "x_null"):
+                delta[key] = stats[key] - previous[key]
+            previous = stats
+            windows.append({"label": label, "sent": sent, "stats": delta,
+                            "raw": stats, "text": text})
+            print(f"[trigpred] window {label}: sent={sent} delta={delta} raw={text.strip()}")
+
+        deadline = time.time() + poll_s
+        while time.time() < deadline:
+            time.sleep(POLL_INTERVAL_S)
+        final_stats, final_text = read_stats(pid, base, exports, stats_buf)
+        print(f"[trigpred] final stats: {final_text.strip()}")
+
+        per_window = []
+        for w in windows:
+            per_window.append(
+                (w["label"],
+                 verdict(w["stats"], [], systems, refused=not w["sent"]))
             )
-        arm_token(pid, base, exports, token)
-        sent = send_script(cmd_file, script, game_log, SCRIPT_WAIT_S)
-        stats, text = read_stats(pid, base, exports, stats_buf)
-        delta = dict(stats)
-        for key in ("calls", "token_matched", "x_null"):
-            delta[key] = stats[key] - previous[key]
-        previous = stats
-        windows.append({"label": label, "sent": sent, "stats": delta,
-                        "raw": stats, "text": text})
-        print(f"[trigpred] window {label}: sent={sent} delta={delta} raw={text.strip()}")
+        evidence = [v for _l, v in per_window if v in EVIDENCE_VERDICTS]
+        overall = evidence[0] if evidence else per_window[0][1]
 
-    deadline = time.time() + poll_s
-    while time.time() < deadline:
-        time.sleep(POLL_INTERVAL_S)
-    final_stats, final_text = read_stats(pid, base, exports, stats_buf)
-    print(f"[trigpred] final stats: {final_text.strip()}")
-
-    per_window = []
-    for w in windows:
-        per_window.append(
-            (w["label"],
-             verdict(w["stats"], [], systems, refused=not w["sent"]))
-        )
-    evidence = [v for _l, v in per_window if v in EVIDENCE_VERDICTS]
-    overall = evidence[0] if evidence else per_window[0][1]
-
-    cleanup = _cleanup(pid, base, exports, settle_s)
+    finally:
+        cleanup = _cleanup(pid, base, exports, settle_s)
 
     meta = {
         "target_rva": f"{TARGET_RVA:#x}",
