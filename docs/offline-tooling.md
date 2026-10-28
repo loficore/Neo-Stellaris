@@ -221,6 +221,38 @@ vtable 集合里(两张集都只扫 `.rdata`),所以「新集一条都没加」�
 **每一个** run 起点(下限集必须是它的子集,这是构造要求),所以一张已知表的**内部偏移**也会命中。
 `.data` 里的 vtable、以及中途偏移,都是「无法判定」而不是「新集看到的类」。
 
+## 族外边界离线 join(`scripts/join_family_boundary.py`,读 artifact **也**读 exe 拷贝)
+
+### `scripts/join_family_boundary.py [rva_hex ...]`
+
+**用法**:无参时跑段①②③(段③ 的对象 = 段① 的缺席清单);带 RVA 参数时只跑段③,对象就是这些 RVA
+(定靶时用它点名量一个候选的三口径读数)。**退出码**:0 = 读完(含「预期没达成」,读数归读数);
+2 = exe 拷贝找不到或输入表读不到(那是环境问题,不是判据问题)。exe 路径走 `disrva.resolve_exe()`
+的 `NS_STELLARIS_EXE` 候选链。
+
+**它回答的问题只有一个**:§13 那七把各 2,090 次的 exec shim,在不在 CEffect 家族的五张 vtable 里?
+三段口径全部照抄仓库既有读法,脚本不发明新判据:
+
+- 段①:`evidence/xrefs/exec_frame_callers_4_4_4.tsv` 的 28 个 `func_start` 里,哪些出现在
+  `evidence/xrefs/ceffect_vtable_map_4_4_4.txt` 的 `ExecuteActual(slot2)` 列(= 该函数确实是某张 vtable 的
+  slot[2]);缺席的那批才是「静态集合里没登记的候选」。
+- 段②:§13 七把 shim 的 vtable 与家族五张 `0x24B1D98/0x24EAAC0/0x25F4440/0x2606F00/0x2606FE0` 求交集 ——
+  期望空集。
+- 段③:对缺席候选(或点名给的 RVA)跑 §62.2 的三条独立口径:① `.rdata` 内该地址的 8 对齐 LE-qword 命中数;
+  ② 每个命中的前一槽(`hit-8`)是否 `0x1d08520`;③ 命中回退 `0x10` 当 vtable 基址,是否落在 map 的 1,805 个基址里。
+
+**口径边界(写进 §71 时逐字带上)**:**map 是下限,不是全量** —— 「不在 map」只能写「不在这份静态集合里」,
+不能写「族外没有另一份表」。`join_family_boundary` 的 `join` 指三张表的连接,不是 SQL 的 JOIN。
+map 与 census 里的地址一律是 **RVA**;只有扫 `.rdata` 字节时才加 `BASE`(`0x140000000`)。
+
+**它只判「形状」,不数调用次数**:逐把计数是 `execspy.py` 那条 census 通道的活(§74);本工具答的是
+「哪些函数是某张 vtable 的 slot[2]」这一**身份**问题。两者的数不互相替代。
+
+**旧路径**:本文件 2026-10-28 从 `scripts/scratch/2026-10_live_window_shim_witness/join_family_boundary.py`
+提升上来(**同 basename**);**原件冻结留档、字节不动** —— 取证卷 §71 的正文引的是那条路径,而 `evidence/`
+是 append-only(移走或改名会让取证记录指向不存在的文件)。副本与原件的差别只有两处,都是路径:
+仓库根少上两层、docstring 的「跑法」那一行;判据逻辑逐字未动。
+
 ## 站点离线反解(`scripts/exec_frame_sites.py`,读 artifact **也**读 exe 拷贝)
 
 ### `scripts/exec_frame_sites.py --probe <tsv> [--census <tsv>] [--out <tsv>]`
@@ -634,7 +666,7 @@ python C:/temp/c2_selfabort_repro.py C:/temp/<新文件名>.dll      # 退出码
    `VERDICT: inconclusive`,它对"这份产物会不会自杀"**什么都没证明**,不要当成阴性结果读
    (判据是纯函数 `child_loaded_the_dll`,120 s 超时也走同一条 `inconclusive` 形状)。
 
-### 实机点名 shot 的上线前置（两条，§67 踩过；对 `c2_exec_probe.py` / `c2_scope_probe.py` / `c2_donor_probe.py` 三个 shot 工具通用）
+### 实机点名 shot 的上线前置（两条，§67 踩过；对 `c2_exec_probe.py` / `c2_scope_probe.py` / `c2_donor_probe.py` / `c2_witness_probe.py` / `c2_shim_probe.py` 这些 shot 工具通用）
 
 1. **上线证明 = 覆盖 + 哈希对账，不是「远端有这个文件」**。`ren`(以及 `Copy-Item` 不带 `-Force`)在
    目标已存在时**静默失败**，长度照样非 0 ⇒ 「远端有文件且有长度」证明不了上线的是本场字节。正确动作：
@@ -1224,6 +1256,78 @@ predicate detour 还 armed)/ `-3` stellaris.exe 未找到 / `-4` 目标已被 ho
 `python3 -m pytest scripts/test_c2_witness_probe.py -q` 覆盖(**16 条**:donor 的 14 条平移换靶 +
 `test_verdicts_has_no_tier3_value` + `test_prologue_bytes_pinned`),无游戏、无 Windows API、零 shot。
 
+### `scripts/c2_shim_probe.py [dll] [--mask 0] [--poll-s 120] [--settle-s 2] [--out C:/temp/c4_shim_probe.tsv]`
+
+第四把 guard,**族外证人**。靶不是族内的 `0x3AFD30` / `0x3B01A0`,而是 structures §13 那**七把各 2,090 次**的
+exec shim 里的第一把 `0xCC4220`。**已运行过两窗**(2026-10-27 取证卷 §72:频率窗 20 s `calls=0`,正式窗 120 s
+`calls=2016` / `h0=2016` / `unmatched=0` ⇒ `shim_hit_named`,命中表首 `0x25460F0`,`caller_rva` 全 =
+base Execute `0x1D08520` + 0x5A),产物 `evidence/logs/shim_probe_4_4_4.tsv`。运行需要本次会话内点名,
+见 `docs/roadmap.md` 的授权表。默认 DLL `C:\temp\sqjs_c4.dll`,argv 与 donor/witness 逐字同形。
+
+**它与 donor / witness 的关系**:donor 钩 `0x3AFD30`(**slot[1]**,Execute 的覆写),witness 钩 `0x3B01A0`
+(**slot[2]**,派发位);本仪器钩 `0xCC4220` —— **也是 slot[2]**,但它那张 vtable `0x25460F0` **不在家族五张**
+里(§71.3 段②:七张 × 五张 = 空集)。所以**差的是表,不是派发位**;三者的读数**不共源,不许互相引用**。
+
+**它读谁的字节**:唯一一次引擎内存读是 `[self+0]`,拿它的 RVA join `OUT_OF_FAMILY_VTABLES`
+**七张**(`src/dll/c2/shim_witness_probe.zig:52`);`ctx_ptr` / `a3` / `a4` 只按**值**记录,一个都不解引用
+(陈旧指针最多让驱动侧一次读返回 `None`)。函数体恒转发原函数;引擎字节同样只在 install 的 JMP、
+`removeHook` 的还原、`restoreTarget` 三处被写。前置指纹是 `0xCC4220` 的 24 字节原前序
+(`48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08`),逐字节不符即 `-5` 拒装;
+围栏 `scripts/test_c2_shim_probe.py` 把它和七张表钉回它们的权威(exe 逐字节 + 取证卷 §71.1)。
+
+**它与 census 是两个口径**:`calls` 是 **`0xCC4220` 这一个函数被调了多少次**(本 guard 只 patch 它一个),
+**不是** base Execute 的派发次数;`table_hits` 是逐次原子计数(`shim_witness_probe.zig:184`),早于采样门
+⇒ 比例只从 counters 取,频率先按 20 s 窗口的 `calls` 增量测再定分母。`unmatched` 吸收**七张表之外**的
+对象 vtable。
+
+**门序**:与 donor/witness 同形 —— `resolve_pid → resolve_base_address → sha 门 → gate_module(NEEDED_EXPORTS)
+→ Layout → Reset → SetMask → Install → 轮询 Stats → Drain → write_tsv → finally: Uninstall → Verify →
+settle → assert_game_alive`。`NEEDED_EXPORTS` **九名**(`C2Sanity` + 八个
+`C4ShimProbe{Install,SetMask,Uninstall,Verify,Layout,StatsInto,DrainInto,Reset}`),缺一名即不注入 ——
+从文件核,不从进程核。
+
+**依赖码**:前缀换成 `C4ShimProbe`:`Install` `0` / `-2`(本进程已装好**或** predicate detour 还 armed)/
+`-3` stellaris.exe 未找到 / `-4` 目标已被 hook / `-5` 指纹不符 / `-6` patch 过宽 / `-1` 其余;
+`Uninstall` `0` / `-7`(打印 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`,放弃该进程);`SetMask` 恒 `0`
+(任何 u64 都合法,`mask=0` 的语义是「每条调用都记」,见 `scripts/c2_shim_probe.py:388-394`);
+`Verify` 原样透传 `-1/-2/-3`。`-2` **不重试**,唯一杠杆是新进程。清理段之后**绝不 `FreeLibrary`**。
+
+**layout 词**:`entry=48 stats=64 ring=256 mask=0 version=1` —— `stats` 那 64 B 是 `Stats` 结构体
+(14 个键:`calls` / `samples` / `invalid_self` / `unmatched` / `h0`…`h6` / `patch_size` / `installed` / `mask`),
+其中 `table_hits` 是 `[7]u32` ⇒ 比 donor/witness 的同族表多两格。
+
+**verdict 值域**(`VERDICTS` 是唯一权威;退出码 0 只给两个 hit 证据档且清理成功):
+
+| verdict | 读数 | 这是什么 |
+|---|---|---|
+| `shim_hit_named` | 某个 `hN>0` 且 `installed==1` | 七张族外表之一被命中,并**指名哪张**(`table_rvas()[N]`)—— §57.4 第三档要的「执行确实发生」形态 |
+| `shim_hit_unknown_table` | `calls>0`、`installed==1`、七个 `h` 全 0、`unmatched>0` | 七张表之外的 `[self+0]` ⇒ **交给静态查表的接力**(环 `self_vtable_rva` + `#meta` 的 span 三分区) |
+| `no_calls_inconclusive` | `calls==0` | **ENVIRONMENT**。安静 ⇒ 只说「本窗口没观测到」,**不是**「这一族不执行」 |
+| `instrument_broken` | `invalid_self>=calls` 且其余计数全 0 | 读不出 `[self+0]`,本仪器对本次观测没有陈述能力 |
+| `counter_desync` | `calls>0` 但没有一个计数器对上;或 `installed!=1`;或整跑没有一条完整 stats 行 | 记账坏了。两条代码档的门就在这一档前面 |
+
+**四条判读陷阱(族外证人版)**:
+
+1. **形状 ≠ 身份。** 七张表的命中是**形状**判据(§57.5 第 2 条):「命中表 0」不等于「这个类是 X」;
+   「不在七张里」≠「族外没有另一份表」—— 家族五张是**有界集合**,map 的 1,805 是**下限**(AGENTS 段3 第 3 行)。
+2. **`calls>0` ≠ per-system。** §13 的 2,090 是 2026-09-29 那次场景的读数,原话要求先用换场景 / 换银河大小
+   做相关性(`correlate … before claiming it`);复采同场景只算重复确认。**`calls=2016` 也只是
+   `0x25460F0` 这一把在 120 s 内被调 2,016 次,不是族外执行总数。**
+3. **七张表是下限,不是族外全集。** join 表只有七张;表外的对象 vtable 全落 `unmatched`。`unmatched=0` 的
+   确切含义是「被采样对象的 vtable 全在七张之内」—— 不是「世界里只有这七张表」。
+4. **`h1..h6 = 0` 不携带其余六把的信息。** 本 guard 只 patch `0xCC4220` **一个**函数,而七张表里只有
+   `0x25460F0` 的 slot[2] 是它 ⇒ `h1..h6=0` 是**仪器口径的结构决定**(前提:没有第二张表也把它放在 slot[2];
+   该前提的离线支撑是 §71.3 的 `.rdata` hits=1 —— 那是**下限、只覆盖 `.rdata`**,运行时复制出的 vtable 由窗内
+   `unmatched=0` 闭合)。它**不**回答「另外六把 shim 跑没跑」—— **那由 census 逐把计数回答(§74)**;
+   guard 的 `h1..h6` 只回答「本次采样对象的 vtable 是不是 `0x25460F0`」这一**身份**问题。
+   完整论证见取证卷 **§72.8**。
+
+`run()` 同样**先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败,不许吃掉已拿到的读数。
+判读纯函数(`decode_layout` / `decode_entry` / `decode_stats` / `verdict_for` / `table_rvas` / `write_tsv` /
+`partition_unmatched` / `build_meta`,常量 `VERDICTS` / `EVIDENCE_VERDICTS` / `NEEDED_EXPORTS`)由
+`python3 -m pytest scripts/test_c2_shim_probe.py -q` 覆盖(**15 条**:donor 的 14 条平移换靶 +
+`test_prologue_bytes_pinned`),无游戏、无 Windows API、零 shot。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
@@ -1416,6 +1520,11 @@ RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.
 **DLL 路径**:`NS_LIVE_DLL` 覆盖,缺省仍是 `C:\ns\stellaris_quickjs.dll` —— 这一族与证人/donor 那族的
 `C:\temp\sqjs_c4.dll` 是两份字节,两次读数之间的差可能来自靶子也可能来自字节本身。
 
+**与族外证人 guard 是两个口径**:census 记的是**我们 DLL 的 `exec_hook` 在 base Execute 上的全量派发**,
+**逐把计数**(那是 §13「七把各 2,090」那种数);`c2_shim_probe.py` 只钩 `0xCC4220` **一个**函数,
+它的 `h0..h6` 只回答「本次采样对象的 vtable 是不是 `0x25460F0`」这一**身份**问题。两边的数**不可并排比**,
+也不许互相除 —— 详见 `c2_shim_probe.py` 那一节的陷阱 4 与取证卷 §72.8。
+
 **判读陷阱(本地编号 1–4)**:
 
 1. **`hist_overflow > 0` ⇒ 计数不完整**,这次的任何「N distinct shims」都是**截断假象**(§13 第一轮
@@ -1432,6 +1541,19 @@ RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.
 **顺序:本工具压最后**(窗口计划 Task 10)。它是唯一武装 `base Execute` detour 的一发,之后任何 `[self+0]`
 join 读数都会来自一个热路径归我们所有的进程 —— 那一刻起证人/donor/scope 的 `[self+0]` 都不再干净。
 `hist_overflow == 0` 是这一发的硬门。
+
+**§74 复采口径单**(下一次 census 复采照这张单子执行;写死是为了不在实机窗口里临场判):
+
+1. **产物名**:`evidence/logs/exec_shim_census_<运行日>.txt` —— **不要预钉日期**(没跑过的那天会指向不存在的
+   文件);现存**基线**在 `evidence/xrefs/exec_shim_census_2026_09_29.txt`(实机新产物才进 `logs/`,基线留在 `xrefs/`)。
+2. **硬门**:`hist_overflow == 0`(见上面陷阱 1 与「顺序」段末句)。**禁令**:不得拿 guard 的 `calls`
+   (`c2_shim_probe.py` / donor / witness 那几把)当 census 计数 —— 那是**另一个口径**(见上面「两个口径」那段)。
+3. **并排两列**:七把 shim 的**新计数**与 §13 的 `2,090 each` **并排**。**2,090(shim 计数)与 783/787 不是
+   同一量纲** —— 783/787 是 §55.4 的 **campaign_gate marker 条数**(787 个 system、783 条不同名字,取证卷 §55.4),
+   §55.4 那条与 shim 计数**不可混用**。
+4. **同场景 vs 换场景**:判据原文是 `docs/roadmap.md` 的 B2 行「**换一个场景仍是 2,090 ⇒ per-system 循环**」。
+   同一场景重跑**只算重复确认**,不算判据达成 —— 措辞里必须写明本轮是同一场景还是换了场景。
+5. **措辞模板**(三行固定格式):「本轮是<同一场景/换了场景>」「读数 = <逐把计数>」「判据是否达成 = <是/否,理由>」。
 
 ### `scripts/windows/popup_*.py` —— 弹窗身份三件套
 
