@@ -38,8 +38,10 @@ is the step that requires it — `zig build test` does not.
 历史计数:`293/293`,until `effects/id_mapper.zig` and its 21 tests were retired,
 then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不要拿这两个旧数当现在的门限。
 
-**当前基线(2026-10-26 issue #18 win32-link 计划实施,任务 5 复测于 commit `78fd294`)**:
-`zig build test --summary all` → `Build Summary: 29/29 steps succeeded; 599/599 tests passed`,退出码 **0** ——
+**当前基线(2026-10-28 族外证人窗口收口,复测于 commit `f31f4cd` 之后)**:
+`zig build test --summary all` → `Build Summary: 29/29 steps succeeded; 636/636 tests passed`,退出码 **0** ——
+(2026-10-26 那句 `599/599` 保留在下面作历史:它在 `78fd294` 上是真的,之后 world-state 与族外证人
+两个窗口各加了测试,数字涨到 636 —— 围栏/测试只增不减,拿旧数当门限会把绿读成红。)
 **failed 步归零**。上面 Host caveat 那句「1 个 failed 是环境事实」的判读**已被本次实施作废**:exports 根
 在宿主 target 上不再引用 kernel32(comptime 守卫,本计划四次 shot `a48965e`/`92bfdf3`/`0b09863`/`78fd294`),
 现在真跑;裁定 **P15 那条「这一步记为绿」自此不再需要**(P15 文本住在不入库的私有归档,此处不复述)。
@@ -1535,7 +1537,7 @@ RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.
 它的 `h0..h6` 只回答「本次**全部 2,016 次调用**的对象 vtable 是不是 `0x25460F0`」这一**身份**问题。两边的数**不可并排比**,
 也不许互相除 —— 详见 `c2_shim_probe.py` 那一节的陷阱 4 与取证卷 §72.8。
 
-**判读陷阱(本地编号 1–4)**:
+**判读陷阱(本地编号 1–5)**:
 
 1. **`hist_overflow > 0` ⇒ 计数不完整**,这次的任何「N distinct shims」都是**截断假象**(§13 第一轮
    315,302 次调用就是溢出那一轮,structures :374-382)。出现它就把读数当环境样本记,不写 per-system 结论。
@@ -1547,6 +1549,16 @@ RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.
 4. **模块名跟着注入走**:`DLL_NAME` 在 `execspy.js` 里是 RPC 解析导出的依据,驱动把 `NS_LIVE_DLL` 的
    basename 以 `NS_DLL_NAME` 注入(`execspy.py`);只改 `NS_LIVE_DLL` 而不改它 ⇒ 装进去的是 A、找的是 B,报
    `stellaris_quickjs.dll is not loaded`。
+5. **包着它跑的那个 `.cmd` 必须是纯 ASCII**。2026-10-28 的第一次复采就是死在包装上:10-27 备好的
+   `census_run.cmd` 带 UTF-8 中文 `rem` 行,cp936 的 `cmd.exe` 把那些字节当命令执行
+   (`'…顺序纪律…docs' 不是内部或外部命令`),python 一次都没起来。用 `census_run_ascii.cmd`;
+   这与 `session_bridge.shim_text()` 里 `text.encode("ascii")` 挡的是同一个失败,只是那份 `.cmd` 没走那个函数。
+
+**通道与时序**:本工具**不需要** `session_bridge`(它只 attach 进程,不读窗口)。时序是**三方**的:
+人(或 `just game`)先 `pause` 给静默窗 → 驱动装 → 驱动打印 `RESUME THE GAME NOW` → 人 `unpause` →
+60 s → 人 `pause` → 驱动拆。两个方向紧邻时,`just game unpause` 可能被单行命令通道吞掉一次
+(`cmd=unpause` 已记进事件日志而 `STATUS` 仍 `want=paused`)⇒ **观测窗的起点以驱动打印的
+`live: calls X -> Y` 为准**,不是以你发命令的时刻为准(§74.1)。
 
 **顺序:本工具压最后**(窗口计划 Task 10)。它是唯一武装 `base Execute` detour 的一发,之后任何 `[self+0]`
 join 读数都会来自一个热路径归我们所有的进程 —— 那一刻起证人/donor/scope 的 `[self+0]` 都不再干净。
@@ -1847,13 +1859,27 @@ session 0 里只枚举到 **1 个**顶层窗口,而 `stellaris.exe` / `explorer.
 ```
 just win "python C:/temp/session_bridge.py C:/temp/ns_world.py status"
 just win "python C:/temp/session_bridge.py C:/temp/ns_world.py assert-ready --action install --guard shim"
+# 长的实机 shot 要把超时抬过采样窗(默认 120 s 不够):
+just win "python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_scope_probe.py C:/temp/sqjs_c4.dll --poll-s 120 …"
 ```
+
+**它还是 shot 驱动的必经之道(2026-10-28 实证)。** `c2_scope_probe.gate_module` 在 `inject_dll` **之前**
+调 `world_probe.gate_install`,而那道门要**读窗口**来证明前提;从 SSH(session 0)直接跑驱动,门看到的是
+`NO_GAME`,于是**拒装**(exit 2)—— 这是那道门第一次真的挡住东西。所以 scope/donor/witness 这类要过门的
+驱动一律经 bridge 跑;`execspy.py` 是例外(它只 attach 进程,不需要窗口,见它那一节)。
+
+`--timeout-s` 是 2026-10-28 补的:默认 120 s 与 scope shot 的 `--poll-s 120` 相等,哨兵必然迟到,
+而桥的超时语义是「**不知道**发生了什么」—— 一个 120 s 的 shot 不许读成超时。缺省仍 120 s。
 
 它写一个 **ASCII** 的 `.cmd`(cp936 的 `cmd.exe` 按控制台代码页解析 `.cmd`,非 ASCII 路径
 会让任务在运行时静默死掉,所以在这里就抛),把命令输出重定向到文件、把 `EXIT=` 哨兵追加在
 最后,`/run /I` 点火,等哨兵、删任务、打印输出与退出码。哨兵在输出之后,所以读的时候按
 **最后一个** `EXIT=` 切分,不会被命令自己打印的内容骗到;拿不到哨兵返回 4(**不知道**
 发生了什么,不是成功)。
+
+**读回那一半也有围栏了。** 2026-10-28 之前只测 shim 文本;`run_interactive` 读回 `OUT_PATH` 时
+漏了 `open` 的 `mode`,实机上炸的是 `TypeError: _open_file() missing 1 required positional
+argument: 'mode'` —— 现在 `test_run_interactive_reads_the_sentinel_back` 用 RED→GREEN 钉住它。
 
 **它有意不做成 `just` 食谱。** `just ns` 会是 `game` 之外的第二条改世界通道,而
 `scripts/test_scripts_layout.py` 的 R-verbs 围栏只治理 `game` 那一条。要开这条通道,应该

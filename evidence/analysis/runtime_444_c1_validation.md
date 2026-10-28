@@ -7201,3 +7201,97 @@ scp Windows_Jiaolong:C:/temp/c4_scope_d2_27.tsv evidence/logs/c4_scope_d2_27_202
 `evidence/logs/c4_scope_live_2026_10_28.log`(158 行,含 `CALLERS` / `CHAIN` / 逐源 stdout)。
 清理:`C2ScopeProbeUninstall rc=0`、`C2ScopeProbeVerify rc=0`(engine bytes intact)、`host alive`。
 **一进程一次 install 额度已用尽** —— pid 3604 之后不许再装 scope probe,重打要新进程(点名)。
+
+## §74 B2 复采:七把 shim 从 **2,090** 变 **2,494**,七把之间仍严格相等 —— 「仍是 2,090」这条判据按原文不成立,而「一个彼此相等、却随窗口变的量」比常数更有信息(2026-10-28,点名 ×1)
+
+**授权级别**:点名。同一句「**开跑**」覆盖本窗两发;这一发是计划 Task 10 明写的**最后一发**(它武装
+`0x1D08520` 的 detour,装上之后任何 `[self+0]` join 读数都不再干净 ⇒ §73 排在它之前,并已拆净)。
+
+**判据出处**:roadmap 段4 的 B2 条原文 —— 「判据 = 换一个场景仍是 2,090 ⇒ per-system 循环」;
+口径单(产物名 / `hist_overflow==0` 硬门 / 与 §13 并排两列 / 同场景 vs 换场景的措辞模板)在
+`docs/offline-tooling.md` 的 execspy 一节。**口径边界照旧**:族外证人 guard 的 `calls` **不是** census
+计数(§72.8) —— 本节只用 census 这条通道。
+
+**通道与一处工具缺陷**:`execspy.py` 走 `ssh` 直连(它只 attach 进程,不需要桌面;与 §73 不同)。
+10-27 备好的 `census_run.cmd` **第一次执行就坏了**:它的 `rem` 行是 UTF-8 中文,cp936 的 `cmd.exe`
+把那些字节当命令执行(`'…顺序纪律…docs' 不是内部或外部命令` / `'_overflow' 不是内部或外部命令`)——
+这正是 `session_bridge.shim_text()` 用 `text.encode("ascii")` 挡住的那种失败,只是那份 `.cmd` 没走那个函数。
+本发改用 `census_run_ascii.cmd`(纯 ASCII,随本轮提交)。
+
+**时序**:game 先 `pause`(静默窗)→ execspy 装 detour → 人/驱动 `unpause` → 60 s 观测 → `pause` →
+`ExecHookUninstall`。本发在这一串里踩到一条**通道事实**:`just game pause` 之后 30 s 内发的
+`just game unpause` 被静默吃掉一次(`cmd=unpause` 已记进事件日志,而 `STATUS` 仍是 `paused
+want=paused`),再发一次才生效 —— 命令是**单行文件通道**,两个方向紧邻时后写的那行可能落在守护进程
+两次 tick 之间。所以观测窗的起点不是「装好那一刻」,是**计数器真的动了那一刻**(execspy 自己就是这么
+判的:`live: calls 0 -> 84, observing 60s`)。
+
+### §74.1 门与清理(硬门逐条)
+
+```
+ExecHookInstall -> 0                       (patch_size 16,verify -1 = 我们的 JMP 在位)
+60 s 观测窗 stats: calls=339504 samples=663 invalid=474 hist_overflow=0
+Waiting for base Execute to go silent ... idle at calls=341998
+ExecHookUninstall -> 0
+ExecHookVerify -> 0                        (engine bytes intact at the target)
+post-uninstall probe: 0 calls at base Execute in 1.5s (engine silent — resume to confirm)
+EXIT:0
+```
+
+`hist_overflow = 0` **成立** ⇒ 直方图是完整普查(§13 定下的硬门:>0 就只能当环境样本)。
+`invalid 474 / 339,504 = 0.14 %`,与 §13 的 473/316,468 = 0.15 % 同量级;环(`samples=663`,
+drain 64 条)不参与判据。
+
+### §74.2 与 §13 并排两列(同一条通道,不同进程)
+
+| 键 | §13(2026-09-29) | 本发(2026-10-28) |
+|---|---|---|
+| 观测窗 | ~60 s | 60 s(`--poll` 语义同) |
+| `calls` | 316,468(≈5,300/s) | **339,504**(≈5,658/s) |
+| distinct shims | 291 | **282** |
+| `invalid` | 473(0.15 %) | 474(0.14 %) |
+| `hist_overflow` | 0 | **0** |
+| 七把 shim | **2,090 each** | **2,494 each** |
+| 表首 shim | `0x33D410` ×54,003 | `0x33D410` ×**58,027** |
+
+### §74.3 七把逐把:一个都不少、彼此仍然严格相等、值变了
+
+```
+0x0974840 -> 2,494     0x0cc4220 -> 2,494     0x0de40c0 -> 2,494
+0x0e58d80 -> 2,494     0x0e96e90 -> 2,494     0x0e98720 -> 2,494     0x0e9b580 -> 2,494
+```
+
+七把的 vtable(`0x250E188`/`0x25460F0`/`0x254FA18`/`0x2551620`/`0x2553140`/`0x2553178`/`0x25531E8`)
+在直方图里逐张都在,阈值判据(§71 的「七张之内」)照旧成立。
+
+**比值值得记**:七把 2,090→2,494 是 **×1.193**,而表首 shim 54,003→58,027 是 **×1.074**。两组量不在
+同一个节奏上 ⇒ 支持 §13 结论 2 的读法(七把绑在「一次集合遍历」上,表首那批绑在「每帧评估」上),
+而**削弱**「2,090 是帧数/速度的产物」这一读法 —— 若是同一个帧节奏,两组比值应当一致。
+
+### §74.4 判据达成与否,按原文说
+
+- **判据原文要求「仍是 2,090」⇒ 本发不达成**:七把是 2,494,不是 2,090。
+- **但读数不是空的**:七把**彼此**仍严格相等(2,494 ×7),而它们的绝对值随窗口变 ⇒ 「一个恰好相等、
+  又随世界变的量」正是「同一集合被完整走了一遍」的形状;**「2,090 是代码常量」这一读法被本发排除**。
+- **不能说的是**:「per-system 成立」。要落这条还得一次**已知星系数**的对照 —— 要么在同一个窗口里读到
+  当前 galaxy 的 system 数,要么换 galaxy size 再采一发(两条都还在「下一次点名」的口子里)。
+- **场景这一格必须诚实**:本发**没有记录存档名**,进战役靠 launcher 自带 `--continuelastsave`;所以
+  「换了一个场景」**没有被验证**,能确定的只有:不是同一个进程(pid 3604 vs §13 那次)、相隔 3.5 周。
+  两种可能都写清:
+  - 若**换了存档/星系规模**:2,090→2,494 与「集合大小随世界变」一致,方向指向 per-system,仍不是证明;
+  - 若**仍是同一存档**:星系数没变而计数变了 ⇒ 这个量**不是星系数**,而是被遍历对象数(随事件/日期变),
+    per-system 的读法反而**被削弱**。
+  本发分不开这两支 —— 这是下一次复采要带上的第一格(存档名 + 星系数),不是本发能补的。
+
+### §74.5 复现命令
+
+```bash
+just game pause                                   # 静默窗(先把 detour 装上)
+just win "C:/temp/census_run_ascii.cmd"           # NS_LIVE_DLL=C:\temp\sqjs_c4.dll; execspy.py 60
+just game unpause                                 # 计数器动了才起观测窗
+# 60 s 后:
+just game pause                                   # 让 uninstall 等到静默
+scp Windows_Jiaolong:C:/temp/c4_census_run.txt evidence/logs/exec_shim_census_2026_10_28.txt
+```
+
+产物:`evidence/logs/exec_shim_census_2026_10_28.txt`(329 行,直方图 282 行 + 64 条 drain 记录)。
+**顺序纪律已执行**:本发之后本窗不再有任何 `[self+0]` join 读数;装拆均 `rc=0`、`Verify=0`、host 存活。

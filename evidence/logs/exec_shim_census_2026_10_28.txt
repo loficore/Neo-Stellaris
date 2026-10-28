@@ -1,0 +1,329 @@
+pid=3604  observe=60s
+FreeLibrary: 1
+LoadLibraryW -> 0x7ffb52cb0000
+module: {'loaded': True, 'base': '0x7ffb52cb0000'}
+layout: {'entry': 88, 'hist': 16, 'stats': 48, 'ring': 1024, 'hist_len': 1024}
+probe: Frida Interceptor saw 0 calls at base+0x1d08520 in 1.5s
+  quiescent -> installing
+ExecHookInstall -> 0
+while installed -> verify: -1 (expect -1), stats: {'calls': '0', 'samples': '0', 'invalid': '0', 'hist_overflow': '0', 'img_base': '140699223916544', 'patch_size': '16'}
+RESUME THE GAME NOW — waiting for the counter to actually move (300s max)...
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  live: calls 0 -> 84, observing 60s
+stats: {'calls': '339504', 'samples': '663', 'invalid': '474', 'hist_overflow': '0', 'img_base': '140699223916544', 'patch_size': '16'}
+histogram: 282 distinct shims, counted over every call
+  shim   0x33d410  vtable  0x24b3050  x58027
+  shim   0x33c940  vtable  0x24c69e8  x39639
+  shim   0x34dad0  vtable  0x24b3690  x36208
+  shim   0x230990  vtable  0x24b1c88  x31238
+  shim   0xde0050  vtable  0x250e4b0  x21142
+  shim   0xbd4120  vtable  0x2541268  x20230
+  shim   0xa67200  vtable  0x24ec7c8  x12021
+  shim   0x6ec640  vtable  0x25097c0  x10102
+  shim   0x7fbe60  vtable  0x24b8468  x8829
+  shim   0xe6c230  vtable  0x2552788  x8334
+  shim   0x3caef0  vtable  0x24ec788  x7691
+  shim   0x6c04b0  vtable  0x2508678  x4540
+  shim   0xd05820  vtable  0x2546c98  x4330
+  shim   0xde0430  vtable  0x254f720  x3950
+  shim   0xb62130  vtable  0x2517180  x2906
+  shim  0x1bccf30  vtable  0x26d04c8  x2792
+  shim  0x1bcd120  vtable  0x2522c40  x2792
+  shim   0xe99c10  vtable  0x254a190  x2565
+  shim   0xcc4220  vtable  0x25460f0  x2494
+  shim   0x974840  vtable  0x250e188  x2494
+  shim   0xde40c0  vtable  0x254fa18  x2494
+  shim   0xe98720  vtable  0x25531e8  x2494
+  shim   0xe58d80  vtable  0x2551620  x2494
+  shim   0xe9b580  vtable  0x2553178  x2494
+  shim   0xe96e90  vtable  0x2553140  x2494
+  shim   0xe586d0  vtable  0x24c52b0  x2494
+  shim   0xe59b50  vtable  0x25515b0  x2494
+  shim   0xe99c60  vtable  0x25531b0  x2494
+  shim   0xdec280  vtable  0x254fa58  x2494
+  shim   0xcc8bd0  vtable  0x2545e40  x2494
+  shim   0x8d3150  vtable  0x24b5480  x2442
+  shim   0x87e9c0  vtable  0x2516c00  x2096
+  shim   0xe84100  vtable  0x2552a70  x1626
+  shim   0xddce30  vtable  0x2552a18  x1626
+  shim   0x3768e0  vtable  0x24b86f8  x1406
+  shim   0x377920  vtable  0x2506ee8  x1352
+  shim   0x396460  vtable  0x24e9068  x1330
+  shim  0x1bce7e0  vtable  0x24b39e8  x1072
+  shim   0x84e820  vtable  0x2515c78  x851
+  shim   0xeca810  vtable  0x254faf0  x843
+  shim   0x8af530  vtable  0x2519948  x787
+  shim   0x87e5e0  vtable  0x2516b78  x757
+  shim   0xb5cde0  vtable  0x250e1f8  x587
+  shim   0x7160b0  vtable  0x250e9b8  x537
+  shim   0xe54470  vtable  0x24b3f30  x517
+  shim   0xe526d0  vtable  0x24b3ef8  x517
+  shim   0x240640  vtable  0x24b3268  x497
+  shim   0xd8a820  vtable  0x25435d8  x475
+  shim   0x8ae7e0  vtable  0x24b54d8  x454
+  shim   0x7fe220  vtable  0x2513128  x449
+  shim   0x39bb30  vtable  0x24b8888  x432
+  shim   0x946650  vtable  0x24bf530  x418
+  shim   0x3f4d90  vtable  0x24c2858  x410
+  shim   0x6c2510  vtable  0x2508d50  x400
+  shim   0x6c32e0  vtable  0x2508d18  x400
+  shim   0x8d85e0  vtable  0x251a7b0  x391
+  shim   0x813ea0  vtable  0x2514550  x379
+  shim   0x82e1f0  vtable  0x25144a8  x379
+  shim   0x468b20  vtable  0x24bcf70  x308
+  shim   0x7ee4a0  vtable  0x24b8670  x264
+  shim  0x1760840  vtable  0x25e7650  x258
+  shim   0xd52ab0  vtable  0x254b818  x249
+  shim   0xb5f290  vtable  0x250e230  x248
+  shim   0x7f3200  vtable  0x250e110  x248
+  shim   0x7d06b0  vtable  0x2511d40  x245
+  shim   0xe8a330  vtable  0x24b4068  x230
+  shim   0xeca8f0  vtable  0x2553b98  x221
+  shim   0x7d1940  vtable  0x2511e50  x213
+  shim   0x6b9990  vtable  0x2508638  x192
+  shim   0x68a6e0  vtable  0x2506e88  x190
+  shim   0x92e110  vtable  0x24b8510  x179
+  shim   0x958ef0  vtable  0x24c00f0  x168
+  shim   0xecabc0  vtable  0x254fb28  x166
+  shim   0xdd6840  vtable  0x254f158  x164
+  shim   0xdd6240  vtable  0x253a7e0  x164
+  shim   0x92e700  vtable  0x251d2b0  x163
+  shim   0xbd4330  vtable  0x24b3f68  x148
+  shim   0xb57b90  vtable  0x250e0d8  x148
+  shim   0x9503c0  vtable  0x24b3510  x148
+  shim   0x3d0d10  vtable  0x24ec6d8  x145
+  shim   0xe8a800  vtable  0x2552b18  x141
+  shim   0xe8aa90  vtable  0x24b6580  x141
+  shim   0xdff800  vtable  0x2550ba0  x111
+  shim   0xb5df20  vtable  0x250e1c0  x111
+  shim   0x96e620  vtable  0x24c2908  x93
+  shim   0x3dc340  vtable  0x24ed380  x87
+  shim   0xed8e20  vtable  0x2554018  x83
+  shim   0xdef440  vtable  0x254fb60  x83
+  shim   0xd49f40  vtable  0x25338b0  x82
+  shim   0x393770  vtable  0x24e90a8  x76
+  shim   0xb32610  vtable  0x253a158  x76
+  shim   0x9459a0  vtable  0x24b8620  x75
+  shim   0xb1e9c0  vtable  0x2509478  x73
+  shim   0xd5d310  vtable  0x254b188  x71
+  shim   0x3e2470  vtable  0x24edcf8  x69
+  shim   0x3e9860  vtable  0x24edc70  x69
+  shim   0xb58050  vtable  0x250ec78  x65
+  shim   0x7fef10  vtable  0x25134d8  x64
+  shim   0x39bee0  vtable  0x24b8908  x63
+  shim   0x310c30  vtable  0x24c2820  x57
+  shim   0x39f2a0  vtable  0x24b5b48  x54
+  shim   0x8a6a10  vtable  0x250d3f0  x52
+  shim   0x7167d0  vtable  0x250e9f0  x47
+  shim   0xd4da10  vtable  0x2549eb8  x46
+  shim   0x695f70  vtable  0x2507588  x45
+  shim   0x6d98a0  vtable  0x2508fa8  x45
+  shim   0xcf6da0  vtable  0x2545d58  x45
+  shim   0x92f6e0  vtable  0x24b84b8  x44
+  shim   0xd4a910  vtable  0x2545fa0  x41
+  shim   0x15db30  vtable  0x2514c20  x41
+  shim   0x85a990  vtable  0x2515f50  x41
+  shim   0xb33c00  vtable  0x253a120  x38
+  shim   0x9c2040  vtable  0x2523100  x38
+  shim   0xb5da60  vtable  0x253bd90  x38
+  shim   0x9ee770  vtable  0x2524468  x38
+  shim   0xbdb880  vtable  0x2541380  x38
+  shim   0x970590  vtable  0x25204e8  x38
+  shim   0x846ae0  vtable  0x2515748  x38
+  shim   0xb12ff0  vtable  0x2538a70  x38
+  shim   0x92d500  vtable  0x250e2a8  x38
+  shim   0xb12140  vtable  0x2538a18  x38
+  shim   0xb34360  vtable  0x253a190  x38
+  shim   0x720350  vtable  0x250e748  x38
+  shim   0xb5ee80  vtable  0x250e908  x38
+  shim   0xebb390  vtable  0x25538b8  x38
+  shim   0x7c53d0  vtable  0x25118a0  x38
+  shim   0xf01fd0  vtable  0x2555630  x38
+  shim   0xb3e810  vtable  0x250ed08  x38
+  shim   0x79c630  vtable  0x250e8d0  x38
+  shim   0x85bd60  vtable  0x2515f90  x38
+  shim   0x9f3b80  vtable  0x25245b0  x38
+  shim   0x950490  vtable  0x251e6d0  x38
+  shim   0xa8dda0  vtable  0x24f11b0  x38
+  shim   0xe88a20  vtable  0x2506b68  x35
+  shim   0x7fd2c0  vtable  0x25130d8  x33
+  shim   0xb1d060  vtable  0x2539228  x32
+  shim   0x89a860  vtable  0x2517d58  x27
+  shim   0x6e7620  vtable  0x25094d0  x25
+  shim   0x9522a0  vtable  0x24b6520  x24
+  shim   0x6965c0  vtable  0x2507548  x23
+  shim   0xf02430  vtable  0x25558d0  x22
+  shim   0x9f75f0  vtable  0x24c28d0  x21
+  shim   0x68ece0  vtable  0x2506f68  x20
+  shim   0x54b110  vtable  0x24c2890  x19
+  shim   0x8d7480  vtable  0x24b5428  x19
+  shim   0x6d5b00  vtable  0x2508ff8  x18
+  shim   0x546ef0  vtable  0x24c27e0  x18
+  shim   0x840220  vtable  0x25151c8  x16
+  shim   0x83b950  vtable  0x2514fd0  x16
+  shim   0xb5be10  vtable  0x250e470  x16
+  shim   0xf04250  vtable  0x2555720  x16
+  shim   0x6dcfa0  vtable  0x24c4490  x16
+  shim   0x843f90  vtable  0x2515458  x16
+  shim   0xb07fb0  vtable  0x2537ca8  x14
+  shim   0xf087a0  vtable  0x2555a38  x14
+  shim   0x692750  vtable  0x25072d0  x14
+  shim   0x7edbc0  vtable  0x2512a08  x14
+  shim   0x7f62f0  vtable  0x2512ea0  x14
+  shim   0x881f70  vtable  0x2516df0  x13
+  shim   0x837370  vtable  0x2514a18  x13
+  shim   0x6e0990  vtable  0x2509588  x13
+  shim   0x7d41f0  vtable  0x2512390  x13
+  shim   0x65a410  vtable  0x25059e0  x13
+  shim   0x7d4560  vtable  0x2512358  x13
+  shim   0x7d57c0  vtable  0x25122c8  x13
+  shim   0xd04f50  vtable  0x24b5b08  x12
+  shim   0x27b380  vtable  0x24c3ec0  x12
+  shim   0x664be0  vtable  0x25060a0  x11
+  shim   0x665810  vtable  0x24b8550  x11
+  shim   0x690870  vtable  0x2506fb8  x10
+  shim   0xd5c420  vtable  0x254b2d8  x10
+  shim   0x1b5460  vtable  0x24b4110  x9
+  shim   0x867d70  vtable  0x2516048  x9
+  shim   0x8929a0  vtable  0x25175e8  x8
+  shim   0xd51370  vtable  0x2514ad0  x6
+  shim   0x845080  vtable  0x2515620  x6
+  shim   0x7fed30  vtable  0x2513498  x6
+  shim   0x803b90  vtable  0x24b8280  x6
+  shim   0xe44b80  vtable  0x25510a0  x6
+  shim   0xbd3f50  vtable  0x25412a0  x5
+  shim   0x7ff6c0  vtable  0x2513538  x5
+  shim   0xe2f330  vtable  0x2550c20  x4
+  shim   0x7edd30  vtable  0x2512a88  x4
+  shim   0x936990  vtable  0x24b7798  x3
+  shim   0xd550f0  vtable  0x254b6c8  x3
+  shim   0xf017d0  vtable  0x2555858  x3
+  shim   0xd59d60  vtable  0x253ca88  x3
+  shim   0xb5f4d0  vtable  0x253bdc8  x3
+  shim   0x24ab30  vtable  0x24bfe00  x2
+  shim   0xd44ff0  vtable  0x2545be0  x2
+  shim   0x7f67f0  vtable  0x2512f38  x2
+  shim   0x846210  vtable  0x2515708  x2
+  shim   0x6b2cb0  vtable  0x25082f0  x2
+  shim   0x1b5680  vtable  0x24b40d8  x2
+  shim   0xd7fd20  vtable  0x2549800  x2
+  shim   0x716b40  vtable  0x250eb38  x2
+  shim   0x959000  vtable  0x24c00b8  x1
+  shim   0xe8f000  vtable  0x24c2b50  x1
+  shim   0x299d10  vtable  0x24c3718  x1
+  shim   0x9ac910  vtable  0x24c2a08  x1
+  shim   0x290e20  vtable  0x24c3a98  x1
+  shim   0x284220  vtable  0x24c3ef8  x1
+  shim   0x29a730  vtable  0x24c3670  x1
+  shim   0x2a1950  vtable  0x24c3440  x1
+  shim   0x9aad50  vtable  0x24c2f38  x1
+  shim   0x29ee60  vtable  0x24c3558  x1
+  shim   0x2a2370  vtable  0x24c3478  x1
+  shim   0x31cb70  vtable  0x24c5528  x1
+  shim   0x66f990  vtable  0x2506bd8  x1
+  shim   0x2893b0  vtable  0x24c3cc8  x1
+  shim   0x9543b0  vtable  0x24c2d90  x1
+  shim   0x95c8c0  vtable  0x251eff0  x1
+  shim   0x289dd0  vtable  0x24c3d00  x1
+  shim   0x28c6e0  vtable  0x24c3bb0  x1
+  shim   0xeac7f0  vtable  0x24c2cd0  x1
+  shim   0x9213f0  vtable  0x24bada0  x1
+  shim   0x2903f0  vtable  0x24c3a60  x1
+  shim   0x2a37f0  vtable  0x24c33d0  x1
+  shim   0x9473f0  vtable  0x24bd120  x1
+  shim   0xe90500  vtable  0x2552bd8  x1
+  shim   0x28db20  vtable  0x24c3b40  x1
+  shim   0x29e430  vtable  0x24c3590  x1
+  shim   0x30be50  vtable  0x24bfe38  x1
+  shim   0xdd9070  vtable  0x254f320  x1
+  shim   0x7ec870  vtable  0x24b86a8  x1
+  shim   0x946470  vtable  0x24c2ad0  x1
+  shim   0x288980  vtable  0x24c3c90  x1
+  shim   0x30c8b0  vtable  0x24bfe70  x1
+  shim   0xe93cb0  vtable  0x2552d48  x1
+  shim   0x292cb0  vtable  0x24c3980  x1
+  shim   0x28bcb0  vtable  0x24c3c20  x1
+  shim   0x2936d0  vtable  0x24c39b8  x1
+  shim   0x295fe0  vtable  0x24c37f8  x1
+  shim   0x2940f0  vtable  0x24c38a0  x1
+  shim   0x96f8f0  vtable  0x24bfd80  x1
+  shim   0x9be4f0  vtable  0x24c2a90  x1
+  shim   0xeab4f0  vtable  0x24c29c8  x1
+  shim   0x296a00  vtable  0x24c3830  x1
+  shim   0x29da00  vtable  0x24c3638  x1
+  shim   0xe91f10  vtable  0x24c2d50  x1
+  shim   0x297420  vtable  0x24c3868  x1
+  shim   0x7b3820  vtable  0x250e268  x1
+  shim   0x30d420  vtable  0x24bfea8  x1
+  shim   0x9bbc20  vtable  0x24c2bd0  x1
+  shim   0x297e40  vtable  0x24c3750  x1
+  shim   0xb11640  vtable  0x2506a70  x1
+  shim   0xded350  vtable  0x2550be0  x1
+  shim   0x298860  vtable  0x24c3788  x1
+  shim   0x28e570  vtable  0x24c3b78  x1
+  shim   0x285680  vtable  0x24c3e50  x1
+  shim   0x299280  vtable  0x24c37c0  x1
+  shim   0x292280  vtable  0x24c3948  x1
+  shim   0x28b280  vtable  0x24c3be8  x1
+  shim   0x30df90  vtable  0x24bfee0  x1
+  shim   0x29bb90  vtable  0x24c36e0  x1
+  shim   0x294b90  vtable  0x24c38d8  x1
+  shim   0x28ef90  vtable  0x24c3ad0  x1
+  shim   0x29c5b0  vtable  0x24c35c8  x1
+  shim   0x2955b0  vtable  0x24c3910  x1
+  shim   0x28f9b0  vtable  0x24c3a28  x1
+  shim   0x2a2db0  vtable  0x24c3408  x1
+  shim   0x29cfd0  vtable  0x24c3600  x1
+  shim   0x9bd3d0  vtable  0x24c2c10  x1
+  shim   0x2860e0  vtable  0x24c3d38  x1
+  shim   0x286b00  vtable  0x24c3d70  x1
+  shim   0x287520  vtable  0x24c3da8  x1
+  shim   0x9c1520  vtable  0x24c2dd0  x1
+  shim   0x2a0e30  vtable  0x24c34e8  x1
+  shim   0xcc7a30  vtable  0x2545ef0  x1
+  shim   0x287f40  vtable  0x24c3de0  x1
+  shim   0xeb7850  vtable  0x24c2d10  x1
+  shim   0x281050  vtable  0x24c40b8  x1
+  shim   0x291850  vtable  0x24c39f0  x1
+  shim   0x9c0450  vtable  0x24c2b90  x1
+  shim   0x284c50  vtable  0x24c3e18  x1
+  shim   0x29b160  vtable  0x24c36a8  x1
+  shim   0x243f80  vtable  0x24c0148  x1
+  shim   0x29f8d0  vtable  0x24c3520  x1
+  shim   0x5345e0  vtable  0x24f9920  x1
+  shim   0x9f55e0  vtable  0x24c2c50  x1
+  shim   0x532af0  vtable  0x24bff98  x1
+  shim   0x2a02f0  vtable  0x24c34b0  x1
+drained 64 records (entry 88 bytes)
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 1, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162696014, "ctx_counter": 5, "self_ptr": "0x1d22f6fa0", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1163018576, "ctx_counter": 8, "self_ptr": "0x1d22f7e90", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x2552788", "shim_rva": "0xe6c230", "token_id": 4294967295, "second_token": 934, "flag_12": 6542, "flag_14": 247, "flag_16": 0, "arg_token": 0, "ctx_counter": 2, "self_ptr": "0x177535538", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 3527601904, "ctx_counter": 3, "self_ptr": "0x177569ef8", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1163018576, "ctx_counter": 5, "self_ptr": "0x1d2303070", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x2552788", "shim_rva": "0xe6c230", "token_id": 4294967295, "second_token": 1113, "flag_12": 6542, "flag_14": 247, "flag_16": 0, "arg_token": 0, "ctx_counter": 2, "self_ptr": "0x1775c9b88", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 12142, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1634298949, "ctx_counter": 6, "self_ptr": "0x17d99bdb0", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x2552788", "shim_rva": "0xe6c230", "token_id": 4294967295, "second_token": 1252, "flag_12": 6542, "flag_14": 247, "flag_16": 0, "arg_token": 0, "ctx_counter": 2, "self_ptr": "0x1826596d8", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 12142, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 73, "ctx_counter": 6, "self_ptr": "0x17d7b68e0", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1717924464, "ctx_counter": 5, "self_ptr": "0x1d231eeb0", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x2552788", "shim_rva": "0xe6c230", "token_id": 4294967295, "second_token": 1451, "flag_12": 6542, "flag_14": 247, "flag_16": 0, "arg_token": 0, "ctx_counter": 2, "self_ptr": "0x1826f8078", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 12142, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1836411983, "ctx_counter": 9, "self_ptr": "0x17c89cdb0", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 12142, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1868720468, "ctx_counter": 6, "self_ptr": "0x17c8a3290", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x2552788", "shim_rva": "0xe6c230", "token_id": 4294967295, "second_token": 1644, "flag_12": 6542, "flag_14": 247, "flag_16": 0, "arg_token": 0, "ctx_counter": 2, "self_ptr": "0x182792b48", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 12142, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 86, "ctx_counter": 9, "self_ptr": "0x179c4d410", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 3526437728, "ctx_counter": 3, "self_ptr": "0x1827fcb48", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3690", "shim_rva": "0x34dad0", "token_id": 14515370, "second_token": 0, "flag_12": 14, "flag_14": 0, "flag_16": 0, "arg_token": 0, "ctx_counter": 3, "self_ptr": "0x18282c8e0", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x2552788", "shim_rva": "0xe6c230", "token_id": 4294967295, "second_token": 1900, "flag_12": 6542, "flag_14": 247, "flag_16": 0, "arg_token": 0, "ctx_counter": 2, "self_ptr": "0x18285fa18", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24c69e8", "shim_rva": "0x33c940", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1162690894, "ctx_counter": 8, "self_ptr": "0x18ac32590", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+   {"valid": 1, "vtable_rva": "0x24b3050", "shim_rva": "0x33d410", "token_id": 0, "second_token": 0, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 3526452224, "ctx_counter": 6, "self_ptr": "0x1d2a61b10", "ctx_ptr": "0xec8fd00", "ctx_10": "5249961152", "ctx_18": "0", "ctx_30": "0"}
+Waiting for base Execute to go silent before "uninstall" (300s max)...
+  idle at calls=341998
+ExecHookUninstall -> 0
+ExecHookVerify -> 0 (engine bytes intact at the target)
+post-uninstall probe: 0 calls at base Execute in 1.5s (engine silent — resume to confirm)
+EXIT:0
