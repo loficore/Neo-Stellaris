@@ -6905,3 +6905,53 @@ scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_shim_probe.tsv evidence/logs
 - **§74 的 B2 复采**(`census_run.cmd`,压最后)仍未打;本窗口的 `2016` 与它要复采的七把 shim 计数是两条不同的
   读数口径,不要混。
 - scope(Task 9)未打;§68.8 表第 ② 行原样保留。
+
+## §72.8 `h1..h6 = 0` 的口径:它由仪器结构决定,对另外六把 shim 零信息(2026-10-28,零 shot)
+
+**授权级别**:零 shot。本节**不碰游戏、不注入、不装任何 detour**,只读 §71/§72 的既有读数与
+`src/dll/c2/shim_witness_probe.zig` 的 install 语义;产物是一条给下一发实机窗口用的判读边界。
+
+**要防的误读**:把 §72.4 那行 `h0=2016 h1=0 … h6=0` 读成「另外六把 shim 在那 120 s 里没跑」。
+这个读法**错**,而且错在两头都误导人:①它不是观测事实,是**仪器口径的结构结果**;②即便它是真的,也
+**回答不了**「另外六把跑没跑」这个问题 —— 那由 census 逐把计数回答(§74)。
+
+### §72.8.1 五步论证
+
+1. **本 guard 只 patch 一个函数。** `install()` 对 `moduleFunction(RVA_SHIM_WITNESS)`(= `0xCC4220`,
+   `src/dll/shared/offsets.zig:241`)做 24 B 指纹门 + JMP patch(`src/dll/c2/shim_witness_probe.zig:323-350`;
+   §72.4 的 `patch_size=15` 就是那 15 字节)。所以 `calls` = **`0xCC4220` 这个函数被调了多少次**,
+   **不是** base Execute `0x1D08520` 的派发次数。
+2. **计数是逐次的,不是采样后的。** `table_hits[idx]` 每次分类命中就原子自增
+   (`shim_witness_probe.zig:184`),发生在采样门**之前**;采样门只决定哪些记录进那 256 槽的环
+   (模块头注释:counters per-call、samples behind the gate、only the ring write passes the shouldSample gate)。
+   ⇒ `hN` 是全量计数,环才是抽样。
+3. **七张表里只有 `0x25460F0` 的 slot[2] 是 `0xCC4220`。** §71.1 把主靶钉成「该表的 slot[2]」;
+   §71.3 段② 的表把七把 shim 与七张 vtable 一一配对,七把互不相同;那段里的「补一条同源读数」又给出
+   七把各自 `hits=1 / prev_is_base_execute=1/1 / hit_minus_0x10_in_map=1/1` —— 即每把都是**自己那张表**的
+   slot[2](slot[1] 仍是 base Execute)。⇒ 被采样对象的 vtable 只可能是 `0x25460F0` ⇒ `h1..h6 = 0` 是
+   **结构必然**。
+4. **前提,与它的闭合。** ③ 的必然性有一个前提:「**没有第二张表也把 `0xCC4220` 放在 slot[2]**」。
+   这个前提的离线支撑只有 §71.3 的 `.rdata` hits=1 —— 那是**下限,只覆盖 `.rdata`**,运行时复制出来的
+   vtable 不在这个读数里。这一格由 §72.4 的 **`unmatched=0`** 在**窗内**闭合:第二张表若在七张之外,它的
+   对象必落 `unmatched`。所以最强可写句是:
+   **`h1..h6 = 0` 由仪器口径结构决定、窗内被 `unmatched=0` 佐证 ⇒ 对另外六把 shim 跑没跑零信息。**
+5. **`unmatched=0` 的确切含义**:被采样对象的 vtable **全在七张之内** —— 不是「世界里只有这七张表」。
+
+### §72.8.2 两条配套的限定
+
+- **`calls=2016` 只对 `0x25460F0` 这一把有效**,不是族外执行总数(§72.5 第 2 条那半句「不是 per-system」
+  的同源限定)。
+- **`caller_rva = 0x1d0857a`**(§72.4)只证明这 2,016 次经 base Execute 体内那一发 `call [rax+0x10]`
+  进来 —— 那是**派发位**读数,不是**身份**读数。
+
+### §72.8.3 「另外六把跑没跑」归谁
+
+§13 的「七把各 2,090」**本身就是逐把计数**;`docs/offline-tooling.md` 的 execspy 一节是 §13 census 的
+复采通道 ⇒ **那正是 §74 的事**(复采口径单在该节)。guard 的 `h1..h6` 只回答**身份**问题:「本次采样对象的
+vtable 是不是 `0x25460F0`」。两个口径的数**不可并排比、不可互相除**(那边已有同款纪律:§72.7 第二条)。
+
+### §72.8.4 移交
+
+- `docs/offline-tooling.md` 的 `c2_shim_probe.py` 一节把这条写成**陷阱 4**;`AGENTS.md` 的 `0xCC4220`
+  RVA 行带一句同款提示。
+- 本节**不占 §73/§74 的号** —— 那两号留给 witness 计划 T9(scope 新形状)与 T10(B2 复采)。
