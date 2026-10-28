@@ -327,6 +327,19 @@ def drain_entries(pid, base, exports, buf):
     return [decode_entry(blob[i * ENTRY_SIZE:(i + 1) * ENTRY_SIZE]) for i in range(count)]
 
 
+def script_marker(script):
+    """The literal prefix this script will leave in game.log, or None.
+
+    The script's `log = "TS_NEO_[This.GetName]"` is substituted per system, so the literal
+    `[This.GetName]` never appears in the log: the marker must stop at the first `[`. Getting
+    this wrong makes every window read `script_refused` even when the script ran.
+    """
+    if 'log = "' not in script:
+        return None
+    literal = script.split('log = "', 1)[1].split('"', 1)[0]
+    return literal.split("[", 1)[0] or None
+
+
 def send_script(cmd_file, script, game_log, wait_s):
     """Send one console script and wait for its log marker.
 
@@ -341,7 +354,7 @@ def send_script(cmd_file, script, game_log, wait_s):
     offset = _file_size_or_none(log_path)
     if not _send_console(cmd_file, script):
         return False
-    marker = script.split('log = "', 1)[1].split('"', 1)[0] if 'log = "' in script else None
+    marker = script_marker(script)
     if marker is None:
         return True
     deadline = time.time() + wait_s

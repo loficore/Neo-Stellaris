@@ -21,6 +21,7 @@ from c2_trigger_pred_probe import (
     install_decision,
     parse_mask,
     parse_stats,
+    script_marker,
     verdict,
 )
 
@@ -225,6 +226,12 @@ def test_artifact_rows_are_tab_separated_with_one_row_per_entry():
 # ---------------------------------------------------------------------------
 # Gate order (R-inject)
 # ---------------------------------------------------------------------------
+
+
+def test_script_marker_stops_before_the_scope_substitution():
+    assert script_marker('effect every_system = { log = "TS_NEO_[This.GetName]" }') == "TS_NEO_"
+    assert script_marker('effect every_system = { log = "TS_RIM" }') == "TS_RIM"
+    assert script_marker("effect every_system = { }") is None
 
 
 def test_every_inject_site_is_gated():

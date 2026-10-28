@@ -1,0 +1,6 @@
+# C5 Task 6 的 shot 脚本。第 1 行武装 C1 当场铸出的 neo_effect token;第 2 行武装官方
+# system-scoped 的 is_rim_system(token 18203)。`#` 开头的行与空行被驱动跳过。
+# 注意 marker:game.log 里出现的是 `TS_NEO_<系统名>`,不是 `TS_NEO_[This.GetName]`
+# —— 驱动的 script_marker() 在第一个 `[` 处截断。
+effect every_system = { limit = { neo_effect = yes } log = "TS_NEO_[This.GetName]" }
+effect every_system = { limit = { is_rim_system = yes } log = "TS_RIM_[This.GetName]" }
