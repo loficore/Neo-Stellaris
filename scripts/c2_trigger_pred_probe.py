@@ -38,6 +38,9 @@ DEFAULT_OUT = r"C:/temp/c4_trig_pred.tsv"
 # The supervisor's only command channel (`c4_wiring_probe.SUPERVISOR_CMD`,
 # `game_supervisor.CMD_PATH`).  Any other basename is a file no daemon reads (§76.4).
 SUPERVISOR_CMD_NAME = "ns_game_cmd.txt"
+# The daemon reads ONE absolute path (`game_supervisor.CMD_PATH`), so the directory is
+# part of the channel too: a right-named file elsewhere is never consumed (review I-2).
+SUPERVISOR_CMD_DIR = "C:/temp"
 DEFAULT_CMD_FILE = "C:\\temp\\" + SUPERVISOR_CMD_NAME
 EXE_MODULE = "stellaris.exe"
 
@@ -318,6 +321,26 @@ def sha_gate(dll_path):
     return digest
 
 
+def refuse_if_resident(dll_name, resident_base):
+    """Refuse when a module with this name is already mapped into the game.
+
+    `inject_dll` calls `LoadLibraryA` on the path, and the DLL is never unloaded
+    (AGENTS.md constraint 5), so a resident copy makes the loader hand back **that
+    image** while `sha_gate` hashed the file on disk.  The artifact would then attest
+    bytes that never ran (review I-1).  Two legitimate outs, both named in the message:
+    upload under a new name (the §76.7 `sqjs_c5.dll` trick) or shoot in a new process.
+    """
+    if resident_base is None:
+        return None
+    print(
+        f"[trigpred] {dll_name} is already mapped at 0x{resident_base:x} — LoadLibraryA "
+        "would reuse that image, so the sha256 recorded for this shot would attest a file "
+        "that never ran; upload under a new name or use a fresh game process",
+        file=sys.stderr,
+    )
+    raise SystemExit(EXIT_INSTRUMENT)
+
+
 def build_meta(*, dll_path, dll_sha, module_base, systems, poll_s, settle_s,
                overall, per_window, windows, final_text, cleanup,
                trigger_token, layout, script_wait_s):
@@ -378,6 +401,14 @@ def gate_module(pid, dll_path, needed):
 
     dll_name = os.path.basename(dll_path)
     print(f"[trigpred] pid={pid}  dll={dll_path}")
+    # A same-name module already mapped means the loader will ignore this file.  Any
+    # resolve failure (not loaded, ambiguous, PowerShell) is left to the post-inject
+    # `resolve_base_address`, which is the authoritative one.
+    try:
+        resident = harness.resolve_base_address(pid, dll_name)
+    except RuntimeError:
+        resident = None
+    refuse_if_resident(dll_name, resident)
     # The world-state gate (spec §1): a shot that cannot prove the premise must not inject.
     from world_probe import gate_install  # pyright: ignore[reportMissingImports]
 
@@ -666,10 +697,18 @@ def preflight_paths(script_file, cmd_file):
             file=sys.stderr,
         )
         raise SystemExit(EXIT_INSTRUMENT)
-    if os.path.basename(cmd_file.replace("\\", "/")).lower() != SUPERVISOR_CMD_NAME:
+    normalised = cmd_file.replace("\\", "/").rstrip("/").lower()
+    if os.path.basename(normalised) != SUPERVISOR_CMD_NAME:
         print(
             f"[trigpred] --cmd-file must end in {SUPERVISOR_CMD_NAME}: the supervisor only "
             f"reads that name, so {cmd_file} is a file nothing will ever consume",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_INSTRUMENT)
+    if os.path.dirname(normalised) != SUPERVISOR_CMD_DIR.lower():
+        print(
+            f"[trigpred] --cmd-file must live in {SUPERVISOR_CMD_DIR}: the supervisor reads "
+            f"one absolute path, so {cmd_file} is never consumed either",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_INSTRUMENT)
@@ -724,12 +763,12 @@ def main(argv=None):
         print("[trigpred] --script-file has no scripts", file=sys.stderr)
         return EXIT_INSTRUMENT
 
+    dll_sha = sha_gate(args.dll)
     pid = harness.resolve_pid(EXE_MODULE)
     # Window A's token is only known after C1Run; None tells run() to use it.
     scripts = [("neo_effect", lines[0], None)]
     if len(lines) > 1:
         scripts.append(("is_rim_system", lines[1], args.rim_token))
-    dll_sha = sha_gate(args.dll)
     return run(pid, args.dll, dll_sha, scripts, args.systems, args.out, args.cmd_file,
                args.game_log, args.poll_s, args.settle_s, args.script_wait_s)
 

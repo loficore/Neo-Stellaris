@@ -343,7 +343,44 @@ def test_preflight_refuses_a_command_channel_no_daemon_reads(tmp_path, capsys):
     assert mod.SUPERVISOR_CMD_NAME in capsys.readouterr().err
 
 
-def test_preflight_accepts_the_supervisor_channel_even_in_another_directory(tmp_path):
+def test_preflight_accepts_the_supervisor_channel(tmp_path):
     script = tmp_path / "scripts.txt"
     script.write_text('effect every_system = { log = "X" }\n', encoding="utf-8")
-    assert mod.preflight_paths(str(script), str(tmp_path / mod.SUPERVISOR_CMD_NAME)) is None
+    cmd = mod.SUPERVISOR_CMD_DIR + "/" + mod.SUPERVISOR_CMD_NAME
+    assert mod.preflight_paths(str(script), cmd) is None
+
+
+def test_preflight_refuses_the_supervisor_name_in_another_directory(tmp_path, capsys):
+    """The daemon reads one absolute path: a right-named file elsewhere is never consumed,
+    so the shot would burn 2 x --script-wait-s and read `script_refused` (review I-2)."""
+    script = tmp_path / "scripts.txt"
+    script.write_text('effect every_system = { log = "X" }\n', encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        mod.preflight_paths(str(script), str(tmp_path / mod.SUPERVISOR_CMD_NAME))
+    assert exc.value.code == 2
+    assert mod.SUPERVISOR_CMD_DIR in capsys.readouterr().err
+
+
+def test_refuse_if_resident_accepts_an_unmapped_name():
+    assert mod.refuse_if_resident("sqjs_c4.dll", None) is None
+
+
+def test_refuse_if_resident_stops_when_the_name_is_already_mapped(capsys):
+    """A mapped same-name module makes LoadLibraryA hand back that image, so the sha we
+    recorded would attest a file that never ran (review I-1)."""
+    with pytest.raises(SystemExit) as exc:
+        mod.refuse_if_resident("sqjs_c4.dll", 0x7FF0_1234_0000)
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "sqjs_c4.dll" in err
+    assert "0x7ff012340000" in err
+
+
+def test_resident_check_runs_before_inject():
+    src = (REPO / "scripts/c2_trigger_pred_probe.py").read_text(encoding="utf-8")
+    assert src.index("refuse_if_resident(") < src.index("inject_dll(")
+
+
+def test_sha_gate_runs_before_the_process_is_resolved():
+    src = (REPO / "scripts/c2_trigger_pred_probe.py").read_text(encoding="utf-8")
+    assert src.index("sha_gate(args.dll)") < src.index("harness.resolve_pid(")

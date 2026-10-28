@@ -240,7 +240,9 @@ pub const Hook = struct {
     /// Number of bytes overwritten in the target function.
     patch_size: usize,
 
-    /// Pointer to the allocated trampoline memory (for freeing).
+    /// Pointer to the allocated trampoline memory. **Never freed** — retired into
+    /// `retired_trampolines` on uninstall, because a hot target can still have a thread
+    /// inside it; the process exit reclaims it.
     trampoline_mem: [*]u8,
 
     /// Original memory protection of the target page.

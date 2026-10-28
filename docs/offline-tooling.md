@@ -38,8 +38,10 @@ is the step that requires it — `zig build test` does not.
 历史计数:`293/293`,until `effects/id_mapper.zig` and its 21 tests were retired,
 then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不要拿这两个旧数当现在的门限。
 
-**当前基线(2026-10-28 族外证人窗口收口,复测于 commit `f31f4cd` 之后)**:
-`zig build test --summary all` → `Build Summary: 29/29 steps succeeded; 636/636 tests passed`,退出码 **0** ——
+**当前基线(2026-10-29 `shot-hardening` 分支,`b88e500` 之后)**:
+`zig build test --summary all` → `Build Summary: 29/29 steps succeeded; 656/656 tests passed`,退出码 **0** ——
+(636 是 `f31f4cd` 之后那个数;`b88e500` 加了两条 `TrampolineRetireList` 测试,而 `detour.zig` 被编进
+4 个 test root ⇒ +8。数涨不是回归,但引用旧数当门限会把绿读成红。)
 (2026-10-26 那句 `599/599` 保留在下面作历史:它在 `78fd294` 上是真的,之后 world-state 与族外证人
 两个窗口各加了测试,数字涨到 636 —— 围栏/测试只增不减,拿旧数当门限会把绿读成红。)
 **failed 步归零**。上面 Host caveat 那句「1 个 failed 是环境事实」的判读**已被本次实施作废**:exports 根
@@ -1357,8 +1359,9 @@ finally: Uninstall → Verify → settle → assert_game_alive`。
 system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**分别记窗口**(`stats_a_delta` /
 `stats_b_delta`),`token_matched` 不合并 —— 合起来读会把两段混成一个数。
 
-**门序**(照 §70.6 与 `c2_shim_probe` 的家族纪律):`sha_gate`(**打印并记录**注入文件的 sha256,
-不断言固定常量;文件不在即 `exit 2`)→ `list_exports` 核文件里的十个导出 → `gate_install`
+**门序**(照 §70.6 与 `c2_shim_probe` 的家族纪律):`preflight_paths`(开火前两条拒绝,见下)→
+`sha_gate`(**打印并记录**注入文件的 sha256,不断言固定常量;文件不在即 `exit 2`)→
+`list_exports` 核文件里的十个导出 → `refuse_if_resident`(同名模块已在进程里就拒绝)→ `gate_install`
 (world-state 门,注入前)→ `inject_dll` → `C2Sanity==42` → `C4TrigPredLayout` 与驱动常量对账 →
 `C4TrigPredReset` → `C4TrigPredInstall` → `C1Run` 取 token → 每段 `SetToken` + 发脚本 + 读 delta →
 `--poll-s` 观测窗 → `C4TrigPredUninstall` + `Verify` + settle + `assert_game_alive`。
@@ -1379,9 +1382,15 @@ system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**�
 
 **开火前的两条拒绝(不是陷阱,是门的一部分;都 `exit 2`)**:`--script-file` 指向的文件不在 ——
 打错的路径在 ssh 转手后变成一段与 stdout 丢失混在一起的 traceback(陷阱 8/11);`--cmd-file` 的
-**basename** 不是 `ns_game_cmd.txt` —— supervisor 只读这一个名字,§76.4 那次写成 `ns_cmd.txt`,
-两段窗口各白等 180 s 且都读成 `script_refused`。目录不限(测试与换机要用),名字必须是那一个。
-退出码与 donor 的 `sha_gate`(`SystemExit(str)` = 1)不同码,别混读。
+**名字与目录**都必须是 supervisor 那一个 —— `C:\temp\ns_game_cmd.txt`。§76.4 那次写成 `ns_cmd.txt`,
+两段窗口各白等 180 s 且都读成 `script_refused`;**只核名字是不够的**(2026-10-28 复审 I-2):daemon 读的是
+唯一一条绝对路径,换个目录的同名文件同样没人消费。退出码与 donor 的 `sha_gate`(`SystemExit(str)` = 1)
+不同码,别混读。
+
+**同名模块已在进程里 = 拒绝(复审 I-1)**:`sha_gate` 算的是**磁盘上那个文件**,而 `inject_dll` 走
+`LoadLibraryA`;DLL 永不卸载,同名模块已在时载入器会**复用既有镜像**,新字节根本不会映射 —— artifact 里
+的 `dll_sha256` 就成了「一份从没跑过的字节」的证明。两条合法的出路写在拒绝消息里:换名上传(§76.7 的
+`sqjs_c5.dll`)或用新进程。
 
 **artifact**:`#meta` 在前(含 `overall_verdict` / `verdict_a` / `verdict_b` / `stats_*_delta` /
 `uninstall_rc` / `verify_rc` / `host_alive`,外加 **`dll` / `dll_sha256` / `module_base`**),
@@ -1389,12 +1398,14 @@ system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**�
 五列的行。`run()` **先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败。
 那三格是**溯源**不是装饰:§70.6 的上线门要求主机那份字节与本地构建逐字对上,§76.7 那次
 `sqjs_c4.dll` 与 `sqjs_c5.dll` 在同一进程并存 ⇒ 没有它们,「部署静默失败」与「真读数」在 artifact 上
-长得一模一样。`dll` 按两种分隔符取 basename(纯函数在 Linux 上也要跑测试)。
+长得一模一样。**口径要说准**:`dll_sha256` 是**注入路径上那个文件**的 sha,不是「实际跑着的镜像」的 ——
+所以同名模块已映射时驱动直接拒绝(`refuse_if_resident`,复审 I-1),不靠这一格去猜。`dll` 按两种分隔符
+取 basename(纯函数在 Linux 上也要跑测试)。
 判读纯函数(`parse_stats` / `verdict` / `window_refused` / `overall_verdict` / `decode_layout` /
 `decode_entry` / `install_decision` / `artifact_rows` / `parse_mask` / `parse_c1_result` /
-`script_marker` / `sha_gate` / `build_meta` / `preflight_paths`,常量 `STATS_KEYS` / `VERDICTS` /
-`EVIDENCE_VERDICTS` / `SUPERVISOR_CMD_NAME`)由
-`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**39 条**),无游戏、无 Windows API、零 shot。
+`script_marker` / `sha_gate` / `build_meta` / `preflight_paths` / `refuse_if_resident`,常量
+`STATS_KEYS` / `VERDICTS` / `EVIDENCE_VERDICTS` / `SUPERVISOR_CMD_NAME` / `SUPERVISOR_CMD_DIR`)由
+`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**44 条**),无游戏、无 Windows API、零 shot。
 
 **drain 的坑(2026-10-28 review Critical)**:满环是 `RING_LEN * ENTRY_SIZE` = **10,240 B**,而
 `C4TrigPredStatsInto` 的文本缓冲只有 512 B。驱动在 drain 前必须 `remote_alloc(RING_LEN * ENTRY_SIZE)`
