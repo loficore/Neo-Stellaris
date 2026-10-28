@@ -87,16 +87,26 @@ def _bands(png_path: pathlib.Path, rows: int):
 
 
 def _old_surya_texts(png_path: str) -> list[str]:
-    """The pre-swap engine, called the way the pre-swap module called it."""
+    """The pre-swap engine, called the way the pre-swap module called it.
+
+    ``device=`` belongs to ``FoundationPredictor``, not to
+    ``RecognitionPredictor`` — the first run of this instrument passed it to the
+    wrong constructor and reported the resulting TypeError as "the old engine
+    cannot be measured", which was the instrument's bug wearing the engine's
+    name.  This is the shape ``popup_ocr`` actually used before the swap (see
+    that file's history): the detector keyword goes in by **name**, because the
+    second positional parameter is ``task_names``.
+    """
     import os
 
     os.environ["TORCH_DEVICE"] = "cpu"
     import PIL.Image
     from surya.detection import DetectionPredictor
+    from surya.foundation import FoundationPredictor
     from surya.recognition import RecognitionPredictor
 
     det = DetectionPredictor(device="cpu")
-    rec = RecognitionPredictor(device="cpu")
+    rec = RecognitionPredictor(FoundationPredictor(device="cpu"))
     with PIL.Image.open(png_path) as image:
         preds = rec([image], det_predictor=det)
     return [line.text for line in preds[0].text_lines]

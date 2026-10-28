@@ -1651,10 +1651,29 @@ vocabulary 之外的判词、拒绝未知的原始计数)。为什么没采:那 
 不通过不阻塞 v1。
 
 **OCR 引擎读数**(`evidence/logs/ocr_swap_4_4_4.tsv`,spec §14):surya → rapidocr PP-OCR mobile。
-整块面板(带检测)632–945 ms;单文本带(只跑识别)79–121 ms。**50 ms 那条目标未达标**,
-旧引擎的一致率**量不到**(主机上的 `RecognitionPredictor` 不接受 `device=`,预换型调用形状直接
-TypeError,三行都是 text_len=0 的失败行)。`POPUP_OCR_BUDGET_MS` 由 24 000 重定为 2 000 ms
-(= 面板最坏实测的 3 倍),围栏把它钉在「实测 p95 × 3」以内。
+三块面板、每块 14 带,同一批字节三种读法:
+
+| engine | 单次 ms | 说明 |
+|---|---|---|
+| `-rec`(只跑识别,单带) | 79–125 | spec §14.3 那条 50 ms 目标**未达标** |
+| `-full`(带检测,整面板) | 585–960 | daemon 今天实际走的路 |
+| `surya-panel`(换型前) | 26 488–35 314 | 同样三块面板,13 行 |
+
+所以面板路径是 **~40×**:30 s → 0.7 s。rec-only 对整面板返回 0 行 —— 识别模型吃单行图像,
+而 popup 流程裁的是整块面板;要让 50 ms 那条真正落地,得让流程按行裁片(spec §14.3 的前提
+本来就是「UI 槽位坐标已知 ⇒ 先裁片」)。
+
+**这一节有一处自我更正**:本文件与提交信息的第一版把 surya 记成「量不到」,理由是
+`RecognitionPredictor` 不接受 `device=`。那是**仪器**的错 —— `device=` 属于
+`FoundationPredictor`,换型前的代码正是那么调的。按换型前的调用形状重跑之后旧引擎跑得通,
+上表第三行就是重跑结果。**先把仪器修对,再说引擎测不了。**
+
+新旧引擎的文本比对(归一化后):**逐行同位置一致率 7%**,但词袋重合 82–86%。差的主要是
+**断行方式**(新引擎把 `cns<br>科研` 拆成两行)与旧引擎的碎片(`x` / `librar` / `n`),
+不是读错。这对 `popup_allowlist.json` 是真风险:名单里的 `text_signature` 是用旧引擎的
+文本签的,换型后签名会变 ⇒ **旧名单条目大概率失效**,重新签一遍之前 `decide_action` 会
+一路 `unclassified_hold`(安全侧,但会挡事)。这里不给「一致率达标」的结论,因为它没达标;
+给的是「为什么没达标」和「谁会受影响」。
 
 围栏:`scripts/test_world_state.py` 38 条、`scripts/test_world_probe_pure.py` 3 条、
 `scripts/test_popup_ocr_small.py` 3 条、`scripts/test_scripts_layout.py` 34 条(R-inject / R-verbs 两条新规则)。
