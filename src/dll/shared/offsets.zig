@@ -247,6 +247,13 @@ pub const keyword_reg = struct {
     /// 口径边界:`1091` 是「等于这个地址的 qword 个数」,不是「1,091 张表的 slot[16]」。
     pub const RVA_TRIGGER_PREDICATE: usize = 0x349230;
 
+    /// §77 — 触发**求值**槽的共用基体(trigger vtable 的 slot[5],`+0x28`)。收 `(self, ctx, a3)`:
+    /// 尾部 `jmp [rax+0x20]` 转发到 self 的 slot[4],第二实参是 `&ctx[0x278]`;`ctx` 自己带一个
+    /// 类型门(`ctx+0x158` 必须是 1 或 0x426,读点在 `0x1A918E0`)。
+    /// 口径边界:`352` 是「`.rdata` 里等于 `ImageBase + 本 RVA` 的 qword 个数」—— `.rdata` 存的是
+    /// **绝对地址**,拿裸 RVA 去数会数出 0(本仓踩过一次,见 `scripts/scratch/2026-10_eval_slot/`)。
+    pub const RVA_TRIGGER_EVAL: usize = 0x1A91A80;
+
     /// §24 — C1 borrows an official `class_info` instead of fabricating an object, so these two
     /// donors are data, not code we write. Aliasing is a shape the shipped game already uses: 9
     /// keyword `class_info`s serve 2-3 token ids each (`if`/`else_if`/`else` on `0x269DC98`), every

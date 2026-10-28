@@ -161,6 +161,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x3B01A0` | donor 表 slot[2] `+0x10` = **instantiate helper**,上表那个消费者的另一身份;**证人靶,两窗已打 = §69**:20 s 频率窗 + 120 s 正式窗,`--mask 0`,载入战役后仍 `calls=0`,verdict `no_calls_inconclusive` ⇒ 第三档资格不成立(§69.5 三行诚实条款) | §57.2 §69 |
 | `0xCC4220` | §13 那七把各 2,090 次的 exec shim 之首 = **族外派发位**执行体(vtable `0x25460F0` 的 slot[2];常量钉在 `src/dll/shared/offsets.zig:241`);**第一次正读已打 = §72**:120 s 窗 `calls=2016`/`h0=2016`/`unmatched=0` ⇒ `shim_hit_named`,`caller_rva`(环里 256 条 = 最后 256 次)全 = base Execute+0x5A(前 1,760 次未记录)。**判读提示**:`c2_shim_probe` 只钩它一个 ⇒ 它的 `h1..h6=0` 由仪器口径结构决定(窗内**全量** `unmatched=0` 闭合),**不携带**其余六把 shim 的信息 —— 逐把计数是 census 那条通道的活(§74) | structures §13;c1_validation §71/§72/§72.8/§72.9/**§74**(复采:七把 2,494 × 7、`hist_overflow=0`) |
 | `0x2606FE0` | donor effect vtable,25 槽可复制(slot[1]=Execute、slot[2]=instantiate、slot[19]=谓词) | §52 |
+| `0x1A91A80` | **触发求值槽** slot[5](`+0x28`)的共用基体,收 `(self, ctx, a3)`;尾部 `jmp [self_vtable+0x20]`(slot[4]),第二实参 = `&ctx[0x278]`;`ctx` 带类型门(`ctx+0x158` ∈ {1, 0x426},读点在 `0x1A918E0`);`.rdata` **绝对地址**等于它的 qword 352 个 | §77 |
 | `0x89F960` / `0x8A0450` | `GetScriptedEffect` / `GetScriptedTrigger` — **不是 getter**;唯一副作用是重复定义告警 | §27 |
 | `0x1C91C30` | 上述重复告警走的 logger | §27 |
 | `0x24B1990` | `CScriptedEffectTemplate` vtable(CEffect 家族**没有 RTTI**) | §14 |
