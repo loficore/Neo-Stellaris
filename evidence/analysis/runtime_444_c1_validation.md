@@ -7295,3 +7295,265 @@ scp Windows_Jiaolong:C:/temp/c4_census_run.txt evidence/logs/exec_shim_census_20
 
 产物:`evidence/logs/exec_shim_census_2026_10_28.txt`(329 行,直方图 282 行 + 64 条 drain 记录)。
 **顺序纪律已执行**:本发之后本窗不再有任何 `[self+0]` join 读数;装拆均 `rc=0`、`Verify=0`、host 存活。
+
+## §75 零 shot:触发评价路径的形状 —— 谓词槽 `+0x80` 收 `(self, X)`、求值槽 `+0x28` 收 `(self, ctx, a3)`,基体被 1,091 处引用(2026-10-28,离线)
+
+**授权级别**:离线。只读本地 exe 拷贝,不启动游戏、不注入、不占用任何 shot 额度。
+
+**这一节问的是什么**:C5 v1 的数据面要先回答「我们的求值体能不能拿到被度量的那个对象」。
+`docs/roadmap.md` 段4 那条「真正的 `CEventScope` 是哪个对象」问的是热路径(effect 路线的 `arg2`),
+而 C5 的裁定③走的是 **trigger** 路线 —— 两条路线的入参是不是同一族,决定 C5 要不要重走那四轮 scope 猎取。
+
+**复现**(全部读数由同一条命令产出,自校验不过即退出码 1):
+
+```bash
+python3 scripts/scratch/2026-10_c5_data_plane/trigger_path_readings.py
+```
+
+### §75.1 donor trigger 的对象形状:class_info → create → vtable
+
+```
+class_info 0x269CAA8 = 0x14034C090, 0x141B30450, 0x14034C090, 0x141B304B0
+create 0x1B30450 的 lea 目标 = 0x268ED08, 0x26725C8, 0x26726C0
+`mov [rbx], rax` @ 0x1B304A4            → 0x268ED08 被写进对象 [0]
+vtable 0x268ED08: slot[5](+0x28) = 0x1B183B0   slot[16](+0x80) = 0x349230
+```
+
+与 §23.2 的 consumer 读法对齐:trigger 侧 create 之后写 `[obj+0x38]`=id、`[obj+0x40]`=name,
+然后调 `[vptr+0x80]`。0x349230 就是那个槽的 donor 实现。
+
+### §75.2 0x349230 是 72 B 的谓词,收 `(self, X)`
+
+```
+0034923a  mov  rdi, rdx          ; X = 第 2 实参
+0034923d  mov  rbx, rcx          ; self
+00349240  test rdx, rdx / je  -> return true
+00349245  mov  rax, [rcx] / call qword ptr [rax + 0x70]   ; self 的 +0x70 取值器
+0034924b  test rax, rax / je  -> return true
+00349250  mov  rax, [rbx] / call qword ptr [rax + 0x70]
+00349259  test rdi, rax / setne al                        ; return X != 那个值
+```
+
+形状与 effect 谓词 §52 fact 3 的同构:`(child, parent)` → `if (!parent) true; x = child->[+0x78](); return x != parent`。
+两边都是「拿到一个对象指针,和一个 self 自己的取值器比一比」。
+
+### §75.3 两个实参分别从哪来(`0x349AE0` 逐条)
+
+```
+00349b06  mov     r12, r9                       ; r12 = 第 5 实参
+00349cb1  mov     rdx, r12                      ; 谓词第 2 实参
+00349cb4  mov     rcx, rdi                      ; 谓词第 1 实参 = 新对象
+00349cb7  call    qword ptr [rax + 0x80]        ; slot[16] 谓词
+0034a007  mov     qword ptr [rdx + 0x180], rdi  ; 往上下文里写
+0034a011  mov     r8, qword ptr [rbp + 0x7f]
+0034a015  mov     rdx, r13
+0034a018  mov     rcx, rdi
+0034a01b  call    qword ptr [rax + 0x28]        ; slot[5] 求值
+```
+
+⇒ **谓词槽** `+0x80` 收 `(对象, r9)`;**求值槽** `+0x28` 收 `(对象, r13, [rbp+0x7f])`。两个槽都在
+同一条实例化路径上被调到,这与 §52 fact 7「trigger path differs, `0x349AE0` reaches `[vptr+0x28]`」一致。
+
+### §75.4 基体是共用的,但 21 字节指纹分不开它和 effect 谓词
+
+```
+initialized qwords == 0x140349230: 1091   align={0: 1091}
+0x349230: 48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9 48 85 d2 74 25 48 8b 01 ff 50 70 48 85 c0 74 1a
+0x3b1420: 48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9 48 85 d2 74 25 48 8b 01 ff 50 78 48 85 c0 74 1a
+first 21 bytes equal: True; offset 26 = 0x70 vs 0x78
+```
+
+两条读数各有用处:
+
+1. **1,091 处引用**(全部 8 对齐)说明 `0x349230` 是一个**共用基体**,不是一个类的私有实现。
+   注意口径:`1,091` 是「等于这个地址的 qword 个数」,**不是**「1,091 张表的 slot[16]」——
+   槽号只由 donor 表的 `+0x80` 推出来,没有穷举验证。要给槽号一个全量证人,得另外做一次按表基址归位的扫描。
+2. **前 21 字节与 effect 谓词 `0x3B1420` 逐字节相同**,差别只在偏移 24..26 的调用槽
+   (`FF 50 70` vs `FF 50 78`)⇒ 任何少于 27 字节的前序指纹都**不能**证明 detour 装在触发谓词上。
+   新 guard 钉 32 字节(`src/dll/c2/trigger_pred_probe.zig` 的 `EXPECTED_CODE`)。
+
+### §75.5 donor 求值槽把第 2 实参当解析上下文用
+
+```
+01b183c2  mov     rbx, rdx                 ; X
+01b183c5  mov     rdi, rcx                 ; self
+01b183d0  mov     rcx, rbx
+01b183d3  call    0x1D0C9F0               ; 名字构造器(§52.1:[ctx+0x30] 的读者)
+01b183db  mov     rdx, qword ptr [rbx + 0x288]
+```
+
+**这一条是本节最重要的一条否定**:X 被直接喂给名字构造器 `0x1D0C9F0`,并被按 `[X+0x288]` 取字段 ⇒
+X 的形态是**解析上下文**,与 effect 侧 `0x3B01A0` 拿到的是同一族(§52.1 那句
+「the real event scope is not a valid parse context」说的是同一件事)。
+
+### §75.6 判读边界
+
+- **能说的**:触发谓词槽是 `+0x80`、收 `(self, X)`;触发求值槽是 `+0x28`、收 `(self, ctx, a3)`;
+  两者都从 `0x349AE0` 被调到;`0x349230` 是共用基体;21 字节指纹不够。
+- **不能说的**:「X 就是被求值的星系对象」。§75.5 的读数把这条**削弱**了 —— X 是解析上下文。
+  「scope 被直接交到我们手上、所以 C5 可以绕开热路径那四轮」这个假设**不成立为结论**,
+  它现在只是一个待观测的分支。
+- **不能说的**:「§5.2 因此收口」。本节只把「下一发往哪儿打」从「热路径四根」换成
+  「`+0x80` 的计数与 X 的身份」;是否每个系统一个 X,是点名 shot 的读数,不是本节的推论。
+- **§68.8 ② 的移交不受影响**:那一行说的是 scope 载体一问剩一条新路线,本节不是那条路线的判决,
+  只是把它具体化成「谓词/求值两个槽的实参形态」。
+
+### §75.7 落点
+
+- 新 guard 的靶与指纹:`0x349230` + 32 B(`EXPECTED_CODE`),见 `src/dll/c2/trigger_pred_probe.zig`。
+- 下一发的问题:谓词被调几次、X 的 vtable/区域长什么样 —— 判据与 verdict 值域见
+  `docs/offline-tooling.md` 的 `c2_trigger_pred_probe.py` 一节。
+
+## §76 触发谓词第一发:装拆干净、`calls` ≈ 9,800/s,但 `+0x80` 在 787 次求值里只被调 **11** 次且 X 恒为 **0x80** ⇒ 谓词是实例化期检查,不是每次求值(2026-10-28,点名 ×1)
+
+**授权级别**:点名(2026-10-28 本会话内授权「打这一发」)。一进程一次 install 额度 —— pid 3604,本发之后
+该进程的 trigpred guard 已拆净(`Uninstall rc=0`、`Verify rc=0`),但**同一进程不再重打**(纪律见 §57.5)。
+
+**这一发问的是什么**:§75 留下的那个数 —— 一个 trigger 放进 `every_system` 的 `limit` 之后,谓词槽
+`+0x80`(`0x349230`)被调几次、每次的第 2 实参 X 长什么样。判据与 verdict 值域见
+`docs/offline-tooling.md` 的 `c2_trigger_pred_probe.py` 一节。
+
+**产物**:`evidence/logs/c5_trig_pred_4_4_4.tsv`(20 行 `#meta` + 表头 + **11 行**)。
+
+### §76.1 门与清理(硬门逐条)
+
+```
+layout   version=1 entry_size=40 ring_len=256 stats_size=40 target_rva=0x349230 prologue_len=32
+inject   sqjs_c5.dll sha256 = 59A97C02…B819461C(与本地 zig-out/bin 逐字对上)
+gate     IN_GAME_RUNNING(pause=playing console=closed window=none)
+install  rc=0   premise: 32 B 指纹,前 21 B 与 0x3B1420 相同、偏移 26 = 0x70
+C1Run    trigger_token=68636(进程里早已注册,与 C:/temp/c1_result.log 一致)
+uninstall rc=0  verify rc=0  host alive = 1
+```
+
+### §76.2 三个数,按读数说
+
+| 键 | 值 | 出处 |
+|---|---|---|
+| `calls`(谓词基体的调用总数) | 1,467,771(≈ **9,800/s**,窗口约 150 s) | `stats_final` |
+| `token_matched`(= `[self+0x38] == 18203`) | **11** | `stats_final` |
+| 脚本实际求值的系统数 | 787(`every_system`),其中 **78** 个 `is_rim_system` 为真并写了 `TS_RIM_<名>` | `game.log`: `MARKER_TS_RIM=78` |
+
+artifact 的 11 行**逐行同形**:
+
+```
+token	self_ptr	self_vtable_rva	x_ptr	x_vtable_rva
+18203	0x1ea57b430	0x26938f8	0x80	0x0
+18203	0x1c6731e20	0x26938f8	0x80	0x0
+…(共 11 行,self_ptr 有 7 个不同值,self_vtable_rva 全 = 0x26938F8,x_ptr 全 = 0x80)
+```
+
+`0x26938F8` 是 `is_rim_system` 的 vtable(`vtable.py 0x26938f8` 读出 slot[9] 引用
+`IS_RIM_SYSTEM_TRIGGER`,slot[16] 也是 `0x349230`)—— 所以 detour 确实抓的是 trigger,不是别的东西。
+
+### §76.3 判决:**谓词不是每次求值**
+
+787 次 `limit` 求值,谓词只被调 **11** 次;11 次里 X 全等于 `0x80`(小常量,不是指针,`x_vtable_rva=0`)。
+
+- **形状与 §54 的 effect 侧同源**:§54 那次 206,695 次谓词调用里,armed token 只匹配 **1** 次。
+- 所以 `+0x80` 是**实例化期**的 scope 检查:`if (!X) true; y = self->[+0x70](); return X != y` —— X 是
+  一个 scope/类型掩码,不是被求值的对象。
+- **verdict 按读数 = `predicate_instantiate_once`**(不是 `predicate_per_system`)。驱动自己在 artifact 里
+  写的是 `script_refused`,理由是「marker 30 s 内没出现」;那两格是**驱动口径**的问题,见 §76.4。
+  本节以读数为准,并把这个分歧原样留在案:**同一份 artifact 上,`overall_verdict` 与
+  `stats_final/last_token` 打架**,下一发之前必须先修驱动的口径(§76.4 第 2 条)。
+
+### §76.4 三条通道/驱动缺陷(都实测到了,都还没修)
+
+1. **`game.log` 是缓冲写的,30 s 等不到 marker。** 驱动 `SCRIPT_WAIT_S = 30`;实测 RIM 的 78 条 marker
+   在**约 2 分钟后**才落盘(`GAME_LOG size=1606 → 10101`)。⇒ 两段的 `sent_*` 全 0,但它们**不是**
+   `script_refused` 的证据,只是「30 s 内没看见」。
+2. **verdict 只看两个窗口,丢掉了 poll 窗。** 11 次匹配全部落在 `--poll-s 120` 那一段
+   (`stats_b_raw` 时 `token_matched=0`,`stats_final` 才 11)。驱动把 poll 窗只记进 `stats_final`、
+   不参与 `verdict()` ⇒ 一次「脚本晚到」被读成了「脚本没跑」。
+3. **NEO 段的命令从未被守护进程消费。** supervisor 的 `ns_game_log.jsonl` 里**只有一条 `command` 事件**
+   (RIM,`21:39:50`),没有 NEO 的;`game.log` 里 `TS_NEO=0`。而驱动在 `_send_console` 返回 False 之后
+   仍然写下一条命令,**把还没被消费的 NEO 命令覆盖掉了**(`ns_game_cmd.txt` 里最后只剩 RIM)。
+   NEO 是否**本身**会失败(scope 类型)仍未验证 —— 它没被送到。
+
+诊断用的只读探针:`scripts/scratch/2026-10_c5_data_plane/probe_logs.py`(game.log 尾部 + supervisor
+事件 + 命令文件/`.seen` 的状态,一次打印);它的输出留在 `evidence/logs/c5_trig_pred_after_4_4_4.txt`。
+
+### §76.5 对 §75 的修正(append-only,不改写 §75)
+
+§75.5 写的是「X 的形态是解析上下文」,依据是 donor 的 **slot[5]**(求值槽 `0x1B183B0`)把第 2 实参
+喂给名字构造器 `0x1D0C9F0`。本节实测的 X 来自 **slot[16]**(谓词槽),它是 `0x80` —— 一个常量。
+
+⇒ **§75.5 那条结论只适用于求值槽的第 2 实参,不能推广到谓词槽。** 两个槽的实参不是同一个东西:
+- 谓词槽 `+0x80`:第 2 实参是**小常量**(本节实测 `0x80`);
+- 求值槽 `+0x28`:第 2 实参是 `ctx`,donor 把它当解析上下文用(§75.5 的读数)。
+
+§75.6 的「不能说的」因此要加一条:**不能说「谓词拿到的 X 是 scope 或解析上下文」** —— 它是掩码量。
+
+### §76.6 下一靶(零 shot,已定形)
+
+`is_rim_system` 的 vtable `0x26938F8` 的 **slot[5] (+0x28) = `0x1A91A80`**,而 `.rdata` 里等于它的
+qword 有 **352** 个 ⇒ 它也是一个**共用基体**,且是**每次求值**走的那一个(§75 读数 3:
+`0x34A01B call [rax+0x28]`,实参 `rcx=self, rdx=r13, r8=[rbp+0x7f]`)。它的头部:
+
+```
+01a91a8f  mov  rdi, rcx        ; self
+01a91a92  mov  rsi, r8         ; a3
+01a91a95  add  rcx, 0x78       ; &self[0x78]
+01a91a99  mov  rbx, rdx        ; ctx
+01a91a9c  call 0x1A918E0
+01a91aa1  mov  rax, [rdi]
+01a91aa4  lea  rdx, [rbx + 0x278]   ; ctx + 0x278
+```
+
+⇒ 下一发把 detour 从 `0x349230` 换到 **`0x1A91A80`**,记 `(self, ctx, a3)`;要问的是
+「ctx 或 `ctx+0x278` 上有没有星系的身份」。这是**新仪器**(新靶、新指纹、新 Entry 字段),
+不在本计划内 —— 归下一份计划,判据与授权级由它自己写。
+
+### §76.7 复现命令
+
+```bash
+just game cmd status        # 清掉上一次的 quit,否则新 daemon 起来就退出
+just game start
+just game unpause
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py status"     # -> IN_GAME_RUNNING
+just win "python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_trigger_pred_probe.py \
+  C:/temp/sqjs_c5.dll --systems 787 --script-file C:/temp/ts_scripts.txt --poll-s 120 \
+  --out C:/temp/c4_trig_pred.tsv"
+scp Windows_Jiaolong:C:/temp/c4_trig_pred.tsv evidence/logs/c5_trig_pred_4_4_4.tsv
+```
+
+`sqjs_c5.dll` 是本发的模块名(**不是** `sqjs_c4.dll`):pid 3604 里 `sqjs_c4.dll` 已被早前会话装载,
+`scp` 覆盖被占用文件实测失败(dest open: Failure),所以本发换名装载同一份字节(sha 逐字相同)。
+**这也意味着该进程里两个模块副本同时在**,后续任何 `[self+0]` join 读数都要先确认不是 `sqjs_c4` 那份
+(本 guard 不读 `[self+0]` 做判据,只读 `[self+0x38]` 的 token,所以本节不受影响)。
+
+### §76.8 修复状态与判决的可辩依据(2026-10-28 终审后追加,append-only)
+
+**§76.4 那三条「都还没修」在同一个提交里就已经修了** —— 本节的标题读作「记录」而不是「待办」。
+逐条对账(全部在 `62fb984` 与 `f792be1` 之后的终审提交里收口):
+
+| §76.4 | 修在哪 | 怎么钉 |
+|---|---|---|
+| ① marker 30 s 等不到 | `SCRIPT_WAIT_S` 30 → **180** + `--script-wait-s` | `docs/offline-tooling.md` 的用法行 |
+| ② verdict 丢掉 poll 窗 | 新增 poll 窗 + 纯函数 `overall_verdict()` | `test_overall_verdict_lets_the_poll_window_win` |
+| ③ 未确认仍写下一段(覆盖未消费命令) | 未确认即停;并且**把 3 s 的 `.seen` 确认换成窗口预算** | 见下一条 |
+
+**③ 的根因终审补上了(此前只写了现象)**:supervisor 在持有世界租约时**整段跳过 `read_command`**
+(`game_supervisor.py` 的 `yield_to_lease` 分支先 `continue`)。本次产物自己就有这条证人 ——
+`evidence/logs/c5_trig_pred_after_4_4_4.txt` 里 21:39:42–21:39:49 连续 8 条 `YIELD_TO_LEASE`,
+21:39:50 才出现唯一的 `command` 事件,21:39:54 `console_sent`。所以 NEO 的命令不是「被拒」,是**被延后**,
+然后被下一段覆盖。`_send_console` 的 3 s 确认窗口短于一次租约持有 ⇒ 现在的实现把「等租约」等满
+`--script-wait-s` 再判,而不是 3 s 就放弃。
+
+**artifact 是修前驱动写的**(meta 里是 `sent_a`/`sent_b`,没有 `delivered_*`/`marker_*`/`verdict_poll`)。
+本节的读数按 artifact 原样保留;要让 JSON 级的 meta 与当前驱动一致,只有重打一发(未打)。
+
+**判决的可辩依据要换一条(此前用的是比值,而比值分母的来源被夸大过)**:
+
+1. **787 不是本窗口的求值次数。** 它来自**存档拷贝**(10:56 UTC 的 `save_hypergraph.py`,见
+   `evidence/logs/c5_save_graph_4_4_4.log`),不是 shot 里的计数。§76.2 把它写成「脚本实际求值的系统数」
+   是错的;能说的只有「按存档,这场战役有 787 个系统」。工具文档自己也写着「拿它当分母会把
+   `token_matched=1` 判成 `predicate_instantiate_once` —— 结论对、理由错」。
+2. **那 11 次匹配属于官方 `is_rim_system`(token 18203),不是 C1 的 `neo_effect`(68636)。**
+   artifact 的 11 行全是 `token=18203`;NEO 段的命令从未送达(§76.4 ③)⇒ **C5 自己的 keyword 在这一发里
+   一次也没被求值过**。所以本节的结论是关于「一个 system-scoped 官方 trigger」的,不是关于 C5 keyword 的。
+3. **结论该站在哪两条上**:①artifact 里 **11 次调用落在 7 个不同的 `self_ptr` 上**(7 个对象,不是 787 个);
+   ②基体自己的代码形状 `if (!X) true; x = self->[+0x70](); return X != x` —— 是「拿一个掩码和自身掩码
+   比一比」,不是「把对象交给调用方」。两条合起来才支撑「实例化期检查」;`11 vs 787` 只是**一致**,
+   不是依据。

@@ -1,0 +1,119 @@
+# C5 数据面 Task 5 —— 当前战役的星连图与星系数（2026-10-28，文件拷贝，不是 shot）
+
+## 1. 存档来源
+
+`find_save.py`（一次性探针，`scripts/scratch/2026-10_c5_data_plane/find_save.py`）在主机上枚举到的根：
+
+```
+HOME	C:\Users\13229
+ROOT	C:\Users\13229\Documents\Paradox Interactive\Stellaris\save games
+```
+
+选中的是**最新的一份自动存档**（mtime 最大）：
+
+```
+SAV	1793184994	2022384	C:\Users\13229\Documents\Paradox Interactive\Stellaris\save games\_1474567734\autosave_2231.07.01.sav
+```
+
+- 战役目录：`_1474567734`
+- 存档名：`autosave_2231.07.01.sav`（游戏内日期 **2231.07.01**）
+- 字节数：**2,022,384**
+- 主机侧 mtime（epoch）：`1793184994` = 2026-10-28 10:56:34 UTC
+- 本地副本 sha256：`32413c3e885f75523910135fa2be6cbc534a6a98847d2c0b2e9bee325a725362`
+
+**通道说明（与计划的一处偏离，已记 ledger）**：计划 Step 1 用的是 powershell 一行命令，实测被本机 sshd 的
+默认 shell 拆坏两次（`cmd /c dir /s "…\*.sav"` → GBK 的「系统找不到指定的路径」；
+`Get-ChildItem … | Select-Object …` → sh 的「未绑定的变量」）。改用仓库自己用惯的通道——
+`scp` 一个 `C:/temp/<name>.py` 探针 + `python C:/temp/<name>.py`（justfile 的 launch/deploy 都是这个形状）。
+
+## 2. 复现命令
+
+```bash
+scp scripts/scratch/2026-10_c5_data_plane/find_save.py Windows_Jiaolong:C:/temp/find_save.py
+just win "python C:/temp/find_save.py"
+scp "Windows_Jiaolong:C:/Users/13229/Documents/Paradox Interactive/Stellaris/save games/_1474567734/autosave_2231.07.01.sav" /mnt/cache/tmp/opencode/c5_campaign.sav
+sha256sum /mnt/cache/tmp/opencode/c5_campaign.sav
+python3 scripts/save_hypergraph.py /mnt/cache/tmp/opencode/c5_campaign.sav \
+    --edges evidence/xrefs/c5_campaign_edges_4_4_4.tsv --stats
+python3 scripts/chokepoint_scores.py evidence/xrefs/c5_campaign_edges_4_4_4.tsv \
+    --out /mnt/cache/tmp/opencode/c5_scores.tsv --top 10
+```
+
+## 3. 读数
+
+`save_hypergraph.py --stats` 的逐行输出（原样）：
+
+```
+systems=787
+directed_entries=2442
+undirected_edges=1217
+components=1
+isolates=0
+self_loops=0
+duplicate_entries=8
+asymmetric_edges=0
+conflicting_edges=0
+replacement_chars=0
+```
+
+⇒ **星系数 N = 787**，边数 **1,217**，图连通（`components=1`，`isolates=0`）。
+
+`chokepoint_scores.py --top 10` 的前十（`system_id degree betweenness betweenness_norm score is_articulation is_bridge_endpoint`）：
+
+```
+578	4	88288.927339	0.286183	286	0	0
+705	5	80062.845021	0.259519	260	0	0
+610	3	78664.628253	0.254987	255	0	0
+771	4	78382.321496	0.254071	254	0	0
+126	6	78179.032282	0.253413	253	1	0
+587	2	76794.497548	0.248925	249	0	0
+486	2	76771.394770	0.248850	249	0	0
+82	3	72738.565191	0.235778	236	0	0
+274	3	72259.604465	0.234225	234	0	0
+364	4	63087.989268	0.204496	204	0	0
+```
+
+## 4. 与烘焙表的对账：**同一张图**（这一格比数字本身更重要）
+
+```
+$ diff --strip-trailing-cr -q /mnt/cache/tmp/opencode/c5_scores.tsv evidence/xrefs/chokepoint_scores_4_4_4.tsv
+IDENTICAL modulo CRLF
+```
+
+即：**从这份 2231.07.01 存档重建出来的 787 行分数表，与 2026-09-29 那次（烘焙进
+`src/dll/c2/chokepoint_table.zig` 的那一份）逐字节相同，只差 CRLF。** 两条存档的 sha 不同
+（本发 `32413c3e…` vs 表里记的 `6f271294…`），星系数相同（787），边集相同。
+
+**这条读数能说的**：这张图的星连边在本战役里是**稳定**的 —— 至少从 2026-09-29 到 2231.07.01 没有变过。
+所以「构建期烘焙表 + 运行时查表」那条路在本图上不会因为图变了而失真；C4 的 `chokepoint_table.zig`
+（`SCORE_COUNT=787`、`SAVE_SHA256=6f271294…`）对**这场战役**仍然是对的。
+
+**这条读数不能说的**：不能说「图永远不变」。bypass / gateway 会改边（`add_seen_bypass` 那一族在
+§1 的 41 条里），本发只覆盖「同一战役、同一自动存档序列」这一段；`§0` 差异口径第 ④ 项
+「可随战局更新」仍然要求运行时版本信号（spec §2 表末那条 `未观测`）。
+
+**产物取舍（一处偏离，已记 ledger）**：计划要求同时落 edges 与 scores 两张 TSV；实际只提交 edges
+（新信息），scores 不入库 —— 它与既有 `evidence/xrefs/chokepoint_scores_4_4_4.tsv` 逐字节相同（除 CRLF），
+再存一份只会让「哪份是权威」多一个歧义。对账结论写在本节。
+
+## 5. 对 §74.4「已知星系数」那一格的落点
+
+§74.4 明写：下一次 B2 复采要带上的第一格是**存档名 + 星系数**。本发给出了这一格：
+
+| 键 | 值 |
+|---|---|
+| 存档名 | `_1474567734/autosave_2231.07.01.sav`（游戏内 2231.07.01） |
+| 星系数 N | **787** |
+| 与 §74 那次复采的关系 | **未验证** —— §74 的运行记录里没有存档名（§74.4 自己写了这一格缺失），所以「§74 那次是不是这场 787 星的战役」仍然分不开 |
+
+一条只用本发就能算的比值（**读数，不是判据**）：七把 shim 的 2,494 ÷ 787 = **3.17**；
+表首 shim 的 58,027 ÷ 787 = **73.7**。两者都不是整数倍 ⇒「每系统一次」这个最朴素的 per-system 读法
+**不被这两个比值支持**，但也不能被它们否掉（一次遍历里对每个系统调多次同样成立）。
+判据原文是「换一个场景仍是 2,090」，那需要**换场景**，不是换算式。
+
+## 6. 本发对 Task 6 的交付
+
+- `--systems` 的分母 = **787**（Task 6 的命令行必须显式写它；驱动没有默认值，见
+  `docs/offline-tooling.md` 陷阱 3）。
+- 图的稳定性给了 Task 6 一个额外的好处：若 `predicate_per_system` 成立，X 的 `x_vtable_rva` 只要在
+  **同一场战役**里比对，就不受「图变没变」干扰。

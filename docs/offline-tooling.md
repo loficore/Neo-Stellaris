@@ -1340,6 +1340,55 @@ finally: Uninstall → Verify → settle → assert_game_alive`。
 §72.2 记的那份 `c2_shim_probe.py = 791f3a8e…`(那是加陷阱 4 之前的字节;读数不受影响,但「主机侧那份
 = git HEAD」这条对账会当场不过)。
 
+### `scripts/c2_trigger_pred_probe.py [dll] --systems N --script-file <path> [--poll-s 120] [--settle-s 3] [--script-wait-s 180] [--out C:/temp/c4_trig_pred.tsv] [--cmd-file C:/temp/ns_game_cmd.txt]`
+
+**第五把 guard,C5 数据面的第一发。** 靶是**触发谓词基体** `0x349230`(取证卷 §75):trigger 的
+`[vptr+0x80]` 的共用实现,72 B,实参 `(self, X)`;`.rdata` 里 1,091 个 qword 等于它。与 C4 那条线
+**不是同一族**:C4 钩的是 effect 侧(`0x3B1420` 谓词 / `0x3AFD30` Execute),本仪器钩 trigger 侧。
+
+**这一发问的是两个数**(不是「scope 是谁」):一个 trigger 放进 `every_system` 的 `limit` 之后,
+谓词被调**几次**(`token_matched`),以及每次的第 2 实参 X 的**值**(`x_ptr`)。**X 不解引用** ——
+§76 实测它是常量 `0x80`(scope/类型掩码),`x_vtable_rva` 这一列在本靶上恒为 0,留着是给将来的靶用。
+两个方向都算读数 —— `predicate_per_system`(≈ 星系数)与 `predicate_instantiate_once`(==1)都是
+`EVIDENCE_VERDICTS`。`no_calls` 只算环境(getcensus 的口径照旧)。
+
+**两段脚本**:`--script-file` 每行一条 console 脚本。第 1 行用 `C1Run` 当场铸出的 `neo_effect` token
+(unique,但它的 class_info 借的是 country 侧 donor,放进 system scope 可能被判非法);第 2 行用官方
+system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**分别记窗口**(`stats_a_delta` /
+`stats_b_delta`),`token_matched` 不合并 —— 合起来读会把两段混成一个数。
+
+**门序**(照 §70.6 与 `c2_shim_probe` 的家族纪律):`list_exports` 核文件里的十个导出 → `gate_install`
+(world-state 门,注入前)→ `inject_dll` → `C2Sanity==42` → `C4TrigPredLayout` 与驱动常量对账 →
+`C4TrigPredReset` → `C4TrigPredInstall` → `C1Run` 取 token → 每段 `SetToken` + 发脚本 + 读 delta →
+`--poll-s` 观测窗 → `C4TrigPredUninstall` + `Verify` + settle + `assert_game_alive`。
+`Install` 返回 `-2`(已装 / predicate armed)**不重试**;`-5`(指纹)是「靶读错」的发现,停手留证。
+
+**判读陷阱(本仪器专属,三条):**
+
+1. **`script_refused` 不是仪器坏了,`no_calls` 也不是「这一族不存在」。** 脚本没送达或它的 log marker
+   没出现 ⇒ `script_refused`;脚本跑了但谓词一次没匹配 ⇒ `token_absent`;连谓词都没被调 ⇒ `no_calls`。
+   三条互不替代。`neo_effect` 在 system scope 里被判非法时,长这样的是**第 1 段**——第 2 段照样给读数,
+   所以别因为 A 段失败就丢掉整发。
+2. **21 字节指纹不够。** `0x349230` 与 effect 谓词 `0x3B1420` 的前 21 字节**逐字节相同**,只有偏移
+   24..26 的调用槽不同(`FF 50 70` vs `FF 50 78`)⇒ guard 钉 32 字节,驱动的
+   `install_decision` 也核 `prologue_len == 32`。看到「指纹过了但装错函数」的怀疑,先核这一格。
+3. **`--systems` 没有默认值,这是故意的。** 787 属于另一场存档(`chokepoint_table.zig` 的 `SAVE_SHA256`),
+   拿它当分母会把 `token_matched=1` 判成 `predicate_instantiate_once` —— 结论对,理由错。分母只从
+   `save_hypergraph.py` 对**当前存档**重建的边表来。
+
+**artifact**:`#meta` 在前(含 `overall_verdict` / `verdict_a` / `verdict_b` / `stats_*_delta` /
+`uninstall_rc` / `verify_rc` / `host_alive`),然后是 `token self_ptr self_vtable_rva x_ptr x_vtable_rva`
+五列的行。`run()` **先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败。
+判读纯函数(`parse_stats` / `verdict` / `window_refused` / `overall_verdict` / `decode_layout` /
+`decode_entry` / `install_decision` / `artifact_rows` / `parse_mask` / `parse_c1_result` /
+`script_marker`,常量 `STATS_KEYS` / `VERDICTS` / `EVIDENCE_VERDICTS`)由
+`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**32 条**),无游戏、无 Windows API、零 shot。
+
+**drain 的坑(2026-10-28 review Critical)**:满环是 `RING_LEN * ENTRY_SIZE` = **10,240 B**,而
+`C4TrigPredStatsInto` 的文本缓冲只有 512 B。驱动在 drain 前必须 `remote_alloc(RING_LEN * ENTRY_SIZE)`
+并调 **`C4TrigPredSetDrainCap(10240)`** 声明容量(DLL 侧 clamp,未声明就返回 0 行)。`call_remote_with_arg`
+只能传一个寄存器,所以容量是 setter 而不是第二个实参。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把

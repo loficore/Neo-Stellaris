@@ -240,6 +240,13 @@ pub const keyword_reg = struct {
     /// 2,090 is the static counterpart of that one earlier reading, not a standing fact (§74).
     pub const RVA_SHIM_WITNESS_EXECUTE: usize = 0xCC4220;
 
+    /// 触发谓词基体(§75):trigger 侧 `[vptr+0x80]` 的共用实现,72 B,实参 `(self, X)`。
+    /// 它的前 21 字节与 effect 谓词 `RVA_EFFECT_PREDICATE` **逐字节相同**,差别只在偏移
+    /// 24..26 的调用槽(`FF 50 70` vs `FF 50 78`)⇒ 任何短于 27 字节的前序指纹都分不开
+    /// 这两个函数;`trigger_pred_probe.zig` 因此钉 32 字节。
+    /// 口径边界:`1091` 是「等于这个地址的 qword 个数」,不是「1,091 张表的 slot[16]」。
+    pub const RVA_TRIGGER_PREDICATE: usize = 0x349230;
+
     /// §24 — C1 borrows an official `class_info` instead of fabricating an object, so these two
     /// donors are data, not code we write. Aliasing is a shape the shipped game already uses: 9
     /// keyword `class_info`s serve 2-3 token ids each (`if`/`else_if`/`else` on `0x269DC98`), every
@@ -549,4 +556,8 @@ test "C4 execution-path constants are pinned" {
     try std.testing.expect(k.RVA_SHIM_WITNESS_EXECUTE != k.RVA_BASE_EXECUTE);
     try std.testing.expect(k.RVA_SHIM_WITNESS_EXECUTE != k.RVA_EFFECT_DONOR_EXECUTE);
     try std.testing.expect(k.RVA_SHIM_WITNESS_EXECUTE < text_end);
+    // §75 触发谓词基体:与 effect 谓词是两个地址、两段代码,只共享前 21 字节。
+    try std.testing.expectEqual(@as(usize, 0x349230), k.RVA_TRIGGER_PREDICATE);
+    try std.testing.expect(k.RVA_TRIGGER_PREDICATE != k.RVA_EFFECT_PREDICATE);
+    try std.testing.expect(k.RVA_TRIGGER_PREDICATE < text_end);
 }

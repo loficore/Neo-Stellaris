@@ -145,6 +145,12 @@ def peel_timeout(args: list[str]) -> tuple[float, list[str]]:
     return DEFAULT_TIMEOUT_S, args
 
 
+def _printable(text: str) -> str:
+    """Round-trip `text` through stdout's encoding, replacing what it cannot carry."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
@@ -157,7 +163,11 @@ def main(argv=None) -> int:
     script, rest = args[0], " ".join(args[1:])
     output, code = run_interactive(script, rest, timeout_s=timeout_s)
     if output:
-        print(output)
+        # The inner process writes in the host's console codepage (cp936 on this box), and a
+        # shot driver legitimately emits U+FFFD when a memory read decodes as non-ASCII. A
+        # bare print() then dies with UnicodeEncodeError **after** the shot finished, which
+        # costs the whole reading (2026-10-28, §76). Replace what this codec cannot carry.
+        print(_printable(output))
     if code is None:
         print("BRIDGE=timeout (no EXIT sentinel — treat as unknown, not success)")
         return 4
