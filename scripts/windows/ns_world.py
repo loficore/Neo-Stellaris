@@ -227,6 +227,20 @@ def _store(args):
     return ws.Store.load(getattr(args, "state_path", None))
 
 
+def _reported_state(store) -> str:
+    """The state a **bookkeeping** command may honestly report.
+
+    ``arm`` / ``unarm`` / ``consume`` / ``abort`` do not take a reading — they
+    change the books, not the world.  Reporting ``IN_GAME_RUNNING`` from them
+    (which this CLI did until a live smoke caught it printing that with no game
+    running) tells the agent something nobody observed.  So they report what the
+    store last recorded, and ``NO_GAME`` when it has recorded nothing: "we have
+    not observed a game" is a true statement, and it is the one the agent needs.
+    """
+    recorded = store.data.get("state")
+    return recorded if isinstance(recorded, str) and recorded else "NO_GAME"
+
+
 def _emit(state: str, evidence: dict | None, next_actions) -> str:
     """Print the one line and return it."""
     line = render_status(state, evidence, next_actions)
@@ -405,11 +419,11 @@ def cmd_consume(args) -> int:
         _emit("BLOCKED_WITH_EVIDENCE", {"reason": str(exc)}, ())
         return exit_code_for("wedged")
     if not consumed:
-        _emit("IN_GAME_RUNNING", {"reason": f"lease {args.lease!r} could not be "
+        _emit(_reported_state(store), {"reason": f"lease {args.lease!r} could not be "
                                             f"consumed (unknown, used up or expired)"},
               ())
         return exit_code_for("refused")
-    _emit("IN_GAME_RUNNING", {"reason": f"lease {args.lease} consumed"}, ())
+    _emit(_reported_state(store), {"reason": f"lease {args.lease} consumed"}, ())
     return exit_code_for("ok")
 
 
@@ -427,7 +441,7 @@ def cmd_arm(args) -> int:
         _emit("BLOCKED_WITH_EVIDENCE", {"reason": str(exc)}, ())
         return exit_code_for("wedged")
     except ValueError as exc:
-        _emit("IN_GAME_RUNNING", {"reason": str(exc)}, ())
+        _emit(_reported_state(store), {"reason": str(exc)}, ())
         return exit_code_for("refused")
     _emit("GUARD_ARMED", {"reason": f"guard {args.guard} armed on lease {args.lease}"},
           ())
@@ -451,7 +465,7 @@ def cmd_unarm(args) -> int:
     except TimeoutError as exc:
         _emit("BLOCKED_WITH_EVIDENCE", {"reason": str(exc)}, ())
         return exit_code_for("wedged")
-    _emit("IN_GAME_RUNNING", {"reason": f"guard {args.guard} unarmed"}, ())
+    _emit(_reported_state(store), {"reason": f"guard {args.guard} unarmed"}, ())
     return exit_code_for("ok")
 
 
@@ -479,7 +493,7 @@ def cmd_unblock(args) -> int:
     if not ok:
         _emit("BLOCKED_WITH_EVIDENCE", {"reason": reason}, ())
         return exit_code_for("blocked")
-    _emit("IN_GAME_RUNNING", {"reason": reason}, ())
+    _emit(_reported_state(store), {"reason": reason}, ())
     _record("unblock", None, action=args.action, nonce=nonce,
             reason=args.reason or reason)
     return exit_code_for("ok")
@@ -540,7 +554,7 @@ def cmd_abort(args) -> int:
     if blocked is not None:
         reason += (f" — but it is still blocked ({blocked['attempts']} attempts "
                    f"on record): only 'unblock --evidence' can clear that")
-    _emit("IN_GAME_RUNNING", {"reason": reason}, ())
+    _emit(_reported_state(store), {"reason": reason}, ())
     _record("abort", None, action=args.action, reason=args.reason or "",
             blocked=blocked is not None)
     return exit_code_for("ok")
