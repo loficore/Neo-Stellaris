@@ -7471,6 +7471,9 @@ token	self_ptr	self_vtable_rva	x_ptr	x_vtable_rva
    仍然写下一条命令,**把还没被消费的 NEO 命令覆盖掉了**(`ns_game_cmd.txt` 里最后只剩 RIM)。
    NEO 是否**本身**会失败(scope 类型)仍未验证 —— 它没被送到。
 
+诊断用的只读探针:`scripts/scratch/2026-10_c5_data_plane/probe_logs.py`(game.log 尾部 + supervisor
+事件 + 命令文件/`.seen` 的状态,一次打印);它的输出留在 `evidence/logs/c5_trig_pred_after_4_4_4.txt`。
+
 ### §76.5 对 §75 的修正(append-only,不改写 §75)
 
 §75.5 写的是「X 的形态是解析上下文」,依据是 donor 的 **slot[5]**(求值槽 `0x1B183B0`)把第 2 实参
