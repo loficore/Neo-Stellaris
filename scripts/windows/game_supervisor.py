@@ -12,6 +12,11 @@ The command file is one line, consumed once; every action re-reads the pause
 icon because closing an event window can unpause the game by itself.
 """
 
+# ``world_state`` sits one directory up in the repo and beside this module
+# on the wire (C:\\temp); ``numpy`` is only installed on the Windows host,
+# so a static checker cannot resolve either from here.  Both resolve at run
+# time on the box that runs the daemon.
+# pyright: reportMissingImports=false
 from __future__ import annotations
 
 import argparse
@@ -462,7 +467,7 @@ def _launch():
 
 def _user32():
     import ctypes
-    return ctypes.windll.user32
+    return ctypes.windll.user32  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def _be_dpi_aware() -> None:
@@ -484,7 +489,7 @@ def window_candidates(pid: int) -> list:
     user32 = _user32()
     cands = []
 
-    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)  # pyright: ignore[reportAttributeAccessIssue]
     def cb(hwnd, _):
         wpid = wt.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
@@ -585,7 +590,7 @@ def _set_clipboard_text(text: str) -> bool:
     import ctypes.wintypes as wt
 
     user32 = _user32()
-    kernel32 = ctypes.windll.kernel32
+    kernel32 = ctypes.windll.kernel32  # pyright: ignore[reportAttributeAccessIssue]
 
     user32.OpenClipboard.argtypes = [wt.HWND]
     user32.OpenClipboard.restype = wt.BOOL
@@ -680,6 +685,21 @@ def read_console(hwnd: int):
     luma = a.mean(axis=2) if a.ndim == 3 else a
     px = int((luma > CONSOLE_BRIGHT_MIN).sum())
     return classify_console(px), px
+
+
+def _console_state_word(seen) -> str:
+    """``classify_console``'s three-valued answer as the state machine's word.
+
+    ``True``/``False``/``None`` → ``open``/``closed``/``undecided``.  ``None``
+    stays ``undecided``: it is the reading that lands on the blocking side
+    (spec §5), and folding it into ``closed`` is exactly the confident
+    misreading this project keeps paying for.
+    """
+    if seen is True:
+        return "open"
+    if seen is False:
+        return "closed"
+    return "undecided"
 
 
 def apply_console_observation(state, seen, bright_px: int):
@@ -1088,6 +1108,77 @@ def _read_status():
         return None
 
 
+def _consume(state: dict, lease_id: str, now: float | None = None) -> bool:
+    """Use a lease up after the action it authorised actually happened.
+
+    One lease, one use (spec §6 rule 1): leaving it outstanding would hold the
+    world against every later action for the rest of its TTL, and the daemon
+    would spend 30 seconds standing aside from itself.
+    """
+    try:
+        import world_state
+    except ImportError:
+        return False
+    stamp = time.time() if now is None else now
+    path = state.get("state_path")
+    try:
+        store = world_state.Store.load(path) if path else world_state.Store.load()
+        with store.locked():
+            used = world_state.consume(store, lease_id, stamp)
+            if used:
+                store.save()
+        return used
+    except (OSError, ValueError, TimeoutError):
+        return False
+
+
+def acquire_or_refuse(state: dict, action: str, *, guard: str | None = None,
+                      now: float | None = None) -> str | None:
+    """Take a lease for a world-changing verb, or log ``REFUSED_<action>``.
+
+    spec §12(a) point 1: 「agent 不再直接调 `just game click|unpause|console_close`;
+    这些动词要么删掉,要么改成「先拿租约再转调」的薄壳」.  This is that shell.
+
+    Returns the lease id on success — the caller then does the thing and
+    consumes the lease — or ``None``, having logged why it did not.  A refusal
+    is a **logged event**, never a silent no-op: a window that stops acting
+    must be distinguishable from a window that is fine.
+
+    The clock and the store are named parameters so the host tests can drive
+    this without a game, a screenshot or the wall clock.
+    """
+    try:
+        import world_state
+    except ImportError:
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            import world_state
+        except ImportError:
+            _log({"event": f"REFUSED_{action}", "reason": "world_state_unavailable"})
+            return None
+    stamp = time.time() if now is None else now
+    path = state.get("state_path")
+    try:
+        store = world_state.Store.load(path) if path else world_state.Store.load()
+    except (OSError, ValueError) as exc:
+        _log({"event": f"REFUSED_{action}", "reason": f"state_unreadable: {exc}"})
+        return None
+    try:
+        with store.locked():
+            ok, detail = world_state.assert_ready(
+                store, action, guard=guard, probe_evidence=state.get("probe") or {},
+                now=stamp)
+            if ok:
+                store.save()
+    except TimeoutError as exc:
+        _log({"event": f"REFUSED_{action}", "reason": f"lock_timeout: {exc}"})
+        return None
+    if not ok:
+        _log({"event": f"REFUSED_{action}", "reason": detail})
+        return None
+    return detail
+
+
 def _handle_command(cmd, hwnd, state):
     """Apply one parsed command; returns ``(quit_now, one_shot_policy)``."""
     verb = cmd["verb"]
@@ -1119,11 +1210,18 @@ def _handle_command(cmd, hwnd, state):
         time.sleep(0.6)
         state["speed_sha"] = [before, speed_label_sha(hwnd)]
     elif verb == "click" and hwnd:
+        # A raw click is a world-changing action (spec §12(a) point 1): it needs
+        # a lease like every other one, so the agent cannot move the world by
+        # asking the daemon to click a pixel.
+        lease = acquire_or_refuse(state, "click_option")
         rect = window_rect(hwnd)
-        if _inside(rect, cmd["x"], cmd["y"]):
+        if lease is None:
+            pass
+        elif _inside(rect, cmd["x"], cmd["y"]):
             if focus(hwnd):
                 _launch()._click_at(cmd["x"], cmd["y"])
                 state["console_open"] = None
+                _consume(state, lease)
             else:
                 _log({"event": "click_refused", "x": cmd["x"], "y": cmd["y"]})
     elif verb == "console" and hwnd:
@@ -1135,7 +1233,7 @@ def _handle_command(cmd, hwnd, state):
         elif not _set_clipboard_text(cmd["text"]):
             _log({"event": "console_clipboard_failed", "chars": len(cmd["text"])})
         else:
-            for vk, scan, flags, delay in console_key_plan(open_console=arg):
+            for vk, scan, flags, delay in console_key_plan(open_console=bool(arg)):
                 _send_input_event(vk, scan, flags)
                 time.sleep(delay)
             time.sleep(0.3)
@@ -1145,6 +1243,10 @@ def _handle_command(cmd, hwnd, state):
     elif verb == "console_close" and hwnd:
         # The pause key cannot reach the game while the panel is open, so a
         # console the daemon left open needs a way back to a known-closed state.
+        # Closing it is world-changing, so it goes through the same lease.
+        lease = acquire_or_refuse(state, "console_close")
+        if lease is None:
+            return quit_now, one_shot
         if state.get("console_open") is not True:
             _log({"event": "console_refused", "hwnd": hwnd,
                   "reason": "console_state_unknown"})
@@ -1184,7 +1286,43 @@ def _handle_command(cmd, hwnd, state):
     return quit_now, one_shot
 
 
-def serve(args) -> int:
+def yield_to_lease(state_path: str | None = None, now: float | None = None) -> str | None:
+    """The lease this tick must stand aside for, or ``None``.
+
+    spec §12(a) point 2: the daemon is the *other* thing that changes the
+    world, so the two of them cooperate instead of competing — every tick,
+    before anything else, it asks whether the agent holds a lease and stands
+    down if it does.
+
+    The judgement lives in ``world_state.yield_to_lease`` (pure, so the host
+    tests can reach it); this wrapper only supplies the clock and the file.
+    A store that cannot be read is **not** a reason to yield: a broken state
+    file must not freeze the game, and the daemon has always been the half
+    that keeps driving.
+    """
+    try:
+        import world_state
+    except ImportError:
+        # In the repo the state machine is one directory up; on the wire both
+        # files sit in C:\\temp beside each other.  Try both, and treat a real
+        # absence as "no lease to defer to" rather than as an error — the
+        # daemon's job is to keep driving the game, and a missing state file
+        # has never been a reason to stop.
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            import world_state
+        except ImportError:
+            return None
+    stamp = time.time() if now is None else now
+    try:
+        store = (world_state.Store.load(state_path) if state_path
+                 else world_state.Store.load())
+    except (OSError, ValueError):
+        return None
+    return world_state.yield_to_lease(store, stamp)
+
+
+def serve(args, once: bool = False) -> int:
     _require_windows()
     rng = random.Random()
     state = {"want": "playing", "policy": args.policy, "paused": "unknown",
@@ -1208,7 +1346,29 @@ def serve(args) -> int:
     last_pid = None
     quit_now = False
     _log({"event": "serve_start", "pid": os.getpid()})
+    # ``once`` is a tick budget checked at the TOP of the loop, not a return at
+    # the bottom: the body has several ``continue`` paths (no game, capture
+    # error), and a bottom-of-loop check would be skipped by every one of them
+    # — which is exactly how a "run one tick" test hangs instead of failing.
+    remaining = 1 if once else None
     while not quit_now:
+        if remaining is not None:
+            if remaining <= 0:
+                return 0
+            remaining -= 1
+        # First thing every tick (spec §12(a) point 2): is somebody else
+        # changing the world right now?  If so, this tick does nothing but say
+        # that it stood aside — the deferral is loud on purpose, because a
+        # window that stops acting must not look like a window that is fine.
+        deferring = yield_to_lease(getattr(args, "state_path", None))
+        if deferring is not None:
+            _log({"event": "YIELD_TO_LEASE", "lease": deferring})
+            _write_status({"pid": 0, "hwnd": 0, "state": "yield_to_lease",
+                           "note": "YIELD_TO_LEASE", "lease": deferring,
+                           "want": state["want"], "policy": state["policy"],
+                           "handled": handled, "last_cmd": last_cmd})
+            time.sleep(args.interval)
+            continue
         pid, hwnd = find_game()
         if pid != last_pid:
             # A launched game starts with its console closed; carrying the
@@ -1285,6 +1445,18 @@ def serve(args) -> int:
             forget_popup_reading(state)
         if paused == "playing":
             state["resume"] = False
+        # Publish this tick's reading (spec §10's R4 shape) so a world-changing
+        # verb handled below can be gated on it instead of taking a second
+        # screenshot — the design's whole complaint about checklists is that
+        # they cost three captures per action.
+        state["probe"] = {
+            "pause": {"state": paused, "red_px": red, "green_px": green},
+            "console": {"state": _console_state_word(seen), "bright_px": console_px},
+            "window": {"kind": window, "gold_px": int(stats.get("gold") or 0),
+                       "row_count": len(stats.get("rows") or ()),
+                       "option_count": len(nrows), "bbox": nbbox},
+            "raw": {}, "pid": int(pid or 0), "hwnd": int(hwnd or 0),
+        }
         action, extra = plan_step(state["want"], paused, window,
                                   resume_commanded=state["resume"])
         note = "ok"
@@ -1493,6 +1665,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--policy", default="first")
     s.add_argument("--no-ocr", action="store_true")
     s.add_argument("--popup-allowlist", default=POPUP_ALLOWLIST_PATH)
+    # The world-state file the daemon defers to (spec §12(a) point 2).  Named,
+    # so the host tests can point the daemon at a tmp store instead of C:\temp.
+    s.add_argument("--state-path", default=None)
     start = sub.add_parser("start")
     start.add_argument("--timeout-s", type=int, default=30)
     start.add_argument("--pythonw", default=None)

@@ -8,7 +8,9 @@ No Windows API, no PIL, no numpy.
 import inspect
 import json
 import os
+import pathlib
 import random
+import time
 
 import pytest
 
@@ -279,6 +281,39 @@ def test_console_command_refuses_instead_of_guessing_when_state_is_unknown(
     assert "console_refused" in _logged_events(tmp_path)
 
 
+def _armed_state(tmp_path, action, **over):
+    """A ``state`` dict carrying a lease for ``action``, as ``serve`` builds it.
+
+    Since spec §12(a) point 1 the world-changing verbs go through the lease, so
+    a test that exercises one has to arm it first — the gate is not a detail of
+    the verb, it *is* the verb's precondition.
+    """
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    import world_state as ws
+
+    probe = {
+        "pause": {"state": "playing", "red_px": 61, "green_px": 40},
+        "console": {"state": "closed", "bright_px": 300},
+        "window": {"kind": "none", "gold_px": 0, "row_count": 0,
+                   "option_count": 0, "bbox": None},
+        "raw": {}, "pid": 4242, "hwnd": 7,
+    }
+    # One store per call: ``acquire`` allows a single outstanding lease, so a
+    # shared file would make the second verb in a loop fail for the wrong reason.
+    path = tmp_path / f"ns_world_{len(list(tmp_path.glob('ns_world*.json')))}.json"
+    store = ws.Store.load(path)
+    with store.locked():
+        lease = ws.acquire(store, action, guard=None, state="IN_GAME_RUNNING",
+                           fingerprint=ws.lease_fingerprint(probe), now=time.time())
+        assert lease is not None
+        store.save()
+    state = {"want": "paused", "console_open": True, "probe": probe,
+             "state_path": str(path)}
+    state.update(over)
+    return state
+
+
 def test_game_input_verbs_invalidate_the_console_belief(monkeypatch, tmp_path):
     # A click in the game area or a speed key can close or defocus the panel;
     # after any input aimed at the game the panel state is no longer known.
@@ -286,8 +321,9 @@ def test_game_input_verbs_invalidate_the_console_belief(monkeypatch, tmp_path):
                       ("click", {"verb": "click", "x": 10, "y": 20}),
                       ("dismiss", {"verb": "dismiss"})):
         sent = _input_stub(monkeypatch, tmp_path)
-        state = {"want": "paused", "console_open": True,
-                 "last_bbox": (100, 100, 200, 200), "paused": "paused"}
+        action = "click_option" if verb == "click" else "unpause"
+        state = _armed_state(tmp_path, action,
+                             last_bbox=(100, 100, 200, 200), paused="paused")
         gs._handle_command(cmd, 7, state)
         assert state["console_open"] is None, verb
 
@@ -311,13 +347,13 @@ def test_console_close_taps_once_only_when_the_panel_is_believed_open(
     # open.  Toggling is only safe when the parity is known.
     assert gs.parse_command("console_close") == {"verb": "console_close"}
     sent = _input_stub(monkeypatch, tmp_path)
-    state = {"want": "paused", "console_open": True}
+    state = _armed_state(tmp_path, "console_close")
     gs._handle_command({"verb": "console_close"}, 7, state)
     assert sent == [(0, 0x29), (0, 0x29)]
     assert state["console_open"] is False
 
     sent = _input_stub(monkeypatch, tmp_path)
-    state = {"want": "paused", "console_open": None}
+    state = _armed_state(tmp_path, "console_close", console_open=None)
     gs._handle_command({"verb": "console_close"}, 7, state)
     assert sent == []
     assert "console_refused" in _logged_events(tmp_path)

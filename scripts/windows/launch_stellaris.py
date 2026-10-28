@@ -2,6 +2,10 @@
 
 See docs/superpowers/specs/2026-09-29-launch-stellaris-design.md for the contract.
 """
+# This module is Windows-only: it imports ``pywinauto`` and reads Win32
+# through ``ctypes``, neither of which resolves on the Linux host where the
+# fast gates run.  Both resolve on the box that launches the game.
+# pyright: reportMissingImports=false, reportAttributeAccessIssue=false
 from __future__ import annotations
 
 import argparse
@@ -249,7 +253,9 @@ class _ArgParser(argparse.ArgumentParser):
     """Resolves --bridge-timeout-s after parsing: its default depends on
     --unpause, which argparse cannot express as another flag's default."""
 
-    def parse_args(self, args=None, namespace=None):
+    def parse_args(self, args=None, namespace=None):  # pyright: ignore[reportIncompatibleMethodOverride]
+        # Same signature as ``argparse.ArgumentParser.parse_args``; the only
+        # work added is resolving the dependent default after the parse.
         parsed = super().parse_args(args, namespace)
         if parsed.bridge_timeout_s is None:
             parsed.bridge_timeout_s = (

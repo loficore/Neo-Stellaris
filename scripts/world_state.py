@@ -1322,6 +1322,32 @@ def _timestamp(value: Any, where: str) -> float:
         raise Unreadable(f"{where} is {value!r}, not a number") from exc
 
 
+def yield_to_lease(store: Store, now: float) -> str | None:
+    """The lease the daemon must stand aside for, or ``None``.
+
+    spec §12(a) point 2: 「`serve` 每 tick 先读状态;若存在未过期租约(尤其是
+    `install` 租约),本 tick 不点任何东西,只记 `YIELD_TO_LEASE`。它是我们的代码,
+    所以这是协作而非竞争。」
+
+    That is the whole of "one world-changer at a time": the agent takes a lease
+    to install a guard, and the daemon — which clicks options and taps the pause
+    key on its own schedule — stands aside for as long as that lease lives.
+    Without this, the two would interleave: the daemon's click would move the
+    world the agent just proved, and the lease's fingerprint would be a
+    statement about a world that no longer exists.
+
+    Read-only and pure: it reports, it does not consume, expire or record.
+    A lease that is consumed or expired does **not** make the daemon yield — a
+    lease that no longer holds the world must not stop the world from being
+    driven forward.
+    """
+    lease = _outstanding_lease(store, now)
+    if lease is None:
+        return None
+    lease_id = lease.get("lease_id")
+    return lease_id if isinstance(lease_id, str) else None
+
+
 def _outstanding_lease(store: Store, now: float) -> dict | None:
     """The lease that is neither expired nor consumed, or ``None``.
 
