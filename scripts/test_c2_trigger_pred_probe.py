@@ -295,3 +295,33 @@ def test_cmd_file_default_is_the_supervisor_channel():
 def test_every_inject_site_is_gated():
     src = (REPO / "scripts/c2_trigger_pred_probe.py").read_text(encoding="utf-8")
     assert src.index("gate_install(") < src.index("inject_dll(")
+
+
+def test_sha_gate_refuses_a_file_that_is_not_there(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        mod.sha_gate(str(tmp_path / "nope.dll"))
+    assert exc.value.code == 2
+    assert "nope.dll" in capsys.readouterr().err
+
+
+def test_sha_gate_records_a_stable_digest(tmp_path):
+    dll = tmp_path / "sqjs_c5.dll"
+    dll.write_bytes(b"bytes-under-test")
+    assert mod.sha_gate(str(dll)) == mod._sha256(str(dll))
+
+
+def test_build_meta_records_the_injected_bytes_and_module():
+    meta = mod.build_meta(
+        dll_path=r"C:\temp\sqjs_c5.dll", dll_sha="ab" * 32, module_base=0x1A0000,
+        systems=787, poll_s=120, settle_s=3, overall="predicate_instantiate_once",
+        per_window=[("neo_effect", "predicate_instantiate_once")], windows=[],
+        final_text="calls=0", cleanup={"uninstall_rc": 0, "verify_rc": 0, "host_alive": 1},
+        trigger_token=10599, layout={"version": 1}, script_wait_s=180)
+    assert meta["dll"] == "sqjs_c5.dll"
+    assert meta["dll_sha256"] == "ab" * 32
+    assert meta["module_base"] == "0x1a0000"
+
+
+def test_sha_gate_runs_before_the_process_is_touched():
+    src = (REPO / "scripts/c2_trigger_pred_probe.py").read_text(encoding="utf-8")
+    assert src.index("sha_gate(args.dll)") < src.index("return run(")

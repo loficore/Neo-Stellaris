@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import struct
 import sys
@@ -281,6 +282,82 @@ def write_tsv(path, rows, meta):
     os.replace(tmp, path)
 
 
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def sha_gate(dll_path):
+    """Hash the exact file this shot will inject, or refuse before touching a process.
+
+    Prints and records rather than asserting a pinned constant: a whole-file DLL sha
+    changes on every relink, so it is provenance (which bytes ran), not code identity
+    (docs/offline-tooling.md).  Refusal is `SystemExit(2)` — this driver's pre-fire
+    refusals all exit 2 (same code as `gate_install`); donor's `sha_gate` raises
+    `SystemExit(str)`, which is exit 1, so do not read the two as one code.
+    """
+    if not os.path.isfile(dll_path):
+        print(
+            f"[trigpred] {dll_path} not found — upload the freshly built DLL first "
+            "(this script injects THIS file, so it must be the bytes under test)",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_INSTRUMENT)
+    digest = _sha256(dll_path)
+    print(
+        f"[trigpred] dll={dll_path} sha256={digest}\n"
+        f"[trigpred]   compare with `sha256sum zig-out/bin/stellaris_quickjs.dll` — "
+        "recorded in the #meta line so a failed upload is visible after the fact"
+    )
+    return digest
+
+
+def build_meta(*, dll_path, dll_sha, module_base, systems, poll_s, settle_s,
+               overall, per_window, windows, final_text, cleanup,
+               trigger_token, layout, script_wait_s):
+    """Assemble the `#meta` dict written before the artifact's data rows.
+
+    Pure (no handles, no ctypes) so it is testable off-machine.  `dll` / `dll_sha256` /
+    `module_base` answer "which bytes, in which module copy" — the 2026-10-28 window had
+    `sqjs_c4.dll` and `sqjs_c5.dll` resident at once (§76.7), and a silently failed
+    upload otherwise reads exactly like a real reading.
+    """
+    return {
+        "target_rva": f"{TARGET_RVA:#x}",
+        "systems": systems,
+        "poll_s": poll_s,
+        "settle_s": settle_s,
+        "overall_verdict": overall,
+        "verdict_a": per_window[0][1] if per_window else "-",
+        "verdict_b": per_window[1][1] if len(per_window) > 1 else "-",
+        "verdict_poll": per_window[-1][1] if per_window else "-",
+        "stats_a_raw": windows[0]["text"].strip() if windows else "-",
+        "stats_a_delta": _format_delta(windows[0]["stats"]) if windows else "-",
+        "stats_b_raw": windows[1]["text"].strip() if len(windows) > 1 else "-",
+        "stats_b_delta": _format_delta(windows[1]["stats"]) if len(windows) > 1 else "-",
+        "stats_poll_delta": _format_delta(windows[-1]["stats"]) if windows else "-",
+        "stats_final": final_text.strip(),
+        "delivered_a": int(windows[0]["delivered"]) if windows else 0,
+        "delivered_b": int(windows[1]["delivered"]) if len(windows) > 1 else 0,
+        "marker_a": int(windows[0]["sent"]) if windows else 0,
+        "marker_b": int(windows[1]["sent"]) if len(windows) > 1 else 0,
+        "armed_a": windows[0]["token"] if windows else 0,
+        "armed_b": windows[1]["token"] if len(windows) > 1 else 0,
+        "script_wait_s": script_wait_s,
+        "uninstall_rc": cleanup["uninstall_rc"],
+        "verify_rc": cleanup["verify_rc"],
+        "host_alive": cleanup["host_alive"],
+        "trigger_token": trigger_token,
+        "layout": " ".join(f"{k}={v}" for k, v in layout.items()),
+        "dll": os.path.basename(dll_path.replace("\\", "/")),
+        "dll_sha256": dll_sha,
+        "module_base": f"0x{module_base:x}",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Live path (Windows only; not exercised by the host tests)
 # ---------------------------------------------------------------------------
@@ -460,7 +537,7 @@ def _cleanup(pid, base, exports, settle_s):
     return {"uninstall_rc": uninstall_rc, "verify_rc": verify_rc, "host_alive": int(alive)}
 
 
-def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
+def run(pid, dll_path, dll_sha, scripts, systems, out_path, cmd_file, game_log,
         poll_s, settle_s, script_wait_s=SCRIPT_WAIT_S):
     base, exports = gate_module(pid, dll_path, NEEDED_EXPORTS)
 
@@ -545,34 +622,12 @@ def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
     finally:
         cleanup = _cleanup(pid, base, exports, settle_s)
 
-    meta = {
-        "target_rva": f"{TARGET_RVA:#x}",
-        "systems": systems,
-        "poll_s": poll_s,
-        "settle_s": settle_s,
-        "overall_verdict": overall,
-        "verdict_a": per_window[0][1] if per_window else "-",
-        "verdict_b": per_window[1][1] if len(per_window) > 1 else "-",
-        "verdict_poll": per_window[-1][1] if per_window else "-",
-        "stats_a_raw": windows[0]["text"].strip() if windows else "-",
-        "stats_a_delta": _format_delta(windows[0]["stats"]) if windows else "-",
-        "stats_b_raw": windows[1]["text"].strip() if len(windows) > 1 else "-",
-        "stats_b_delta": _format_delta(windows[1]["stats"]) if len(windows) > 1 else "-",
-        "stats_poll_delta": _format_delta(windows[-1]["stats"]) if windows else "-",
-        "stats_final": final_text.strip(),
-        "delivered_a": int(windows[0]["delivered"]) if windows else 0,
-        "delivered_b": int(windows[1]["delivered"]) if len(windows) > 1 else 0,
-        "marker_a": int(windows[0]["sent"]) if windows else 0,
-        "marker_b": int(windows[1]["sent"]) if len(windows) > 1 else 0,
-        "armed_a": windows[0]["token"] if windows else 0,
-        "armed_b": windows[1]["token"] if len(windows) > 1 else 0,
-        "script_wait_s": script_wait_s,
-        "uninstall_rc": cleanup["uninstall_rc"],
-        "verify_rc": cleanup["verify_rc"],
-        "host_alive": cleanup["host_alive"],
-        "trigger_token": trigger_token,
-        "layout": " ".join(f"{k}={v}" for k, v in layout.items()),
-    }
+    meta = build_meta(
+        dll_path=dll_path, dll_sha=dll_sha, module_base=base,
+        systems=systems, poll_s=poll_s, settle_s=settle_s, overall=overall,
+        per_window=per_window, windows=windows, final_text=final_text,
+        cleanup=cleanup, trigger_token=trigger_token, layout=layout,
+        script_wait_s=script_wait_s)
     # Artifact first, drain second: a bad drain must not cost the stats line.
     write_tsv(out_path, artifact_rows([]), meta)
     try:
@@ -645,7 +700,8 @@ def main(argv=None):
     scripts = [("neo_effect", lines[0], None)]
     if len(lines) > 1:
         scripts.append(("is_rim_system", lines[1], args.rim_token))
-    return run(pid, args.dll, scripts, args.systems, args.out, args.cmd_file,
+    dll_sha = sha_gate(args.dll)
+    return run(pid, args.dll, dll_sha, scripts, args.systems, args.out, args.cmd_file,
                args.game_log, args.poll_s, args.settle_s, args.script_wait_s)
 
 

@@ -1357,7 +1357,8 @@ finally: Uninstall → Verify → settle → assert_game_alive`。
 system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**分别记窗口**(`stats_a_delta` /
 `stats_b_delta`),`token_matched` 不合并 —— 合起来读会把两段混成一个数。
 
-**门序**(照 §70.6 与 `c2_shim_probe` 的家族纪律):`list_exports` 核文件里的十个导出 → `gate_install`
+**门序**(照 §70.6 与 `c2_shim_probe` 的家族纪律):`sha_gate`(**打印并记录**注入文件的 sha256,
+不断言固定常量;文件不在即 `exit 2`)→ `list_exports` 核文件里的十个导出 → `gate_install`
 (world-state 门,注入前)→ `inject_dll` → `C2Sanity==42` → `C4TrigPredLayout` 与驱动常量对账 →
 `C4TrigPredReset` → `C4TrigPredInstall` → `C1Run` 取 token → 每段 `SetToken` + 发脚本 + 读 delta →
 `--poll-s` 观测窗 → `C4TrigPredUninstall` + `Verify` + settle + `assert_game_alive`。
@@ -1377,12 +1378,16 @@ system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**�
    `save_hypergraph.py` 对**当前存档**重建的边表来。
 
 **artifact**:`#meta` 在前(含 `overall_verdict` / `verdict_a` / `verdict_b` / `stats_*_delta` /
-`uninstall_rc` / `verify_rc` / `host_alive`),然后是 `token self_ptr self_vtable_rva x_ptr x_vtable_rva`
+`uninstall_rc` / `verify_rc` / `host_alive`,外加 **`dll` / `dll_sha256` / `module_base`**),
+然后是 `token self_ptr self_vtable_rva x_ptr x_vtable_rva`
 五列的行。`run()` **先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败。
+那三格是**溯源**不是装饰:§70.6 的上线门要求主机那份字节与本地构建逐字对上,§76.7 那次
+`sqjs_c4.dll` 与 `sqjs_c5.dll` 在同一进程并存 ⇒ 没有它们,「部署静默失败」与「真读数」在 artifact 上
+长得一模一样。`dll` 按两种分隔符取 basename(纯函数在 Linux 上也要跑测试)。
 判读纯函数(`parse_stats` / `verdict` / `window_refused` / `overall_verdict` / `decode_layout` /
 `decode_entry` / `install_decision` / `artifact_rows` / `parse_mask` / `parse_c1_result` /
-`script_marker`,常量 `STATS_KEYS` / `VERDICTS` / `EVIDENCE_VERDICTS`)由
-`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**32 条**),无游戏、无 Windows API、零 shot。
+`script_marker` / `sha_gate` / `build_meta`,常量 `STATS_KEYS` / `VERDICTS` / `EVIDENCE_VERDICTS`)由
+`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**36 条**),无游戏、无 Windows API、零 shot。
 
 **drain 的坑(2026-10-28 review Critical)**:满环是 `RING_LEN * ENTRY_SIZE` = **10,240 B**,而
 `C4TrigPredStatsInto` 的文本缓冲只有 512 B。驱动在 drain 前必须 `remote_alloc(RING_LEN * ENTRY_SIZE)`
