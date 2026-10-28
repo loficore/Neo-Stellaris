@@ -189,3 +189,35 @@ def test_artifact_rows_carry_the_ctx_columns():
                                   "a3", "sub_obj"]
     assert rows[1].split("\t")[0] == str(0x4321)  # the token column is decimal, like the
     # four sibling drivers
+
+
+def test_verdict_zero_distinct_is_not_evidence():
+    """2026-10-29 review C-1: `distinct_ctx == 0` means "this window observed no new
+    ctx", not "ctx is not per system" — the second reading is a conclusion we did not
+    earn, and it was sitting in the evidence verdicts."""
+    stats = _stats(calls=120, token_matched=120, distinct_ctx=0)
+    assert verdict(stats, [], 787) == "ctx_no_new"
+    assert verdict(stats, [], 787) not in EVIDENCE_VERDICTS
+
+
+def test_window_delta_differences_only_the_cumulative_counters():
+    """The ctx population is per-token and absolute; only the frequency counters are
+    differenced between windows (2026-10-29 review C-2 / M-4)."""
+    current = _stats(calls=900, token_matched=787, distinct_ctx=787)
+    previous = _stats(calls=100, token_matched=12, distinct_ctx=0)
+    delta = mod.window_delta(current, previous)
+    assert delta["calls"] == 800
+    assert delta["token_matched"] == 775
+    assert delta["distinct_ctx"] == 787  # absolute, not a difference
+
+
+def test_every_pre_fire_refusal_exits_two():
+    """Exit 1 means "the shot ran and found no evidence"; an install refusal is an
+    instrument failure and must not look like that (2026-10-29 review M-2)."""
+    import re
+
+    src = (REPO / "scripts/c2_trigger_eval_probe.py").read_text(encoding="utf-8")
+    raises = re.findall(r"raise SystemExit\(([^)]*)\)", src)
+    assert raises, "the driver has no pre-fire refusal at all"
+    assert all(r.strip() == "EXIT_INSTRUMENT" for r in raises), raises
+    assert mod.EXIT_INSTRUMENT == 2

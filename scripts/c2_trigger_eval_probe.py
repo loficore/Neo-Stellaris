@@ -75,6 +75,7 @@ VERDICTS = (
     "ctx_per_system",
     "ctx_single",
     "ctx_not_per_system",
+    "ctx_no_new",
     "ctx_table_full",
     "token_absent",
     "script_refused",
@@ -241,6 +242,10 @@ def verdict(stats, entries, systems, refused=False):
         # against the star count would be a conclusion from a partial count.
         return "ctx_table_full"
     distinct = stats.get("distinct_ctx", 0)
+    if distinct == 0:
+        # This window observed no new ctx at all. That is NOT "ctx is not per system" —
+        # it is the absence of a reading (2026-10-29 review C-1).
+        return "ctx_no_new"
     if distinct == 1:
         return "ctx_single"
     if abs(distinct - systems) <= systems * SYSTEM_TOLERANCE:
@@ -258,6 +263,21 @@ ARTIFACT_COLUMNS = (
     "a3",
     "sub_obj",
 )
+
+
+def window_delta(current, previous):
+    """What this window added to the cumulative counters.
+
+    Only `calls` and `token_matched` are differenced: they count events since the
+    process started. The ctx population is **per token** (the DLL clears it when the
+    driver arms the next token) and is therefore read absolute — differencing it across
+    windows would report 0 whenever the engine handed out the same scope objects again
+    (2026-10-29 review C-2).
+    """
+    delta = dict(current)
+    for key in ("calls", "token_matched"):
+        delta[key] = current[key] - previous[key]
+    return delta
 
 
 def artifact_rows(entries):
@@ -460,6 +480,25 @@ def build_meta(*, dll_path, dll_sha, module_base, systems, poll_s, settle_s,
     }
 
 
+def failure_meta(*, dll_path, dll_sha, module_base, systems, layout, install_rc, reason):
+    """The meta of a shot that never got as far as reading anything.
+
+    An install refusal used to leave **no artifact at all**, so the window's only trace
+    was a line of stdout — and stdout is lost half the time (traps 8/11).
+    """
+    return {
+        "target_rva": f"{TARGET_RVA:#x}",
+        "systems": systems,
+        "overall_verdict": "instrument_broken",
+        "install_rc": install_rc,
+        "reason": reason,
+        "layout": " ".join(f"{k}={v}" for k, v in (layout or {}).items()),
+        "dll": os.path.basename(dll_path.replace("\\", "/")),
+        "dll_sha256": dll_sha,
+        "module_base": f"0x{module_base:x}",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Live path (Windows only; not exercised by the host tests)
 # ---------------------------------------------------------------------------
@@ -470,10 +509,12 @@ def gate_module(pid, dll_path, needed):
     exports = harness.list_exports(dll_path)
     missing = [name for name in needed if name not in exports]
     if missing:
-        raise SystemExit(
-            f"{dll_path} is missing {missing} — refusing to inject a DLL that cannot "
-            "answer this shot's calls (a stale upload would sample the wrong target)"
+        print(
+            f"[trigeval] {dll_path} is missing {missing} — refusing to inject a DLL that "
+            "cannot answer this shot's calls (a stale upload would sample the wrong target)",
+            file=sys.stderr,
         )
+        raise SystemExit(EXIT_INSTRUMENT)
 
     dll_name = os.path.basename(dll_path)
     print(f"[trigeval] pid={pid}  dll={dll_path}")
@@ -618,7 +659,7 @@ def send_script(cmd_file, script, game_log, wait_s):
     return True, False
 
 
-def _cleanup(pid, base, exports, settle_s):
+def _cleanup(pid, base, exports, settle_s, installed_ok=True):
     uninstall_rc = dispatch_once(pid, base, exports["C4TrigEvalUninstall"],
                                  "C4TrigEvalUninstall")
     verify_rc = _signed32(harness.call_remote(pid, base, exports["C4TrigEvalVerify"]))
@@ -629,7 +670,10 @@ def _cleanup(pid, base, exports, settle_s):
         alive = True
     except Exception:  # noqa: BLE001 — a dead host is a reading, not a crash
         alive = False
-    if uninstall_rc == -7 or verify_rc != 0:
+    # The banner is reserved for a process we actually patched and did not restore. A
+    # failed prologue gate leaves verify() == -2 for a process that was never patched —
+    # calling that "restore incomplete" is a false alarm (2026-10-29 review M-3).
+    if installed_ok and (uninstall_rc == -7 or verify_rc != 0):
         print("RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY", file=sys.stderr)
     return {"uninstall_rc": uninstall_rc, "verify_rc": verify_rc, "host_alive": int(alive)}
 
@@ -643,16 +687,22 @@ def run(pid, dll_path, dll_sha, scripts, systems, out_path, cmd_file, game_log,
         (layout["version"], layout["entry_size"], layout["ring_len"],
          layout["stats_size"], layout["target_rva"], layout["prologue_len"]))
     if refusal:
-        raise SystemExit(f"layout refuses install: {refusal}")
+        print(f"[trigeval] layout refuses install: {refusal}", file=sys.stderr)
+        raise SystemExit(EXIT_INSTRUMENT)
 
     reset_probe(pid, base, exports)
     rc = install_probe(pid, base, exports)
     if rc != 0:
-        raise SystemExit(
-            f"C4TrigEvalInstall returned {rc} (0 ok | -2 already installed / predicate "
-            "armed | -3 no module | -4 already hooked | -5 prologue | -6 patch width) — "
-            "do not retry in this process"
+        print(
+            f"[trigeval] C4TrigEvalInstall returned {rc} (0 ok | -2 already installed / "
+            "predicate armed | -3 no module | -4 already hooked | -5 prologue | -6 patch "
+            "width) — do not retry in this process",
+            file=sys.stderr,
         )
+        write_tsv(out_path, artifact_rows([]), failure_meta(
+            dll_path=dll_path, dll_sha=dll_sha, module_base=base, systems=systems,
+            layout=layout, install_rc=rc, reason="install refused"))
+        raise SystemExit(EXIT_INSTRUMENT)
 
     cleanup = {"uninstall_rc": -999, "verify_rc": -999, "host_alive": 0}
     try:
@@ -676,16 +726,14 @@ def run(pid, dll_path, dll_sha, scripts, systems, out_path, cmd_file, game_log,
             if token is None:
                 token = trigger_token
             if token <= 0:
-                raise SystemExit(
-                    "C1Run did not return a trigger token — the DLL could not register "
-                    "neo_effect, so window A would arm a token nothing can match"
-                )
+                print("[trigeval] C1Run did not return a trigger token — the DLL could not "
+                      "register neo_effect, so window A would arm a token nothing can match",
+                      file=sys.stderr)
+                raise SystemExit(EXIT_INSTRUMENT)
             arm_token(pid, base, exports, token)
             delivered, seen = send_script(cmd_file, script, game_log, script_wait_s)
             stats, text = read_stats(pid, base, exports, stats_buf)
-            delta = dict(stats)
-            for key in ("calls", "token_matched", "distinct_ctx"):
-                delta[key] = stats[key] - previous[key]
+            delta = window_delta(stats, previous)
             previous = stats
             windows.append({"label": label, "sent": seen, "delivered": delivered,
                             "token": token, "stats": delta, "raw": stats, "text": text})
@@ -700,9 +748,7 @@ def run(pid, dll_path, dll_sha, scripts, systems, out_path, cmd_file, game_log,
         while time.time() < deadline:
             time.sleep(POLL_INTERVAL_S)
         final_stats, final_text = read_stats(pid, base, exports, stats_buf)
-        poll_delta = dict(final_stats)
-        for key in ("calls", "token_matched", "distinct_ctx"):
-            poll_delta[key] = final_stats[key] - previous[key]
+        poll_delta = window_delta(final_stats, previous)
         windows.append({"label": "poll", "sent": True, "delivered": True,
                         "token": None, "stats": poll_delta, "raw": final_stats,
                         "text": final_text})

@@ -128,6 +128,14 @@ pub fn isInstalled() bool {
     return installed;
 }
 
+/// True once any object has been patched with our vtable copy.  **Sticky**: `uninstall`
+/// restores the target's prologue but never undoes the object writes, so the hazard
+/// outlives the detour — a later probe in the same process would read `[obj+0]` pointing
+/// at our DLL's copy and take it for an engine vtable (2026-10-29 review I-6).
+pub fn objectsWerePatched() bool {
+    return @atomicLoad(u64, &stat_patched, .monotonic) > 0;
+}
+
 /// Arm the token whose instantiated objects get our vtable. Rejects 0 (the
 /// engine never writes it, and it would match every unknown object) and any
 /// change while the detour is installed.

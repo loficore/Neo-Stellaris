@@ -1425,8 +1425,17 @@ trigger 的 `[vptr+0x28]` 的共用实现,收 `(self, ctx, a3)`;`.rdata` 里 **3
 「那个子对象是什么类型」)。**不解引用第二层** —— §59/§73 已经证明「猜偏移链」这条路是死的。
 
 三个方向都算读数:`ctx_per_system`(distinct ≈ 星系数)、`ctx_single`(== 1)、
-`ctx_not_per_system`(别的正数)。`no_calls` / `token_absent` / `script_refused` /
-`ctx_table_full` / `instrument_broken` 都是环境档,**不是**证据。
+`ctx_not_per_system`(别的正数)。另有六档环境档,**不是**证据:`ctx_no_new`(本窗口一个新 ctx 都没有 ——
+**不是**「ctx 不是每系统一个」)、`ctx_table_full`(去重表溢出)、`token_absent` / `script_refused` /
+`instrument_broken` / `no_calls`。
+
+**`distinct_ctx` 是「本窗口(本 token)里的不同 ctx 个数」,不是增量。** 驱动每段换一个 token,DLL 在
+`SetToken` 时把去重表与该计数**清零**(累计计数器 `calls`/`token_matched` 不清,它们是频率读数);
+驱动只对 `calls`/`token_matched` 做差分。**为什么不能拿它做差分**:引擎第二轮若交出同一批 scope 对象,
+差分就是 0,而 0 会被读成「ctx 不是每系统一个」—— 可能正好反着(2026-10-29 复核 C-2)。
+
+**artifact 的行 = 最后一个 armed token 那一窗的 exemplars。** 换 token 会清空环,所以第 1 行(C1 铸的
+token)的行不在 artifact 里;两段的**绝对**计数在 meta 的 `stats_a_*` / `stats_b_*` 里。
 
 **门序**(照 §70.6 与兄弟驱动的家族纪律):`preflight_paths`(开火前两条拒绝,见下)→ `sha_gate`
 (**打印并记录**注入文件的 sha256,不断言固定常量;文件不在即 `exit 2`)→ `list_exports` 核文件里的
@@ -1441,8 +1450,11 @@ trigger 的 `[vptr+0x28]` 的共用实现,收 `(self, ctx, a3)`;`.rdata` 里 **3
 1. **`ctx_not_per_system` 不是「没有星系身份」,只是「ctx 不是每系统一个」。** 它否掉的只有「每系统
    一个 ctx」这一条;ctx 到底是什么对象,这一发给不出答案。`ctx_single` 同理(它比
    `ctx_not_per_system` 更强一点:全程只有一个 ctx)。
-2. **`sub_vtable_rva = 0` 是「我们认不出来」,不是「没有 vtable」。** `[ctx+0x278]` 落在镜像外时记 0
-   —— 那可能是堆对象,也可能我们算错了基址;读成「那个子对象没有类型」是过度解读。
+2. **`sub_vtable_rva = 0` 与 `self_vtable_rva = 0` 都是「我们认不出来」,不是「没有 vtable」。**
+   `[ctx+0x278]` 落在镜像外时记 0 —— 那可能是堆对象,也可能我们算错了基址;`[self]` 同理:**若同进程里
+   predicate guard 曾经改过对象(它的 `uninstall` 不回滚那些写),`[self+0]` 会指向我们 DLL 的 vtable 副本**,
+   于是 `self_vtable_rva` 读到 0 或一个非引擎地址(复核 I-6:本仪器在装之前会拒绝这种进程,但**跨 DLL 副本**
+   认不出来 —— 那一格只能读成「没认出来」)。
 3. **`dedupe_full != 0` 时 `distinct_ctx` 只是**下界**,分母判据当次作废。** 去重表 1,024 槽满了以后,
    新的 distinct ctx 不再计数(`distinct_ctx` 停在表里已有的数),verdict 落 `ctx_table_full`。
    那一档的读数**不许**用来支持任何结论。
@@ -1453,7 +1465,7 @@ trigger 的 `[vptr+0x28]` 的共用实现,收 `(self, ctx, a3)`;`.rdata` 里 **3
 `run()` **先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败。
 `dll_sha256` 是**注入路径上那个文件**的 sha,不是「跑着的镜像」—— 所以同名模块已映射时驱动直接拒绝
 (`refuse_if_resident`)。`--systems` **无默认值**:分母只从当前存档重建的边表来(787 属于另一场存档)。
-判读纯函数由 `python3 -m pytest scripts/test_c2_trigger_eval_probe.py -q` 覆盖(**18 条**),无游戏、
+判读纯函数由 `python3 -m pytest scripts/test_c2_trigger_eval_probe.py -q` 覆盖(**21 条**),无游戏、
 无 Windows API、零 shot。
 
 **下一发照单执行(机器回来时;本节就是那一发的清单)**

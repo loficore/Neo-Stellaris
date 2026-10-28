@@ -110,7 +110,23 @@ var armed_token: u32 = 0;
 
 /// The token filter. Unlike `predicate_hook`, the value may change after install: it only
 /// decides which calls land in the statistics, it is not a patch target.
+///
+/// **Arming a token starts a fresh ctx population.** The driver arms one token per
+/// window, so the ctx set of THIS window must begin empty: with a process-wide table the
+/// second window's `distinct_ctx` was 0 whenever the engine handed out the same scope
+/// objects again, and the driver read that 0 as "ctx is not per system" — a conclusion
+/// that may be exactly backwards (2026-10-29 review C-2). The cumulative counters
+/// (`calls`, `token_matched`) are NOT reset: they are the frequency reading.
 pub fn setToken(value: u32) void {
+    lockRec();
+    dedupe = DedupeTable{};
+    row_count = 0;
+    @memset(std.mem.asBytes(&ring), 0);
+    @atomicStore(u64, &stats.distinct_ctx, 0, .monotonic);
+    @atomicStore(u64, &stats.dedupe_full, 0, .monotonic);
+    @atomicStore(u64, &stats.ctx_null, 0, .monotonic);
+    @atomicStore(u32, &stats.last_tag, 0, .monotonic);
+    unlockRec();
     @atomicStore(u32, &armed_token, value, .monotonic);
 }
 
@@ -163,8 +179,11 @@ pub const InsertResult = enum { new, seen, full };
 /// the host tests drive it directly, no engine memory involved.
 pub const DedupeTable = struct {
     pub const SLOTS: usize = DEDUPE_SLOTS;
+    /// The row a key lives in, or `NO_ROW` when the key was never written to the ring.
+    pub const NO_ROW: u16 = 0xFFFF;
 
     keys: [SLOTS]u64 = undefined,
+    rows: [SLOTS]u16 = undefined,
     used: [SLOTS]bool = [_]bool{false} ** SLOTS,
     count: usize = 0,
 
@@ -174,15 +193,18 @@ pub const DedupeTable = struct {
     }
 
     /// `new` = the key was not seen before, `seen` = it was, `full` = the table is full
-    /// and the key is unknown (the caller must then treat it as an untracked distinct ctx).
-    pub fn insert(self: *DedupeTable, key: u64) InsertResult {
-        if (self.count == SLOTS) return .full;
+    /// **and the key is unknown** — a known key is always `seen`, even when the table is
+    /// full (2026-10-29 review I-2: the old code answered `.full` before it looked for
+    /// the key, so every repeat of a known ctx voided the window).
+    pub fn insert(self: *DedupeTable, key: u64, row: u16) InsertResult {
         var idx = slot(key);
         var probes: usize = 0;
         while (probes < SLOTS) : (probes += 1) {
             if (!self.used[idx]) {
+                if (self.count == SLOTS) return .full;
                 self.used[idx] = true;
                 self.keys[idx] = key;
+                self.rows[idx] = row;
                 self.count += 1;
                 return .new;
             }
@@ -192,13 +214,17 @@ pub const DedupeTable = struct {
         return .full;
     }
 
-    /// The slot index of `key`, if it is in the table.
-    pub fn indexOf(self: *const DedupeTable, key: u64) ?usize {
+    /// The ring row of `key`, if it is in the table. O(1) on average — the repeat path
+    /// must not scan the ring under the spinlock (2026-10-29 review I-5).
+    pub fn rowOf(self: *const DedupeTable, key: u64) ?u16 {
         var idx = slot(key);
         var probes: usize = 0;
         while (probes < SLOTS) : (probes += 1) {
             if (!self.used[idx]) return null;
-            if (self.keys[idx] == key) return idx;
+            if (self.keys[idx] == key) {
+                const row = self.rows[idx];
+                return if (row == NO_ROW) null else row;
+            }
             idx = (idx + 1) % SLOTS;
         }
         return null;
@@ -239,17 +265,22 @@ pub const Snapshot = struct {
     distinct_ctx: u64,
     dedupe_full: u64,
     ctx_null: u64,
+    last_tag: u32,
     samples: u32,
 };
 
 pub fn snapshot() Snapshot {
+    lockRec();
+    const rows: u32 = @intCast(@min(row_count, RING_LEN));
+    unlockRec();
     return .{
         .calls = @atomicLoad(u64, &stats.calls, .monotonic),
         .token_matched = @atomicLoad(u64, &stats.token_matched, .monotonic),
         .distinct_ctx = @atomicLoad(u64, &stats.distinct_ctx, .monotonic),
         .dedupe_full = @atomicLoad(u64, &stats.dedupe_full, .monotonic),
         .ctx_null = @atomicLoad(u64, &stats.ctx_null, .monotonic),
-        .samples = @intCast(@min(row_count, RING_LEN)),
+        .last_tag = @atomicLoad(u32, &stats.last_tag, .monotonic),
+        .samples = rows,
     };
 }
 
@@ -267,20 +298,19 @@ pub fn recordCall(obj_token: u32, self: usize, ctx: usize, a3: u64) void {
         return;
     }
 
-    // The two reads §77 pinned: the type tag and the sub-object's first qword. Both go
-    // through the bounds gate — a plausible-but-unmapped value would fault the host.
-    const tag = readU32(ctx, CTX_TAG_OFF);
-    const sub = readU64(ctx + CTX_SUB_OFF) orelse 0;
-    @atomicStore(u32, &stats.last_tag, tag, .monotonic);
-
     lockRec();
     defer unlockRec();
 
-    switch (dedupe.insert(ctx)) {
+    // The row this ctx would take. A ctx that arrives after the ring is full is tracked
+    // in the table but has no row (`NO_ROW`) — its occurrences are then not counted.
+    const row: u16 = if (row_count < RING_LEN) @as(u16, @intCast(row_count)) else DedupeTable.NO_ROW;
+
+    switch (dedupe.insert(ctx, row)) {
         .seen => {
-            // Same ctx again: bump the occurrence counter of its row, if it has one.
-            if (dedupe.indexOf(ctx)) |slot| {
-                if (dedupe_row(slot)) |r| ring[r].occurrences += 1;
+            // Same ctx again: bump the occurrence counter of its row. No engine read
+            // happens here — the values were taken when the ctx was first seen.
+            if (dedupe.rowOf(ctx)) |r| {
+                if (r < RING_LEN) ring[r].occurrences += 1;
             }
         },
         .full => {
@@ -290,8 +320,26 @@ pub fn recordCall(obj_token: u32, self: usize, ctx: usize, a3: u64) void {
         },
         .new => {
             _ = @atomicRmw(u64, &stats.distinct_ctx, .Add, 1, .monotonic);
-            if (row_count < RING_LEN) {
-                const slot: usize = row_count;
+
+            // The two reads §77 pinned — the type tag and the sub-object's first qword.
+            // They happen only for a ctx we have NOT seen before, and only after the
+            // bytes are proven committed: `plausible()` is a range test, not a mapping
+            // proof, and an unmapped ctx used to be able to fault the host
+            // (2026-10-29 review I-1). An uncommitted ctx degrades to a row with zeros.
+            var tag: u32 = 0;
+            var sub: u64 = 0;
+            if (ctxFieldsCommitted(ctx)) {
+                tag = readU32(ctx, CTX_TAG_OFF);
+                sub = readU64(ctx + CTX_SUB_OFF) orelse 0;
+            }
+            @atomicStore(u32, &stats.last_tag, tag, .monotonic);
+
+            var self_vt: u32 = 0;
+            if (ctxFieldsCommitted(self)) {
+                self_vt = toRva(@intCast(readU64(self) orelse 0));
+            }
+
+            if (row < RING_LEN) {
                 row_count += 1;
                 var e: Entry = .{};
                 e.valid = 1;
@@ -299,27 +347,23 @@ pub fn recordCall(obj_token: u32, self: usize, ctx: usize, a3: u64) void {
                 e.token = obj_token;
                 e.ctx_tag = tag;
                 e.sub_vtable_rva = toRva(@intCast(sub));
-                e.self_vtable_rva = toRva(@intCast(readU64(self) orelse 0));
+                e.self_vtable_rva = self_vt;
                 e.occurrences = 1;
                 e.ctx_ptr = ctx;
                 e.a3 = a3;
                 e.sub_obj = sub;
-                ring[slot] = e;
+                ring[row] = e;
             }
         },
     }
 }
 
-/// The ring row of a dedupe slot. The table and the ring are filled together, so the n-th
-/// distinct ctx is row n-1 until the ring is full; beyond that the table slot has no row.
-fn dedupe_row(slot: usize) ?usize {
-    if (row_count == 0) return null;
-    const key = dedupe.keys[slot];
-    var i: usize = 0;
-    while (i < row_count) : (i += 1) {
-        if (ring[i].ctx_ptr == key) return i;
-    }
-    return null;
+/// Are the bytes we are about to read actually mapped? Both the ctx fields and the
+/// trigger object's own vtable word go through this, so an unmapped pointer degrades to
+/// a zero column instead of a host fault.
+fn ctxFieldsCommitted(addr: usize) bool {
+    if (!plausible(addr)) return false;
+    return windows.isCommitted(addr);
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +419,10 @@ pub fn drainInto(out: [*]u8) u32 {
     const capacity = @min(drain_cap / @sizeOf(Entry), RING_LEN);
     if (capacity == 0) return 0;
     const dst: [*]Entry = @ptrCast(@alignCast(out));
+    // Under the lock: a drain concurrent with a record would otherwise copy a half-written
+    // Entry (2026-10-29 review I-3).
+    lockRec();
+    defer unlockRec();
     var copied: u32 = 0;
     while (copied < capacity and copied < row_count) : (copied += 1) {
         dst[copied] = ring[copied];
@@ -385,14 +433,26 @@ pub fn drainInto(out: [*]u8) u32 {
 /// Clear counters + ring + table + token + image window. Does not uninstall a hook (clearing
 /// `calls` under a live patch would silently reset the frequency denominator).
 pub fn reset() void {
-    stats = .{};
+    lockRec();
+    defer unlockRec();
+    // Counter-by-counter: a whole-struct store would race the recorder's atomic updates
+    // (2026-10-29 review I-4). The ring is zeroed rather than `undefined`, so a later
+    // drain cannot copy uninitialized bytes into the artifact.
+    @atomicStore(u64, &stats.calls, 0, .monotonic);
+    @atomicStore(u64, &stats.token_matched, 0, .monotonic);
+    @atomicStore(u64, &stats.distinct_ctx, 0, .monotonic);
+    @atomicStore(u64, &stats.dedupe_full, 0, .monotonic);
+    @atomicStore(u64, &stats.ctx_null, 0, .monotonic);
+    @atomicStore(u64, &stats.patch_size, 0, .monotonic);
+    @atomicStore(u32, &stats.last_token, 0, .monotonic);
+    @atomicStore(u32, &stats.last_tag, 0, .monotonic);
     dedupe = DedupeTable{};
     row_count = 0;
-    ring = undefined;
+    @memset(std.mem.asBytes(&ring), 0);
     @atomicStore(u32, &armed_token, 0, .monotonic);
     drain_cap = 0;
-    img_base = 0;
-    img_end = 0;
+    // The image window is a property of the module, not of the counters: clearing it
+    // would make every later row's vtable columns read 0 (2026-10-29 review M-5).
 }
 
 /// Reset everything the host tests share. The assembly section (install/uninstall) lands in
@@ -447,7 +507,10 @@ fn evalDetour(self: u64, ctx: u64, a3: u64) callconv(.c) u64 {
 
 pub fn install() InstallError!void {
     if (!is_windows) return error.Unsupported;
-    try preflightChecks(installed, predicate_hook.isInstalled());
+    // `objectsWerePatched()` is sticky: the predicate detour's uninstall restores the
+    // target's prologue but never undoes its object writes, so the hazard outlives the
+    // detour (2026-10-29 review I-6).
+    try preflightChecks(installed, predicate_hook.isInstalled() or predicate_hook.objectsWerePatched());
 
     const target = windows.moduleFunction(RVA_TRIGGER_EVAL) catch return error.ModuleNotFound;
     if (detour_mod.isHooked(target)) return error.AlreadyHooked;
@@ -549,21 +612,42 @@ test "Stats is 56 bytes" {
 
 test "DedupeTable reports new, seen, and full" {
     var table = DedupeTable{};
-    try std.testing.expectEqual(InsertResult.new, table.insert(0x1000));
-    try std.testing.expectEqual(InsertResult.seen, table.insert(0x1000));
+    try std.testing.expectEqual(InsertResult.new, table.insert(0x1000, 0));
+    try std.testing.expectEqual(InsertResult.seen, table.insert(0x1000, 1));
     var i: usize = 0;
-    while (i < DEDUPE_SLOTS) : (i += 1) _ = table.insert(0x2000 + i * 8);
-    try std.testing.expectEqual(InsertResult.full, table.insert(0x9999_9999));
+    while (i < DEDUPE_SLOTS) : (i += 1) _ = table.insert(0x2000 + i * 8, 2);
+    try std.testing.expectEqual(InsertResult.full, table.insert(0x9999_9999, 3));
 }
 
 test "DedupeTable counts every distinct key exactly once" {
     var table = DedupeTable{};
     try std.testing.expectEqual(@as(usize, 0), table.len());
-    _ = table.insert(1);
-    _ = table.insert(2);
-    _ = table.insert(1);
-    _ = table.insert(3);
+    _ = table.insert(1, 0);
+    _ = table.insert(2, 1);
+    _ = table.insert(1, 2);
+    _ = table.insert(3, 3);
     try std.testing.expectEqual(@as(usize, 3), table.len());
+}
+
+test "a full table still reports a KNOWN key as seen" {
+    // 2026-10-29 review I-2: the table used to answer `.full` before it looked for the
+    // key, so every repeat of a known ctx was counted as "untracked" — the window was
+    // voided (ctx_table_full) although `distinct_ctx` was exactly right.
+    var table = DedupeTable{};
+    _ = table.insert(0x1000, 0);
+    var i: usize = 0;
+    while (i < DEDUPE_SLOTS) : (i += 1) _ = table.insert(0x2000 + i * 8, 1);
+    try std.testing.expectEqual(InsertResult.seen, table.insert(0x1000, 2));
+    try std.testing.expectEqual(InsertResult.full, table.insert(0x9999_9999, 3));
+}
+
+test "the table remembers the ring row of every key" {
+    // The repeat path must be O(1): a linear scan of the ring under the spinlock was
+    // the shape the plan flagged (2026-10-29 review I-5).
+    var table = DedupeTable{};
+    _ = table.insert(0x1000, 7);
+    try std.testing.expectEqual(@as(?u16, 7), table.rowOf(0x1000));
+    try std.testing.expectEqual(@as(?u16, null), table.rowOf(0x2000));
 }
 
 test "a matching call records one row per distinct ctx" {
@@ -624,6 +708,51 @@ test "statsInto writes one k=v line with all ten keys" {
     const expected = "calls=0 token_matched=0 distinct_ctx=0 dedupe_full=0 ctx_null=0 " ++
         "patch_size=0 installed=0 verify=-3 last_token=0 last_tag=0\n";
     try std.testing.expectEqualStrings(expected, buf[0..n]);
+}
+
+test "arming a new token starts a fresh ctx population" {
+    // 2026-10-29 review C-2: the dedupe table used to be global for the whole process,
+    // so the SECOND window's delta of `distinct_ctx` was 0 whenever the engine handed
+    // out the same scope objects again — and the driver read that 0 as "ctx is not
+    // per system", which may be exactly backwards.
+    resetForTest();
+    setToken(0x1111);
+    recordCall(0x1111, 0x1000, 0x2000, 0);
+    try std.testing.expectEqual(@as(u64, 1), snapshot().distinct_ctx);
+
+    setToken(0x2222);
+    try std.testing.expectEqual(@as(u64, 0), snapshot().distinct_ctx);
+    recordCall(0x2222, 0x1000, 0x2000, 0);
+    const s = snapshot();
+    try std.testing.expectEqual(@as(u64, 1), s.distinct_ctx);
+    try std.testing.expectEqual(@as(u32, 1), s.samples);
+}
+
+test "the recorder never dereferences an uncommitted ctx" {
+    // 2026-10-29 review I-1: `plausible()` is a range test, not a mapping proof, so a
+    // plausible-but-unmapped ctx used to be dereferenced and could fault the host.
+    resetForTest();
+    setToken(0x4321);
+    recordCall(0x4321, 0x1000, 0x2000, 0);
+    const s = snapshot();
+    try std.testing.expectEqual(@as(u64, 1), s.distinct_ctx);
+    try std.testing.expectEqual(@as(u32, 0), s.last_tag);
+
+    setDrainCap(@sizeOf(Entry));
+    var buf: [@sizeOf(Entry)]u8 align(8) = undefined;
+    try std.testing.expectEqual(@as(u32, 1), drainInto(&buf));
+    const row: *Entry = @ptrCast(@alignCast(&buf));
+    try std.testing.expectEqual(@as(u32, 0), row.ctx_tag);
+    try std.testing.expectEqual(@as(u64, 0), row.sub_obj);
+}
+
+test "reset keeps the image window" {
+    // 2026-10-29 review M-5: clearing the image bounds made every later row's
+    // vtable columns read 0 — a silent degradation of the artifact.
+    resetForTest();
+    setImageBounds(0x140000000, 0x140000000 + 0x400_0000);
+    reset();
+    try std.testing.expectEqual(@as(u32, 0x1A91A80), toRva(0x140000000 + 0x1A91A80));
 }
 
 test "layoutInto reports six words and a stable entry size" {

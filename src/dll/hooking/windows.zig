@@ -48,6 +48,22 @@ extern "kernel32" fn FlushInstructionCache(hProcess: ?*anyopaque, lpBaseAddress:
 extern "kernel32" fn GetCurrentProcess() ?*anyopaque;
 extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callconv(.c) ?*anyopaque;
 extern "kernel32" fn ReadProcessMemory(hProcess: ?*anyopaque, lpBaseAddress: ?*const anyopaque, lpBuffer: LPVOID, nSize: SIZE_T, lpNumberOfBytesRead: ?*SIZE_T) BOOL;
+extern "kernel32" fn VirtualQuery(lpAddress: LPVOID, lpBuffer: ?*anyopaque, dwLength: SIZE_T) SIZE_T;
+
+/// x86_64 MEMORY_BASIC_INFORMATION. `PartitionId` shares the padding slot of the older
+/// SDK layout, so the offsets are the same either way.
+const MEMORY_BASIC_INFORMATION = extern struct {
+    base_address: ?*anyopaque,
+    allocation_base: ?*anyopaque,
+    allocation_protect: DWORD,
+    partition_id: u16,
+    _pad0: u16 = 0,
+    region_size: SIZE_T,
+    state: DWORD,
+    protect: DWORD,
+    type_: DWORD,
+    _pad1: u32 = 0,
+};
 
 /// Read `out.len` bytes of this process into `out`. The comptime branch keeps
 /// kernel32 out of native (non-Windows) test binaries entirely; on Windows a
@@ -58,6 +74,19 @@ pub fn readProcessMemory(addr: usize, out: []u8) bool {
     var got: SIZE_T = 0;
     const ok = ReadProcessMemory(GetCurrentProcess(), @ptrFromInt(addr), out.ptr, out.len, &got);
     return ok != 0 and got == out.len;
+}
+
+/// Is this address inside a **committed** region?  A range check is not a mapping proof:
+/// an address can be inside the user address space and still be unmapped, and reading it
+/// faults the host (2026-10-29 review I-1).  The comptime branch keeps kernel32 out of
+/// native test binaries, like the rest of this family.
+pub fn isCommitted(addr: usize) bool {
+    if (comptime builtin.os.tag != .windows) return false;
+    if (addr == 0) return false;
+    var mbi: MEMORY_BASIC_INFORMATION = undefined;
+    const n = VirtualQuery(@ptrFromInt(addr), @ptrCast(&mbi), @sizeOf(MEMORY_BASIC_INFORMATION));
+    if (n == 0) return false;
+    return mbi.state == MEM_COMMIT;
 }
 
 /// Resolve an RVA inside stellaris.exe to its live absolute address.
@@ -192,4 +221,5 @@ test "win32 wrappers are inert off Windows" {
         ProtectGuard.change(@ptrCast(&dummy), 4096, .execute_readwrite));
     try std.testing.expectError(error.VirtualFreeFailed, freeMem(@ptrCast(&dummy)));
     flushInstructionCache(@ptrCast(&dummy), 4096);
+    try std.testing.expect(!isCommitted(@intFromPtr(&dummy)));
 }
