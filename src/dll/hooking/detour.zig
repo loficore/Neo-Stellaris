@@ -269,6 +269,51 @@ const MAX_HOOKS = 64;
 var hook_count: usize = 0;
 var hooks: [MAX_HOOKS]Hook = undefined;
 
+/// Trampolines that were installed and then unhooked.  They are **never freed**.
+///
+/// A trampoline is the landing page of the detour's `call orig`.  On a hot target
+/// (§76 measured ~9,800 calls/s on the trigger predicate body) `uninstall` can run
+/// while another thread is still inside it, and freeing the mapping then unmaps code
+/// a live thread is executing.  The process exit reclaims it — the same discipline as
+/// never calling FreeLibrary (AGENTS.md constraint 5).
+///
+/// `CAP` bounds the bookkeeping only: past it `dropped` grows and the mapping still
+/// leaks, it is just no longer remembered.
+pub const TrampolineRetireList = struct {
+    pub const CAP: usize = 8;
+
+    slots: [CAP][*]u8 = undefined,
+    count: usize = 0,
+    dropped: usize = 0,
+
+    pub fn add(self: *TrampolineRetireList, mem: [*]u8) void {
+        if (self.count == CAP) {
+            self.dropped += 1;
+            return;
+        }
+        self.slots[self.count] = mem;
+        self.count += 1;
+    }
+
+    pub fn contains(self: *const TrampolineRetireList, mem: [*]u8) bool {
+        for (self.slots[0..self.count]) |slot| {
+            if (slot == mem) return true;
+        }
+        return false;
+    }
+
+    pub fn len(self: *const TrampolineRetireList) usize {
+        return self.count;
+    }
+
+    pub fn droppedCount(self: *const TrampolineRetireList) usize {
+        return self.dropped;
+    }
+};
+
+/// Every trampoline this process has unhooked.  Guarded by `hook_lock`.
+var retired_trampolines: TrampolineRetireList = .{};
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -406,8 +451,11 @@ pub fn removeHook(hook: *const Hook) !void {
     // 2. Flush instruction cache.
     windows.flushInstructionCache(hook.target, hook.patch_size);
 
-    // 3. Free trampoline memory.
-    try windows.freeMem(hook.trampoline_mem);
+    // 3. Retire the trampoline instead of freeing it.  It is the landing page of the
+    //    detour's `call orig`, so a hot target (§76: ~9,800 calls/s) can still have a
+    //    thread inside it right now; freeing here would unmap code that is executing.
+    //    The process exit reclaims it — same discipline as never calling FreeLibrary.
+    retired_trampolines.add(hook.trampoline_mem);
 
     // 4. Remove from global list.
     var i: usize = 0;
@@ -744,4 +792,21 @@ test "decodePrologueLength: 15 bytes needed" {
     const code = [_]u8{0x90} ** 15;
     const len = decodePrologueLength(&code, JMP_PATCH_SIZE);
     try std.testing.expectEqual(@as(usize, 14), len);
+}
+
+test "TrampolineRetireList: keeps every trampoline up to the cap" {
+    var list = TrampolineRetireList{};
+    list.add(@ptrFromInt(0x1000));
+    list.add(@ptrFromInt(0x2000));
+    try std.testing.expectEqual(@as(usize, 2), list.len());
+    try std.testing.expect(list.contains(@ptrFromInt(0x1000)));
+    try std.testing.expect(!list.contains(@ptrFromInt(0x3000)));
+    try std.testing.expectEqual(@as(usize, 0), list.droppedCount());
+}
+
+test "TrampolineRetireList: past the cap it stops tracking but never forgets to leak" {
+    var list = TrampolineRetireList{};
+    for (0..10) |i| list.add(@ptrFromInt(0x1000 * (i + 1)));
+    try std.testing.expectEqual(TrampolineRetireList.CAP, list.len());
+    try std.testing.expectEqual(@as(usize, 2), list.droppedCount());
 }
