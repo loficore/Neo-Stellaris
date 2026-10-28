@@ -1,7 +1,7 @@
 """Pure-core tests for keep_awake.
 
 The numbers in these assertions come from the read-only survey of the host on
-2026-10-24(见 docs/superpowers/plans/2026-10-24-keep-awake-desktop-guard.md 的「现场现状」表);
+2026-10-24(见 docs/superpowers/plans/archive/2026-10-24-keep-awake-desktop-guard.md 的「现场现状」表);
 they are the contract the Windows edge feeds into the pure core, so the whole
 decision table stays testable on Linux with no ctypes, PIL or numpy.
 """
