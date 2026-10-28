@@ -94,7 +94,11 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
+# The CLI lives on the Windows side of the tree (it is scp'd to C:\temp next
+# to world_state.py), so its pure half is reached through that directory.
+sys.path.insert(0, str(REPO / "scripts" / "windows"))
 
+import ns_world as cli  # noqa: E402  # pyright: ignore[reportMissingImports]
 import world_state as store_module  # noqa: E402 - the sys.path setup above must precede this import
 from world_state import (  # noqa: E402 - the sys.path setup above must precede this import
     ACTIONS,
@@ -1534,3 +1538,85 @@ def test_a_hand_edited_ttl_cannot_extend_a_lease(tmp_path):
         check.save()
     assert fresh is not None
     assert fresh["lease_id"] != lease_id
+
+
+# ---------------------------------------------------------------------------
+# Task 5: the CLI's pure half — the one line and the four exit codes
+# ---------------------------------------------------------------------------
+
+def test_render_status_is_one_line():
+    """The agent's whole interface is ONE line, and it names the three fields.
+
+    A second line would mean the agent has to parse more than one thing, and
+    the second line is where a reason would go — a reason with a newline in
+    it would break the "one line" contract silently, so the sanitizer has to
+    be pinned too.
+    """
+    evidence = {"pause": {"state": "playing"}, "console": {"state": "closed"},
+                "window": {"kind": "none"},
+                "raw": {"red_px": 61, "green_px": 40, "bright_px": 300,
+                        "gold_px": 0, "row_count": 0, "option_count": 0,
+                        "bbox": None},
+                "reason": "a reason,\nwith a comma and a newline"}
+    line = cli.render_status("IN_GAME_RUNNING", evidence, ("install",))
+
+    assert "\n" not in line and "\r" not in line
+    assert line.startswith("STATE=IN_GAME_RUNNING ")
+    assert "EVIDENCE=" in line and "NEXT=" in line
+    assert "NEXT=install" in line
+    # 判词与原始计数都在这一行里;理由在最后,逗号被写成「;」,所以按「,」切分仍然是成对的。
+    assert "pause=playing" in line
+    assert "red_px=61" in line
+    pairs = line.split("EVIDENCE=", 1)[1].split(" NEXT=", 1)[0].split(",")
+    assert all("=" in pair for pair in pairs)
+    reason_pair = [pair for pair in pairs if pair.startswith("reason=")]
+    assert len(reason_pair) == 1
+    assert ";" in reason_pair[0] and "," not in reason_pair[0]
+
+    # 空的动作表留下空的 NEXT —— 没有可做的事,不是一个像状态的词。
+    empty = cli.render_status("NO_GAME", {}, ())
+    assert empty.endswith("NEXT=")
+
+
+def test_exit_codes_are_0_2_3_4():
+    """The four codes, and nothing else.
+
+    An unknown kind raises: a new outcome must not slip through as "some
+    non-zero code" and leave the agent guessing whether it was refused or
+    blocked.
+    """
+    assert cli.exit_code_for("ok") == 0
+    assert cli.exit_code_for("refused") == 2
+    assert cli.exit_code_for("blocked") == 3
+    assert cli.exit_code_for("wedged") == 4
+    for bad in ("", "OK", "unknown", "1", "timeout"):
+        try:
+            cli.exit_code_for(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"unknown kind {bad!r} must raise")
+
+
+def test_next_actions_come_from_transition_table():
+    """NEXT lists exactly what the transition table allows from that state.
+
+    The CLI must not keep its own list of "what may follow" — a second list
+    would drift from the table, and the drift would only show up as an agent
+    attempting something the state machine forbids.
+    """
+    for state in STATES:
+        named = {action for from_state, _to, action in store_module.TRANSITIONS
+                 if from_state == state and action in ACTIONS}
+        assert set(store_module.legal_actions(state)) == named, state
+        for action in store_module.legal_actions(state):
+            assert any(may(state, to, action)
+                       for from_state, to, act in store_module.TRANSITIONS
+                       if act == action and from_state == state), (state, action)
+
+    # 计划点名的那一条:IN_GAME_RUNNING 之后只有 install(其余边不由动作促成)。
+    assert store_module.legal_actions("IN_GAME_RUNNING") == ("install",)
+    assert store_module.legal_actions("NO_GAME") == ()
+    line = cli.render_status("IN_GAME_RUNNING", {},
+                             store_module.legal_actions("IN_GAME_RUNNING"))
+    assert line.endswith("NEXT=install")
