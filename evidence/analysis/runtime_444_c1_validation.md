@@ -6930,28 +6930,100 @@ scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_shim_probe.tsv evidence/logs
    七把各自 `hits=1 / prev_is_base_execute=1/1 / hit_minus_0x10_in_map=1/1` —— 即每把都是**自己那张表**的
    slot[2](slot[1] 仍是 base Execute)。⇒ 被采样对象的 vtable 只可能是 `0x25460F0` ⇒ `h1..h6 = 0` 是
    **结构必然**。
-4. **前提,与它的闭合。** ③ 的必然性有一个前提:「**没有第二张表也把 `0xCC4220` 放在 slot[2]**」。
-   这个前提的离线支撑只有 §71.3 的 `.rdata` hits=1 —— 那是**下限,只覆盖 `.rdata`**,运行时复制出来的
-   vtable 不在这个读数里。这一格由 §72.4 的 **`unmatched=0`** 在**窗内**闭合:第二张表若在七张之外,它的
-   对象必落 `unmatched`。所以最强可写句是:
-   **`h1..h6 = 0` 由仪器口径结构决定、窗内被 `unmatched=0` 佐证 ⇒ 对另外六把 shim 跑没跑零信息。**
-5. **`unmatched=0` 的确切含义**:被采样对象的 vtable **全在七张之内** —— 不是「世界里只有这七张表」。
+4. **前提,与它的闭合(两条分支分开写)。** ③ 的必然性有一个前提:「**没有第二张表也把 `0xCC4220`
+   放在 slot[2]**」,它分两条:
+   - **七张之内**:由 §71.3 的**逐把 hits=1** 闭合(每把 shim 的地址在 `.rdata` 里只出现一次 ⇒ 七把两两不同);
+   - **七张之外**:`.rdata` 读不到运行时复制出来的表,这一支由 §72.4 的 **`unmatched=0`** 在**窗内**闭合
+     (第二张表若在七张之外,它的对象必落 `unmatched`;而 `unmatched` 是**全量**计数,不是抽样)。
+   `unmatched=0` 不是「佐证」,是**必要前提**:没有它,落在七张之外的调用既不进 `h0` 也不进 `h1..h6`。
+   所以最强可写句是:
+   **`h1..h6 = 0` 由仪器口径结构决定(前提如上,两条分支各由各自的事实闭合)、窗内被全量 `unmatched=0`
+   闭合 ⇒ 对另外六把 shim 跑没跑零信息。**
+5. **`unmatched=0` 的确切含义**:`unmatched` 是**逐次、采样门之前**的计数
+   (`shim_witness_probe.zig:186`,门在 `:189`)⇒ 它覆盖**全部 2,016 次调用**,不只是环里那 256 条:
+   每次调用的对象 vtable **全在七张之内** —— 不是「世界里只有这七张表」。同理 `h1..h6=0` 是**全量**事实,
+   不是抽样事实。
+6. **最强可写句(记账恒等式)。** 三个计数互斥且穷尽:`capture()` 先读 `[self+0]`,读不到 → `invalid_self`
+   (`:177-179`);读到且落在七张之一 → 对应 `hN`(`:182-184`);读到但不在七张 → `unmatched`(`:186`);
+   `calls` 由 detour 每次进入自增(`:313`)⇒ 恒有 **`calls = invalid_self + Σ(h0..h6) + unmatched`**。
+   本窗 `2016 = 0 + 2016 + 0` ⇒ **每一次调用都落在 `0x25460F0` 那张表**。所以 `h1..h6=0` 是**推论**,
+   不是一条独立观测 —— 写成「结构决定」必须同时带这条恒等式,否则下一发窗里会有人把它当成
+   「另外六把没跑」的观测。
 
 ### §72.8.2 两条配套的限定
 
 - **`calls=2016` 只对 `0x25460F0` 这一把有效**,不是族外执行总数(§72.5 第 2 条那半句「不是 per-system」
   的同源限定)。
-- **`caller_rva = 0x1d0857a`**(§72.4)只证明这 2,016 次经 base Execute 体内那一发 `call [rax+0x10]`
-  进来 —— 那是**派发位**读数,不是**身份**读数。
+- **`caller_rva = 0x1d0857a`**(§72.4)只证明**环里那 256 条**(= 2,016 次里的**最后** 256 次;环按
+  `seq % 256` 覆盖,`shim_witness_probe.zig:47`、`:192`,§72.4「the ring wrapped at 256 records」)
+  经 base Execute 体内那一发 `call [rax+0x10]` 进来 —— 那是**派发位**读数,不是**身份**读数;
+  **前 1,760 次的 `caller_rva` 未被记录**,不能写成「这 2,016 次都从 base Execute 进来」。
+  (取证卷 append-only:§72.5 第 1 条「派发点是 base Execute 体内 `+0x5A` 那一发」同样只对环里那 256 条
+  成立,**以本条为准**。)
 
 ### §72.8.3 「另外六把跑没跑」归谁
 
 §13 的「七把各 2,090」**本身就是逐把计数**;`docs/offline-tooling.md` 的 execspy 一节是 §13 census 的
-复采通道 ⇒ **那正是 §74 的事**(复采口径单在该节)。guard 的 `h1..h6` 只回答**身份**问题:「本次采样对象的
-vtable 是不是 `0x25460F0`」。两个口径的数**不可并排比、不可互相除**(那边已有同款纪律:§72.7 第二条)。
+复采通道 ⇒ **那正是 §74 的事**(复采口径单在该节)。guard 的 `h1..h6` 只回答**身份**问题:「本次**全部
+2,016 次调用**的对象 vtable 是不是 `0x25460F0`」。两个口径的数**不可并排比、不可互相除**(那边已有同款
+纪律:§72.7 第二条)。
 
 ### §72.8.4 移交
 
 - `docs/offline-tooling.md` 的 `c2_shim_probe.py` 一节把这条写成**陷阱 4**;`AGENTS.md` 的 `0xCC4220`
   RVA 行带一句同款提示。
 - 本节**不占 §73/§74 的号** —— 那两号留给 witness 计划 T9(scope 新形状)与 T10(B2 复采)。
+
+## §72.9 零 shot:`0xCC4220` 的三条静态路线读数 —— 补 §72.8 第 4 步的「七张之内」那一支(2026-10-28,零 shot)
+
+**授权级别**:零 shot。**不碰游戏、不注入、不装任何 detour**;只跑本仓库已有的离线脚本,读 exe 拷贝与
+镜像。本节只做一件事:把 §72.8.1 第 4 步那条前提「**没有第二张表也把 `0xCC4220` 放在 slot[2]**」的
+闭合证据从「§71.3 的 `.rdata` hits=1」再往前推一格,并把**没有闭合的那一格**写清楚。
+
+### §72.9.1 三条命令与逐字输出
+
+```bash
+$ python3 scripts/join_family_boundary.py 0xcc4220
+# exe=/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
+# base=0x140000000 base_execute=0x1d08520 (map 只收 slot[1] 仍是它的那批 = floor)
+# map_vtables=1805 map_distinct_slot2=543 census_shim_rows=25
+# mode=explicit_rvas 0xcc4220
+
+## ③ §62.2 三口径(8 对齐 qword 命中 / 命中前一槽 == base Execute / 命中-0x10 落进 map)
+target 0xcc4220 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+  hit@rdata+0x1b4100 prev=0x1d08520
+
+$ python3 scripts/fastcalls.py 0xcc4220
+0 direct code sites to 0xcc4220 in .text
+in 0 functions
+wrote evidence/xrefs/callers_0xcc4220_buckets.tsv
+
+$ python3 scripts/find_refs.py 0xcc4220
+stellaris.exe  targets: 0xcc4220
+scanning .text (0x2390800 bytes) ...
+== 0xcc4220: 0 references ==
+```
+
+`evidence/xrefs/callers_0xcc4220_buckets.tsv` 是 `fastcalls.py` 的产物,**只有表头、零站点**
+(与同目录其它 `callers_0x<rva>_buckets.tsv` 同一形状)。
+
+### §72.9.2 三条各闭哪一格
+
+1. **`hits=1` + `prev=0x1d08520`**:`0xCC4220` 在整个 `.rdata` 里只出现**一次**,而且那一处的前一槽就是
+   base Execute ⇒ 它是**恰好一张** vtable 的 slot[2](`.rdata` 口径)。这闭的是 §72.8.1 第 4 步的
+   **「七张之内」**那一支(七把两两不同 ⇒ `0xCC4220` 不在另外六把的表里)。
+2. **`0 direct code sites`**:`.text` 里**没有**任何直接 `call` / `jmp` 指向 `0xCC4220` ⇒ 没有「绕过虚派发
+   直接调它」的静态路线。
+3. **`0 references`**:`.text` 里**没有**任何 rip 相对引用指向它 ⇒ 没有「拿它的地址当数据或立即数用」的
+   静态路线。
+
+⇒ 三条合起来:通往 `0xCC4220` 的**静态**路线只有那一张表的 slot[2](与 §72.8.1 第 1–3 步的读法一致:
+它是 slot[2],派发位是 base Execute)。
+
+### §72.9.3 没有闭合的那一格(不粉饰)
+
+- 上面三条都是**静态**读数,它们**看不到运行时复制出来的 vtable**;那一格只能靠 §72.4 的
+  **`unmatched=0`**(全量计数)在窗内闭合 —— 即 §72.8.1 第 4 步的**「七张之外」**那一支。
+- 三个脚本都按**8 字节对齐**读指针 / 地址:一个把 `0xCC4220` 以 `imm32` 形式嵌在 `.text` 里的立即数,
+  `fastcalls.py`(只找 call/jmp 目标)、`find_refs.py`(只找 rip 相对引用)与 `.rdata` 的 qword 扫描
+  **三个都抓不到**。这一格**没有**被这三条命令闭合,也不假装闭合。

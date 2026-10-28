@@ -250,8 +250,9 @@ map 与 census 里的地址一律是 **RVA**;只有扫 `.rdata` 字节时才加 
 
 **旧路径**:本文件 2026-10-28 从 `scripts/scratch/2026-10_live_window_shim_witness/join_family_boundary.py`
 提升上来(**同 basename**);**原件冻结留档、字节不动** —— 取证卷 §71 的正文引的是那条路径,而 `evidence/`
-是 append-only(移走或改名会让取证记录指向不存在的文件)。副本与原件的差别只有两处,都是路径:
-仓库根少上两层、docstring 的「跑法」那一行;判据逻辑逐字未动。
+是 append-only(移走或改名会让取证记录指向不存在的文件)。副本与原件的差别是**两处路径**(仓库根少上两层,
+见下 `_REPO`;docstring 的「跑法」那一行)外加两行说明文字(本段旧路径记述与 `_REPO` 旁的注释);
+判据逻辑逐字未动。
 
 ## 站点离线反解(`scripts/exec_frame_sites.py`,读 artifact **也**读 exe 拷贝)
 
@@ -1260,7 +1261,8 @@ predicate detour 还 armed)/ `-3` stellaris.exe 未找到 / `-4` 目标已被 ho
 
 第四把 guard,**族外证人**。靶不是族内的 `0x3AFD30` / `0x3B01A0`,而是 structures §13 那**七把各 2,090 次**的
 exec shim 里的第一把 `0xCC4220`。**已运行过两窗**(2026-10-27 取证卷 §72:频率窗 20 s `calls=0`,正式窗 120 s
-`calls=2016` / `h0=2016` / `unmatched=0` ⇒ `shim_hit_named`,命中表首 `0x25460F0`,`caller_rva` 全 =
+`calls=2016` / `h0=2016` / `unmatched=0` ⇒ `shim_hit_named`,命中表首 `0x25460F0`,`caller_rva`(环里 256 条
+= 2,016 次里的**最后** 256 次;前 1,760 次未被记录)全 =
 base Execute `0x1D08520` + 0x5A),产物 `evidence/logs/shim_probe_4_4_4.tsv`。运行需要本次会话内点名,
 见 `docs/roadmap.md` 的授权表。默认 DLL `C:\temp\sqjs_c4.dll`,argv 与 donor/witness 逐字同形。
 
@@ -1281,8 +1283,11 @@ base Execute `0x1D08520` + 0x5A),产物 `evidence/logs/shim_probe_4_4_4.tsv`。�
 对象 vtable。
 
 **门序**:与 donor/witness 同形 —— `resolve_pid → resolve_base_address → sha 门 → gate_module(NEEDED_EXPORTS)
-→ Layout → Reset → SetMask → Install → 轮询 Stats → Drain → write_tsv → finally: Uninstall → Verify →
-settle → assert_game_alive`。`NEEDED_EXPORTS` **九名**(`C2Sanity` + 八个
+→ Layout → Reset → SetMask → Install → 轮询 Stats → write_tsv(meta only) → Drain → write_tsv(rows) →
+finally: Uninstall → Verify → settle → assert_game_alive`。
+(本工具的 `write_tsv` 有两次:先写 meta-only artifact 再 drain,理由见本节末尾与驱动 docstring
+`scripts/c2_shim_probe.py:31-35` —— stdout 整段丢时,artifact 仍在。)
+`NEEDED_EXPORTS` **九名**(`C2Sanity` + 八个
 `C4ShimProbe{Install,SetMask,Uninstall,Verify,Layout,StatsInto,DrainInto,Reset}`),缺一名即不注入 ——
 从文件核,不从进程核。
 
@@ -1314,12 +1319,12 @@ settle → assert_game_alive`。`NEEDED_EXPORTS` **九名**(`C2Sanity` + 八个
    做相关性(`correlate … before claiming it`);复采同场景只算重复确认。**`calls=2016` 也只是
    `0x25460F0` 这一把在 120 s 内被调 2,016 次,不是族外执行总数。**
 3. **七张表是下限,不是族外全集。** join 表只有七张;表外的对象 vtable 全落 `unmatched`。`unmatched=0` 的
-   确切含义是「被采样对象的 vtable 全在七张之内」—— 不是「世界里只有这七张表」。
+   确切含义是「**全部 2,016 次调用**的对象 vtable 全在七张之内(`unmatched` 是逐次、采样门之前的计数)」—— 不是「世界里只有这七张表」。
 4. **`h1..h6 = 0` 不携带其余六把的信息。** 本 guard 只 patch `0xCC4220` **一个**函数,而七张表里只有
    `0x25460F0` 的 slot[2] 是它 ⇒ `h1..h6=0` 是**仪器口径的结构决定**(前提:没有第二张表也把它放在 slot[2];
    该前提的离线支撑是 §71.3 的 `.rdata` hits=1 —— 那是**下限、只覆盖 `.rdata`**,运行时复制出的 vtable 由窗内
    `unmatched=0` 闭合)。它**不**回答「另外六把 shim 跑没跑」—— **那由 census 逐把计数回答(§74)**;
-   guard 的 `h1..h6` 只回答「本次采样对象的 vtable 是不是 `0x25460F0`」这一**身份**问题。
+   guard 的 `h1..h6` 只回答「本次**全部 2,016 次调用**的对象 vtable 是不是 `0x25460F0`」这一**身份**问题。
    完整论证见取证卷 **§72.8**。
 
 `run()` 同样**先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败,不许吃掉已拿到的读数。
@@ -1327,6 +1332,11 @@ settle → assert_game_alive`。`NEEDED_EXPORTS` **九名**(`C2Sanity` + 八个
 `partition_unmatched` / `build_meta`,常量 `VERDICTS` / `EVIDENCE_VERDICTS` / `NEEDED_EXPORTS`)由
 `python3 -m pytest scripts/test_c2_shim_probe.py -q` 覆盖(**15 条**:donor 的 14 条平移换靶 +
 `test_prologue_bytes_pinned`),无游戏、无 Windows API、零 shot。
+
+**驱动字节变了(2026-10-28)**:本节与 §72.8 落账后,驱动的 docstring 加了**陷阱 4**(三条 → 四条),
+现 sha256 前 16 位 = `3a2db17782129980`。下一发窗口按 §70.6 的规矩**重新 scp 并核对 sha**,不要沿用
+§72.2 记的那份 `c2_shim_probe.py = 791f3a8e…`(那是加陷阱 4 之前的字节;读数不受影响,但「主机侧那份
+= git HEAD」这条对账会当场不过)。
 
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
@@ -1522,7 +1532,7 @@ RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.
 
 **与族外证人 guard 是两个口径**:census 记的是**我们 DLL 的 `exec_hook` 在 base Execute 上的全量派发**,
 **逐把计数**(那是 §13「七把各 2,090」那种数);`c2_shim_probe.py` 只钩 `0xCC4220` **一个**函数,
-它的 `h0..h6` 只回答「本次采样对象的 vtable 是不是 `0x25460F0`」这一**身份**问题。两边的数**不可并排比**,
+它的 `h0..h6` 只回答「本次**全部 2,016 次调用**的对象 vtable 是不是 `0x25460F0`」这一**身份**问题。两边的数**不可并排比**,
 也不许互相除 —— 详见 `c2_shim_probe.py` 那一节的陷阱 4 与取证卷 §72.8。
 
 **判读陷阱(本地编号 1–4)**:
@@ -1548,9 +1558,9 @@ join 读数都会来自一个热路径归我们所有的进程 —— 那一刻�
    文件);现存**基线**在 `evidence/xrefs/exec_shim_census_2026_09_29.txt`(实机新产物才进 `logs/`,基线留在 `xrefs/`)。
 2. **硬门**:`hist_overflow == 0`(见上面陷阱 1 与「顺序」段末句)。**禁令**:不得拿 guard 的 `calls`
    (`c2_shim_probe.py` / donor / witness 那几把)当 census 计数 —— 那是**另一个口径**(见上面「两个口径」那段)。
-3. **并排两列**:七把 shim 的**新计数**与 §13 的 `2,090 each` **并排**。**2,090(shim 计数)与 783/787 不是
-   同一量纲** —— 783/787 是 §55.4 的 **campaign_gate marker 条数**(787 个 system、783 条不同名字,取证卷 §55.4),
-   §55.4 那条与 shim 计数**不可混用**。
+3. **并排两列**:七把 shim 的**新计数**与 §13 的 `2,090 each` **并排**。**2,090(shim 计数)与 787/783 不是
+   同一量纲** —— 按取证卷 §55.4 陷阱 3 的原话:**783 = 渲染出的唯一 system 名数**,**787 = §54 那次记的
+   per-system 执行次数**(两个数本来就不同源,§54.4 记过 787/783 的差);它们与 shim 计数**不可混用**。
 4. **同场景 vs 换场景**:判据原文是 `docs/roadmap.md` 的 B2 行「**换一个场景仍是 2,090 ⇒ per-system 循环**」。
    同一场景重跑**只算重复确认**,不算判据达成 —— 措辞里必须写明本轮是同一场景还是换了场景。
 5. **措辞模板**(三行固定格式):「本轮是<同一场景/换了场景>」「读数 = <逐把计数>」「判据是否达成 = <是/否,理由>」。

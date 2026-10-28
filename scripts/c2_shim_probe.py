@@ -97,7 +97,7 @@ longer describes the current scene), and this probe cannot separate them.  It on
 are gated on ``installed == 1``: ``calls > 0`` with ``installed == 0`` did not come from an
 installed probe in this process, so it decodes to ``counter_desync`` rather than a code answer.
 
-判读陷阱（族外证人版，三条，先读再用读数）:
+判读陷阱（族外证人版，四条，先读再用读数）:
 
 1. **``calls == 0`` 不是 §57.4 第三档的正面证据**,只是「本窗口没观测到」。反过来
    ``calls > 0`` 也只证明这个执行体在跑,**不**证明它按 system 走 —— §13 原话
@@ -108,6 +108,12 @@ installed probe in this process, so it decodes to ``counter_desync`` rather than
 3. **四把仪器的 ``[self+0]`` 不同源,不得互引**:donor 读的是 Execute 的 effect 对象,
    证人读的是被 instantiate 的父对象,本仪器读的是族外 shim 的 `self`。拿一把的 ``h``
    计数去解释另一把的 ``unmatched`` 分区,就是把两个测量当同一个。
+4. **``h1..h6 = 0`` 不携带其余六把 shim 的信息。** 本 guard 只 patch ``0xCC4220`` **一个**
+   函数,而七张表里只有 ``0x25460F0`` 的 slot[2] 是它 ⇒ ``h1..h6=0`` 是**仪器口径的结构决定**
+   (前提:没有第二张表也把它放在 slot[2];七张之内由 §71.3 的逐把 hits=1 闭合、七张之外由
+   **全量** ``unmatched=0`` 在窗内闭合)—— 它**不**回答「另外六把 shim 跑没跑」,那由 census
+   逐把计数回答(取证卷 §72.8;复采口径单在 §74)。同理,``caller_rva`` 只覆盖**环里那 256 条**
+   (= 最后 256 次),不是全部调用。
 """
 
 import argparse
