@@ -251,6 +251,11 @@ def main(argv=None) -> int:
 
     # --- gate order copied from c2_task5_init.py, unchanged, so a different
     # --- outcome is attributable to the new channel and not to the module copy.
+    # The world-state gate (spec §1): a shot that cannot prove the premise
+    # must not inject.  The refusal happens BEFORE inject_dll — "injected,
+    # then noticed the premise was false" is the failure mode this removes.
+    from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+    gate_install('threadstate')
     inject_dll(pid, dll_path)
     assert_game_alive(pid)
     base = resolve_base_address(pid, dll_name)

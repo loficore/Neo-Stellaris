@@ -516,6 +516,11 @@ def main():
 
     # --- gate: prove the copy we inject is live and sane before any side
     # --- effect leaves C2Init untouched (c2_task3_diag.py pattern).
+    # The world-state gate (spec §1): a shot that cannot prove the premise
+    # must not inject.  The refusal happens BEFORE inject_dll — "injected,
+    # then noticed the premise was false" is the failure mode this removes.
+    from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+    gate_install('task5')
     inject_dll(pid, dll_path)
     assert_game_alive(pid)
     base = resolve_base_address(pid, dll_name)

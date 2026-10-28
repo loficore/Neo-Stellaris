@@ -124,6 +124,11 @@ def main():
     print(f"[task3] pid={pid}  dll={dll_path}")
 
     # The new export exists only in this rebuilt copy -> one injection (P12).
+    # The world-state gate (spec §1): a shot that cannot prove the premise
+    # must not inject.  The refusal happens BEFORE inject_dll — "injected,
+    # then noticed the premise was false" is the failure mode this removes.
+    from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+    gate_install('task3')
     inject_dll(pid, dll_path)
     assert_game_alive(pid)
     base = resolve_base_address(pid, dll_name)

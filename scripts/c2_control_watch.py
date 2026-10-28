@@ -36,11 +36,19 @@ import sys
 import psutil
 
 from c2_harness import (
-    resolve_pid, resolve_base_address, inject_dll, list_exports,
-    call_remote, read_memory, assert_game_alive,
+    resolve_pid, resolve_base_address, inject_dll, list_exports, remote_alloc,
+    read_memory, call_remote, assert_game_alive, dispatch_watching_buffer,
+    inject_dll,
+    list_exports,
+    read_memory,
+    resolve_base_address,
+    resolve_pid,
 )
 from c2_task5_init import (
-    MEM_SAMPLE_EVERY_MS, memory_growth_lines, psutil_memory_sampler, sample_window,
+    MEM_SAMPLE_EVERY_MS,
+    memory_growth_lines,
+    psutil_memory_sampler,
+    sample_window,
 )
 
 # The shot's window was ~8 s from dispatch to unreadable; 20 s of watching gives
@@ -59,6 +67,11 @@ def main(argv=None) -> int:
     print(f"[control] pid={pid}  dll={dll_path}  watch={watch_ms}ms "
           f"every={MEM_SAMPLE_EVERY_MS}ms")
 
+    # The world-state gate (spec §1): a shot that cannot prove the premise
+    # must not inject.  The refusal happens BEFORE inject_dll — "injected,
+    # then noticed the premise was false" is the failure mode this removes.
+    from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+    gate_install('control_watch')
     inject_dll(pid, dll_path)
     assert_game_alive(pid)
     base = resolve_base_address(pid, dll_name)

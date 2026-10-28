@@ -175,6 +175,71 @@ def may(from_state: str, to_state: str, action: str) -> bool:
     return (from_state, to_state, action) in _ALLOWED
 
 
+#: The verbs the justfile advertises, and the budget entry each one spends.
+#:
+#: spec §12(a) point 5: 「justfile 里凡是改变世界的动词,必须出现在状态机的 ACTIONS 表里;
+#: 新增动词而不登记即红」.  The registry is that declaration: a verb that changes the world
+#: names the ACTIONS entry whose budget it spends, and a verb that does not is
+#: listed in ``UNGATED_VERBS``.
+#:
+#: Three of these mappings are not one-to-one, and each is deliberate:
+#:
+#: * ``pause`` / ``toggle`` spend the ``unpause`` budget — they are the same
+#:   key press, and the budget's job is "do not spam the pause key";
+#: * ``dismiss`` spends the ``click_option`` budget — it clicks a row in a
+#:   window, which is the same class of action (and the same accident: trap
+#:   10's ✖-on-the-console);
+#: * ``close`` and ``quit`` end the session.  The budget has no entry for
+#:   that, and spec §1's D3 keeps ``quit`` a separate action from the ones
+#:   here — so they are ungated rather than folded into one of the five.
+VERB_ACTIONS: dict[str, str | None] = {
+    "start": None,
+    "stop": None,
+    "status": None,
+    "shot": None,
+    "want": None,
+    "policy": None,
+    "choose": None,
+    "console": None,
+    "console_sync": None,
+    "speed": None,
+    "close": None,
+    "quit": None,
+    "pause": "unpause",
+    "toggle": "unpause",
+    "unpause": "unpause",
+    "click": "click_option",
+    "dismiss": "click_option",
+    "console_close": "console_close",
+}
+
+#: The verbs that do **not** change the world, so no budget entry governs them.
+#:
+#: The plan fixes the seed of this list (``status|shot|want|policy|choose|
+#: console|console_sync|speed|shot``) and the fence checks that this set does
+#: not grow past it **plus** the verbs the seed demonstrably forgot:
+#: ``close`` and ``quit`` (both end the session, and §1's D3 keeps them apart
+#: from the budgeted actions) and the daemon's lifecycle verbs ``start`` /
+#: ``stop`` (they run the daemon, they do not touch the game).
+UNGATED_VERBS: tuple[str, ...] = (
+    "status", "shot", "want", "policy", "choose", "console", "console_sync",
+    "speed", "close", "quit", "start", "stop",
+)
+
+#: The names that count as **being gated** for the injection fence.
+#:
+#: ``assert_ready`` is the pure gate (it decides, it does not touch the
+#: window); ``assert_install_ready`` and ``gate_install`` are its live
+#: wrappers on the Windows side (they take the reading and then decide).  A
+#: call to any of them, in the same scope as an injection and before it,
+#: means the injection is behind a gate.
+GATE_ENTRY_POINTS: tuple[str, ...] = (
+    "assert_ready",
+    "assert_install_ready",
+    "gate_install",
+)
+
+
 def legal_actions(state: str) -> tuple[str, ...]:
     """The world-changing actions the transition table allows from ``state``.
 
@@ -230,10 +295,10 @@ def infer_state(probe: dict) -> tuple[str, dict]:
     the process and the launcher handoff, which this probe shape does not carry.
     """
     if not isinstance(probe, dict):
-        raise ValueError("probe must be a dict")
+        raise Unreadable("probe must be a dict")
     for section in ("pause", "console", "window"):
         if not isinstance(probe.get(section), dict):
-            raise ValueError(f"probe is missing the {section} section "
+            raise Unreadable(f"probe is missing the {section} section "
                              "(pause/console/window are mandatory)")
     pause = probe["pause"]
     console = probe["console"]
@@ -713,6 +778,19 @@ class Store:
         _unlink(self.lock_path)
 
 
+class Unreadable(ValueError):
+    """Data we were handed that we cannot use.
+
+    A malformed probe, a state file that is not JSON, a counter of the wrong
+    type — all of them are the **data's** fault, not the code's, so this is a
+    ``ValueError`` (every test that pins one of them keeps pinning
+    ``ValueError``).  It has its own name so a caller can tell "the file on
+    disk is broken" from any other ValueError, and so the lint rule that wants
+    a ``TypeError`` after an ``isinstance`` check sees a deliberate choice
+    rather than a slip.
+    """
+
+
 class Blocked(Exception):
     """Raised when an action's attempt budget is already spent.
 
@@ -975,7 +1053,7 @@ def acquire(store: Store, action: str, *, guard: str | None, state: str,
     """
     _require_counted(action)
     if not isinstance(fingerprint, str) or not fingerprint:
-        raise ValueError(
+        raise Unreadable(
             f"the lease for {action!r} needs a non-empty fingerprint, "
             f"got {fingerprint!r} (spec §6 rule 3: a lease is pinned to one "
             f"reading of the world)")
@@ -1039,7 +1117,7 @@ def arm(store: Store, guard: str, lease_id: str, identity: tuple[int, str],
     A programming error, so it raises rather than returning silently.
     """
     if not isinstance(lease_id, str) or not lease_id:
-        raise ValueError(
+        raise Unreadable(
             f"arm({guard!r}) needs a non-empty lease_id, got {lease_id!r}")
     store.data["armed"][guard] = {
         "lease_id": lease_id,
@@ -1241,7 +1319,7 @@ def _timestamp(value: Any, where: str) -> float:
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{where} is {value!r}, not a number") from exc
+        raise Unreadable(f"{where} is {value!r}, not a number") from exc
 
 
 def _outstanding_lease(store: Store, now: float) -> dict | None:
@@ -1301,7 +1379,7 @@ def _require_counted(action: str) -> None:
     (spec §11-6).  A caller that passes one has a bug, not a budget.
     """
     if action not in MAX_ATTEMPTS:
-        raise ValueError(f"{action!r} is not a world-changing action; only "
+        raise Unreadable(f"{action!r} is not a world-changing action; only "
                          f"{sorted(MAX_ATTEMPTS)} are ever counted")
 
 
@@ -1325,7 +1403,7 @@ def _count(value: Any) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"the state file's attempt count {value!r} is not a number") from exc
+        raise Unreadable(f"the state file's attempt count {value!r} is not a number") from exc
 
 
 def _global_count(counter: dict | None, now: float) -> int:
@@ -1445,16 +1523,16 @@ def _read_state(path: str) -> dict:
     except FileNotFoundError:
         return _fresh_state()
     if not raw.strip():
-        raise ValueError(f"{path} is empty — refusing to read it as an empty budget")
+        raise Unreadable(f"{path} is empty — refusing to read it as an empty budget")
     try:
         data = json.loads(raw)
     except ValueError as exc:
-        raise ValueError(f"{path} is not valid JSON ({exc})") from exc
+        raise Unreadable(f"{path} is not valid JSON ({exc})") from exc
     if not isinstance(data, dict):
-        raise ValueError(f"{path} does not hold a JSON object")
+        raise Unreadable(f"{path} does not hold a JSON object")
     version = data.get("version")
     if version != STATE_VERSION:
-        raise ValueError(f"{path}: version {version!r} is not {STATE_VERSION}")
+        raise Unreadable(f"{path}: version {version!r} is not {STATE_VERSION}")
     return _normalize(data)
 
 
@@ -1479,11 +1557,11 @@ def _normalize(data: dict) -> dict:
     data.setdefault("armed", {})
     for key in ("attempts", "blocks", "leases", "armed"):
         if not isinstance(data[key], dict):
-            raise ValueError(f"the state file's {key!r} is not an object")
+            raise Unreadable(f"the state file's {key!r} is not an object")
     for key in ("by_identity", "global"):
         data["attempts"].setdefault(key, {})
         if not isinstance(data["attempts"][key], dict):
-            raise ValueError(f"the state file's attempts.{key} is not an object")
+            raise Unreadable(f"the state file's attempts.{key} is not an object")
     _validate_counters(data["attempts"])
     _validate_markers(data["blocks"])
     _validate_leases(data["leases"])
@@ -1502,14 +1580,14 @@ def _validate_markers(blocks: dict) -> None:
     for action, marker in blocks.items():
         where = f"blocks[{action!r}]"
         if not isinstance(marker, dict):
-            raise ValueError(f"the state file's {where} is not an object")
+            raise Unreadable(f"the state file's {where} is not an object")
         nonce = marker.get("nonce")
         if not isinstance(nonce, str) or not nonce:
-            raise ValueError(f"the state file's {where}.nonce is not a nonce")
+            raise Unreadable(f"the state file's {where}.nonce is not a nonce")
         for key in ("blocked_at", "attempts"):
             value = marker.get(key)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"the state file's {where}.{key} is {value!r}, "
+                raise Unreadable(f"the state file's {where}.{key} is {value!r}, "
                                  f"not a number")
 
 
@@ -1524,15 +1602,15 @@ def _validate_leases(leases: dict) -> None:
     for lease_id, lease in leases.items():
         where = f"leases[{lease_id!r}]"
         if not isinstance(lease, dict):
-            raise ValueError(f"the state file's {where} is not an object")
+            raise Unreadable(f"the state file's {where} is not an object")
         for key in ("issued_at", "ttl_s"):
             value = lease.get(key)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"the state file's {where}.{key} is {value!r}, "
+                raise Unreadable(f"the state file's {where}.{key} is {value!r}, "
                                  f"not a number")
         fingerprint = lease.get("fingerprint")
         if not isinstance(fingerprint, str) or not fingerprint:
-            raise ValueError(f"the state file's {where}.fingerprint is missing")
+            raise Unreadable(f"the state file's {where}.fingerprint is missing")
 
 
 def _validate_armed(armed: dict) -> None:
@@ -1545,10 +1623,10 @@ def _validate_armed(armed: dict) -> None:
     for guard, entry in armed.items():
         where = f"armed[{guard!r}]"
         if not isinstance(entry, dict):
-            raise ValueError(f"the state file's {where} is not an object")
+            raise Unreadable(f"the state file's {where} is not an object")
         lease_id = entry.get("lease_id")
         if not isinstance(lease_id, str) or not lease_id:
-            raise ValueError(f"the state file's {where}.lease_id is missing")
+            raise Unreadable(f"the state file's {where}.lease_id is missing")
 
 
 def _validate_counters(attempts: dict) -> None:
@@ -1561,7 +1639,7 @@ def _validate_counters(attempts: dict) -> None:
     """
     for identity, per_action in attempts["by_identity"].items():
         if not isinstance(per_action, dict):
-            raise ValueError(
+            raise Unreadable(
                 f"the state file's attempts.by_identity[{identity!r}] "
                 f"is not an object")
         for action, counter in per_action.items():
@@ -1578,26 +1656,26 @@ def _check_counter(counter: Any, where: str) -> None:
     sliding window is computed from them.
     """
     if not isinstance(counter, dict):
-        raise ValueError(f"the state file's {where} is not an object")
+        raise Unreadable(f"the state file's {where} is not an object")
     count = counter.get("attempts")
     if isinstance(count, bool) or not isinstance(count, int):
-        raise ValueError(f"the state file's {where}.attempts is {count!r}, "
+        raise Unreadable(f"the state file's {where}.attempts is {count!r}, "
                          f"not a count")
     for key in ("first_t", "last_t"):
         value = counter.get(key)
         if value is None:
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"the state file's {where}.{key} is {value!r}, "
+            raise Unreadable(f"the state file's {where}.{key} is {value!r}, "
                              f"not a timestamp")
     times = counter.get("times")
     if times is None:
         return
     if not isinstance(times, list):
-        raise ValueError(f"the state file's {where}.times is not a list")
+        raise Unreadable(f"the state file's {where}.times is not a list")
     for value in times:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"the state file's {where}.times holds {value!r}, "
+            raise Unreadable(f"the state file's {where}.times holds {value!r}, "
                              f"which is not a timestamp")
 
 
@@ -1642,8 +1720,8 @@ def _process_start_time(pid: int) -> str | None:
     if provider is not None:
         try:
             value = provider(pid)
-        except Exception:
-            return None
+        except Exception:  # noqa: BLE001 - a provider that cannot answer
+            return None       # leaves the generation check at liveness only
         if value is None:
             return None
         return str(value)
@@ -1697,8 +1775,8 @@ def _windows_pid_alive(pid: int) -> bool:
         # 87 is ERROR_INVALID_PARAMETER: OpenProcess reports it for a pid that
         # does not exist.  Anything else (5 = ACCESS_DENIED) means it is there.
         return last_error() != 87
-    except Exception:
-        return True
+    except Exception:  # noqa: BLE001 - failing toward "wait" is the safe
+        return True       # answer: a lock we cannot judge is not stolen
 
 
 def _age(path: str) -> float:

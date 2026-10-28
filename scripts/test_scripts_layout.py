@@ -339,9 +339,9 @@ def test_family_depth_rule_flags_a_nested_c2_script(tmp_path):
     # it, deleting the windows skip in violates_family_depth changes nothing
     # anyone can observe (a mutation-surviving branch).
     (tmp_path / "windows" / "c2_helper.py").write_text("")
-    assert violates_family_depth(tmp_path) == ["c2_harness.py: must sit directly "
-                                               "under scripts/ (bare-name imports + "
-                                               "C:/temp wire contract)"]
+    assert violates_family_depth(tmp_path) == [
+        ("c2_harness.py: must sit directly under scripts/ "
+         "(bare-name imports + C:/temp wire contract)")]
 
 def test_real_family_is_at_depth_one():
     assert violates_family_depth(SCRIPTS) == []
@@ -511,3 +511,265 @@ def test_census_runs_last_ordering_note():
     # The DLL module NAME is baked into execspy.js too — a driver that only
     # parameterized the Python path would load one file and look for another.
     assert "execspy.js" in section and "模块名" in section
+
+
+# ---------------------------------------------------------------------------
+# Task 6: the two fences that keep the world-state gate from being bypassed.
+#
+# spec §1's judgement criterion is 「在 IN_GAME_RUNNING 之外(或无有效租约)执行
+# 任何 guard 的 Install,gate_module 必须拒绝」.  A gate that only *some* shots
+# call is not that criterion — it is a habit.  The first fence counts the
+# `inject_dll(` call sites and the ones behind a gate, and fails when the two
+# disagree, so a new injector cannot be written without one.
+#
+# The second fence is spec §12(a) point 5: 「justfile 里凡是改变世界的动词,必须出现
+# 在状态机的 ACTIONS 表里;新增动词而不登记即红」.
+# ---------------------------------------------------------------------------
+
+def _modules():
+    """The two files the fences read their vocabulary from."""
+    import world_state
+    return world_state
+
+
+def _scope_spans(src: str) -> list[tuple[str, int, int]]:
+    """Every ``(name, start_line, end_line)`` scope in ``src``, 1-based.
+
+    The unit of "behind a gate" is the **scope** (a function body, or the
+    module body), not the file: a gate in ``main`` does not protect an
+    injection in ``helper``.  Line ranges rather than an AST walk because the
+    check is textual by nature ("does the gate call appear *before* the
+    injection in the same scope") and a parser would have to re-derive the
+    ordering anyway.
+    """
+    import ast
+    spans: list[tuple[str, int, int]] = []
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            spans.append((node.name, node.lineno,
+                          max(getattr(node, "end_lineno", node.lineno), node.lineno)))
+    spans.append(("<module>", 1, len(src.splitlines())))
+    return spans
+
+
+def _scope_of(spans, line: int) -> str:
+    """The innermost scope containing ``line``."""
+    best = ("<module>", 1, 10 ** 9)
+    for name, start, end in spans:
+        if start <= line <= end and (start, -end) > (best[1], -best[2]):
+            best = (name, start, end)
+    return best[0]
+
+
+def violates_ungated_injections(scripts_dir):
+    """R-inject: every ``inject_dll(`` call site must be behind a gate.
+
+    A **call site** is a call to ``inject_dll`` (bare or as an attribute, so
+    ``harness.inject_dll(...)`` counts too) in a maintained top-level script —
+    not the ``def inject_dll`` in ``c2_harness.py``, which is the machinery.
+
+    "Behind a gate" means: in the same scope, a call to one of
+    ``world_state.GATE_ENTRY_POINTS`` appears **before** the injection, so the
+    refusal happens before the DLL is loaded.  A gate after the injection is
+    the failure mode this rule exists for (「注入了再发现前提不成立」), so the
+    order is part of the rule, not a detail.
+
+    Violation strings are ``"<basename>: <scope> injects without a gate"``.
+    """
+    import ast
+    ws = _modules()
+    gates = set(ws.GATE_ENTRY_POINTS)
+    out = []
+    for path in sorted(scripts_dir.glob("*.py")):
+        src = path.read_text(encoding="utf-8", errors="replace")
+        if "inject_dll" not in src:
+            continue
+        spans = _scope_spans(src)
+        tree = ast.parse(src)
+        injections: list[int] = []
+        gates_at: dict[str, list[int]] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = None
+            if isinstance(node.func, ast.Name):
+                name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                name = node.func.attr
+            if name == "inject_dll":
+                injections.append(node.lineno)
+            elif name in gates:
+                gates_at.setdefault(_scope_of(spans, node.lineno), []).append(node.lineno)
+        for line in injections:
+            scope = _scope_of(spans, line)
+            if not any(gate_line < line for gate_line in gates_at.get(scope, ())):
+                out.append(f"{path.name}: {scope} injects without a gate "
+                           "(no gate call before inject_dll in that scope)")
+    return out
+
+
+def test_ungated_rule_flags_an_injection_without_a_gate(tmp_path):
+    """The fence bites: a gate in another scope does not protect this one."""
+    (tmp_path / "ungated.py").write_text(
+        "def helper():\n"
+        "    inject_dll(1, 'x')\n"
+        "\n"
+        "def main():\n"
+        "    assert_ready('install', guard='g')\n"
+        "    helper()\n", encoding="utf-8")
+    (tmp_path / "gated.py").write_text(
+        "def main():\n"
+        "    assert_ready('install', guard='g')\n"
+        "    inject_dll(1, 'x')\n", encoding="utf-8")
+    (tmp_path / "after.py").write_text(
+        "def main():\n"
+        "    inject_dll(1, 'x')\n"
+        "    assert_ready('install', guard='g')\n", encoding="utf-8")
+    (tmp_path / "attribute.py").write_text(
+        "def run(h):\n"
+        "    gate_install('g')\n"
+        "    h.inject_dll(1, 'x')\n", encoding="utf-8")
+    hits = [v.split(":")[0] for v in violates_ungated_injections(tmp_path)]
+    assert hits == ["after.py", "ungated.py"], hits
+
+
+def test_every_inject_call_site_is_gated():
+    """The real tree: every maintained injection is behind a gate."""
+    assert violates_ungated_injections(SCRIPTS) == []
+
+
+#: The justfile verbs the plan's seed whitelist names, verbatim.  Anything the
+#: daemon grows beyond this plus ``UNGATED_VERBS`` has to be registered.
+PLAN_UNGAITED_SEED = ("status", "shot", "want", "policy", "choose", "console",
+                      "console_sync", "speed")
+
+_GAME_RECIPE_RE = re.compile(r"^game\b[^:]*:")
+_JUSTFILE_RECIPE_RE = re.compile(r"^([a-z][a-z0-9_]*)(?:\s+[a-z*].*)?:", re.MULTILINE)
+
+
+def justfile_game_verbs(justfile_path):
+    """The verbs the justfile advertises for the game, read off its comment.
+
+    The ``game`` recipe's usage line is the documentation an operator reads,
+    so it is also the list a new verb is most likely to be added to without a
+    registry change.  Parsed as ``a | b | c`` tokens; a token with arguments
+    (``click 1400 861``) contributes its first word.
+    """
+    text = _read(justfile_path)
+    lines = text.splitlines()
+    block: list[str] = []
+    # The usage comment is the run of "#" lines immediately above the `game`
+    # recipe.  Anchoring on the recipe (not on the word "start") is what makes
+    # the rule bite for a verb list that was rewritten wholesale.
+    for index, line in enumerate(lines):
+        if not _GAME_RECIPE_RE.match(line):
+            continue
+        above = []
+        for candidate in reversed(lines[:index]):
+            stripped = candidate.strip()
+            if not stripped.startswith("#"):
+                break
+            above.append(stripped.lstrip("# "))
+        block = list(reversed(above))
+        break
+    # Split on " | " with the spaces: a verb's own alternatives are written
+    # without them (``console_sync open|closed|auto``), so the separator is
+    # unambiguous and ``closed`` is not mistaken for a verb.
+    verbs = []
+    for chunk in " ".join(block).split(" | "):
+        words = chunk.split()
+        if not words:
+            continue
+        verb = words[0].strip()
+        if verb and verb not in verbs:
+            verbs.append(verb)
+    return tuple(verbs)
+
+
+def violates_unregistered_verbs(justfile_path):
+    """R-verbs: every advertised world-changing verb must be registered.
+
+    spec §12(a) point 5 binds this: a verb that changes the world and is not
+    in the state machine's registry is a way to change the world without a
+    lease.  The fence checks three things and reports each separately:
+
+    * the verb is **registered** in ``world_state.VERB_ACTIONS``;
+    * a registered verb that claims to change the world names an entry that
+      **is** in ``world_state.ACTIONS`` (a typo would silently ungate it);
+    * a verb that claims *not* to change the world is listed in
+      ``world_state.UNGATED_VERBS`` — otherwise "no budget entry" would be a
+      claim nobody can check.
+
+    ``UNGATED_VERBS`` may only hold the plan's seed plus the session-ending
+    verbs and the daemon's own lifecycle verbs; anything else is a new claim
+    about the world and has to be made deliberately, in that constant.
+    """
+    ws = _modules()
+    out = []
+    for verb in justfile_game_verbs(justfile_path):
+        if verb not in ws.VERB_ACTIONS:
+            out.append(f"{justfile_path.name}: verb {verb!r} is not registered "
+                       "in world_state.VERB_ACTIONS")
+            continue
+        action = ws.VERB_ACTIONS[verb]
+        if action is None:
+            if verb not in ws.UNGATED_VERBS:
+                out.append(f"{justfile_path.name}: verb {verb!r} claims not to "
+                           "change the world but is not in "
+                           "world_state.UNGATED_VERBS")
+        elif action not in ws.ACTIONS:
+            out.append(f"{justfile_path.name}: verb {verb!r} is registered "
+                       f"against {action!r}, which is not one of world_state.ACTIONS")
+    return out
+
+
+def test_unregistered_verb_rule_flags_an_unknown_and_a_mistyped_verb(
+        tmp_path, monkeypatch):
+    """The fence bites on each of the three failures it claims to catch."""
+    ws = _modules()
+    jf = tmp_path / "justfile"
+    jf.write_text(
+        "# start | status | nuke | pause | console_sync open|closed|auto\n"
+        "game verb *args:\n"
+        "    ssh host python game_supervisor.py\n", encoding="utf-8")
+
+    # 1) a verb nobody registered
+    hits = violates_unregistered_verbs(jf)
+    assert any("'nuke'" in h and "not registered" in h for h in hits), hits
+    # registered verbs raise nothing; ``pause`` maps onto the unpause budget,
+    # and an argument alternative (``closed``) is not read as a verb at all.
+    assert not any("'status'" in h for h in hits), hits
+    assert not any("'pause'" in h for h in hits), hits
+    assert not any("'closed'" in h for h in hits), hits
+    assert ws.VERB_ACTIONS["pause"] in ws.ACTIONS
+
+    # 2) registered as "does not change the world" without being on the list
+    monkeypatch.setitem(ws.VERB_ACTIONS, "nuke", None)
+    hits = violates_unregistered_verbs(jf)
+    assert any("'nuke'" in h and "UNGATED_VERBS" in h for h in hits), hits
+
+    # 3) registered against something that is not one of the five actions
+    monkeypatch.setitem(ws.VERB_ACTIONS, "nuke", "detonate")
+    hits = violates_unregistered_verbs(jf)
+    assert any("'nuke'" in h and "not one of world_state.ACTIONS" in h
+               for h in hits), hits
+
+
+def test_real_justfile_verbs_are_registered():
+    """The real justfile: every advertised verb is registered and consistent."""
+    assert violates_unregistered_verbs(REPO / "justfile") == []
+
+
+def test_ungated_verbs_is_the_seed_plus_the_named_extensions():
+    """The whitelist cannot grow silently.
+
+    Its content IS the claim "these verbs do not change the world".  Growing
+    it is a decision about scope, so the fence pins the exact set: the plan's
+    seed, plus the two session-ending verbs §1's D3 keeps apart from the
+    budgeted actions, plus the daemon's own lifecycle verbs.
+    """
+    ws = _modules()
+    allowed = set(PLAN_UNGAITED_SEED) | {"close", "quit", "start", "stop"}
+    assert set(ws.UNGATED_VERBS) == allowed
+    assert set(ws.UNGATED_VERBS).isdisjoint(ws.ACTIONS)

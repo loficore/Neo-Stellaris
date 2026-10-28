@@ -897,6 +897,11 @@ def _flow(args, result, state):
         if "is not loaded" not in str(exc):
             raise _Abort("stale_module", str(exc))
         try:
+            # The world-state gate (spec §1): a shot that cannot prove the premise
+            # must not inject.  The refusal happens BEFORE inject_dll — "injected,
+            # then noticed the premise was false" is the failure mode this removes.
+            from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+            gate_install('c4')
             harness.inject_dll(pid, args.dll)
             base = harness.resolve_base_address(pid, module)
         except RuntimeError as inject_exc:

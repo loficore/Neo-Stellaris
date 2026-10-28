@@ -147,8 +147,6 @@ def _state_module():
     """
     try:
         import world_state as ws
-
-        return ws
     except ImportError:
         here = os.path.dirname(os.path.abspath(__file__))
         for candidate in (os.path.dirname(here), here):
@@ -156,12 +154,11 @@ def _state_module():
                 sys.path.append(candidate)
         try:
             import world_state as ws
-
-            return ws
         except ImportError as exc:
             raise RuntimeError(
                 "world_state.py is not importable — it must sit beside this "
                 "file (C:\\temp) or one directory above it") from exc
+    return ws
 
 
 def _install_provider() -> None:
