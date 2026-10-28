@@ -1,0 +1,158 @@
+[scope] pid=3604  dll=C:/temp/sqjs_c4.dll
+[scope] sqjs_c4.dll base (64-bit): 0x7ffb52cb0000
+[scope] MZ header at base OK
+[scope] C2Sanity == 42, game alive ¡ª dispatch authorized
+[scope] exe_base=0x7ff717430000 image_end=0x7ff71ad57000 known_vtables=1805
+[scope] LAYOUT entry=120 stats=56 ring=256 mask=511 version=2
+[scope] C2ScopeProbeInstall rc=0
+[scope] waiting: calls=960 samples=1 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2029 samples=3 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+[scope] waiting: calls=2970 samples=5 invalid_self=0 invalid_ctx=0
+STATS: calls=2970 samples=5 invalid_self=0 invalid_ctx=0 lexer=0 x_nonzero=5 patch_size=16 installed=1 verified=-1
+CALLERS:
+  ret=0x1c4369e est_site=0x1c43699 count=4 func=- origin=-
+  ret=0x1bcd192 est_site=0x1bcd18d count=1 func=0x1bcd120 origin=incoming_arg
+CHAIN:
+  ctx=0x7fe768 ok=0 x=0x0 s=- vptr=- id=- name=- object=-
+  ctx=0x7fed78 ok=0 x=0x1f6412ae0 s=0x100 vptr=- id=- name=- object=-
+OBJECTS:
+  source=self root=0x20cbaa2d0 off=0x0 ptr=0x1dcd6500 ptr_rva=- member_vtable=0 vptr=0xe684b5e899abe7bf vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x20cbaa2d0 off=0x8 ptr=0x4c4b40 ptr_rva=- member_vtable=0 vptr=- vptr_rva=- known=0 slot2_rva=-
+  source=helper root=0x7fef70 off=0x0 ptr=0x7ff000 ptr_rva=- member_vtable=0 vptr=0x340109 vptr_rva=- known=0 slot2_rva=-
+  source=helper root=0x7fef70 off=0x20 ptr=0xc4340000 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=helper root=0x7fef70 off=0x30 ptr=0x3f800000 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x7fe4f0 off=0x28 ptr=0x7ff7199937a0 ptr_rva=0x25637a0 member_vtable=0 vptr=0x53454355444f5250 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x7fe4f0 off=0x30 ptr=0x7f0000000008 ptr_rva=- member_vtable=0 vptr=- vptr_rva=- known=0 slot2_rva=-
+  source=helper root=0x7fe960 off=0x10 ptr=0x7feac0 ptr_rva=- member_vtable=0 vptr=0x7ff719919068 vptr_rva=0x24e9068 known=1 slot2_rva=0x396460
+  source=helper root=0x7fe960 off=0x18 ptr=0x170912ee0 ptr_rva=- member_vtable=0 vptr=0x7ff7198e38b8 vptr_rva=0x24b38b8 known=0 slot2_rva=-
+  source=self root=0x2122c7a40 off=0x0 ptr=0x199a22060 ptr_rva=- member_vtable=0 vptr=0x7ff7199002b0 vptr_rva=0x24d02b0 known=1 slot2_rva=0x240640
+  source=self root=0x2122c7a40 off=0x8 ptr=0x186a0 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x2122c7a40 off=0x10 ptr=0x7ff719d9c7f0 ptr_rva=0x296c7f0 member_vtable=0 vptr=0x7ff7198e34d0 vptr_rva=0x24b34d0 known=0 slot2_rva=-
+  source=self root=0x2122c7a40 off=0x20 ptr=0xbc253b8 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x2122c7a40 off=0x30 ptr=0x7ff7198f5320 ptr_rva=0x24c5320 member_vtable=1 vptr=0x7ff717591000 vptr_rva=0x161000 known=0 slot2_rva=-
+  source=self root=0x2122c7a40 off=0x38 ptr=0x19a08f060 ptr_rva=- member_vtable=0 vptr=0x7ff71991c880 vptr_rva=0x24ec880 known=1 slot2_rva=0x15db30
+  source=self root=0x141deafc0 off=0x0 ptr=0x20c648690 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x141deafc0 off=0x10 ptr=0x7a6d25c0 ptr_rva=- member_vtable=0 vptr=0x800 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x141deafc0 off=0x20 ptr=0x2860fc00 ptr_rva=- member_vtable=0 vptr=0x300000001 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x141deafc0 off=0x30 ptr=0x99a2e600 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x141deafc0 off=0x38 ptr=0x100401000 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x141deb020 off=0x0 ptr=0x7ff7198e3050 ptr_rva=0x24b3050 member_vtable=1 vptr=0x7ff7175e3ea0 vptr_rva=0x1b3ea0 known=0 slot2_rva=-
+  source=self root=0x141deb020 off=0x8 ptr=0x100000000 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self root=0x141deb020 off=0x38 ptr=0x199d67e00 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=helper.d2 root=0x7ff000 off=0x0 ptr=0x572d87a0 ptr_rva=- member_vtable=0 vptr=0x7ff719b27270 vptr_rva=0x26f7270 known=0 slot2_rva=-
+  source=helper.d2 root=0x7ff000 off=0x8 ptr=0x7ffbffc4c3a0 ptr_rva=- member_vtable=0 vptr=0xfffffc39840fc085 vptr_rva=- known=0 slot2_rva=-
+  source=helper.d2 root=0x7ff000 off=0x10 ptr=0x1f69fd810 ptr_rva=- member_vtable=0 vptr=0x7ff719b18f60 vptr_rva=0x26e8f60 known=0 slot2_rva=-
+  source=helper.d2 root=0x7ff000 off=0x18 ptr=0x1f56154a0 ptr_rva=- member_vtable=0 vptr=0x7ff7199cf2b0 vptr_rva=0x259f2b0 known=0 slot2_rva=-
+  source=helper.d2 root=0x7ff000 off=0x20 ptr=0x1f69fde70 ptr_rva=- member_vtable=0 vptr=0x7ff7198aa488 vptr_rva=0x247a488 known=0 slot2_rva=-
+  source=helper.d2 root=0x7ff000 off=0x28 ptr=0x7ff190 ptr_rva=- member_vtable=0 vptr=0x7ff329 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7199937a0 off=0x10 ptr=0x7ff7183c0250 ptr_rva=0xf90250 member_vtable=0 vptr=0xffedd7e908e98348 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7199937a0 off=0x18 ptr=0x7ff7183bf1d0 ptr_rva=0xf8f1d0 member_vtable=0 vptr=0x7c894808245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7199937a0 off=0x20 ptr=0x7ff7183bf030 ptr_rva=0xf8f030 member_vtable=0 vptr=0x83485708245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7199937a0 off=0x28 ptr=0x7ff717635960 ptr_rva=0x205960 member_vtable=0 vptr=0x4c894818245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7199937a0 off=0x30 ptr=0x7ff7183bf160 ptr_rva=0xf8f160 member_vtable=0 vptr=0x83485618246c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7199937a0 off=0x38 ptr=0x7ff7183bf320 ptr_rva=0xf8f320 member_vtable=0 vptr=0x6c894808245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=helper.d2 root=0x7feac0 off=0x0 ptr=0x7ff7198e8940 ptr_rva=0x24b8940 member_vtable=0 vptr=0x7ff71766aa10 vptr_rva=0x23aa10 known=0 slot2_rva=-
+  source=helper.d2 root=0x170912ee0 off=0x0 ptr=0x7ff7198e38b8 ptr_rva=0x24b38b8 member_vtable=0 vptr=0x7ff717672ef0 vptr_rva=0x242ef0 known=0 slot2_rva=-
+  source=self.d2 root=0x199a22060 off=0x0 ptr=0x7ff7199002b0 ptr_rva=0x24d02b0 member_vtable=1 vptr=0x7ff7177a5d40 vptr_rva=0x375d40 known=0 slot2_rva=-
+  source=self.d2 root=0x199a22060 off=0x8 ptr=0x7ff7198e3468 ptr_rva=0x24b3468 member_vtable=0 vptr=0x7ff717671250 vptr_rva=0x241250 known=0 slot2_rva=-
+  source=self.d2 root=0x199a22060 off=0x10 ptr=0x199a22080 ptr_rva=- member_vtable=0 vptr=0x48 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x199a22060 off=0x30 ptr=0x7ff7198e3488 ptr_rva=0x24b3488 member_vtable=0 vptr=0x7ff7176713b0 vptr_rva=0x2413b0 known=0 slot2_rva=-
+  source=self.d2 root=0x199a22060 off=0x38 ptr=0x199a220a8 ptr_rva=- member_vtable=0 vptr=0x186a0 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff719d9c7f0 off=0x0 ptr=0x7ff7198e34d0 ptr_rva=0x24b34d0 member_vtable=0 vptr=0x7ff71758db30 vptr_rva=0x15db30 known=0 slot2_rva=-
+  source=self.d2 root=0x7ff719d9c7f0 off=0x28 ptr=0x7ff7198efcc0 ptr_rva=0x24bfcc0 member_vtable=0 vptr=0x7ff717695d70 vptr_rva=0x265d70 known=0 slot2_rva=-
+  source=self.d2 root=0x7ff719d9c7f0 off=0x30 ptr=0x21211ded0 ptr_rva=- member_vtable=0 vptr=0x4e20 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198f5320 off=0x0 ptr=0x7ff717591000 ptr_rva=0x161000 member_vtable=0 vptr=0x8b4820ec83485340 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198f5320 off=0x8 ptr=0x7ff719138520 ptr_rva=0x1d08520 member_vtable=0 vptr=0x40d00000000025ff vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198f5320 off=0x10 ptr=0x7ff7182881e0 ptr_rva=0xe581e0 member_vtable=0 vptr=0x74894808245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198f5320 off=0x18 ptr=0x7ff717965070 ptr_rva=0x535070 member_vtable=0 vptr=0x74894808245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198f5320 off=0x20 ptr=0x7ff7182882f0 ptr_rva=0xe582f0 member_vtable=0 vptr=0x74894808245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198f5320 off=0x28 ptr=0x7ff71758db30 ptr_rva=0x15db30 member_vtable=0 vptr=0xcccccccccc0000c2 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198f5320 off=0x30 ptr=0x7ff71758db30 ptr_rva=0x15db30 member_vtable=0 vptr=0xcccccccccc0000c2 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198f5320 off=0x38 ptr=0x7ff71775b9c0 ptr_rva=0x32b9c0 member_vtable=0 vptr=0x8b4820ec83485340 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x19a08f060 off=0x0 ptr=0x7ff71991c880 ptr_rva=0x24ec880 member_vtable=1 vptr=0x7ff7177f4d10 vptr_rva=0x3c4d10 known=0 slot2_rva=-
+  source=self.d2 root=0x19a08f060 off=0x8 ptr=0x7ff71991c870 ptr_rva=0x24ec870 member_vtable=0 vptr=0x7ff717808404 vptr_rva=0x3d8404 known=0 slot2_rva=-
+  source=self.d2 root=0x19a08f060 off=0x18 ptr=0x170ce03c0 ptr_rva=- member_vtable=0 vptr=0x7ff719a17a60 vptr_rva=0x25e7a60 known=0 slot2_rva=-
+  source=self.d2 root=0x19a08f060 off=0x20 ptr=0x7ff7198e39c8 ptr_rva=0x24b39c8 member_vtable=0 vptr=0x7ff717672920 vptr_rva=0x242920 known=0 slot2_rva=-
+  source=self.d2 root=0x19a08f060 off=0x28 ptr=0x19a04fbe0 ptr_rva=- member_vtable=0 vptr=0x7ff7198e38b8 vptr_rva=0x24b38b8 known=0 slot2_rva=-
+  source=self.d2 root=0x19a08f060 off=0x38 ptr=0x7ff7198e3590 ptr_rva=0x24b3590 member_vtable=0 vptr=0x7ff717671d00 vptr_rva=0x241d00 known=0 slot2_rva=-
+  source=self.d2 root=0x20c648690 off=0x8 ptr=0x2860fc00 ptr_rva=- member_vtable=0 vptr=0x300000001 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x20c648690 off=0x10 ptr=0xa08800 ptr_rva=- member_vtable=0 vptr=0x2717035704e3281a vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x20c648690 off=0x18 ptr=0x159375290 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7a6d25c0 off=0x8 ptr=0x400000 ptr_rva=- member_vtable=0 vptr=- vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7a6d25c0 off=0x20 ptr=0x100000040 ptr_rva=- member_vtable=0 vptr=0x0 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x2860fc00 off=0x10 ptr=0x678000000 ptr_rva=- member_vtable=0 vptr=- vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x2860fc00 off=0x18 ptr=0x80000000008 ptr_rva=- member_vtable=0 vptr=- vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x2860fc00 off=0x28 ptr=0x4200000000 ptr_rva=- member_vtable=0 vptr=- vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x2860fc00 off=0x30 ptr=0x500000000 ptr_rva=- member_vtable=0 vptr=- vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198e3050 off=0x0 ptr=0x7ff7175e3ea0 ptr_rva=0x1b3ea0 member_vtable=0 vptr=0x83485708245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198e3050 off=0x8 ptr=0x7ff719138520 ptr_rva=0x1d08520 member_vtable=0 vptr=0x40d00000000025ff vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198e3050 off=0x10 ptr=0x7ff71776d410 ptr_rva=0x33d410 member_vtable=0 vptr=0x74894808245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198e3050 off=0x18 ptr=0x7ff71776d540 ptr_rva=0x33d540 member_vtable=0 vptr=0x74894808245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198e3050 off=0x20 ptr=0x7ff71776d5c0 ptr_rva=0x33d5c0 member_vtable=0 vptr=0x4c894810245c8948 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198e3050 off=0x28 ptr=0x7ff71758db30 ptr_rva=0x15db30 member_vtable=0 vptr=0xcccccccccc0000c2 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198e3050 off=0x30 ptr=0x7ff71758db30 ptr_rva=0x15db30 member_vtable=0 vptr=0xcccccccccc0000c2 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x7ff7198e3050 off=0x38 ptr=0x7ff71765a4f0 ptr_rva=0x22a4f0 member_vtable=0 vptr=0x8b4820ec83485340 vptr_rva=- known=0 slot2_rva=-
+  source=self.d2 root=0x199d67e00 off=0x30 ptr=0x7ff71991c810 ptr_rva=0x24ec810 member_vtable=1 vptr=0x7ff7177f9c30 vptr_rva=0x3c9c30 known=0 slot2_rva=-
+  source=self.d2 root=0x199d67e00 off=0x38 ptr=0x7ff71991c800 ptr_rva=0x24ec800 member_vtable=0 vptr=0x7ff717808410 vptr_rva=0x3d8410 known=0 slot2_rva=-
+REGIONS:
+  source=self addr=0x20cbaa2d0 verdict=private_committed base=0x20cbaa000 size=0xe000 state=0x1000 protect=0x4 type=0x20000
+  source=helper addr=0x7fef70 verdict=private_committed base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000
+  source=arg4 addr=0x7ff7195b7b28 verdict=image base=0x7ff7195b7000 size=0x20b000 state=0x1000 protect=0x20 type=0x1000000
+  source=self addr=0x7fe4f0 verdict=private_committed base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000
+  source=helper addr=0x7fe960 verdict=private_committed base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000
+  source=arg3 addr=0x7ff719138520 verdict=image base=0x7ff719138000 size=0x68a000 state=0x1000 protect=0x20 type=0x1000000
+  source=self addr=0x2122c7a40 verdict=private_committed base=0x2122c7000 size=0x157000 state=0x1000 protect=0x4 type=0x20000
+  source=self addr=0x141deafc0 verdict=private_committed base=0x141dea000 size=0x21000 state=0x1000 protect=0x4 type=0x20000
+  source=self addr=0x141deb020 verdict=private_committed base=0x141deb000 size=0x20000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x1dcd6500 verdict=private_committed base=0x1dcd6000 size=0x785000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x4c4b40 verdict=reserved base=0x4c4000 size=0x2f4000 state=0x2000 protect=0x0 type=0x20000
+  source=helper.d2 addr=0x7ff000 verdict=private_committed base=0x7ff000 size=0x1000 state=0x1000 protect=0x4 type=0x20000
+  source=helper.d2 addr=0xc4340000 verdict=private_committed base=0xc4340000 size=0xff8000 state=0x1000 protect=0x4 type=0x20000
+  source=helper.d2 addr=0x3f800000 verdict=private_committed base=0x3f800000 size=0x11f000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x7ff7199937a0 verdict=image base=0x7ff719993000 size=0x3f1000 state=0x1000 protect=0x2 type=0x1000000
+  source=self.d2 addr=0x7f0000000008 verdict=free base=0x7f0000000000 size=0xf4fdc90000 state=0x10000 protect=0x1 type=0x0
+  source=helper.d2 addr=0x7feac0 verdict=private_committed base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000
+  source=helper.d2 addr=0x170912ee0 verdict=private_committed base=0x170912000 size=0x1a000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x199a22060 verdict=private_committed base=0x199a22000 size=0x13000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x186a0 verdict=mapped_view base=0x18000 size=0x8000 state=0x1000 protect=0x4 type=0x40000
+  source=self.d2 addr=0x7ff719d9c7f0 verdict=image base=0x7ff719d9c000 size=0x3000 state=0x1000 protect=0x4 type=0x1000000
+  source=self.d2 addr=0xbc253b8 verdict=private_committed base=0xbc25000 size=0x11c000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x7ff7198f5320 verdict=image base=0x7ff7198f5000 size=0x48f000 state=0x1000 protect=0x2 type=0x1000000
+  source=self.d2 addr=0x19a08f060 verdict=private_committed base=0x19a08f000 size=0x41000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x20c648690 verdict=private_committed base=0x20c648000 size=0x24000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x7a6d25c0 verdict=private_committed base=0x7a6d2000 size=0x56000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x2860fc00 verdict=private_committed base=0x2860f000 size=0xaf000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x99a2e600 verdict=private_committed base=0x99a2e000 size=0x4ff000 state=0x1000 protect=0x4 type=0x20000
+  source=self.d2 addr=0x100401000 verdict=private_committed base=0x100401000 size=0xbef000 state=0x1000 protect=0x404 type=0x20000
+  source=self.d2 addr=0x7ff7198e3050 verdict=image base=0x7ff7198e3000 size=0x4a1000 state=0x1000 protect=0x2 type=0x1000000
+  source=self.d2 addr=0x100000000 verdict=private_committed base=0x100000000 size=0xff0000 state=0x1000 protect=0x404 type=0x20000
+  source=self.d2 addr=0x199d67e00 verdict=private_committed base=0x199d67000 size=0x3d000 state=0x1000 protect=0x4 type=0x20000
+  source=ctx addr=0x7fed78 verdict=private_committed base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000
+  source=ctx addr=0x7fe768 verdict=private_committed base=0x7fe000 size=0x2000 state=0x1000 protect=0x4 type=0x20000
+[scope] entries=5 valid=5 lexer=0 chain_ok=0 distinct_vtables=3 ids=[]
+[scope] roots=9 known_vtable_hits=3 member_vtable_hits=2 unknown_ptr_hits=20 unreadable_roots=0 capped_total=0
+[scope] root self: followed=5 implausible=0 capped=0 withheld=0
+[scope] root helper: followed=2 implausible=0 capped=0 withheld=0
+[scope] root arg3: followed=1 implausible=4 capped=0 withheld=0
+[scope] root arg4: followed=1 implausible=0 capped=0 withheld=0
+[scope] depth2 self: planned=18 followed=18 capped=0 deduped=0
+[scope] depth2 helper: planned=5 followed=5 capped=0 deduped=0
+[scope] depth2 arg3: planned=0 followed=0 capped=0 deduped=0
+[scope] depth2 arg4: planned=0 followed=0 capped=0 deduped=0
+[scope] shared_cells=n=0
+[scope] wrote 149 rows to C:/temp/c4_scope_d2_27.tsv
+VERDICT: scope_candidate
+at least one pointer-shaped qword under the four roots dereferenced to an object whose vtable RVA is in the known CEffect map. The rows name which root, which offset, and the matched slot2 entity. Identity of a CEventScope is still NOT established by this verdict. The member_vtable rows are a separate datum ¡ª a known vtable address sitting AT root+off describes the root's own class, not what that member points at.
+VERDICT_D2: no_depth2_lead
+[scope] C2ScopeProbeUninstall rc=0
+[scope] C2ScopeProbeVerify rc=0 (engine bytes intact)
+[scope] host alive
+EXIT=0 

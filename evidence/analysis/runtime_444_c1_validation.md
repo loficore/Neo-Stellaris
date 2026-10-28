@@ -6387,6 +6387,10 @@ ssh Windows_Jiaolong "cd C:\temp; python C:\temp\ns_scope_finish_cleanup.py 2022
 本发（§68）落在 ② 的**证据档**：`lineage_edge_found` 成立但两条边一条是标量、一条是模块内静态表
 （§68.3），没把载体往前推一格，所以 ② 现在是**条件式移交**，未触发。
 
+**2026-10-28 改判（§73）**：下一发 `verdict_d2 = no_depth2_lead`（非证据档）⇒ ② 的触发条件成立，
+**本仪器这一层问完了，只剩一条新路线**。改判的读数与作用域见 §73.4–§73.7（本发样本 5 个、
+`capped` 全 0，与 §68 那 19 不是同一集合）。
+
 ## §69 同族 slot[2] 证人两窗（20 s + 120 s）：`0x3B01A0` 全程静默 —— 而「载入进行中存档」这一步是 launcher 的 `--continuelastsave` 代做的，点击路径本窗口未执行(2026-10-27,点名 ×2)
 
 **授权级别**：同一个窗口里两段点名，彼此分开。第一段人给的是「**授权武装：launch + 载入点击**」，
@@ -7027,3 +7031,173 @@ scanning .text (0x2390800 bytes) ...
 - 三个脚本都按**8 字节对齐**读指针 / 地址:一个把 `0xCC4220` 以 `imm32` 形式嵌在 `.text` 里的立即数,
   `fastcalls.py`(只找 call/jmp 目标)、`find_refs.py`(只找 rip 相对引用)与 `.rdata` 的 qword 扫描
   **三个都抓不到**。这一格**没有**被这三条命令闭合,也不假装闭合。
+
+## §73 scope 新形状一发(预算 27):self 支 18/18 问完、`capped` 归零,`verdict_d2` 落 `no_depth2_lead` ⇒ §68.8 ② 的条件式移交**触发**(2026-10-28,点名 ×1)
+
+**授权级别**:点名。人对这一窗的原话是「**实际操作吧,现在机器就在线**」;窗口内容在发前提里逐条列明为
+「1 次 launch + 两发 install/uninstall(§73、§74)」,人回「**开跑**」。本节的这一发是两发里的第一发
+(scope),census(§74)是第二发且压在其后。
+
+**这一发问的是什么**:§59.9 前置 ①(连线前先按 `plausible_user_ptr` + 界内/界外分档)与前置 ②
+(`self` 支预算抬高到 27)都已由计划 Task 5 做进驱动(`partition_cells` / `DEPTH2_PER_SOURCE = 27`,
+`04.24` 之后未再改动 DLL);本发是**同形状之外的第一次**:深度与预算同时到位,而 DLL 字节是 §69/§70/§72
+那一份。判据表照 §57.4/§68.8 原样,不在这里重述。
+
+**环境与前置读数**:新进程 pid **3604**,hwnd 1116360。`just launch` 一次成功(`GAME_OBSERVE step=ok
+alive_s=30`、`inner_exit code=0`),落地即战役内(日期 2300.07.25 一类的续档,launcher 自带
+`--continuelastsave`)。**紧邻执行 shot 的前置读数**:
+
+```
+STATUS=playing note=ok pid=3604 hwnd=1116360 age=0.1s want=playing policy=first handled=0 cmd=unpause
+```
+
+这一行不是 `just game status` 直接读到的 —— 见下面「仪器通道」,它是经 session 1 读出来的状态机读数
+`STATE=IN_GAME_PAUSED_CLEAN … NEXT=unpause` 执行 `unpause` 之后的同一份监督器心跳。
+
+**上线字节与对账**:`C:\temp\sqjs_c4.dll` sha256
+`17c2b8251d7e7faeec92481d27d963b7f73ed5cde51203426279c720aff1e840`(= 本场 `zig-out/bin/stellaris_quickjs.dll`,
+= §69/§70/§72 那一份字节;与 §68 的 `7d3e45c4…` **不同值**,所以本发与 §68 之间仪器换过,两发只能当
+「同一台仪器族、不同字节」并排)。三份静态输入在主机上逐文件哈希对账一致:
+`ceffect_vtable_map_4_4_4.txt` `3e21961a…`、`exec_frame_callers_4_4_4.tsv` `02b104c6…`、
+`descriptor_oracle_4_4_4.tsv` `44b1768c…`。**驱动侧**`c2_scope_probe.py` 上传前=HEAD `31968f1f…`
+(主机原有一份 `9cca999f…` = `fcadef2`,即 §68 那一发的记录版本,按 §70.6 先对账再覆盖)。
+
+### §73.1 仪器通道:这一发第一次必须经 `session_bridge`
+
+`c2_scope_probe.gate_module` 在 `inject_dll` **之前**调 `world_probe.gate_install('scope')`(spec §1:
+证明不了前提就不许注入)。而 SSH 落在 **session 0**,`EnumWindows` 在那一层只看得到一个控制台窗口
+(实测 `windows=1`),监督器与状态机在那里都只会读到 `NO_GAME` / `STATUS=stopped`。所以本发是从
+`session_bridge.py`(schtasks `/run /I`)投进 **session 1** 跑的;直接 `ssh … python c2_scope_probe.py`
+会在门口被拒(这是这条门第一次真的挡下东西,记录在此)。
+
+同一晚在 bridge 上修了两处缺陷(都先看到红再补):
+
+1. **读回路径缺 `mode`** —— `_open_file(OUT_PATH, encoding=...)` 少了 `"r"`,`TypeError` 在实机上炸在
+   `print` 之前;总线上只有 shim 文本那条被围栏覆盖,读回半句没有。现在
+   `scripts/windows/tests/test_session_bridge.py::test_run_interactive_reads_the_sentinel_back` 用
+   RED→GREEN 钉住(4 passed → 7 passed)。
+2. **默认超时 120 s 短于本发的 120 s 采样窗** —— 加了 `--timeout-s`,本发用 420 s;两个纯函数测试
+   (`peel_timeout`)覆盖缺省与显式两条路。
+
+### §73.2 depth-1 读数(与 §59.3 / §68.1 并排,不做增量断言)
+
+| 键 | §59.3(depth-1) | §68.1(depth-1+2) | 本发(预算 27) |
+|---|---|---|---|
+| 字节 | `…`(§59) | `7d3e45c4…` | `17c2b825…` |
+| `calls` | 3061(≈25.5/s) | 1046773(≈8723/s) | **2970**(≈24.75/s) |
+| `samples` | 5 | 2044 | **5** |
+| `valid` / `lexer` | 5 / 0 | 256 / 0 | 5 / 0 |
+| `followed_by_source` | self=4/helper=2/arg3=1/arg4=1 | self=8/helper=2/arg3=0/arg4=1 | self=5/helper=2/arg3=1/arg4=1 |
+| `implausible_by_source` | — | self=0/helper=0/**arg3=256**/arg4=255 | self=0/helper=0/**arg3=4**/arg4=0 |
+| `capped_by_source` | 0 | self=245 | **self=0** |
+| known / member / unknown / unreadable | 0/0/16/0 | 2/13/37/0 | **3**/2/20/0 |
+| `verdict` | `no_scope_candidate` | `scope_candidate` | **`scope_candidate`** |
+| `verdict_d2` | 该档当时不存在 | `lineage_edge_found` | **`no_depth2_lead`** |
+| `shared_cells` | — | `n=2` | **`n=0`** |
+
+本发的 calls/s 与 §59 几乎相同(24.75 vs 25.5),与 §68 差**两个数量级** —— §68 那个窗口是一扇事件窗在跑
+(§68 首段:停在「克伯利安恒星国同盟的末日」上),不是一条基线。所以本发**只与 §59 同量级可比**;
+`valid=5` 就是这一层的全部样本,判词的作用域是这 5 个样本,不是这条路径的全部行为。
+
+`layout entry=120 stats=56 ring=256 mask=511 version=2`,采样率 1/512,`patch_size=16`、
+`x_nonzero=5`、`C2Sanity == 42`、`C2ScopeProbeInstall rc=0`、`installed=1 verified=-1`(装着的窗口里
+verify 报 -1 是期望值)。
+
+### §73.3 `known=3`:三条 floor 命中指名到「根 + 偏移 + slot2」,其中一条的 slot2 是 `ret 0` 空桩
+
+```
+object root=0x7fe960    source=helper off=0x10 vptr_rva=0x24e9068 slot2_rva=0x396460
+object root=0x2122c7a40 source=self   off=0x00 vptr_rva=0x24d02b0 slot2_rva=0x240640
+object root=0x2122c7a40 source=self   off=0x38 vptr_rva=0x24ec880 slot2_rva=0x15db30
+```
+
+措辞门(照 §68.2 的口径):`known` 的定义是「某个根 + 偏移上的 qword 解引用一次后,其 vptr 落在
+`ceffect_vtable_map_4_4_4.txt` 那 1,805 行 floor map 里」。所以这三行说的是**那三个槽里存着指向已知
+CEffect 类对象的指针**,不是「找到了 `CEventScope`」。三条 RVA 与 §56.4/§68.2 那对
+(`0x2545e40` / `0x254fa18`)**不同值** ⇒ 本发交出的是另外三行,既不是那两行的复现,也不是「新认出的类」
+(known 的集合是 map,不是我的判断)。
+
+第三条的 `slot2=0x15db30` 是 `ret 0` 空桩(`disrva.py 0x15db30 8`;§60.5 已把它记成承载函数 vtable
+`0x26d4dd0` 的 `+0x08` 位)—— 换句话说那个类**有一个什么都不做的 `ExecuteActual`**。这是形状读数,
+不是判据读数:它不许被读成「scope 找到了但是空的」,也不许读成「这一族不走 Execute」。
+
+`member_vtable_hits=2`(`self@0x2122c7a40+0x30` → `member_slot2=0xe581e0`;`self@0x141deb020+0x00` →
+`member_slot2=0x33d410`)按判读陷阱 7 **不进判词**:它说的是根自己的类(多继承副表),不是成员指向谁。
+
+### §73.4 depth-2:两个有计划的源全部问完,`capped` 全 0
+
+| 源 | `d2_planned` | `d2_followed` | `d2_capped` | 有候选的根 / 候选行 | 其余 |
+|---|---|---|---|---|---|
+| `self` | **18** | **18** | **0** | 10 根 / 47 行 | 2 根不可读(`0x4c4b40`、`0x7f0000000008`),6 根读了但 8 个 qword 里无一像指针 |
+| `helper` | **5** | **5** | **0** | 3 根 / 8 行 | 2 根无候选 |
+| `arg3` | 0 | 0 | 0 | — | §68.1 那一支的 256 条 implausible 在本发是 4 条,同样不产出 lead |
+| `arg4` | 0 | 0 | 0 | — | 同上,0 条 |
+
+`d2_implausible=12`(第三桶:从来不是 lead 的 cell,多为不可读;不读作「丢掉的标量」)、
+`deduped self=0/helper=0`(stdout 逐源行,`#meta` 七个键不含它)、`shared_cells n=0`、
+`verdict_d2 = no_depth2_lead`。
+
+**「没有候选」与「预算截断」在这一发被分开了**:两类都写进上表,而 `capped` 这一键是 0 —— 18 个 lead
+一个不剩地被 deref 过。这是本发与 §68.1(`self` 8 followed / **19 capped**)唯一的结构差别。
+
+### §73.5 「§68 那 19 个问完了吗」—— 不能这么说,只能说本发的 lead 集问完了
+
+§68.1 的 19 是**那一发样本**在每源预算 8 下没来得及 deref 的**余量**(8 followed + 19 capped + 5 deduped,
+样本 2044)。本发**不是接着那 19 个地址往下问**:`plan_depth2` 每一发都从**本次** depth-1 候选重新规划,
+并且把每一行自己的 root 排除(`already`),所以本发的 18 是**本发样本**的 lead 集,与 §68 那 19 个
+不是同一个集合(样本 5 vs 2044,命中的根也不同)。
+
+- 可以说:**本发这一支 `planned=18 / followed=18 / capped=0` ⇒ 本发的 lead 集问完了**。
+- 不可以说:**「§68 那 19 个问完了」**。要给那 19 个地址一个身份,得把它们点名留给下一次同进程读数
+  (或按 §73.6 判的新路线去问),本发读数里没有这一格。
+- 也不可以说:本发「比 §68 问得更深」。两发的样本集不同,深度键只在本发内部闭合。
+
+### §73.6 region 仪器:34 个查询,两条值得记
+
+`regions_queried=34`,判决分布:
+
+```
+self/private_committed=5      helper/private_committed=2   arg3/image=1   arg4/image=1
+ctx/private_committed=2       self.d2/private_committed=11 self.d2/image=4
+self.d2/mapped_view=1         self.d2/reserved=1           self.d2/free=1
+```
+
+- `self.d2 0x7f0000000008` 落 **`free`** —— 与它同根那条 `root_unreadable` 是同一件事的两种写法
+  (读一个不属于任何提交页的地址,读回失败不是「读到了 0」)。
+- `0x100000000` 落 **`private_committed`**(`base=0x100000000 size=0xff0000 protect=0x404`)。
+  §68.3 把它记成「一条标量边」,本发在区域层补一句:它是内存里一个**已提交的 16 MB 私有区**的基址。
+  本发它**只在一个根下出现**,`shared_cells n=0` ⇒ 不构成边;`§68.3` 那条「标量」判定不被本发推翻,
+  但「它不像指针」这个读法在本发站不住(它过了 `plausible_user_ptr`,并且有区域)。
+
+### §73.7 判决与移交:§68.8 ② 的条件式移交**触发**
+
+`verdict_d2 = no_depth2_lead` ∈ 非证据档(`EVIDENCE_D2_VERDICTS` 只有
+`depth2_known_vtable_hit` / `lineage_edge_found` 两档)。按 §68.8 ② 的触发条件:
+
+- **本仪器这一层问完了**:四根各自问过(depth-1 9 个根 / depth-2 两个有计划的源 capped 全 0)、
+  `shared_cells=0`、`d2_implausible` 与「无候选」分开记账、`arg3`/`arg4` 两个源结构性地不产出 lead。
+- **只剩一条新路线**:往上定帧构造点(§61–§63 已判完,`dispatchers_partial`)与两段形态派发方
+  (§66 已判完,`two_stage_dispatchers_partial`)两条零 shot 路线都判完了,且判决词不同义、不合并;
+  要再往前走,得是**新形状**(不是同一形状的第五发)。
+- 不许写的两句:`scope 是这里的 X`(本发只是三条 floor 命中);`这一族不走 Execute`(静默与计数都不在
+  本节的判据里 —— 那是 §57.4 第三档的口径,归 §72/§74)。
+
+### §73.8 复现命令行与清理复核
+
+```bash
+# 前置读数(经 session 1 的状态机;SSH 在 session 0 看不到窗口)
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py status"      # -> IN_GAME_PAUSED_CLEAN
+just game console_close && just game unpause                               # -> STATUS=playing
+# 执行 shot(必须经 bridge,否则 gate_install 在 session 0 拒装)
+just win "python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_scope_probe.py C:/temp/sqjs_c4.dll \
+  --poll-s 120 --settle-s 2 --out C:/temp/c4_scope_d2_27.tsv \
+  --vtables C:/temp/ceffect_vtable_map_4_4_4.txt --census C:/temp/exec_frame_callers_4_4_4.tsv \
+  --id-names C:/temp/descriptor_oracle_4_4_4.tsv"
+# 拉回
+scp Windows_Jiaolong:C:/temp/c4_scope_d2_27.tsv evidence/logs/c4_scope_d2_27_2026_10_28.tsv
+```
+
+产物:`evidence/logs/c4_scope_d2_27_2026_10_28.tsv`(150 行,31 条 `#meta`,含 depth-2 七个键)、
+`evidence/logs/c4_scope_live_2026_10_28.log`(158 行,含 `CALLERS` / `CHAIN` / 逐源 stdout)。
+清理:`C2ScopeProbeUninstall rc=0`、`C2ScopeProbeVerify rc=0`(engine bytes intact)、`host alive`。
+**一进程一次 install 额度已用尽** —— pid 3604 之后不许再装 scope probe,重打要新进程(点名)。
