@@ -241,6 +241,14 @@ def test_c1_result_fallback_reads_the_minted_trigger_token():
     assert parse_c1_result("") == 0
 
 
+def test_cmd_file_default_is_the_supervisor_channel():
+    """The 2026-10-28 shot wrote `ns_cmd.txt` — a path no daemon reads — so both windows
+    read `script_refused` with `.seen` never created. Pin the default to the real channel."""
+    import c4_wiring_probe
+
+    assert mod.DEFAULT_CMD_FILE.lower() == c4_wiring_probe.SUPERVISOR_CMD.lower()
+
+
 def test_every_inject_site_is_gated():
     src = (REPO / "scripts/c2_trigger_pred_probe.py").read_text(encoding="utf-8")
     assert src.index("gate_install(") < src.index("inject_dll(")

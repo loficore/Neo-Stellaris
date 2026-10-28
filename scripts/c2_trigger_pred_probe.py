@@ -34,7 +34,7 @@ import c2_harness as harness
 
 DEFAULT_DLL = r"C:\temp\sqjs_c4.dll"
 DEFAULT_OUT = r"C:/temp/c4_trig_pred.tsv"
-DEFAULT_CMD_FILE = r"C:/temp/ns_cmd.txt"
+DEFAULT_CMD_FILE = r"C:\temp\ns_game_cmd.txt"  # the supervisor's real channel (c4_wiring_probe.SUPERVISOR_CMD)
 EXE_MODULE = "stellaris.exe"
 
 TARGET_RVA = 0x349230        # offsets.keyword_reg.RVA_TRIGGER_PREDICATE (§75)
