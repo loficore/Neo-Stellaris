@@ -35,7 +35,10 @@ import c2_harness as harness
 
 DEFAULT_DLL = r"C:\temp\sqjs_c4.dll"
 DEFAULT_OUT = r"C:/temp/c4_trig_pred.tsv"
-DEFAULT_CMD_FILE = r"C:\temp\ns_game_cmd.txt"  # the supervisor's real channel (c4_wiring_probe.SUPERVISOR_CMD)
+# The supervisor's only command channel (`c4_wiring_probe.SUPERVISOR_CMD`,
+# `game_supervisor.CMD_PATH`).  Any other basename is a file no daemon reads (§76.4).
+SUPERVISOR_CMD_NAME = "ns_game_cmd.txt"
+DEFAULT_CMD_FILE = "C:\\temp\\" + SUPERVISOR_CMD_NAME
 EXE_MODULE = "stellaris.exe"
 
 TARGET_RVA = 0x349230        # offsets.keyword_reg.RVA_TRIGGER_PREDICATE (§75)
@@ -647,6 +650,31 @@ def run(pid, dll_path, dll_sha, scripts, systems, out_path, cmd_file, game_log,
     return EXIT_OK if overall in EVIDENCE_VERDICTS else EXIT_NOT_EVIDENCE
 
 
+def preflight_paths(script_file, cmd_file):
+    """Refuse before touching the process when the two paths cannot produce a reading.
+
+    Both failures cost a whole shot.  A mistyped `--script-file` is a traceback whose text
+    competes with the stdout loss in traps 8/11; a `--cmd-file` whose basename is not
+    `ns_game_cmd.txt` is a file no daemon reads — the 2026-10-28 window spent 2 x 180 s on
+    `ns_cmd.txt` and read both windows as `script_refused` (§76.4).  Exit code 2 is this
+    driver's pre-fire refusal code (same as `gate_install`, same as `EXIT_INSTRUMENT`).
+    """
+    if not os.path.isfile(script_file):
+        print(
+            f"[trigpred] --script-file {script_file} does not exist — the shot would arm "
+            "a token and never evaluate it; put one console script per line in that file",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_INSTRUMENT)
+    if os.path.basename(cmd_file.replace("\\", "/")).lower() != SUPERVISOR_CMD_NAME:
+        print(
+            f"[trigpred] --cmd-file must end in {SUPERVISOR_CMD_NAME}: the supervisor only "
+            f"reads that name, so {cmd_file} is a file nothing will ever consume",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_INSTRUMENT)
+
+
 def _script_lines(path):
     with open(path, encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip() and not line.startswith("#")]
@@ -690,6 +718,7 @@ def main(argv=None):
         print("[trigpred] --script-file is required for a shot: without a script the "
               "predicate is never evaluated and the reading is meaningless", file=sys.stderr)
         return EXIT_INSTRUMENT
+    preflight_paths(args.script_file, args.cmd_file)
     lines = _script_lines(args.script_file)
     if not lines:
         print("[trigpred] --script-file has no scripts", file=sys.stderr)

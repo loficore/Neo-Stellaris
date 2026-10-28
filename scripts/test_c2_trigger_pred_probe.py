@@ -325,3 +325,25 @@ def test_build_meta_records_the_injected_bytes_and_module():
 def test_sha_gate_runs_before_the_process_is_touched():
     src = (REPO / "scripts/c2_trigger_pred_probe.py").read_text(encoding="utf-8")
     assert src.index("sha_gate(args.dll)") < src.index("return run(")
+
+
+def test_preflight_refuses_a_script_file_that_is_not_there(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        mod.preflight_paths(str(tmp_path / "typo.txt"), str(tmp_path / "ns_game_cmd.txt"))
+    assert exc.value.code == 2
+    assert "typo.txt" in capsys.readouterr().err
+
+
+def test_preflight_refuses_a_command_channel_no_daemon_reads(tmp_path, capsys):
+    script = tmp_path / "scripts.txt"
+    script.write_text('effect every_system = { log = "X" }\n', encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        mod.preflight_paths(str(script), str(tmp_path / "ns_cmd.txt"))
+    assert exc.value.code == 2
+    assert mod.SUPERVISOR_CMD_NAME in capsys.readouterr().err
+
+
+def test_preflight_accepts_the_supervisor_channel_even_in_another_directory(tmp_path):
+    script = tmp_path / "scripts.txt"
+    script.write_text('effect every_system = { log = "X" }\n', encoding="utf-8")
+    assert mod.preflight_paths(str(script), str(tmp_path / mod.SUPERVISOR_CMD_NAME)) is None

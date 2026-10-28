@@ -1377,6 +1377,12 @@ system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**�
    拿它当分母会把 `token_matched=1` 判成 `predicate_instantiate_once` —— 结论对,理由错。分母只从
    `save_hypergraph.py` 对**当前存档**重建的边表来。
 
+**开火前的两条拒绝(不是陷阱,是门的一部分;都 `exit 2`)**:`--script-file` 指向的文件不在 ——
+打错的路径在 ssh 转手后变成一段与 stdout 丢失混在一起的 traceback(陷阱 8/11);`--cmd-file` 的
+**basename** 不是 `ns_game_cmd.txt` —— supervisor 只读这一个名字,§76.4 那次写成 `ns_cmd.txt`,
+两段窗口各白等 180 s 且都读成 `script_refused`。目录不限(测试与换机要用),名字必须是那一个。
+退出码与 donor 的 `sha_gate`(`SystemExit(str)` = 1)不同码,别混读。
+
 **artifact**:`#meta` 在前(含 `overall_verdict` / `verdict_a` / `verdict_b` / `stats_*_delta` /
 `uninstall_rc` / `verify_rc` / `host_alive`,外加 **`dll` / `dll_sha256` / `module_base`**),
 然后是 `token self_ptr self_vtable_rva x_ptr x_vtable_rva`
@@ -1386,8 +1392,9 @@ system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**�
 长得一模一样。`dll` 按两种分隔符取 basename(纯函数在 Linux 上也要跑测试)。
 判读纯函数(`parse_stats` / `verdict` / `window_refused` / `overall_verdict` / `decode_layout` /
 `decode_entry` / `install_decision` / `artifact_rows` / `parse_mask` / `parse_c1_result` /
-`script_marker` / `sha_gate` / `build_meta`,常量 `STATS_KEYS` / `VERDICTS` / `EVIDENCE_VERDICTS`)由
-`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**36 条**),无游戏、无 Windows API、零 shot。
+`script_marker` / `sha_gate` / `build_meta` / `preflight_paths`,常量 `STATS_KEYS` / `VERDICTS` /
+`EVIDENCE_VERDICTS` / `SUPERVISOR_CMD_NAME`)由
+`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**39 条**),无游戏、无 Windows API、零 shot。
 
 **drain 的坑(2026-10-28 review Critical)**:满环是 `RING_LEN * ENTRY_SIZE` = **10,240 B**,而
 `C4TrigPredStatsInto` 的文本缓冲只有 512 B。驱动在 drain 前必须 `remote_alloc(RING_LEN * ENTRY_SIZE)`
