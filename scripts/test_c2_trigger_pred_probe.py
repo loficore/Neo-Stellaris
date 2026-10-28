@@ -20,6 +20,7 @@ from c2_trigger_pred_probe import (
     decode_layout,
     install_decision,
     overall_verdict,
+    window_refused,
     parse_c1_result,
     parse_mask,
     parse_stats,
@@ -260,6 +261,27 @@ def test_overall_verdict_prefers_the_first_evidence_window():
 
 def test_overall_verdict_falls_back_to_the_first_window():
     assert overall_verdict([("a", "token_absent"), ("b", "no_calls")]) == "token_absent"
+
+
+def test_a_delivered_but_unmarked_script_is_a_refusal_not_silence():
+    """Review I1: `delivered` is transport; the marker is the engine's receipt."""
+    assert window_refused({"delivered": True, "sent": False}) is True
+    assert window_refused({"delivered": True, "sent": True}) is False
+    stats = _stats(calls=9000)
+    assert verdict(stats, [], 787, refused=window_refused({"delivered": True, "sent": False})) \
+        == "script_refused"
+
+
+def test_the_drain_buffer_is_sized_for_a_full_ring():
+    """Review Critical 1: the drain used to reuse the 512 B stats buffer for a 10,240 B write."""
+    src = (REPO / "scripts/c2_trigger_pred_probe.py").read_text(encoding="utf-8")
+    assert "remote_alloc(pid, RING_LEN * ENTRY_SIZE)" in src
+    assert "C4TrigPredSetDrainCap" in src
+    assert mod.RING_LEN * mod.ENTRY_SIZE == 10240
+
+
+def test_systems_zero_is_an_instrument_error_not_a_verdict():
+    assert mod.main(["--systems", "0", "--script-file", "x"]) == mod.EXIT_INSTRUMENT
 
 
 def test_cmd_file_default_is_the_supervisor_channel():

@@ -1340,14 +1340,15 @@ finally: Uninstall → Verify → settle → assert_game_alive`。
 §72.2 记的那份 `c2_shim_probe.py = 791f3a8e…`(那是加陷阱 4 之前的字节;读数不受影响,但「主机侧那份
 = git HEAD」这条对账会当场不过)。
 
-### `scripts/c2_trigger_pred_probe.py [dll] --systems N --script-file <path> [--poll-s 120] [--settle-s 3] [--out C:/temp/c4_trig_pred.tsv] [--cmd-file C:/temp/ns_cmd.txt]`
+### `scripts/c2_trigger_pred_probe.py [dll] --systems N --script-file <path> [--poll-s 120] [--settle-s 3] [--script-wait-s 180] [--out C:/temp/c4_trig_pred.tsv] [--cmd-file C:/temp/ns_game_cmd.txt]`
 
 **第五把 guard,C5 数据面的第一发。** 靶是**触发谓词基体** `0x349230`(取证卷 §75):trigger 的
 `[vptr+0x80]` 的共用实现,72 B,实参 `(self, X)`;`.rdata` 里 1,091 个 qword 等于它。与 C4 那条线
 **不是同一族**:C4 钩的是 effect 侧(`0x3B1420` 谓词 / `0x3AFD30` Execute),本仪器钩 trigger 侧。
 
 **这一发问的是两个数**(不是「scope 是谁」):一个 trigger 放进 `every_system` 的 `limit` 之后,
-谓词被调**几次**(`token_matched`),以及每次的第 2 实参 X 的 `[X+0]` 落在模块内哪一段(`x_vtable_rva`)。
+谓词被调**几次**(`token_matched`),以及每次的第 2 实参 X 的**值**(`x_ptr`)。**X 不解引用** ——
+§76 实测它是常量 `0x80`(scope/类型掩码),`x_vtable_rva` 这一列在本靶上恒为 0,留着是给将来的靶用。
 两个方向都算读数 —— `predicate_per_system`(≈ 星系数)与 `predicate_instantiate_once`(==1)都是
 `EVIDENCE_VERDICTS`。`no_calls` 只算环境(getcensus 的口径照旧)。
 
@@ -1378,9 +1379,15 @@ system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**�
 **artifact**:`#meta` 在前(含 `overall_verdict` / `verdict_a` / `verdict_b` / `stats_*_delta` /
 `uninstall_rc` / `verify_rc` / `host_alive`),然后是 `token self_ptr self_vtable_rva x_ptr x_vtable_rva`
 五列的行。`run()` **先写 meta-only artifact 再 drain**,`entries_error` 只标记 drain 失败。
-判读纯函数(`parse_stats` / `verdict` / `decode_layout` / `decode_entry` / `install_decision` /
-`artifact_rows` / `parse_mask`,常量 `STATS_KEYS` / `VERDICTS` / `EVIDENCE_VERDICTS`)由
-`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**23 条**),无游戏、无 Windows API、零 shot。
+判读纯函数(`parse_stats` / `verdict` / `window_refused` / `overall_verdict` / `decode_layout` /
+`decode_entry` / `install_decision` / `artifact_rows` / `parse_mask` / `parse_c1_result` /
+`script_marker`,常量 `STATS_KEYS` / `VERDICTS` / `EVIDENCE_VERDICTS`)由
+`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**32 条**),无游戏、无 Windows API、零 shot。
+
+**drain 的坑(2026-10-28 review Critical)**:满环是 `RING_LEN * ENTRY_SIZE` = **10,240 B**,而
+`C4TrigPredStatsInto` 的文本缓冲只有 512 B。驱动在 drain 前必须 `remote_alloc(RING_LEN * ENTRY_SIZE)`
+并调 **`C4TrigPredSetDrainCap(10240)`** 声明容量(DLL 侧 clamp,未声明就返回 0 行)。`call_remote_with_arg`
+只能传一个寄存器,所以容量是 setter 而不是第二个实参。
 
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 

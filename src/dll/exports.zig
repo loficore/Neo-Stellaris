@@ -872,6 +872,14 @@ export fn C4TrigPredStatsInto(out: [*]u8) callconv(.c) i32 {
     return @intCast(c2_trigger_pred.statsInto(out[0..512]));
 }
 
+/// 必须先声明缓冲大小:满环是 256 * 40 = 10,240 B,而 2026-10-28 的 review 发现驱动把 512 B 的
+/// stats 缓冲复用到这个调用上(成功时打穿宿主堆)。`call_remote_with_arg` 只能传一个寄存器,
+/// 所以容量用 setter 声明,而不是加第二个实参。
+export fn C4TrigPredSetDrainCap(cap: u32) callconv(.c) i32 {
+    c2_trigger_pred.setDrainCap(cap);
+    return 0;
+}
+
 export fn C4TrigPredDrainInto(out: [*]u8) callconv(.c) u32 {
     return c2_trigger_pred.drainInto(out);
 }

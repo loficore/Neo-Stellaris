@@ -7522,3 +7522,38 @@ scp Windows_Jiaolong:C:/temp/c4_trig_pred.tsv evidence/logs/c5_trig_pred_4_4_4.t
 `scp` 覆盖被占用文件实测失败(dest open: Failure),所以本发换名装载同一份字节(sha 逐字相同)。
 **这也意味着该进程里两个模块副本同时在**,后续任何 `[self+0]` join 读数都要先确认不是 `sqjs_c4` 那份
 (本 guard 不读 `[self+0]` 做判据,只读 `[self+0x38]` 的 token,所以本节不受影响)。
+
+### §76.8 修复状态与判决的可辩依据(2026-10-28 终审后追加,append-only)
+
+**§76.4 那三条「都还没修」在同一个提交里就已经修了** —— 本节的标题读作「记录」而不是「待办」。
+逐条对账(全部在 `62fb984` 与 `f792be1` 之后的终审提交里收口):
+
+| §76.4 | 修在哪 | 怎么钉 |
+|---|---|---|
+| ① marker 30 s 等不到 | `SCRIPT_WAIT_S` 30 → **180** + `--script-wait-s` | `docs/offline-tooling.md` 的用法行 |
+| ② verdict 丢掉 poll 窗 | 新增 poll 窗 + 纯函数 `overall_verdict()` | `test_overall_verdict_lets_the_poll_window_win` |
+| ③ 未确认仍写下一段(覆盖未消费命令) | 未确认即停;并且**把 3 s 的 `.seen` 确认换成窗口预算** | 见下一条 |
+
+**③ 的根因终审补上了(此前只写了现象)**:supervisor 在持有世界租约时**整段跳过 `read_command`**
+(`game_supervisor.py` 的 `yield_to_lease` 分支先 `continue`)。本次产物自己就有这条证人 ——
+`evidence/logs/c5_trig_pred_after_4_4_4.txt` 里 21:39:42–21:39:49 连续 8 条 `YIELD_TO_LEASE`,
+21:39:50 才出现唯一的 `command` 事件,21:39:54 `console_sent`。所以 NEO 的命令不是「被拒」,是**被延后**,
+然后被下一段覆盖。`_send_console` 的 3 s 确认窗口短于一次租约持有 ⇒ 现在的实现把「等租约」等满
+`--script-wait-s` 再判,而不是 3 s 就放弃。
+
+**artifact 是修前驱动写的**(meta 里是 `sent_a`/`sent_b`,没有 `delivered_*`/`marker_*`/`verdict_poll`)。
+本节的读数按 artifact 原样保留;要让 JSON 级的 meta 与当前驱动一致,只有重打一发(未打)。
+
+**判决的可辩依据要换一条(此前用的是比值,而比值分母的来源被夸大过)**:
+
+1. **787 不是本窗口的求值次数。** 它来自**存档拷贝**(10:56 UTC 的 `save_hypergraph.py`,见
+   `evidence/logs/c5_save_graph_4_4_4.log`),不是 shot 里的计数。§76.2 把它写成「脚本实际求值的系统数」
+   是错的;能说的只有「按存档,这场战役有 787 个系统」。工具文档自己也写着「拿它当分母会把
+   `token_matched=1` 判成 `predicate_instantiate_once` —— 结论对、理由错」。
+2. **那 11 次匹配属于官方 `is_rim_system`(token 18203),不是 C1 的 `neo_effect`(68636)。**
+   artifact 的 11 行全是 `token=18203`;NEO 段的命令从未送达(§76.4 ③)⇒ **C5 自己的 keyword 在这一发里
+   一次也没被求值过**。所以本节的结论是关于「一个 system-scoped 官方 trigger」的,不是关于 C5 keyword 的。
+3. **结论该站在哪两条上**:①artifact 里 **11 次调用落在 7 个不同的 `self_ptr` 上**(7 个对象,不是 787 个);
+   ②基体自己的代码形状 `if (!X) true; x = self->[+0x70](); return X != x` —— 是「拿一个掩码和自身掩码
+   比一比」,不是「把对象交给调用方」。两条合起来才支撑「实例化期检查」;`11 vs 787` 只是**一致**,
+   不是依据。

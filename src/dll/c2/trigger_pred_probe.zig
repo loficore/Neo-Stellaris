@@ -195,7 +195,10 @@ pub fn recordCall(obj_token: u32, self: usize, x: u64) void {
     e.self_ptr = self;
     e.x_ptr = x;
     if (readU64(self)) |v| e.self_vtable_rva = toRva(@intCast(v));
-    if (readU64(@intCast(x))) |v| e.x_vtable_rva = toRva(@intCast(v));
+    // X is NOT dereferenced: §76 measured it as the constant 0x80 (a scope/type mask), and an
+    // unchecked read of a plausible-but-unmapped value would fault the host. `x_vtable_rva`
+    // stays in the layout as a zero column — it is the field a future target would use if X
+    // ever turns out to be an object (the evaluate slot's ctx, not this slot's X).
 }
 
 // ---------------------------------------------------------------------------
@@ -234,14 +237,28 @@ pub fn statsInto(out: []u8) usize {
     return written.len;
 }
 
+/// The caller's drain buffer size, declared with `setDrainCap` before `drainInto`.
+/// Why a setter instead of a parameter: `call_remote_with_arg` (ruling P4) can only pass **one**
+/// register, so a second argument cannot reach this function. Zero means "not declared" and
+/// `drainInto` refuses — a full ring is 256 * 40 = 10,240 B, and the 2026-10-28 review found the
+/// driver reusing its 512 B stats buffer here, which corrupts the host's heap in the success case.
+var drain_cap: usize = 0;
+
+pub fn setDrainCap(bytes: usize) void {
+    drain_cap = bytes;
+}
+
 /// Copy the retained rows into `out` (8-aligned) oldest first, keeping only the last RING_LEN.
+/// Clamped to the byte count declared by `setDrainCap`; refuses (0 rows) when none was declared.
 pub fn drainInto(out: [*]u8) u32 {
+    const capacity = @min(drain_cap / @sizeOf(Entry), RING_LEN);
+    if (capacity == 0) return 0;
     const dst: [*]Entry = @ptrCast(@alignCast(out));
     const total = seq.load(.monotonic);
     const first: u64 = if (total > RING_LEN) total - RING_LEN else 0;
     var i: u64 = first;
     var copied: u32 = 0;
-    while (i < total) : (i += 1) {
+    while (i < total and copied < capacity) : (i += 1) {
         dst[copied] = ring[@intCast(i % RING_LEN)];
         copied += 1;
     }
@@ -253,6 +270,7 @@ pub fn reset() void {
     stats = .{};
     _ = seq.swap(0, .monotonic);
     @atomicStore(u32, &armed_token, 0, .monotonic);
+    drain_cap = 0;
     img_base = 0;
     img_end = 0;
 }
@@ -312,7 +330,14 @@ pub fn install() InstallError!void {
 
     const h = detour_mod.installHookArmed(target, @ptrCast(@constCast(&predDetour)), &orig) catch
         return error.DetourUnavailable;
-    if (h.patch_size > saved_code.len) return error.PatchTooWide;
+    if (h.patch_size > saved_code.len) {
+        // The patch is already live at this point: undo it here, or the process keeps a hook
+        // this module can no longer reach (2026-10-28 review, Important 5).
+        detour_mod.removeHook(&h) catch {};
+        restoreTarget(h.patch_size) catch {};
+        orig = null;
+        return error.PatchTooWide;
+    }
     hook = h;
     installed = true;
     stats.patch_size = h.patch_size;
@@ -461,6 +486,39 @@ test "layoutInto reports six words and a stable entry size" {
     try std.testing.expectEqual(@as(u32, 40), words[1]);
     try std.testing.expectEqual(@as(u32, @intCast(RING_LEN)), words[2]);
     try std.testing.expectEqual(@as(u32, @intCast(RVA_TRIGGER_PREDICATE)), words[4]);
+}
+
+test "drainInto refuses when the caller declared no capacity" {
+    resetForTest();
+    setToken(1);
+    recordCall(1, 0x1000, 0x2000);
+    var buf: [40 * 4]u8 = undefined;
+    try std.testing.expectEqual(@as(u32, 0), drainInto(&buf));
+    resetForTest();
+}
+
+test "drainInto clamps to the declared capacity" {
+    resetForTest();
+    setToken(1);
+    var i: usize = 0;
+    while (i < 10) : (i += 1) recordCall(1, 0x1000, 0x2000);
+    var buf: [40 * 4]u8 = undefined;
+    setDrainCap(buf.len);
+    try std.testing.expectEqual(@as(u32, 4), drainInto(&buf));
+    resetForTest();
+}
+
+test "drainInto never writes past the declared capacity" {
+    resetForTest();
+    setToken(1);
+    var i: usize = 0;
+    while (i < RING_LEN) : (i += 1) recordCall(1, 0x1000, 0x2000);
+    // One entry short of the ring: the clamp must cap at 1, not copy all 256.
+    var buf: [40]u8 = undefined;
+    @memset(&buf, 0xAA);
+    setDrainCap(40);
+    try std.testing.expectEqual(@as(u32, 1), drainInto(&buf));
+    resetForTest();
 }
 
 test "plausible rejects bad pointers" {

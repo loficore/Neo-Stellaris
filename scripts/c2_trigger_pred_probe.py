@@ -74,6 +74,7 @@ NEEDED_EXPORTS = (
     "C4TrigPredVerify",
     "C4TrigPredSetToken",
     "C4TrigPredStatsInto",
+    "C4TrigPredSetDrainCap",
     "C4TrigPredDrainInto",
     "C4TrigPredLayout",
     "C4TrigPredReset",
@@ -239,6 +240,22 @@ def artifact_rows(entries):
     return rows
 
 
+def _format_delta(stats):
+    """`k=v` like the DLL's own line, so the meta stays machine-parseable."""
+    return " ".join(f"{k}={stats[k]}" for k in sorted(stats))
+
+
+def window_refused(window):
+    """Was this window's script refused by the engine?
+
+    The marker (`window["sent"]`) is the engine-side receipt; `delivered` is only the
+    transport ack. A delivered-but-unmarked script was refused (scope-type error, unknown
+    token) and must read `script_refused`, never `no_calls` — the distinction Review Focus 1
+    exists for (review I1).
+    """
+    return not window["sent"]
+
+
 def overall_verdict(per_window):
     """First evidence verdict wins; otherwise the first window's.
 
@@ -347,6 +364,7 @@ def read_stats(pid, base, exports, buf):
 
 
 def drain_entries(pid, base, exports, buf):
+    """The DLL clamps to the capacity declared by `C4TrigPredSetDrainCap`; allocate the ring."""
     count = harness.call_remote_with_arg(pid, base, exports["C4TrigPredDrainInto"], buf)
     count = min(count & 0xFFFF_FFFF, RING_LEN)
     if count == 0:
@@ -368,33 +386,61 @@ def script_marker(script):
     return literal.split("[", 1)[0] or None
 
 
-def send_script(cmd_file, script, game_log, wait_s):
-    """Send one console script and wait for its log marker.
+def _read_seen(path):
+    try:
+        with open(path, encoding="ascii", errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return None
 
-    Returns True when the marker appeared (the script really ran), False otherwise — and
-    False is `script_refused`, **not** `no_calls`: a script that never executed tells us
-    nothing about the predicate. The console-send protocol is `c4_wiring_probe`'s (its
-    `.seen` handshake is the only proven one), so it is imported rather than re-invented.
+
+def _write_command_atomic(path, text):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def send_script(cmd_file, script, game_log, wait_s):
+    """Send one console script; return `(delivered, marker_seen)`.
+
+    `delivered` = the supervisor acknowledged the command file (its `.seen` key changed).
+    `marker_seen` = the script's own log line appeared — the **engine-side** receipt, and the
+    only signal that distinguishes "the script ran" from "the script was refused".
+
+    Both waits use the window's whole budget, not a fixed 3 s: the supervisor skips
+    `read_command` entirely while a world lease is held (`game_supervisor.py`'s
+    `yield_to_lease` branch `continue`s first), and the 2026-10-28 shot measured an eight-tick
+    deferral followed by a consume one second after release. A 3 s ack treated that routine
+    condition as a refusal (review I3), and the old code then overwrote the unconsumed file.
     """
-    from c4_wiring_probe import GAME_LOG, _file_size_or_none, _read_text_from, _send_console
+    from c4_wiring_probe import GAME_LOG, _file_size_or_none, _read_text_from
 
     log_path = os.path.expanduser(game_log or GAME_LOG)
     offset = _file_size_or_none(log_path)
-    if not _send_console(cmd_file, script):
-        # The daemon never acknowledged. Do NOT write the next script: an unconsumed
-        # command file gets overwritten, and the window silently never runs (§76.4 item 3).
+    seen_path = os.path.splitext(cmd_file)[0] + ".seen"
+    before = _read_seen(seen_path)
+    _write_command_atomic(cmd_file, "console " + script + "\n")
+
+    deadline = time.time() + wait_s
+    delivered = False
+    while time.time() < deadline:
+        if _read_seen(seen_path) != before:
+            delivered = True
+            break
+        time.sleep(0.25)
+    if not delivered:
         return False, False
+
     marker = script_marker(script)
     if marker is None:
         return True, True
-    deadline = time.time() + wait_s
     while time.time() < deadline:
-        if offset is not None:
-            try:
-                if marker in (_read_text_from(log_path, offset) or ""):
-                    return True, True
-            except OSError:
-                pass
+        try:
+            if marker in (_read_text_from(log_path, offset) or ""):
+                return True, True
+        except OSError:
+            pass
         time.sleep(0.25)
     return True, False
 
@@ -419,7 +465,9 @@ def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
     base, exports = gate_module(pid, dll_path, NEEDED_EXPORTS)
 
     layout = decode_layout(read_layout_words(pid, base, exports))
-    refusal = install_decision(tuple(layout.values()))
+    refusal = install_decision(
+        (layout["version"], layout["entry_size"], layout["ring_len"],
+         layout["stats_size"], layout["target_rva"], layout["prologue_len"]))
     if refusal:
         raise SystemExit(f"layout refuses install: {refusal}")
 
@@ -490,7 +538,7 @@ def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
         for w in windows:
             per_window.append(
                 (w["label"],
-                 verdict(w["stats"], [], systems, refused=not w["delivered"]))
+                 verdict(w["stats"], [], systems, refused=window_refused(w)))
             )
         overall = overall_verdict(per_window)
 
@@ -507,10 +555,10 @@ def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
         "verdict_b": per_window[1][1] if len(per_window) > 1 else "-",
         "verdict_poll": per_window[-1][1] if per_window else "-",
         "stats_a_raw": windows[0]["text"].strip() if windows else "-",
-        "stats_a_delta": str(windows[0]["stats"]) if windows else "-",
+        "stats_a_delta": _format_delta(windows[0]["stats"]) if windows else "-",
         "stats_b_raw": windows[1]["text"].strip() if len(windows) > 1 else "-",
-        "stats_b_delta": str(windows[1]["stats"]) if len(windows) > 1 else "-",
-        "stats_poll_delta": str(windows[-1]["stats"]) if windows else "-",
+        "stats_b_delta": _format_delta(windows[1]["stats"]) if len(windows) > 1 else "-",
+        "stats_poll_delta": _format_delta(windows[-1]["stats"]) if windows else "-",
         "stats_final": final_text.strip(),
         "delivered_a": int(windows[0]["delivered"]) if windows else 0,
         "delivered_b": int(windows[1]["delivered"]) if len(windows) > 1 else 0,
@@ -528,7 +576,10 @@ def run(pid, dll_path, scripts, systems, out_path, cmd_file, game_log,
     # Artifact first, drain second: a bad drain must not cost the stats line.
     write_tsv(out_path, artifact_rows([]), meta)
     try:
-        entries = drain_entries(pid, base, exports, stats_buf)
+        drain_buf = harness.remote_alloc(pid, RING_LEN * ENTRY_SIZE)
+        harness.call_remote_with_arg(pid, base, exports["C4TrigPredSetDrainCap"],
+                                     RING_LEN * ENTRY_SIZE)
+        entries = drain_entries(pid, base, exports, drain_buf)
     except Exception as err:  # noqa: BLE001 — entries are a witness, not the verdict
         entries = []
         meta["entries_error"] = repr(err)
@@ -575,6 +626,9 @@ def main(argv=None):
         parse_mask(args.mask)
     except ValueError as err:
         print(f"[trigpred] {err}", file=sys.stderr)
+        return EXIT_INSTRUMENT
+    if args.systems <= 0:
+        print(f"[trigpred] --systems must be positive, got {args.systems}", file=sys.stderr)
         return EXIT_INSTRUMENT
 
     if args.script_file is None:
