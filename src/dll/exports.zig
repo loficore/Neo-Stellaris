@@ -206,6 +206,8 @@ const c2_donor_probe = @import("c2/donor_exec_probe.zig");
 const c2_witness_probe = @import("c2/instantiate_witness_probe.zig");
 const c2_shim_probe = @import("c2/shim_witness_probe.zig");
 const c2_trigger_pred = @import("c2/trigger_pred_probe.zig");
+/// C5 数据面第二发(§77):触发求值槽 `0x1A91A80` 的只读 guard。
+const c2_trigger_eval = @import("c2/trigger_eval_probe.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
@@ -888,6 +890,78 @@ export fn C4TrigPredDrainInto(out: [*]u8) callconv(.c) u32 {
 /// 因此必须在 Install 之前调用。
 export fn C4TrigPredReset() callconv(.c) void {
     c2_trigger_pred.reset();
+}
+
+/// 安装码表(与四支兄弟逐字同构):0 成功 | -2 本进程已装 / predicate armed | -3 未找到
+/// stellaris.exe | -4 目标已被 hook | -5 指纹不符 | -6 patch 过宽。
+/// 一进程一次 install 额度,所以 -2 不重试。
+fn trigEvalInstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.AlreadyInstalled, error.PatchActive => -2,
+        error.ModuleNotFound => -3,
+        error.AlreadyHooked => -4,
+        error.UnexpectedPrologue => -5,
+        error.PatchTooWide => -6,
+        else => -1,
+    };
+}
+
+/// 卸载折叠表:-7 = RestoreIncomplete,其余 -1。
+fn trigEvalUninstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.RestoreIncomplete => -7,
+        else => -1,
+    };
+}
+
+/// 只记录触发求值槽共用基体(`0x1A91A80`)的调用。码表见 trigEvalInstallCode。
+export fn C4TrigEvalInstall() callconv(.c) i32 {
+    c2_trigger_eval.install() catch |err| return trigEvalInstallCode(err);
+    return 0;
+}
+
+/// 0 = 引擎字节已验证还原。-7 = RestoreIncomplete:不要信任该进程,且**绝不 FreeLibrary**。
+export fn C4TrigEvalUninstall() callconv(.c) i32 {
+    c2_trigger_eval.uninstall() catch |err| return trigEvalUninstallCode(err);
+    return 0;
+}
+
+/// 原样透传模块约定:0 一致 | -1 装着但 hook 丢了 | -2 已卸但引擎字节不符 | -3 从未解析到靶。
+export fn C4TrigEvalVerify() callconv(.c) i32 {
+    return c2_trigger_eval.verify();
+}
+
+/// token 过滤器。允许安装后改值(它不是补丁目标,只决定哪些调用落进统计)。
+export fn C4TrigEvalSetToken(token: u32) callconv(.c) i32 {
+    c2_trigger_eval.setToken(token);
+    return 0;
+}
+
+/// 六个布局词:[version, Entry size, RING_LEN, Stats size, target RVA, prologue length]。
+export fn C4TrigEvalLayout(out: [*]u32) callconv(.c) u32 {
+    const words: *[6]u32 = @ptrCast(out);
+    return c2_trigger_eval.layoutInto(words);
+}
+
+export fn C4TrigEvalStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_trigger_eval.statsInto(out[0..512]));
+}
+
+/// 必须先声明缓冲大小:满环是 256 * 48 = 12,288 B,而 stats 文本缓冲只有 512 B。
+/// `call_remote_with_arg` 只能传一个寄存器,所以容量用 setter 声明,而不是加第二个实参。
+export fn C4TrigEvalSetDrainCap(cap: u32) callconv(.c) i32 {
+    c2_trigger_eval.setDrainCap(cap);
+    return 0;
+}
+
+export fn C4TrigEvalDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_trigger_eval.drainInto(out);
+}
+
+/// 清计数 + 环 + 去重表 + token + 镜像窗口;不卸载 hook(带活补丁清 calls 会把频率分母悄悄
+/// 重置)。因此必须在 Install 之前调用。
+export fn C4TrigEvalReset() callconv(.c) void {
+    c2_trigger_eval.reset();
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.

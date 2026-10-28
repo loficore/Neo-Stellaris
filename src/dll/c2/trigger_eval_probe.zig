@@ -24,7 +24,13 @@
 // prologue back over the patch.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const offsets = @import("../shared/offsets.zig");
+const detour_mod = @import("../hooking/detour.zig");
+const windows = @import("../hooking/windows.zig");
+const predicate_hook = @import("predicate_hook.zig");
+
+const is_windows = builtin.os.tag == .windows;
 
 /// §77 的靶:触发求值槽共用基体。Reference only — the value lives in offsets.zig.
 pub const RVA_TRIGGER_EVAL: usize = offsets.keyword_reg.RVA_TRIGGER_EVAL;
@@ -96,6 +102,8 @@ var stats = Stats{};
 
 /// Guard state is private to this module — same discipline as the other four guards.
 var installed = false;
+var hook: ?detour_mod.Hook = null;
+var orig: ?*anyopaque = null;
 var target_addr: usize = 0;
 var saved_code: [32]u8 = [_]u8{0} ** 32;
 var armed_token: u32 = 0;
@@ -392,14 +400,131 @@ pub fn reset() void {
 pub fn resetForTest() void {
     reset();
     installed = false;
+    hook = null;
+    orig = null;
     target_addr = 0;
     saved_code = [_]u8{0} ** 32;
 }
 
-/// Engine bytes are still ours? The assembly section replaces this; the pure core can only
-/// report "never installed".
+// ---------------------------------------------------------------------------
+// Assembly: fingerprint gate + install / uninstall / verify
+// (shape copied from trigger_pred_probe.zig — same-family prologue gate, saved_code
+// snapshot, restoreTarget, flushInstructionCache)
+// ---------------------------------------------------------------------------
+
+pub const InstallError = error{
+    Unsupported,
+    AlreadyInstalled,
+    PatchActive,
+    ModuleNotFound,
+    AlreadyHooked,
+    UnexpectedPrologue,
+    PatchTooWide,
+    DetourUnavailable,
+};
+
+/// Two refusals before installing: this guard is already in, or the predicate detour is
+/// armed. The second is §57.4's reason — with the predicate armed, `[self+0]` may point at
+/// our own DLL's vtable copy, and a self vtable read in that state is not an engine reading.
+pub fn preflightChecks(already_installed: bool, patch_active: bool) InstallError!void {
+    if (already_installed) return error.AlreadyInstalled;
+    if (patch_active) return error.PatchActive;
+}
+
+pub const OrigFn = *const fn (u64, u64, u64) callconv(.c) u64;
+
+/// The evaluation slot takes `(self, ctx, a3)` (§77.1 ②). Its shared base tail-jumps to the
+/// per-table slot[4], so the return convention belongs to that table; the one call site we
+/// can read statically (`0x34A01B`) **discards** the result. Forwarding the raw `rax` is
+/// therefore the safe choice: a void callee's rax is nobody's business, and a bool or
+/// pointer callee keeps its value in rax.
+fn evalDetour(self: u64, ctx: u64, a3: u64) callconv(.c) u64 {
+    const obj_token = readU32(@intCast(self), TRIGGER_OBJECT_TOKEN_ID);
+    recordCall(obj_token, @intCast(self), @intCast(ctx), a3);
+    const f: OrigFn = @ptrCast(orig orelse return 0);
+    return f(self, ctx, a3);
+}
+
+pub fn install() InstallError!void {
+    if (!is_windows) return error.Unsupported;
+    try preflightChecks(installed, predicate_hook.isInstalled());
+
+    const target = windows.moduleFunction(RVA_TRIGGER_EVAL) catch return error.ModuleNotFound;
+    if (detour_mod.isHooked(target)) return error.AlreadyHooked;
+
+    target_addr = @intFromPtr(target); // set before the gate so fingerprintMatches can re-check
+
+    const tb: [*]const u8 = @ptrCast(target);
+    for (EXPECTED_CODE, 0..) |byte, i| {
+        if (tb[i] != byte) return error.UnexpectedPrologue;
+    }
+    @memcpy(&saved_code, tb[0..saved_code.len]);
+
+    const base = @intFromPtr(target) - RVA_TRIGGER_EVAL;
+    setImageBounds(base, base + 0x400_0000);
+
+    const h = detour_mod.installHookArmed(target, @ptrCast(@constCast(&evalDetour)), &orig) catch
+        return error.DetourUnavailable;
+    if (h.patch_size > saved_code.len) {
+        // The patch is already live at this point: undo it here, or the process keeps a hook
+        // this module can no longer reach (2026-10-28 review, Important 5).
+        detour_mod.removeHook(&h) catch {};
+        restoreTarget(h.patch_size) catch {};
+        orig = null;
+        return error.PatchTooWide;
+    }
+    hook = h;
+    installed = true;
+    stats.patch_size = h.patch_size;
+    std.log.info("c2.trigger_eval_probe: installed detour at 0x{x}", .{RVA_TRIGGER_EVAL});
+}
+
+/// Copy our own snapshot of the prologue back. The authoritative restore: it does not depend
+/// on `removeHook` reading a trampoline that is still intact (that memory is retired, never
+/// freed — see `detour.zig`).
+fn restoreTarget(len: usize) !void {
+    var guard = try windows.ProtectGuard.change(@ptrFromInt(target_addr), len, .execute_readwrite);
+    defer guard.deinit();
+    const dst: [*]u8 = @ptrFromInt(target_addr);
+    @memcpy(dst[0..len], saved_code[0..len]);
+    windows.flushInstructionCache(@ptrFromInt(target_addr), len);
+}
+
+/// Remove the detour. A no-op when not installed — the driver still calls it after a failed install.
+pub fn uninstall() !void {
+    if (!installed) return;
+    const h = hook orelse return;
+    detour_mod.removeHook(&h) catch {};
+    hook = null;
+    installed = false;
+    try restoreTarget(h.patch_size);
+    orig = null; // only once the engine bytes are ours again
+    if (!fingerprintMatches()) return error.RestoreIncomplete;
+    std.log.info("c2.trigger_eval_probe: uninstalled detour", .{});
+}
+
+/// True when the engine's own 32-byte prologue is present at the target.
+fn fingerprintMatches() bool {
+    if (target_addr == 0) return false;
+    const tb: [*]const u8 = @ptrFromInt(target_addr);
+    for (EXPECTED_CODE, 0..) |byte, i| {
+        if (tb[i] != byte) return false;
+    }
+    return true;
+}
+
+/// 0 = consistent. Installed: the hook must still be in the detour table; not installed: we
+/// resolved the target this session and the engine bytes are intact.
+/// -1 hook lost | -2 bytes differ | -3 the target was never resolved this session.
 pub fn verify() i32 {
-    return -3;
+    if (target_addr == 0) return -3;
+    const target: *anyopaque = @ptrFromInt(target_addr);
+    if (installed) return if (detour_mod.isHooked(target)) 0 else -1;
+    return if (fingerprintMatches()) 0 else -2;
+}
+
+pub fn isInstalled() bool {
+    return installed;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,4 +635,19 @@ test "layoutInto reports six words and a stable entry size" {
     try std.testing.expectEqual(@as(u32, 56), words[3]);
     try std.testing.expectEqual(@as(u32, 0x1A91A80), words[4]);
     try std.testing.expectEqual(@as(u32, 32), words[5]);
+}
+
+test "preflight refuses a second install on the same process" {
+    try std.testing.expectError(error.AlreadyInstalled, preflightChecks(true, false));
+    try std.testing.expectError(error.PatchActive, preflightChecks(false, true));
+}
+
+test "preflight accepts a clean process" {
+    try preflightChecks(false, false);
+}
+
+test "verify is -3 before the first install" {
+    resetForTest();
+    try std.testing.expectEqual(@as(i32, -3), verify());
+    try std.testing.expect(!isInstalled());
 }
