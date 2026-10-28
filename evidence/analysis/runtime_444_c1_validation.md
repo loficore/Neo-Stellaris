@@ -7040,12 +7040,12 @@ scanning .text (0x2390800 bytes) ...
 
 **这一发问的是什么**:§59.9 前置 ①(连线前先按 `plausible_user_ptr` + 界内/界外分档)与前置 ②
 (`self` 支预算抬高到 27)都已由计划 Task 5 做进驱动(`partition_cells` / `DEPTH2_PER_SOURCE = 27`,
-`04.24` 之后未再改动 DLL);本发是**同形状之外的第一次**:深度与预算同时到位,而 DLL 字节是 §69/§70/§72
+DLL 侧一行未动);本发是**同形状之外的第一次**:深度与预算同时到位,而 DLL 字节是 §69/§70/§72
 那一份。判据表照 §57.4/§68.8 原样,不在这里重述。
 
 **环境与前置读数**:新进程 pid **3604**,hwnd 1116360。`just launch` 一次成功(`GAME_OBSERVE step=ok
-alive_s=30`、`inner_exit code=0`),落地即战役内(日期 2300.07.25 一类的续档,launcher 自带
-`--continuelastsave`)。**紧邻执行 shot 的前置读数**:
+alive_s=30`、`inner_exit code=0`),落地即战役内(launcher 自带
+`--continuelastsave`,§69.1 的机制复现;本窗没有记存档名,这一格在 §74.4 里算账)。**紧邻执行 shot 的前置读数**:
 
 ```
 STATUS=playing note=ok pid=3604 hwnd=1116360 age=0.1s want=playing policy=first handled=0 cmd=unpause
@@ -7083,12 +7083,12 @@ STATUS=playing note=ok pid=3604 hwnd=1116360 age=0.1s want=playing policy=first 
 
 | 键 | §59.3(depth-1) | §68.1(depth-1+2) | 本发(预算 27) |
 |---|---|---|---|
-| 字节 | `…`(§59) | `7d3e45c4…` | `17c2b825…` |
+| 字节 | `373ab26b…`(`sqjs_c4_scope_v2.dll`) | `7d3e45c4…` | `17c2b825…` |
 | `calls` | 3061(≈25.5/s) | 1046773(≈8723/s) | **2970**(≈24.75/s) |
 | `samples` | 5 | 2044 | **5** |
 | `valid` / `lexer` | 5 / 0 | 256 / 0 | 5 / 0 |
 | `followed_by_source` | self=4/helper=2/arg3=1/arg4=1 | self=8/helper=2/arg3=0/arg4=1 | self=5/helper=2/arg3=1/arg4=1 |
-| `implausible_by_source` | — | self=0/helper=0/**arg3=256**/arg4=255 | self=0/helper=0/**arg3=4**/arg4=0 |
+| `implausible_by_source` | arg3=2/arg4=0 | self=0/helper=0/**arg3=256**/arg4=255 | self=0/helper=0/**arg3=4**/arg4=0 |
 | `capped_by_source` | 0 | self=245 | **self=0** |
 | known / member / unknown / unreadable | 0/0/16/0 | 2/13/37/0 | **3**/2/20/0 |
 | `verdict` | `no_scope_candidate` | `scope_candidate` | **`scope_candidate`** |
