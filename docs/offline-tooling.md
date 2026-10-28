@@ -1678,6 +1678,38 @@ vocabulary 之外的判词、拒绝未知的原始计数)。为什么没采:那 
 围栏:`scripts/test_world_state.py` 38 条、`scripts/test_world_probe_pure.py` 3 条、
 `scripts/test_popup_ocr_small.py` 3 条、`scripts/test_scripts_layout.py` 34 条(R-inject / R-verbs 两条新规则)。
 
+### `scripts/windows/session_bridge.py` —— SSH(session 0)到交互桌面(session 1)的通道
+
+**这条不补,`ns_world.py` 在 agent 的实际工作方式下不可用。** Windows 上 SSH 登录落在
+**session 0**(服务会话,没有交互桌面),那里 `EnumWindows` 几乎什么都看不见:实机测过一次,
+session 0 里只枚举到 **1 个**顶层窗口,而 `stellaris.exe` / `explorer.exe` / `steam.exe`
+全在 session 1。所以从 SSH 直接跑探针会永远得到 `NO_GAME` —— 状态机的工作就是读真窗口,
+读不到就没有前提。
+
+`launch_stellaris.py` 与 `game_supervisor.py start` 早就用同一个办法绕开它:注册一个
+**计划任务**并以交互方式运行(`/run /I`),这样的任务继承已登录用户的会话,能看见也能碰
+游戏窗口。这个工具把同一机制泛化成「跑一条命令」:
+
+```
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py status"
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py assert-ready --action install --guard shim"
+```
+
+它写一个 **ASCII** 的 `.cmd`(cp936 的 `cmd.exe` 按控制台代码页解析 `.cmd`,非 ASCII 路径
+会让任务在运行时静默死掉,所以在这里就抛),把命令输出重定向到文件、把 `EXIT=` 哨兵追加在
+最后,`/run /I` 点火,等哨兵、删任务、打印输出与退出码。哨兵在输出之后,所以读的时候按
+**最后一个** `EXIT=` 切分,不会被命令自己打印的内容骗到;拿不到哨兵返回 4(**不知道**
+发生了什么,不是成功)。
+
+**它有意不做成 `just` 食谱。** `just ns` 会是 `game` 之外的第二条改世界通道,而
+`scripts/test_scripts_layout.py` 的 R-verbs 围栏只治理 `game` 那一条。要开这条通道,应该
+先把它的动词登记进 `world_state.VERB_ACTIONS`,而不是顺手加个 recipe。
+
+**判读陷阱**:任务跑在**已登录用户的会话**里,所以(1) 没人登录桌面时它跑不出东西 —— 拿不到
+哨兵就报 4,不要当成"拒绝了";(2) 它和 launcher / supervisor 用的是不同任务名
+(`NSWorldOneShot`),互不干扰,但**同时**点火两个交互任务时 Windows 只让一个拿前台焦点,
+另一个的点击会打偏。
+
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 
 `scripts/disrva.py` 与 `scripts/cap.py` 反汇编的是**游戏**:它们只收 RVA,自己去找 `stellaris.exe`
