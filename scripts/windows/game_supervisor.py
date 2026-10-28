@@ -100,7 +100,13 @@ POPUP_EVIDENCE_KEEP = 40
 # with the heartbeat.  The budget is per daemon session; past it the identity
 # degrades to geometry-only, which the allowlist never matches.
 POPUP_OCR_MIN_INTERVAL_S = 60.0
-POPUP_OCR_BUDGET_MS = 24_000.0
+# Re-derived 2026-10-27 for the PP-OCR mobile engine (spec §14.4).  Measured on
+# the host over 3 text panels (evidence/logs/ocr_swap_4_4_4.tsv): a whole-panel
+# read costs 632-945 ms with detection on, and one text band costs 79-121 ms
+# rec-only.  The budget must cover the panel path the daemon actually takes, so
+# it is 2 000 ms — 3x the measured worst case (945 ms) and 12x smaller than the
+# 24 000 ms the surya pipeline needed (0.7 s * 14 lines ~= 10 s per panel).
+POPUP_OCR_BUDGET_MS = 2_000.0
 
 # ``decide_action``'s reason is the truth; this table is a total map onto the
 # note vocabulary, so the note never re-derives anything.

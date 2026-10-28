@@ -556,18 +556,24 @@ def test_a_failed_ocr_retries_on_the_backoff_interval_not_every_tick():
 
 
 def test_popup_tick_stops_asking_ocr_once_the_session_budget_is_spent():
+    # The per-read cost is derived from the budget rather than written down:
+    # the budget is a measured quantity (spec §14.4 re-derived it to 2 000 ms
+    # on 2026-10-27), and a test that hard-codes the old 24 s arithmetic would
+    # have to be rewritten every time somebody re-measures.  One read that
+    # costs the whole budget spends it.
+    cost = gs.POPUP_OCR_BUDGET_MS
     calls = []
     st = {"popup_id": None, "popup_attempts": 0, "popup_same_hits": 0,
           "popup_last_ocr_ts": 0.0, "popup_ocr_ms": 0.0}
     boxes = [[0, 0, 900, 400], [0, 0, 900, 500], [0, 0, 900, 600], [0, 0, 900, 700]]
     for tick, box in enumerate(boxes):           # 四个几何互不相同的窗 = 四次边沿触发
         got = gs.popup_tick(0, "p.png", box, 0, st,
-                            lambda p: calls.append(p) or (["x"], "ok", 9_000.0),
+                            lambda p: calls.append(p) or (["x"], "ok", cost),
                             now=1_000.0 + tick)
-    assert len(calls) == 3                       # 问第三次时累计 18 s 还在线内,第四次 27 s 已超
-    assert st["popup_ocr_ms"] == 27_000.0
+    assert len(calls) == 1                       # 第一次就花光,其后一律不再问
+    assert st["popup_ocr_ms"] == cost
     assert got["ocr_status"] == "budget_spent" and got["ms"] == 0.0
-    assert got["ocr_ms_total"] == 27_000.0
+    assert got["ocr_ms_total"] == cost
     assert got["popup_id"].startswith("geom:")   # 没文本就只能用几何 id,而几何 id 不在名单
     assert got["action"] == "hold"
 

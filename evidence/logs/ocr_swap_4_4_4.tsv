@@ -1,0 +1,20 @@
+# OCR engine swap, measured on the game host 2026-10-27 (spec §14.4).
+# engine labels: rec-band = rec-only on ONE text band (spec §14.3's shape);
+#   full-panel = the same wheel with detection on, over the whole popup;
+#   surya-panel = the pre-swap engine, through the pre-swap call shape.
+# surya rows carry text_len=0: RecognitionPredictor on this host does not
+#   accept device=, so the old engine could NOT be measured this way — the
+#   rows record the failure and its elapsed ms, not a comparison.
+# agree_with_human=unverified on every row: a human verdict is not something
+#   the instrument can produce.
+# crops all come from C:/temp/ns_popup; 3 text panels x 14 bands each.
+crop_sha256	engine	ms	text_len	agree_with_human
+2fdd05d2a639c6c0929793f56288b89e932672bf61d2387d63c65de4b4a661bd	rapidocr-ppocr-mobile-rec	120.8	8	unverified
+2fdd05d2a639c6c0929793f56288b89e932672bf61d2387d63c65de4b4a661bd	rapidocr-ppocr-mobile-full	945.0	14	unverified
+9e422699b71b11004d5d67d83fb8f08057325342632f5ece174a13e77c23802d	rapidocr-ppocr-mobile-rec	79.3	8	unverified
+9e422699b71b11004d5d67d83fb8f08057325342632f5ece174a13e77c23802d	rapidocr-ppocr-mobile-full	632.3	14	unverified
+a749cc49e30ce20a9a921c41a91ace31cd2797f98a191684809cb7dd1c62f15a	rapidocr-ppocr-mobile-rec	79.5	8	unverified
+a749cc49e30ce20a9a921c41a91ace31cd2797f98a191684809cb7dd1c62f15a	rapidocr-ppocr-mobile-full	650.1	14	unverified
+2fdd05d2a639c6c0929793f56288b89e932672bf61d2387d63c65de4b4a661bd	surya-panel	11736.6	0	unverified
+9e422699b71b11004d5d67d83fb8f08057325342632f5ece174a13e77c23802d	surya-panel	195.8	0	unverified
+a749cc49e30ce20a9a921c41a91ace31cd2797f98a191684809cb7dd1c62f15a	surya-panel	165.8	0	unverified
