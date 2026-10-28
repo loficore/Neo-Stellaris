@@ -1697,7 +1697,8 @@ vocabulary 之外的判词、拒绝未知的原始计数)。为什么没采:那 
 给的是「为什么没达标」和「谁会受影响」。
 
 围栏:`scripts/test_world_state.py` 38 条、`scripts/test_world_probe_pure.py` 3 条、
-`scripts/test_popup_ocr_small.py` 3 条、`scripts/test_scripts_layout.py` 34 条(R-inject / R-verbs 两条新规则)。
+`scripts/test_popup_ocr_small.py` 3 条、`scripts/test_scripts_layout.py` 38 条(四条新规则:
+R-inject / R-verbs / R-gate-symbol / R-deploy)。
 
 ### `scripts/windows/session_bridge.py` —— SSH(session 0)到交互桌面(session 1)的通道
 
