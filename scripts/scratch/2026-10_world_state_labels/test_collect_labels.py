@@ -28,8 +28,12 @@ def test_row_requires_a_label_from_the_classifier_vocabulary_and_a_real_frame(tm
     """Only the three classifiers' words are verdicts; only bytes are a frame."""
     frame = _frame(tmp_path)
 
-    row = cl.build_row(frame=str(frame), label="playing", source="human",
-                       raw={"red_px": 0, "green_px": 203})
+    row = cl.build_row(
+        frame=str(frame),
+        label="playing",
+        source="human",
+        raw={"red_px": 0, "green_px": 203},
+    )
     assert row["label"] == "playing"
     assert row["source"] == "human"
     assert row["raw"] == {"red_px": 0, "green_px": 203}
@@ -47,8 +51,9 @@ def test_row_requires_a_label_from_the_classifier_vocabulary_and_a_real_frame(tm
 
     # Nor is a row whose frame is not there: a label must name real pixels.
     try:
-        cl.build_row(frame=str(tmp_path / "absent.png"), label="playing",
-                     source="human", raw={})
+        cl.build_row(
+            frame=str(tmp_path / "absent.png"), label="playing", source="human", raw={}
+        )
     except ValueError as exc:
         assert "not found" in str(exc)
     else:
@@ -87,8 +92,12 @@ def test_raw_counts_parse_verbatim_and_refuse_unknown_or_non_integer(tmp_path):
     # And the row keeps them as ints, because the counts are what a later
     # calibration re-grades (spec §10).
     frame = _frame(tmp_path, payload=b"other-pixels")
-    row = cl.build_row(frame=str(frame), label="console_open", source="agent",
-                       raw=cl.parse_raw(["bright_px=2315"]))
+    row = cl.build_row(
+        frame=str(frame),
+        label="console_open",
+        source="agent",
+        raw=cl.parse_raw(["bright_px=2315"]),
+    )
     assert isinstance(row["raw"]["bright_px"], int)
 
     # Agreement reporting keeps abstentions apart from disagreements, and

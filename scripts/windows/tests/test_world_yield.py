@@ -16,8 +16,8 @@ import sys
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))          # scripts/windows
-sys.path.insert(0, str(HERE.parent.parent))   # scripts/
+sys.path.insert(0, str(HERE.parent))  # scripts/windows
+sys.path.insert(0, str(HERE.parent.parent))  # scripts/
 
 import game_supervisor as gs
 import world_state as ws  # pyright: ignore[reportMissingImports]
@@ -27,8 +27,14 @@ def _take_install_lease(tmp_path, now):
     """Leave one outstanding ``install`` lease on disk, as the agent does."""
     store = ws.Store.load(tmp_path / "ns_world.json")
     with store.locked():
-        lease = ws.acquire(store, "install", guard="shim",
-                           state="IN_GAME_RUNNING", fingerprint="f" * 64, now=now)
+        lease = ws.acquire(
+            store,
+            "install",
+            guard="shim",
+            state="IN_GAME_RUNNING",
+            fingerprint="f" * 64,
+            now=now,
+        )
         assert lease is not None
         store.save()
     return lease
@@ -65,17 +71,23 @@ def test_serve_yields_when_lease_outstanding(tmp_path, monkeypatch):
     monkeypatch.setattr(gs, "SHOT_PATH", str(tmp_path / "shot.png"))
     monkeypatch.setattr(gs, "find_game", lambda: (0, 0))
     monkeypatch.setattr(gs, "click_row", lambda *a, **k: clicks.append(a))
-    monkeypatch.setattr(gs, "send_pause_key", lambda *a, **k: unpauses.append(a) or "sent")
+    monkeypatch.setattr(
+        gs, "send_pause_key", lambda *a, **k: unpauses.append(a) or "sent"
+    )
     monkeypatch.setattr(gs, "_require_windows", lambda: None)
 
-    gs.serve(gs.build_parser().parse_args(["serve", "--state-path", str(path)]),
-             once=True)
+    gs.serve(
+        gs.build_parser().parse_args(["serve", "--state-path", str(path)]), once=True
+    )
 
     assert clicks == [], "the daemon clicked while a lease was outstanding"
-    assert unpauses == [], "the daemon tapped the pause key while a lease was outstanding"
+    assert unpauses == [], (
+        "the daemon tapped the pause key while a lease was outstanding"
+    )
     assert any(rec.get("event") == "YIELD_TO_LEASE" for rec in logged), (
         "a deferral must be audible: the whole point of cooperating in code is "
-        f"that a stuck window says so. Logged: {logged}")
+        f"that a stuck window says so. Logged: {logged}"
+    )
 
 
 def test_yield_is_none_without_a_lease(tmp_path):

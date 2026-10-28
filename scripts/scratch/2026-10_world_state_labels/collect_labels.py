@@ -33,9 +33,15 @@ import pathlib
 #: The three classifiers' vocabularies (spec §13.2).  A label outside these is
 #: not a verdict about this machine's window state.
 LABELS = (
-    "playing", "paused", "unknown",                              # pause
-    "console_open", "console_closed", "console_undecided",        # console
-    "choice", "dialog", "none",                                   # window
+    "playing",
+    "paused",
+    "unknown",  # pause
+    "console_open",
+    "console_closed",
+    "console_undecided",  # console
+    "choice",
+    "dialog",
+    "none",  # window
 )
 
 #: Where a row's verdict came from (spec §13.4).  ``engine`` is reserved and
@@ -45,8 +51,7 @@ SOURCES = ("human", "agent", "engine")
 
 #: The raw counts a row may carry (spec §10).  Unknown keys are refused: a
 #: typo in a count name would silently become a count nobody reads.
-RAW_KEYS = ("red_px", "green_px", "bright_px", "gold_px", "row_count",
-            "option_count")
+RAW_KEYS = ("red_px", "green_px", "bright_px", "gold_px", "row_count", "option_count")
 
 
 def crop_sha256(path) -> str:
@@ -68,8 +73,9 @@ def parse_raw(pairs) -> dict:
         key, _, value = pair.partition("=")
         key = key.strip()
         if key not in RAW_KEYS:
-            raise ValueError(f"unknown raw count {key!r} "
-                             f"(known: {', '.join(RAW_KEYS)})")
+            raise ValueError(
+                f"unknown raw count {key!r} (known: {', '.join(RAW_KEYS)})"
+            )
         text = value.strip()
         try:
             out[key] = int(text)
@@ -78,8 +84,16 @@ def parse_raw(pairs) -> dict:
     return out
 
 
-def build_row(*, frame: str, label: str, source: str, raw: dict,
-              classifier: str = "", note: str = "", t: float | None = None) -> dict:
+def build_row(
+    *,
+    frame: str,
+    label: str,
+    source: str,
+    raw: dict,
+    classifier: str = "",
+    note: str = "",
+    t: float | None = None,
+) -> dict:
     """Assemble one golden-set row, refusing a row that cannot be evidence.
 
     The refusals are the feature: they are what stops a rushed run from
@@ -87,11 +101,12 @@ def build_row(*, frame: str, label: str, source: str, raw: dict,
     trust.
     """
     if label not in LABELS:
-        raise ValueError(f"label {label!r} is not one of the classifiers' "
-                         f"verdicts ({', '.join(LABELS)})")
+        raise ValueError(
+            f"label {label!r} is not one of the classifiers' "
+            f"verdicts ({', '.join(LABELS)})"
+        )
     if source not in SOURCES:
-        raise ValueError(f"source {source!r} is not one of "
-                         f"({', '.join(SOURCES)})")
+        raise ValueError(f"source {source!r} is not one of ({', '.join(SOURCES)})")
     path = pathlib.Path(frame)
     if not path.is_file():
         raise ValueError(f"frame not found: {frame}")
@@ -185,10 +200,14 @@ def agreement(rows) -> dict:
             if _classifier_value(said, "console") == "open":
                 console["agree"] += 1
     total = agree + disagree + abstain
-    return {"total": total, "agree": agree, "disagree": disagree,
-            "abstain": abstain,
-            "rate": (agree / total) if total else 0.0,
-            "console_open": console}
+    return {
+        "total": total,
+        "agree": agree,
+        "disagree": disagree,
+        "abstain": abstain,
+        "rate": (agree / total) if total else 0.0,
+        "console_open": console,
+    }
 
 
 def main(argv=None) -> int:
@@ -201,12 +220,21 @@ def main(argv=None) -> int:
     parser.add_argument("--classifier", default="")
     parser.add_argument("--note", default="")
     parser.add_argument("--raw", nargs="*", default=[])
-    parser.add_argument("--out", default=str(
-        pathlib.Path("evidence") / "logs" / "world_state_labels_4_4_4.jsonl"))
+    parser.add_argument(
+        "--out",
+        default=str(
+            pathlib.Path("evidence") / "logs" / "world_state_labels_4_4_4.jsonl"
+        ),
+    )
     args = parser.parse_args(argv)
-    row = build_row(frame=args.frame, label=args.label, source=args.source,
-                    raw=parse_raw(args.raw), classifier=args.classifier,
-                    note=args.note)
+    row = build_row(
+        frame=args.frame,
+        label=args.label,
+        source=args.source,
+        raw=parse_raw(args.raw),
+        classifier=args.classifier,
+        note=args.note,
+    )
     append_row(row, args.out)
     print(f"LABEL={row['label']} SHA={row['crop_sha256'][:12]} OUT={args.out}")
     return 0

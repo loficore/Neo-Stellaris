@@ -111,11 +111,15 @@ def measure(crop_dir: pathlib.Path, out_path: pathlib.Path, surya_limit: int) ->
 
     warm_start = time.monotonic()
     status = popup_ocr.warm()
-    sys.stderr.write(f"[swap] rec-only warm={status} "
-                     f"ms={(time.monotonic() - warm_start) * 1000:.0f}\n")
+    sys.stderr.write(
+        f"[swap] rec-only warm={status} "
+        f"ms={(time.monotonic() - warm_start) * 1000:.0f}\n"
+    )
     full_start = time.monotonic()
     full_engine = RapidOCR()
-    sys.stderr.write(f"[swap] full warm ms={(time.monotonic() - full_start) * 1000:.0f}\n")
+    sys.stderr.write(
+        f"[swap] full warm ms={(time.monotonic() - full_start) * 1000:.0f}\n"
+    )
 
     def full_panel(path):
         out = full_engine(str(path))
@@ -142,18 +146,25 @@ def measure(crop_dir: pathlib.Path, out_path: pathlib.Path, surya_limit: int) ->
                 sys.stderr.write(f"[swap] band {band.name} error: {err}\n")
             band.unlink(missing_ok=True)
         band_times.sort()
-        p95 = band_times[min(len(band_times) - 1,
-                             round(0.95 * (len(band_times) - 1)))] if band_times else 0.0
-        rows.append((digest, "rapidocr-rec-band", round(p95, 1), band_lines,
-                     "unverified"))
+        p95 = (
+            band_times[min(len(band_times) - 1, round(0.95 * (len(band_times) - 1)))]
+            if band_times
+            else 0.0
+        )
+        rows.append(
+            (digest, "rapidocr-rec-band", round(p95, 1), band_lines, "unverified")
+        )
 
         texts, ms, err = _timed(full_panel, panel)
-        rows.append((digest, "rapidocr-full-panel", round(ms, 1), len(texts),
-                     "unverified"))
+        rows.append(
+            (digest, "rapidocr-full-panel", round(ms, 1), len(texts), "unverified")
+        )
         if err:
             sys.stderr.write(f"[swap] full {panel.name} error: {err}\n")
-        sys.stderr.write(f"[swap] {panel.name} bands={len(band_files)} "
-                         f"band_p95={p95:.1f} full={ms:.0f}\n")
+        sys.stderr.write(
+            f"[swap] {panel.name} bands={len(band_files)} "
+            f"band_p95={p95:.1f} full={ms:.0f}\n"
+        )
 
     for panel in panels[:surya_limit]:
         digest = crop_sha256(panel.read_bytes())
@@ -176,7 +187,11 @@ def main(argv=None) -> int:
     if len(args) < 2:
         print(__doc__)
         return 2
-    written = measure(pathlib.Path(args[0]), pathlib.Path(args[1]), int(args[2]) if len(args) > 2 else 3)
+    written = measure(
+        pathlib.Path(args[0]),
+        pathlib.Path(args[1]),
+        int(args[2]) if len(args) > 2 else 3,
+    )
     print(f"STATUS=ok ROWS={written} OUT={args[1]}")
     return 0
 
