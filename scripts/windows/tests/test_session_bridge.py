@@ -60,6 +60,43 @@ def test_a_non_ascii_path_is_refused_here_not_on_the_box():
     raise AssertionError("a non-ASCII shim must be refused at write time")
 
 
+def test_run_interactive_reads_the_sentinel_back(tmp_path, monkeypatch):
+    """The read half of the channel: shim written, task fired, output read back.
+
+    The two halves are separate code paths, and only the shim text had a fence.
+    A read path that cannot open the file it just asked for defeats the whole
+    channel while every shim-text test stays green.
+    """
+    shim = tmp_path / "shim.cmd"
+    out = tmp_path / "out.txt"
+    monkeypatch.setattr(bridge, "SHIM_PATH", str(shim))
+    monkeypatch.setattr(bridge, "OUT_PATH", str(out))
+
+    def fake_run(argv, **kwargs):
+        if "/run" in argv:
+            out.write_text("hello\r\nEXIT=0\r\n", encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(bridge.subprocess, "run", fake_run)
+
+    output, code = bridge.run_interactive(r"C:\temp\probe.py", "status", timeout_s=5)
+    assert (output, code) == ("hello", 0)
+    assert shim.exists()
+
+
+def test_peel_timeout_lets_a_shot_outlast_the_default():
+    """A 120 s sampling window cannot be run under a 120 s bridge timeout."""
+    timeout_s, rest = bridge.peel_timeout(["--timeout-s", "600", r"C:\temp\x.py", "run"])
+    assert timeout_s == 600.0
+    assert rest == [r"C:\temp\x.py", "run"]
+
+
+def test_peel_timeout_is_absent_by_default():
+    timeout_s, rest = bridge.peel_timeout([r"C:\temp\x.py", "status"])
+    assert timeout_s == bridge.DEFAULT_TIMEOUT_S
+    assert rest == [r"C:\temp\x.py", "status"]
+
+
 def test_the_task_name_is_its_own():
     """Firing this must not disturb the launcher's or the supervisor's task."""
     assert bridge.TASK_NAME not in ("NeoStellarisSupervisor",)

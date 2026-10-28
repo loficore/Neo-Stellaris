@@ -110,7 +110,7 @@ def run_interactive(script: str, args: str = "", *,
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             if os.path.exists(OUT_PATH):
-                with _open_file(OUT_PATH, encoding="utf-8",
+                with _open_file(OUT_PATH, "r", encoding="utf-8",
                                 errors="replace") as fh:
                     text = fh.read()
                 if "EXIT=" in text:
@@ -128,13 +128,34 @@ def run_interactive(script: str, args: str = "", *,
                        check=False, capture_output=True, text=True)
 
 
+def peel_timeout(args: list[str]) -> tuple[float, list[str]]:
+    """Take an optional leading ``--timeout-s N`` off the front of ``args``.
+
+    The default (120 s) fits a status read, not the shot drivers: those sample
+    for ``--poll-s 120`` and only then drain, so the sentinel arrives long after
+    the bridge would have given up.  A timeout here is "we do not know what
+    happened", which must never be the reading a 120 s shot produces.
+    """
+    if len(args) >= 2 and args[0] == "--timeout-s":
+        try:
+            timeout_s = float(args[1])
+        except ValueError as exc:
+            raise SystemExit(f"--timeout-s needs a number, got {args[1]!r}") from exc
+        return timeout_s, args[2:]
+    return DEFAULT_TIMEOUT_S, args
+
+
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         print(__doc__)
         return 2
+    timeout_s, args = peel_timeout(args)
+    if not args:
+        print(__doc__)
+        return 2
     script, rest = args[0], " ".join(args[1:])
-    output, code = run_interactive(script, rest)
+    output, code = run_interactive(script, rest, timeout_s=timeout_s)
     if output:
         print(output)
     if code is None:
