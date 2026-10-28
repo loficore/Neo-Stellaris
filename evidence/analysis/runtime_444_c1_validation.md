@@ -7641,3 +7641,54 @@ python3 scripts/scratch/2026-10_eval_slot/shape_1a91a80.py
 2. **`+0x158 ∈ {1, 0x426}` 是代码里的常量,不是读数。** 它证明「ctx 带标签」,不证明「本窗口的 ctx 标签是
    哪一个」。
 3. **本节没有分母。** 星系数仍须从**当前存档**重建(`save_hypergraph.py`),787 属于另一场存档(§76.8 ①)。
+
+## §78 孤儿 handler 已按用户裁定删除:门禁计数与**出货字节**逐字未变(2026-10-29,离线,零 shot)
+
+§64 是**案卷**(§64.3 逐字:「本节不判『该不该删』……删除需要新的裁定」)。裁定在 2026-10-29 由人给出:
+**删**。本节落账执行结果与新基线。
+
+### §78.1 删了什么(照 §64.4 的落点清单逐条执行)
+
+| 落点 | 动作 |
+|---|---|
+| `src/dll/effects/handler.zig`、`src/dll/triggers/handler.zig` | **删文件**(两个目录随之消失) |
+| `build.zig:228-232` | 两段 SKIPPED 注释(`std.Thread.Mutex` 那两条)一并删 |
+| `README.md` | 特性清单「Custom Effects / Custom Triggers」两行、目录树 `effects/` `triggers/` 两段、API 表 `registerEffect` / `registerTrigger` 两行、「Scripted Effect Threshold」一节 |
+| `docs/offline-tooling.md:70` | 「至今零执行 **29 条**」(`bridge.zig` 19 + 两个 handler 各 5)→「至今零执行 **19 条**」(`bridge.zig` 19),并注明两个孤儿已于本日删除 |
+| `docs/roadmap.md:98` | 整条孤儿候选移除(行数 139 → **138**,删行在 140 上限内) |
+
+**没动的**:`evidence/` 里 §29 :460/:707、`zig_test_coverage.md` 26/27/64/65、`docs/scope-read-points.md:57`
+的旧读数 —— 那是**历史数**,按 append-only 不改写;新基线记在本节。
+
+### §78.2 新基线:**逐字未变**
+
+删除前后的两次实测(同一棵树,只差那两个文件):
+
+| 读数 | 删除前 | 删除后 |
+|---|---|---|
+| `zig build test --summary all` | `31/31 steps; 743/743 tests` | `31/31 steps; 743/743 tests` |
+| `zig-out/bin/stellaris_quickjs.dll` sha256 | `ec3716a2655df117d8aafe1f2fd7ab59b4bbf3ae6bbdd11fe03cbd22e85c4614` | **同前,逐字相同** |
+| 同上文件大小 | 7,282,176 B | **同前** |
+| `scripts/test_scripts_layout.py` | 38 passed | 38 passed |
+
+⇒ 那两个文件**从未进入任何构建根**(§64.1 事实 1 的正面复核):删掉它们,出货字节一个 bit 都不变。
+
+### §78.3 这一节**不能**说的
+
+1. **这不证明「C3 那层不需要 JS 路由」。** 它只证明这两个**具体文件**是死的。JS 路由本身仍存在,只是走
+   现役路线(`C2ExecCall` → `quickjs_wrapper.c`,§64.1 事实 3)—— 那是设计问题,不在本节的裁定范围。
+2. **README 删掉的那几行描述的是孤儿的「设计」,不是能力。** `ID > 4081` 这个阈值在整个 `src/` 树里
+   **只出现在那两个文件**(删前实测),`registerEffect` / `registerTrigger` 也不在别处(唯一同名的
+   `src/dll/ui/button.zig:183` 是**按钮**效果注册,另一回事)。而「我们注册的新 keyword 的 effect 执行走
+   JS」这个**能力**不受影响(C4 路线)—— README 目前没有一句描述它。**补那一句是另一件事**,不在 §64.4 的
+   落点清单里,留给下一次有意的文档改动,不在本节顺手做。
+
+### §78.4 复现命令
+
+```bash
+git show --stat <删除提交>
+zig build test --summary all 2>&1 | grep "Build Summary"
+sha256sum zig-out/bin/stellaris_quickjs.dll      # 与 §78.2 的两列逐字相同
+```
+
+**下一发(§77 那台仪器)的实机读数改记 §79** —— 本节占了 §78 这个号。

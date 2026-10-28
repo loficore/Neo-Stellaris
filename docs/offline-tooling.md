@@ -67,9 +67,10 @@ then `272/272` at that time — see §29 of `runtime_444_c1_validation.md`;不�
   旧失败符号 8 个是 `CreateFileA`/`WriteFile`/`CloseHandle`/`GetModuleHandleA`/
   `VirtualProtect`/`VirtualFree`/`GetCurrentProcess`/`FlushInstructionCache`(此前括号只列了 4 个,是旧句的
   半份名单,现在只剩历史读法)。
-- **已知残留缺口 —— 至今零执行 29 条**(`src/dll/api/bridge.zig` 19 + `src/dll/effects/handler.zig` 5 +
-  `src/dll/triggers/handler.zig` 5):成因**不是链接,是可达性** —— `main.initializeQuickJS` 无调用点
-  (Zig 惰性分析不把 `bridge` 拉进 exports 根)、那两个 handler 在整个 `src/` 树零 importer;结构旁证:
+- **已知残留缺口 —— 至今零执行 19 条**(`src/dll/api/bridge.zig` 19;原先另有
+  `src/dll/effects/handler.zig` 5 + `src/dll/triggers/handler.zig` 5,那两个孤儿 handler 已于 2026-10-29
+  按用户裁定删除,见取证卷 §78):成因**不是链接,是可达性** —— `main.initializeQuickJS` 无调用点
+  (Zig 惰性分析不把 `bridge` 拉进 exports 根);结构旁证:
   `bridge.zig:31-32` 按路径引入 gamestate/scope,而它们用命名模块 `@import("offsets")`,exports 根没有
   `addImport("offsets")` —— 若 bridge 真在闭包里,该根会编译失败而非绿。这 29 条**本计划没有填**,
   基线句不许把它们含混成「都跑起来了」。

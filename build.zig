@@ -225,12 +225,6 @@ pub fn build(b: *std.Build) void {
         .root_module = api_scope_mod,
     });
 
-    // Effects handler tests — SKIPPED: std.Thread.Mutex unavailable for x86_64-windows target.
-    // The handler modules use std.Thread.Mutex in production code which doesn't compile
-    // for the cross-compilation target. These tests would pass on native Linux builds.
-
-    // Triggers handler tests — SKIPPED: same reason as effects handler.
-
     // UI module tests.
     const ui_window_mod = b.createModule(.{
         .root_source_file = b.path("src/dll/ui/window.zig"),

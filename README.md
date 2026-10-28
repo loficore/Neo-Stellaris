@@ -4,8 +4,6 @@ A Zig-based DLL extension for Stellaris that embeds a QuickJS JavaScript runtime
 
 ## Features
 
-- **Custom Effects** — Register JavaScript handlers for scripted effects (ID > 4081)
-- **Custom Triggers** — Register JavaScript handlers for scripted triggers
 - **Game State Access** — Read countries, planets, pops, systems, and game date/tick
 - **Scope Inspection** — Query CEventScope type and object ID from JS
 - **UI System** — Create .gui windows with buttons, text, and dynamic text providers
@@ -26,10 +24,6 @@ stellaris-quickjs.dll
 │   ├── bridge.zig       — JS→Zig bridge (Stellaris.* functions)
 │   ├── gamestate.zig    — Game object access (stubs → real offsets)
 │   └── scope.zig        — CEventScope read access
-├── effects/
-│   └── handler.zig      — JS callback routing (orphan: its hook was removed, see §26.3)
-├── triggers/
-│   └── handler.zig      — JS callback routing (orphan: its hook was removed, see §26.3)
 ├── hooking/
 │   ├── detour.zig       — Trampoline detour framework
 │   └── windows.zig      — Win32 API wrappers (VirtualProtect, alloc)
@@ -142,8 +136,6 @@ All functions are available on the global `Stellaris` object:
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `registerEffect(name, func)` | `void` | Register a JS handler for a custom effect |
-| `registerTrigger(name, func)` | `void` | Register a JS handler for a custom trigger |
 | `registerButtonEffect(name, func)` | `void` | Register a button click handler |
 
 ### UI System
@@ -239,10 +231,6 @@ The extension hooks two critical engine functions:
 | CEffect | +0x6A8 (1704) | Vtable pointer | ptr |
 | CEventScope | +8 | Scope type | i64 (bit flag) |
 | CEventScope | +16 | Object ID | i64 |
-
-### Scripted Effect Threshold
-
-Effects with ID > 4081 are treated as custom/scripted and routed to JavaScript handlers. Vanilla effects (ID ≤ 4081) pass through to the original engine function.
 
 ## Project Status
 
