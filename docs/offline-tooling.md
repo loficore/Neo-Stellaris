@@ -1650,6 +1650,27 @@ vocabulary 之外的判词、拒绝未知的原始计数)。为什么没采:那 
 「看起来像证据」的集合,而那个集合正是 §13 要防的东西。spec §13.3 本身也写明黄金集是**读数不是门**,
 不通过不阻塞 v1。
 
+**实机读数(2026-10-28,游戏 pid 11268 —— 这条链唯一一次真跑)**
+
+- 静止:`IN_GAME_PAUSED_CLEAN`(`pause=paused red_px=132..273`、`console=closed bright_px=0`、
+  `window=none`),`NEXT=unpause`。按一次 Space → `playing red=0 green_px=195..201`,
+  `NEXT=install`。失焦自动暂停后又回到 `PAUSED_CLEAN` —— 状态机跟得上。
+- 门**拒绝**(暂停中):`REFUSED: state is IN_GAME_PAUSED_CLEAN, not IN_GAME_RUNNING … |
+  reading: pause=paused console=closed window=none hwnd=2295620`,退出码 2,
+  且 `module loaded AFTER: []` —— **DLL 没有被注入**(用进程模块表验的,不是用驱动自己打印的话)。
+- 门**放行**(运行中):退出码 0,`DLL base 0x7ffb58030000`,`C2Sanity -> 42`,
+  `module loaded AFTER: ['C:\temp\sqjs_cac.dll']`。
+- daemon 让路:持租约起 `serve` → `handled=0`,12 秒内 **17 条 `YIELD_TO_LEASE`**,状态
+  `note=YIELD_TO_LEASE`。
+- 租约:未消费的那张被 `assert-ready` **认领**(返回同一 id,§6 规则 3 指纹相符)、认领即消费;
+  换 `hwnd` 的同批读数被拒并打印两个指纹;`consume` 两次得到 `0` 然后 `2`。
+- `unblock` 拿一份**真实但无关**的探针文件:退出码 3,`nonce` 不匹配 —— 伪造不了。
+
+**一个只有实机才露出来的缺口**:SSH 落在 **session 0**,游戏在 **session 1**,
+`EnumWindows` 在 session 0 里只枚举到 1 个窗口 —— 从 SSH 直接跑探针永远 `NO_GAME`。
+`session_bridge.py` 是这条通道(`schtasks /run /I`),不补它 `ns_world` 在 agent 的实际
+工作方式下不可用。
+
 **OCR 引擎读数**(`evidence/logs/ocr_swap_4_4_4.tsv`,spec §14):surya → rapidocr PP-OCR mobile。
 三块面板、每块 14 带,同一批字节三种读法:
 

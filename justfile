@@ -34,7 +34,7 @@ check: build test fence host-tests chokepoints-check
 # is the CLI.  Leaving any of them out makes the CLI fail on the host with an
 # import error that reads like the tool is broken.
 deploy:
-    scp scripts/world_state.py scripts/windows/world_probe.py scripts/windows/ns_world.py scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py scripts/windows/keep_awake.py scripts/windows/popup_geometry.py scripts/windows/popup_identity.py scripts/windows/popup_guard.py scripts/windows/popup_ocr.py {{WIN_HOST}}:{{WIN_TEMP}}/
+    scp scripts/world_state.py scripts/windows/world_probe.py scripts/windows/ns_world.py scripts/windows/session_bridge.py scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py scripts/windows/keep_awake.py scripts/windows/popup_geometry.py scripts/windows/popup_identity.py scripts/windows/popup_guard.py scripts/windows/popup_ocr.py {{WIN_HOST}}:{{WIN_TEMP}}/
 
 # Launch Stellaris through Steam (launcher clicks included; stays paused).
 launch *args:

@@ -25,10 +25,13 @@ import session_bridge as bridge  # pyright: ignore[reportMissingImports]
 
 
 def test_shim_is_ascii_and_echoes_the_exit_code_after_the_command():
-    text = bridge.shim_text(r"C:\Python\python.exe", r"C:\temp\ns_world.py",
-                           "assert-ready --action install --guard shim",
-                           r"C:\temp\out.txt")
-    text.encode("ascii")                      # raises here, not on the box
+    text = bridge.shim_text(
+        r"C:\Python\python.exe",
+        r"C:\temp\ns_world.py",
+        "assert-ready --action install --guard shim",
+        r"C:\temp\out.txt",
+    )
+    text.encode("ascii")  # raises here, not on the box
     assert text.startswith("@echo off\r\n")
     assert '"C:\\Python\\python.exe" "C:\\temp\\ns_world.py" assert-ready' in text
     assert '> "C:\\temp\\out.txt" 2>&1' in text
@@ -39,18 +42,19 @@ def test_shim_is_ascii_and_echoes_the_exit_code_after_the_command():
 
 
 def test_shim_without_args_still_forms_a_runnable_command():
-    text = bridge.shim_text(r"C:\Python\pythonw.exe", r"C:\temp\ns_world.py", "",
-                            r"C:\temp\out.txt")
-    assert '"C:\\temp\\ns_world.py"\r\n' in text or \
-        '"C:\\temp\\ns_world.py" > ' in text
+    text = bridge.shim_text(
+        r"C:\Python\pythonw.exe", r"C:\temp\ns_world.py", "", r"C:\temp\out.txt"
+    )
+    assert '"C:\\temp\\ns_world.py"\r\n' in text or '"C:\\temp\\ns_world.py" > ' in text
     text.encode("ascii")
 
 
 def test_a_non_ascii_path_is_refused_here_not_on_the_box():
     """The failure has to happen where a human is watching the deploy."""
     try:
-        bridge.shim_text(r"C:\Pуthon\python.exe", r"C:\temp\x.py", "status",
-                         r"C:\temp\out.txt")
+        bridge.shim_text(
+            r"C:\Pуthon\python.exe", r"C:\temp\x.py", "status", r"C:\temp\out.txt"
+        )
     except UnicodeEncodeError:
         return
     raise AssertionError("a non-ASCII shim must be refused at write time")

@@ -854,3 +854,81 @@ def test_gate_symbol_rule_flags_an_import_the_module_cannot_answer(
 def test_every_driver_gate_import_resolves():
     """The real tree: every gate a driver imports is actually defined."""
     assert violates_missing_gate_symbols(SCRIPTS) == []
+
+
+# ---------------------------------------------------------------------------
+# R-deploy: a window-side script that is not deployed cannot run, and the
+# omission is invisible.
+#
+# This class of defect bit three times in one plan: the world-state trio
+# (world_state/world_probe/ns_world) was never deployed, and `session_bridge`
+# was missed in the same way a day later.  R-wire cannot catch either — it
+# checks that every `C:/temp/<name>.py` *written in* the justfile has a source,
+# and an omitted file writes nothing.  So this rule goes the other way: every
+# maintained `scripts/windows/*.py` must appear in the deploy recipe, unless it
+# is named here as deliberately host-absent.
+# ---------------------------------------------------------------------------
+
+#: Window-side modules that are deliberately NOT deployed to ``C:/temp``.
+#: Each entry needs a reason: "it is not on the box because <why>".
+NOT_DEPLOYED: dict[str, str] = {
+    "__init__.py": "package marker; the wire is bare-name scripts, not a package",
+}
+
+
+def violates_undeployed_windows_scripts(scripts_dir, justfile_path):
+    """R-deploy: every window-side module must travel with ``just deploy``.
+
+    Compares ``scripts/windows/*.py`` against the basenames the ``deploy``
+    recipe copies.  A script that is missing from the recipe is reported by
+    name — "which file did I forget" is the question the reader has, and the
+    answer must not require diffing two lists by eye.
+    """
+    windows = scripts_dir / "windows"
+    if not windows.is_dir():
+        return []
+    # A recipe is its head line PLUS the indented body: the scp lives on the
+    # body line, so reading only "deploy:" yields an empty set and every script
+    # looks undeployed (which is how this rule's own test caught it).
+    recipe_lines: list[str] = []
+    collecting = False
+    for line in _read(justfile_path).splitlines():
+        if line.startswith("deploy:"):
+            collecting = True
+            continue
+        if collecting:
+            if line[:1].isspace():
+                recipe_lines.append(line)
+            elif line.strip():
+                break
+    deployed = set(re.findall(r"[A-Za-z0-9_./-]+/([A-Za-z0-9_]+\.py)",
+                              "\n".join(recipe_lines)))
+    out = []
+    for path in sorted(windows.glob("*.py")):
+        if path.name in NOT_DEPLOYED:
+            continue
+        if path.name not in deployed:
+            out.append(f"{path.name}: shipped by no deploy recipe — it cannot "
+                       "run on the host (add it to `just deploy`, or name it in "
+                       "NOT_DEPLOYED with a reason)")
+    return out
+
+
+def test_deploy_rule_flags_a_window_script_nothing_ships(tmp_path):
+    """The fence bites on exactly the omission that bit three times."""
+    windows = tmp_path / "scripts" / "windows"
+    windows.mkdir(parents=True)
+    (windows / "__init__.py").write_text("", encoding="utf-8")
+    (windows / "shipped.py").write_text("", encoding="utf-8")
+    (windows / "forgotten.py").write_text("", encoding="utf-8")
+    jf = tmp_path / "justfile"
+    jf.write_text("deploy:\n"
+                  "    scp scripts/windows/shipped.py host:C:/temp/\n",
+                  encoding="utf-8")
+    hits = violates_undeployed_windows_scripts(tmp_path / "scripts", jf)
+    assert len(hits) == 1 and hits[0].startswith("forgotten.py:"), hits
+
+
+def test_every_window_script_is_deployed():
+    """The real tree: nothing on the window side is left behind."""
+    assert violates_undeployed_windows_scripts(SCRIPTS, REPO / "justfile") == []
