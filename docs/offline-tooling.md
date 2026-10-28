@@ -1455,6 +1455,56 @@ trigger 的 `[vptr+0x28]` 的共用实现,收 `(self, ctx, a3)`;`.rdata` 里 **3
 判读纯函数由 `python3 -m pytest scripts/test_c2_trigger_eval_probe.py -q` 覆盖(**18 条**),无游戏、
 无 Windows API、零 shot。
 
+**下一发照单执行(机器回来时;本节就是那一发的清单)**
+
+*两段脚本*(`C:/temp/ts_scripts.txt`,一行一条;**上次这两行的确切文本没有入库**,下面是按 §76 的读数与
+本地游戏数据的 DSL 形状反推的 —— 引擎里 `common/scripted_effects/cosmic_storms_scripted_effects.txt:1231`
+就是 `limit = { is_rim_system = yes }` 这个写法):
+
+```
+effect every_system = { limit = { neo_effect = yes } log = "TS_NEO_[This.GetName]" }
+effect every_system = { limit = { is_rim_system = yes } log = "TS_RIM_[This.GetName]" }
+```
+
+第 1 行用 C1 当场铸出的 `neo_effect`(token 68636);**它可能被引擎判非法** —— 它的 class_info 借的是
+country 侧的 donor(§24.6),放进 system scope 是否合法**至今未验证**(§76.4 ③:那次它连命令都没被送出去)。
+第 2 行用官方 system-scoped 的 `is_rim_system`(token 18203)—— **带读数的是第 2 行**,第 1 行只是探针自身的
+一个对照。marker 的字面量前缀(`TS_NEO_` / `TS_RIM_`)是驱动的 `script_marker` 认的东西,改脚本就要同步改前缀。
+
+*上线清单*(§70.6 的两道门):
+
+```bash
+# 1) DLL:新名字(已装载的文件覆盖不了 —— §76.7 的实测),再对 sha
+scp zig-out/bin/stellaris_quickjs.dll Windows_Jiaolong:C:/temp/sqjs_c6.dll
+just win "Get-FileHash C:/temp/sqjs_c6.dll -Algorithm SHA256"     # 对上 ec3716a2…(重建后会变,以本地为准)
+# 2) 驱动:主机那份必须与 git HEAD 逐字一致
+scp scripts/c2_trigger_eval_probe.py Windows_Jiaolong:C:/temp/
+```
+
+*命令序列*:
+
+```bash
+just game cmd status                     # 清掉上一次的 quit,否则新 daemon 起来就退出
+just launch                              # 或 just game start
+just game unpause
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py status"   # → IN_GAME_RUNNING
+just win "python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_trigger_eval_probe.py \
+  C:/temp/sqjs_c6.dll --systems <当前存档的星系数> --script-file C:/temp/ts_scripts.txt \
+  --poll-s 120 --out C:/temp/c4_trig_eval.tsv"
+scp Windows_Jiaolong:C:/temp/c4_trig_eval.tsv evidence/logs/c5_trig_eval_4_4_4.tsv
+```
+
+`--systems` **必须从当前存档重建**(`scripts/save_hypergraph.py` → 边表),**不许沿用 787** —— 787 是
+2026-10-28 那场战役的,分母错了会得到「结论对、理由错」的读数(§76 陷阱 3)。
+
+*读数怎么读*(三条陷阱在上一段):`distinct_ctx` ≈ 星系数 ⇒ `ctx_per_system`;== 1 ⇒ `ctx_single`;
+别的正数 ⇒ `ctx_not_per_system`。`sub_vtable_rva` 落在镜像外时是 0(「认不出来」,不是「没有」);
+`dedupe_full != 0` 时 `distinct_ctx` 只是下界,那一档不作结论。
+
+*三条通道缺陷已经在里面了*(§76.4 记的、当时还没修的):`game.log` 缓冲 ⇒ `SCRIPT_WAIT_S = 180`
+(不是 30);verdict 把 poll 窗算进去(`overall_verdict`);未送达的命令不会被下一条覆盖(`delivered` 假
+就停)。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
