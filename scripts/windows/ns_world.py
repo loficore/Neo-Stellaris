@@ -221,6 +221,34 @@ def append_jsonl(record: dict, path: str | None = None) -> None:
                            f"({exc})") from exc
 
 
+def _remember_state(store, state: str, evidence: dict | None) -> None:
+    """Record the state a reading produced, and log a real transition.
+
+    Two things were missing until a live run showed them: ``store["state"]``
+    was never written (so every bookkeeping command fell back to ``NO_GAME``
+    even with the game running), and the transition log (spec §1 D4) only ever
+    received unblock/quit/abort.  A state machine whose state field is dead and
+    whose history is empty is a machine nobody can audit afterwards.
+
+    Only a **change** is logged: a line per tick would make the history
+    unreadable and would bury the transitions, which are the thing D4 asks for.
+    """
+    previous = store.data.get("state")
+    evidence = evidence or {}
+    raw = evidence.get("raw") or {}
+    try:
+        with store.locked():
+            # Re-read the previous value inside the lock: another process may
+            # have moved the state since this reading was taken.
+            previous = store.data.get("state")
+            store.data["state"] = state
+            store.save()
+    except (TimeoutError, OSError, ValueError):
+        return
+    if previous != state:
+        _record("state", evidence, state=state, previous=previous, raw=raw)
+
+
 def _store(args):
     """The state store, from the path the caller gave (or the default)."""
     ws = _state_module()
@@ -290,6 +318,7 @@ def cmd_probe(args) -> int:
             raise RuntimeError(f"{args.out}: cannot write the evidence file "
                                f"({exc})") from exc
     state, evidence = ws.infer_state(reading)
+    _remember_state(_store(args), state, evidence)
     _emit(state, evidence, ws.legal_actions(state))
     return exit_code_for("ok")
 
@@ -334,6 +363,7 @@ def cmd_status(args) -> int:
                            for action in ws.ACTIONS)
     probe["restore_incomplete"] = ws.expired_while_armed(store, now) is not None
     state, evidence = ws.infer_state(probe)
+    _remember_state(store, state, evidence)
     _emit(state, evidence, ws.legal_actions(state))
     return exit_code_for("ok")
 
@@ -367,7 +397,12 @@ def cmd_assert_ready(args) -> int:
         pid = reading.get("pid")
         blocked = ws.block_state(store, args.action, now, pid=pid)
         kind = "blocked" if blocked is not None else "refused"
-        _emit("BLOCKED_WITH_EVIDENCE" if kind == "blocked" else "NO_GAME",
+        # Report the state the reading actually supports.  This used to say
+        # ``NO_GAME`` for every non-blocked refusal, which is a lie the moment
+        # the game is merely paused — a live run caught it printing NO_GAME
+        # while the reason said IN_GAME_PAUSED_CLEAN.
+        refused_state, _ = ws.infer_state(reading)
+        _emit("BLOCKED_WITH_EVIDENCE" if kind == "blocked" else refused_state,
               {"raw": reading.get("raw") or {}, "reason": reason}, ())
         return exit_code_for(kind)
     _emit("GUARD_ARMED" if args.guard else "IN_GAME_RUNNING",
