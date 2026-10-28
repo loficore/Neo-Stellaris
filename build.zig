@@ -279,6 +279,18 @@ pub fn build(b: *std.Build) void {
         .root_module = ui_button_mod,
     });
 
+    // C5 data plane, second probe: the evaluation-slot guard's pure core
+    // (src/dll/c2/trigger_eval_probe.zig). It lives in src/dll/c2 and imports ../shared/*,
+    // so its test root is src/dll/c2_tests.zig (same reason as scripted_tests.zig) — a
+    // module rooted at src/dll/c2 would reject those imports as escaping the module path.
+    const c2_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dll/c2_tests.zig"),
+            .target = native,
+            .optimize = optimize,
+        }),
+    });
+
     // Note: bridge.zig tests require QuickJS C linkage and cannot run standalone.
     // They are tested as part of the full DLL build.
 
@@ -293,6 +305,9 @@ pub fn build(b: *std.Build) void {
     });
     const run_scripted_tests = b.addRunArtifact(scripted_tests);
     run_scripted_tests.skip_foreign_checks = true;
+
+    const run_c2_tests = b.addRunArtifact(c2_tests);
+    run_c2_tests.skip_foreign_checks = true;
 
     const run_tests = b.addRunArtifact(tests);
     run_tests.skip_foreign_checks = true;
@@ -353,4 +368,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_gui_tests.step);
     test_step.dependOn(&run_ui_button_tests.step);
     test_step.dependOn(&run_scripted_tests.step);
+    test_step.dependOn(&run_c2_tests.step);
 }
