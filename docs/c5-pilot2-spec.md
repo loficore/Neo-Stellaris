@@ -267,16 +267,24 @@ docstring 策略),同样被裁定③的 trigger 口径牵动。
    而 `calls==0`」,其前半句是独立证据,运行中的战役永远供不上。用法与门序:
    `docs/offline-tooling.md` C4 donor 一节;离线围栏 `scripts/test_c2_donor_probe.py`(14 条)。
    C5 从它拿的是 §2「执行落点」那行 `静态推断(未验证)` 的第一手读数。
-2. **scope 一问仍未收口(roadmap 段4「真正的 `CEventScope`」条)。** §59 `no_scope_candidate` 原样保持;
-   §63 判队列派发方 = `dispatchers_partial`(限于 `call [reg+0x28]` 直接形态口径),§66 判两段形态 =
-   `two_stage_dispatchers_partial`(**105 对**,86 承载函数;计划草稿的 132 构造不出,§66.4 记了漂移),
-   两个判决词不同义、不合并,且两节都没回答「谁是 scope」。§2 里三条 `未观测` 都挂在这条线上。
-3. **一次 galaxy map 文件的拷贝(文件拷贝,不是 shot)。** 本地解包数据只有 `common/` + `events/` 共
-   **2,186** 个文件(本会话 `find | wc -l` 实测);`tar -tzf /var/lofibass_ssd/data/stellaris/4.4.4/gamedata.tar.gz
-   | grep -iE "galaxy|generated_shape"` 本会话实测无命中 —— 星连边那张静态图不在本地。等价边表的另一条
-   来源是存档侧(`scripts/save_hypergraph.py`,读玩家 `.sav`;判读陷阱与传输口径见 `docs/offline-tooling.md`
-   「离线存档分析」),但存档 id 是**存档局部**的,运行时 join 需要另行解决。
-4. **本 spec §3 的 5 项裁定。** 裁完才允许写实现计划 —— 「可裁定」就是本文件的交付定义。
+2. **scope 一问仍未收口,但下一靶已定形(2026-10-28)。** §59 `no_scope_candidate` 原样保持;
+   §63 `dispatchers_partial` 与 §66 `two_stage_dispatchers_partial` 两个判决词不同义、不合并。
+   **新增(§76,点名 ×1)**:trigger 的谓词槽 `+0x80`(`0x349230`)在 `every_system` 的 787 次 limit 求值里
+   只被调 **11** 次、第 2 实参恒为 `0x80` ⇒ 它是**实例化期**的掩码检查,不是每次求值,也不交对象。
+   下一靶 = 求值槽 `+0x28` 的共用基体 **`0x1A91A80`**(352 张表共用,收 `(self, ctx, a3)`,算 `ctx+0x278`);
+   §2 里那三条 `未观测` 都挂在这条线上,而这一发的读数把它们**从「谓词」挪到了「求值槽」**。
+3. **galaxy map 拷贝 —— 已落地(2026-10-28,文件拷贝,不是 shot)。** 走存档侧
+   (`scripts/save_hypergraph.py` → `scripts/chokepoint_scores.py`):当前战役
+   `_1474567734/autosave_2231.07.01.sav`(sha `32413c3e…`)重建出的边表
+   **N = 787 系统 / 1,217 条无向边 / 连通**;分数表与烘焙进 `chokepoint_table.zig` 的那一份**逐字节相同**
+   (除 CRLF)⇒ 这张图在本战役里稳定。产物:`evidence/xrefs/c5_campaign_edges_4_4_4.tsv` +
+   `evidence/logs/c5_save_graph_4_4_4.log`。**仍未解决**:存档 id 是**存档局部**的,运行时 join 未观测。
+4. **本 spec §3 的 5 项裁定 —— 已下(2026-10-28)。** 结论见 §3.1(两列度量 / 全银河 / 新 trigger /
+   手动 + 按图版本缓存 / 日志验收)。
 5. **新 keyword 命名门禁。** 任何候选词名在进 `0x1D13270` 之前先过 `scripts/c1_preflight.py` 且退出码 0
    (约束 4:token 查找大小写不敏感,撞名即接管官方词)。
-6. 指针:roadmap 段3 C4 行(blocked,那一面 = 跨 scope 聚合的执行侧)、段4 C5 条与 scope 条。
+6. 指针:roadmap 段3 C4 行、段4 C5 条与 scope 条;本计划(Task 1–7)的 hand-off 表在
+   `.superpowers/sdd/2026-10-28-c5-data-plane-scope-and-graph/progress.md`(私有目录,不进 git)。
+
+**§5 的当前账(2026-10-28 收口):四道门里 1(donor 读数)、3(galaxy map)、4(裁定)已落或已引用,
+只剩 2(星系句柄来源)未收口 —— 而它现在有具体靶位(`0x1A91A80`),不再是「无路可走」。**
