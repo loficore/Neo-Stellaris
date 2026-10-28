@@ -778,13 +778,18 @@ root_unreadable / **region** 七类行)。
 **深跟读口径(`plan_depth2` / `follow_depth2` / `find_shared_cells` / `classify_depth2`)**:
 depth-1 每行的 `candidates[*]["ptr"]` 当作**再下一层的根**,再走一遍同一个 `follow_object`(深跟读里不新写任何
 一次 `read_memory`,失败读照旧是 `unreadable` 而不是 0 —— 陷阱 5),行标签是 `"<基源>.d2"`,两层永不相认。
-**预算仍按源给**(`DEPTH2_PER_SOURCE = 8`,把 `.d2` 折回基源计源,四源各 8),而且**depth-1 已经读过的地址不算
+**预算仍按源给**(`DEPTH2_PER_SOURCE = 27`,把 `.d2` 折回基源计源,四源各 27;27 = §68.4 那次判读的
+`followed=8` + `capped=19`,抬预算就是为了把自我支那 19 个没问过的地址问完),而且**depth-1 已经读过的地址不算
 线索**:每个根的 `self_ptr` 与 `ctx_words[1]` 本来就在 `objects` 的 `root` 字段里,计划阶段直接跳过(`already`),
 同一个地址也只计划一次。**预算的三种花费分开记账** —— `planned_by_source` / `followed_by_source` /
 `capped_by_source`,进 `#meta` 的 `d2_planned_by_source` / `d2_followed_by_source` /
 `d2_capped_by_source` 与 `depth2_per_source`;第四个计数 `deduped_by_source` **只在 stdout 的逐源行里,
-`d2_meta_rows` 不把它写进 `#meta`**(六键是固定的),所以引用去重数必须标出处是 stdout,不能声称可从
-TSV 读回。缺前面那几个键,产物里一条短的深度 2
+`d2_meta_rows` 不把它写进 `#meta`**(七键是固定的),所以引用去重数必须标出处是 stdout,不能声称可从
+TSV 读回。第七个键是 `d2_implausible`:深跟读的候选先按 `plausible_user_ptr` + 镜像界分三档
+(`partition_cells`,§68.4 前置 ①),`implausible` 那一档**根本不进跨源连线**,只作为计数落进 `#meta` ——
+少了它,`followed` 变小就分不清「问过但没东西」与「那些候选压根不是用户指针」。
+注意 `0x100000000` 这种标量**过得了** `plausible_user_ptr`(门槛上界 `0x7FFF_FFFF_0000`),它落的是
+「界外」那一档,不是 `implausible`。缺前面那几个键,产物里一条短的深度 2
 列表就退化成「那些槽没东西」的误读,这正是 §56.4 那次把预算耗尽读成负结论的同一形状。
 区域仪器(`region` 行)现在吃**两层的根**(`collect_region_addrs`),`source=` 保留各层自己的标签。
 **跨源共享(`find_shared_cells`)**按**候选值**分组,只保留出现在 **≥2 个不同基源**的值,行是
@@ -1396,6 +1401,38 @@ just game stop | quit
     ⇒ 「这张证据图能不能读」不是传输方式的函数,是**那个 id 会不会再出现**的函数;取 `text:*` 可以 scp,
     取 `geom:*` 要预期半写,判定得靠可解码的那一份。别把半写读成「daemon 写坏了图」。
 
+### `scripts/execspy.py [observe_seconds] [--uninstall-only]` —— §13 shim census 的复采通道
+
+**用法**:Windows 侧跑 `python C:\temp\execspy.py 60`(默认 45 s)。它把 DLL 装进正在跑的游戏、等
+`base Execute` 真的安静下来再 install、观测指定秒数后打印 `stats` / shim histogram / 抽样记录,最后 uninstall 并
+`verify`。`--uninstall-only` 跳过 install/观测,只拆一把已经装上的 detour(游戏先暂停,再跑一次)。
+
+**它读谁的字节**:histogram 是**我们 DLL 的 `exec_hook` 记的**,不是 Frida 记的 —— `execspy.js` 的 `hist`
+RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.js:2`);Frida 自己的
+`Interceptor` 在这条通道里只有一个用途:install 之前当**独立的静默探针**(`spy()`,那时 DLL 的计数器还不存在)。
+所以 §13 那 3,900 行计数与后来任何一次复采,判读者都是**同一份 DLL 侧记录器**,这一点决定了「换了 DLL 字节还能不能
+并排读」的答案:能并排**讨论**,不能并排**比对**(见陷阱 4 与窗口计划的 Review Focus 5)。
+
+**DLL 路径**:`NS_LIVE_DLL` 覆盖,缺省仍是 `C:\ns\stellaris_quickjs.dll` —— 这一族与证人/donor 那族的
+`C:\temp\sqjs_c4.dll` 是两份字节,两次读数之间的差可能来自靶子也可能来自字节本身。
+
+**判读陷阱(本地编号 1–4)**:
+
+1. **`hist_overflow > 0` ⇒ 计数不完整**,这次的任何「N distinct shims」都是**截断假象**(§13 第一轮
+   315,302 次调用就是溢出那一轮,structures :374-382)。出现它就把读数当环境样本记,不写 per-system 结论。
+2. **装与拆都要热路径静默窗口**:install 与 uninstall 各改写同一段 16 字节 `base Execute` 而游戏线程正在执行它。
+   驱动的等待是 `game is RUNNING → polling for silence`(靠 DLL 自己的 `calls` 计数器判静默);等待失败时它**停在
+   已装状态**并退出,不要在这时强行拆或 FreeLibrary。
+3. **「N 次」不是「per-system」**:§13 的 2,090 是那次场景的读数,原话要求先用**换场景/换银河大小**做相关性
+   (`correlate … before claiming it`)。复采同场景只算重复确认,不算判据达成。
+4. **模块名跟着注入走**:`DLL_NAME` 在 `execspy.js` 里是 RPC 解析导出的依据,驱动把 `NS_LIVE_DLL` 的
+   basename 以 `NS_DLL_NAME` 注入(`execspy.py`);只改 `NS_LIVE_DLL` 而不改它 ⇒ 装进去的是 A、找的是 B,报
+   `stellaris_quickjs.dll is not loaded`。
+
+**顺序:本工具压最后**(窗口计划 Task 10)。它是唯一武装 `base Execute` detour 的一发,之后任何 `[self+0]`
+join 读数都会来自一个热路径归我们所有的进程 —— 那一刻起证人/donor/scope 的 `[self+0]` 都不再干净。
+`hist_overflow == 0` 是这一发的硬门。
+
 ### `scripts/windows/popup_*.py` —— 弹窗身份三件套
 
 名单是**数据,不是代码**:放行哪些弹窗改 `C:/temp/ns_popup_allowlist.json`,监督器不热加载,改完
@@ -1562,6 +1599,138 @@ handoff_never_fired|inconclusive`。**退出码不因它改变**,读回失败(`G
 仪器没测到不等于测到了反面。判读陷阱:`handoff_never_fired` 只说「三轮都拿到焦点、光标都落在那一点、
 launcher 仍没推进」,**不**说「Continue 按钮在别处」;这一档要成为结论得等实机那一次(离线无从知道
 CEF 把按钮画在哪)。
+
+### `scripts/windows/ns_world.py` —— 世界状态机的唯一入口
+
+窗口纪律过去写在散文里(判读陷阱、「装之前先确认」),而绕过它不报错:2026-10-27 一个窗口内绕过三次
+(`STATUS=paused note=paused_no_window` 被当事实、`policy=first` 去点一个不是选项窗的东西、
+`just game stop` 的语义是**退出游戏**却被当成「停 daemon」用掉一个进程)。这个工具把「证明」变成
+数据、把「消费」变成代码门。
+
+纯状态机在 `scripts/world_state.py`(跨平台、零 win32、离线可单测);Windows 侧另有两半:
+`world_probe.py` 取一次读数(复用 `game_supervisor` 的分类器,**阈值一个不改**),`ns_world.py` 是 CLI。
+**agent 只读一行**:
+
+```
+STATE=<state> EVIDENCE=<k=v,...> NEXT=<a|b|c>
+```
+
+退出码 `0` 合法 / `2` 拒绝(前提不成立)/ `3` 阻塞(预算或证据挡着)/ `4` 锁僵死。
+`NEXT=` 直接来自转移表,留空就是「之后没有可做的事」,不是一个像状态的词。
+
+```
+just win "python C:/temp/ns_world.py status"                       # 报状态与合法下一步
+just win "python C:/temp/ns_world.py probe --out C:/temp/ev.json"  # 一次读数,可写成解封证据
+just win "python C:/temp/ns_world.py assert-ready --action install --guard shim"
+just win "python C:/temp/ns_world.py unblock --evidence C:/temp/ns_block_<nonce>.json --reason '…'"
+just win "python C:/temp/ns_world.py quit"     # 退游戏(转调 game_supervisor)
+just win "python C:/temp/ns_world.py abort --action click_option"  # 只记录「不再试」,**不动预算**
+just win "python C:/temp/ns_world.py pull"     # 把 C:/temp/ns_world.jsonl 拉回 evidence/logs/
+```
+
+状态与转移史都在 Windows 侧写(`C:\temp\ns_world.json` + `ns_world.jsonl`),Linux 侧只 `pull`:
+单写者,且 jsonl 与状态同源。
+
+**三个判读陷阱**
+
+1. **`YIELD_TO_LEASE` 是让路,不是故障。** daemon 每 tick 先问「有没有未过期租约」,有就整 tick 不动。
+   状态文件里 `state=yield_to_lease` 与日志里同名事件同时出现才叫让路;只有其中一个,说明有人在改
+   其中一侧的写法,而不是「daemon 卡了」。
+2. **一张过期的租约**不**让路,也不解封任何东西**:`expired_while_armed` 会把它读成
+   `RESTORE_INCOMPLETE`(spec §5 宁可误判不可漏判),所以装过 guard 之后**必须** `unarm`,否则
+   30 秒后每个动作都被这条"常驻指控"挡住。看到 `RESTORE_INCOMPLETE` 先查 `armed[]`,不要先怀疑探针。
+3. **`abort` 不是解封。** 它只写一行记录。唯一的解封入口是 `unblock --evidence`,而那份证据必须由
+   `probe --out` 产生:带完整读数(六个原始计数)**且**带那次阻塞的 nonce、且 mtime 晚于阻塞时刻。
+   手写或 `touch` 出来的文件必然缺 nonce —— 这是设计要的,不是麻烦。
+
+**黄金集读数**:`evidence/logs/world_state_labels_4_4_4.jsonl` 本版**未采集**(采集器
+`scripts/scratch/2026-10_world_state_labels/collect_labels.py` 已就绪:它拒绝无 `crop_sha256`、拒绝
+vocabulary 之外的判词、拒绝未知的原始计数)。为什么没采:那 20 帧要运行中的窗口,且判词按定义是
+**人**看一眼给的(spec §13.2);本次会话没有可用窗口,也不具备看图的条件 —— 硬写 20 行会得到一个
+「看起来像证据」的集合,而那个集合正是 §13 要防的东西。spec §13.3 本身也写明黄金集是**读数不是门**,
+不通过不阻塞 v1。
+
+**实机读数(2026-10-28,游戏 pid 11268 —— 这条链唯一一次真跑)**
+
+- 静止:`IN_GAME_PAUSED_CLEAN`(`pause=paused red_px=132..273`、`console=closed bright_px=0`、
+  `window=none`),`NEXT=unpause`。按一次 Space → `playing red=0 green_px=195..201`,
+  `NEXT=install`。失焦自动暂停后又回到 `PAUSED_CLEAN` —— 状态机跟得上。
+- 门**拒绝**(暂停中):`REFUSED: state is IN_GAME_PAUSED_CLEAN, not IN_GAME_RUNNING … |
+  reading: pause=paused console=closed window=none hwnd=2295620`,退出码 2,
+  且 `module loaded AFTER: []` —— **DLL 没有被注入**(用进程模块表验的,不是用驱动自己打印的话)。
+- 门**放行**(运行中):退出码 0,`DLL base 0x7ffb58030000`,`C2Sanity -> 42`,
+  `module loaded AFTER: ['C:\temp\sqjs_cac.dll']`。
+- daemon 让路:持租约起 `serve` → `handled=0`,12 秒内 **17 条 `YIELD_TO_LEASE`**,状态
+  `note=YIELD_TO_LEASE`。
+- 租约:未消费的那张被 `assert-ready` **认领**(返回同一 id,§6 规则 3 指纹相符)、认领即消费;
+  换 `hwnd` 的同批读数被拒并打印两个指纹;`consume` 两次得到 `0` 然后 `2`。
+- `unblock` 拿一份**真实但无关**的探针文件:退出码 3,`nonce` 不匹配 —— 伪造不了。
+
+**一个只有实机才露出来的缺口**:SSH 落在 **session 0**,游戏在 **session 1**,
+`EnumWindows` 在 session 0 里只枚举到 1 个窗口 —— 从 SSH 直接跑探针永远 `NO_GAME`。
+`session_bridge.py` 是这条通道(`schtasks /run /I`),不补它 `ns_world` 在 agent 的实际
+工作方式下不可用。
+
+**OCR 引擎读数**(`evidence/logs/ocr_swap_4_4_4.tsv`,spec §14):surya → rapidocr PP-OCR mobile。
+三块面板、每块 14 带,同一批字节三种读法:
+
+| engine | 单次 ms | 说明 |
+|---|---|---|
+| `-rec`(只跑识别,单带) | 79–125 | spec §14.3 那条 50 ms 目标**未达标** |
+| `-full`(带检测,整面板) | 585–960 | daemon 今天实际走的路 |
+| `surya-panel`(换型前) | 26 488–35 314 | 同样三块面板,13 行 |
+
+所以面板路径是 **~40×**:30 s → 0.7 s。rec-only 对整面板返回 0 行 —— 识别模型吃单行图像,
+而 popup 流程裁的是整块面板;要让 50 ms 那条真正落地,得让流程按行裁片(spec §14.3 的前提
+本来就是「UI 槽位坐标已知 ⇒ 先裁片」)。
+
+**这一节有一处自我更正**:本文件与提交信息的第一版把 surya 记成「量不到」,理由是
+`RecognitionPredictor` 不接受 `device=`。那是**仪器**的错 —— `device=` 属于
+`FoundationPredictor`,换型前的代码正是那么调的。按换型前的调用形状重跑之后旧引擎跑得通,
+上表第三行就是重跑结果。**先把仪器修对,再说引擎测不了。**
+
+新旧引擎的文本比对(归一化后):**逐行同位置一致率 7%**,但词袋重合 82–86%。差的主要是
+**断行方式**(新引擎把 `cns<br>科研` 拆成两行)与旧引擎的碎片(`x` / `librar` / `n`),
+不是读错。这对 `popup_allowlist.json` 是真风险:名单里的 `text_signature` 是用旧引擎的
+文本签的,换型后签名会变 ⇒ **旧名单条目大概率失效**,重新签一遍之前 `decide_action` 会
+一路 `unclassified_hold`(安全侧,但会挡事)。这里不给「一致率达标」的结论,因为它没达标;
+给的是「为什么没达标」和「谁会受影响」。
+
+围栏:`scripts/test_world_state.py` 38 条、`scripts/test_world_probe_pure.py` 3 条、
+`scripts/test_popup_ocr_small.py` 3 条、`scripts/test_scripts_layout.py` 38 条(四条新规则:
+R-inject / R-verbs / R-gate-symbol / R-deploy)。
+
+### `scripts/windows/session_bridge.py` —— SSH(session 0)到交互桌面(session 1)的通道
+
+**这条不补,`ns_world.py` 在 agent 的实际工作方式下不可用。** Windows 上 SSH 登录落在
+**session 0**(服务会话,没有交互桌面),那里 `EnumWindows` 几乎什么都看不见:实机测过一次,
+session 0 里只枚举到 **1 个**顶层窗口,而 `stellaris.exe` / `explorer.exe` / `steam.exe`
+全在 session 1。所以从 SSH 直接跑探针会永远得到 `NO_GAME` —— 状态机的工作就是读真窗口,
+读不到就没有前提。
+
+`launch_stellaris.py` 与 `game_supervisor.py start` 早就用同一个办法绕开它:注册一个
+**计划任务**并以交互方式运行(`/run /I`),这样的任务继承已登录用户的会话,能看见也能碰
+游戏窗口。这个工具把同一机制泛化成「跑一条命令」:
+
+```
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py status"
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py assert-ready --action install --guard shim"
+```
+
+它写一个 **ASCII** 的 `.cmd`(cp936 的 `cmd.exe` 按控制台代码页解析 `.cmd`,非 ASCII 路径
+会让任务在运行时静默死掉,所以在这里就抛),把命令输出重定向到文件、把 `EXIT=` 哨兵追加在
+最后,`/run /I` 点火,等哨兵、删任务、打印输出与退出码。哨兵在输出之后,所以读的时候按
+**最后一个** `EXIT=` 切分,不会被命令自己打印的内容骗到;拿不到哨兵返回 4(**不知道**
+发生了什么,不是成功)。
+
+**它有意不做成 `just` 食谱。** `just ns` 会是 `game` 之外的第二条改世界通道,而
+`scripts/test_scripts_layout.py` 的 R-verbs 围栏只治理 `game` 那一条。要开这条通道,应该
+先把它的动词登记进 `world_state.VERB_ACTIONS`,而不是顺手加个 recipe。
+
+**判读陷阱**:任务跑在**已登录用户的会话**里,所以(1) 没人登录桌面时它跑不出东西 —— 拿不到
+哨兵就报 4,不要当成"拒绝了";(2) 它和 launcher / supervisor 用的是不同任务名
+(`NSWorldOneShot`),互不干扰,但**同时**点火两个交互任务时 Windows 只让一个拿前台焦点,
+另一个的点击会打偏。
 
 ## 我们自己产物的反汇编(`scripts/pe_disrva.py`)
 

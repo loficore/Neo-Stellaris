@@ -4,10 +4,12 @@ Fixtures mirror the DLL contract: Entry is 120 bytes with the layout pinned by
 src/dll/c2/scope_probe.zig, and the layout words are [120, 56, 256, 511, 2].
 """
 
+import inspect
 import struct
 
 import pytest
 
+import c2_scope_probe as scope
 from c2_scope_probe import (
     D2_VERDICTS, DEPTH2_PER_SOURCE, EVIDENCE_D2_VERDICTS,
     _entry_roots, _region_verdicts, caller_site_estimate, classify,
@@ -883,19 +885,22 @@ def test_verdict_d2_domain_has_no_negative_tier():
     }
 
 
-def test_d2_meta_rows_carries_six_keys():
-    """Six keys, exactly: the budget rungs, the cap, the verdict, the edges."""
+def test_d2_meta_rows_carries_seven_keys():
+    """Seven keys, exactly: the budget rungs, the cap, the verdict, the edges, and
+    the bucket that was never a lead (``d2_implausible`` — §68.4 前置 ①)."""
     stats = {
         "planned_by_source": {"self": 1, "helper": 0, "arg3": 0, "arg4": 0},
         "followed_by_source": {"self": 1, "helper": 0, "arg3": 0, "arg4": 0},
         "capped_by_source": {"self": 3, "helper": 0, "arg3": 0, "arg4": 0},
         "deduped_by_source": {"self": 0, "helper": 0, "arg3": 0, "arg4": 0},
     }
-    rows = d2_meta_rows(stats, "no_depth2_lead", [])
+    rows = d2_meta_rows(stats, "no_depth2_lead", [], d2_implausible=4)
     assert set(rows) == {
-        "depth2_per_source", "d2_planned_by_source", "d2_followed_by_source",
-        "d2_capped_by_source", "verdict_d2", "shared_cells",
+        "depth2_per_source", "d2_implausible", "d2_planned_by_source",
+        "d2_followed_by_source", "d2_capped_by_source", "verdict_d2",
+        "shared_cells",
     }
+    assert rows["d2_implausible"] == 4
     assert rows["depth2_per_source"] == DEPTH2_PER_SOURCE
     assert rows["verdict_d2"] == "no_depth2_lead"
 
@@ -925,3 +930,65 @@ def test_collect_region_addrs_carries_both_layers():
     assert collect_region_addrs(objects, d2_objects) == [
         (0x7fe_b00, "self"), (0x7fe_bd0, "self.d2"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Task 5 (plan 2026-10-27-live-window-out-of-family-witness, §68.4 前置 ①②):
+# depth-2 cells get bucketed before they are joined, and the per-source budget
+# covers the 19 cells §68 capped on the `self` branch.
+# ---------------------------------------------------------------------------
+
+def test_partition_buckets_by_plausibility_and_image_bounds():
+    """Three cells, three buckets: in-image user ptr / out-of-image user ptr / scalar.
+
+    §68.4's two prerequisites in one function: ``plausible_user_ptr`` is the DLL's
+    own gate (so a cell the guard could never read is not a "lead"), and the
+    image bounds are the exe's, so a plausible pointer outside the module is told
+    apart from a plausible in-module one.  A scalar like ``0x100000000`` is
+    neither ⇒ ``implausible``, and it must never reach the lineage join.
+    """
+    exe_base, image_end = 0x7FF600000000, 0x7FF600000000 + 0x3927000
+    cells = [
+        {"source": "self.d2", "root": 0x7FE000,
+         "candidates": [{"offset": 0x10, "ptr": exe_base + 0x247A488,
+                         "ptr_rva": 0x247A488}]},
+        {"source": "helper.d2", "root": 0x7FE960,
+         "candidates": [{"offset": 0x28, "ptr": 0x2DDC2C90,
+                         "ptr_rva": None}]},
+        {"source": "self.d2", "root": 0x7FEB00,
+         "candidates": [{"offset": 0x30, "ptr": 0x1000, "ptr_rva": None}]},
+    ]
+    buckets = scope.partition_cells(cells, exe_base, image_end)
+    assert [c["root"] for c in buckets["user_ptr_in_image"]] == [0x7FE000]
+    assert [c["root"] for c in buckets["user_ptr_out_of_image"]] == [0x7FE960]
+    assert [c["root"] for c in buckets["implausible"]] == [0x7FEB00]
+    assert sum(len(v) for v in buckets.values()) == 3
+    # Without bounds the only available test is the cell's own ptr_rva.
+    fallback = scope.partition_cells(cells)
+    assert [c["root"] for c in fallback["user_ptr_in_image"]] == [0x7FE000]
+    # §68's scalar edge is `0x100000000` — and it PASSES plausible_user_ptr (the
+    # gate's ceiling is 0x7FFF_FFFF_0000), so it is a plausible pointer outside the
+    # image, NOT an implausible cell.  Recorded here so the §73 shot does not read
+    # that edge as bucket three.
+    scalar = [{"source": "helper.d2", "root": 0x7FE960,
+               "candidates": [{"offset": 0x10, "ptr": 0x1_0000_0000,
+                               "ptr_rva": None}]}]
+    got = scope.partition_cells(scalar, exe_base, image_end)
+    assert got["implausible"] == []
+    assert [c["root"] for c in got["user_ptr_out_of_image"]] == [0x7FE960]
+
+
+def test_depth2_budget_covers_the_19_uncapped_cells():
+    """27 = §68.4's ``followed=8`` + ``capped=19`` on the self branch.
+
+    The budget is what makes "that branch was not finished being asked" go away;
+    if this number drops back to 8, §73's shot re-asks the same 19 cells and gets
+    the same cap.  The comment next to the constant must carry the arithmetic and
+    its source (§68.4), because the number alone reads like a tuning knob.
+    """
+    assert scope.DEPTH2_PER_SOURCE == 27
+    src = inspect.getsource(scope)
+    at = src.index("DEPTH2_PER_SOURCE = 27")
+    window = src[max(0, at - 700):at + 120]
+    assert "68.4" in window, "预算 27 旁边必须写出处 §68.4"
+    assert "19" in window and "8" in window, "预算 27 旁边必须写 8+19 的算术"

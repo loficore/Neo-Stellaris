@@ -41,11 +41,15 @@ from __future__ import annotations
 import sys
 
 import psutil
-
 from c2_harness import (
-    resolve_pid, resolve_base_address, pe_image_size,
-    capture_thread_state, format_thread_state, open_process_handle,
-    open_thread_handle, close_handle,
+    capture_thread_state,
+    close_handle,
+    format_thread_state,
+    open_process_handle,
+    open_thread_handle,
+    pe_image_size,
+    resolve_base_address,
+    resolve_pid,
 )
 
 # Enough threads to make "all of them failed" mean something, few enough that a

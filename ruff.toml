@@ -1,0 +1,20 @@
+# Ruff configuration for the Neo-Stellaris tree.
+#
+# The C2 family was written before this file existed and uses a house style
+# that ruff's defaults disagree with: one grouped `from c2_harness import (...)`
+# block per file (ruff wants the members sorted, one per line), printf-style
+# formatting in a few format strings, and `zip()` without an explicit
+# ``strict=``.  Those are not defects here — they are the shape the existing
+# evidence-attached code has, and rewriting them would put unrelated churn
+# into a diff whose subject is something else.
+#
+# The rules that DO bite are kept: unused imports (F401), unsorted import
+# blocks that ruff can fix without reformatting the house style, and the
+# file-context rules the World-State work introduced.
+[lint]
+ignore = [
+    "I001",    # import block is un-sorted or un-formatted
+    "UP031",   # printf-string-formatting
+    "B904",    # raise ... from err inside an except clause
+    "B905",    # zip() without an explicit strict= parameter
+]

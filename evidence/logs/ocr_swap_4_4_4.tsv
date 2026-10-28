@@ -1,0 +1,22 @@
+# OCR engine swap, measured on the game host 2026-10-27 (spec §14.4).
+# engine labels: -rec = rec-only on ONE text band (spec §14.3's shape);
+#   -full = the same wheel with detection on, over the whole popup panel.
+#   3 panels x 14 bands; ms is wall-clock per call (rec rows: p95 of the bands).
+# CORRECTION 2026-10-27: an earlier revision of this file recorded the surya
+#   rows as text_len=0 / 'not measurable'. That was the INSTRUMENT'S bug —
+#   it passed device= to RecognitionPredictor instead of FoundationPredictor.
+#   With the pre-swap call shape the old engine works, and costs 26-35 s per
+#   panel (13 lines), i.e. ~40x the new engine's panel path.
+# agree_with_human=unverified on every row: a human verdict is not something
+#   the instrument can produce. Engine-vs-engine text agreement is recorded
+#   separately (see the ocr swap section of docs/offline-tooling.md).
+crop_sha256	engine	ms	text_len	agree_with_human
+2fdd05d2a639c6c0929793f56288b89e932672bf61d2387d63c65de4b4a661bd	rapidocr-ppocr-mobile-rec	124.5	8	unverified
+2fdd05d2a639c6c0929793f56288b89e932672bf61d2387d63c65de4b4a661bd	rapidocr-ppocr-mobile-full	959.9	14	unverified
+9e422699b71b11004d5d67d83fb8f08057325342632f5ece174a13e77c23802d	rapidocr-ppocr-mobile-rec	79.3	8	unverified
+9e422699b71b11004d5d67d83fb8f08057325342632f5ece174a13e77c23802d	rapidocr-ppocr-mobile-full	585.3	14	unverified
+a749cc49e30ce20a9a921c41a91ace31cd2797f98a191684809cb7dd1c62f15a	rapidocr-ppocr-mobile-rec	79.9	8	unverified
+a749cc49e30ce20a9a921c41a91ace31cd2797f98a191684809cb7dd1c62f15a	rapidocr-ppocr-mobile-full	656.0	14	unverified
+2fdd05d2a639c6c0929793f56288b89e932672bf61d2387d63c65de4b4a661bd	surya-panel	35313.6	13	unverified
+9e422699b71b11004d5d67d83fb8f08057325342632f5ece174a13e77c23802d	surya-panel	27951.5	13	unverified
+a749cc49e30ce20a9a921c41a91ace31cd2797f98a191684809cb7dd1c62f15a	surya-panel	26488.3	13	unverified

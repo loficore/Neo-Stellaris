@@ -6632,3 +6632,276 @@ argv。出处逐字：
   不靠哈希），**在字节层面不可比**。本节把第 4 行落成「资格从未出现」而不是「§67 被复核并确认」，就是这个差别。
 - 立下的规矩（本窗口起生效，已在备枪舱流程里执行）：**任何上线前先对主机侧 `.py` 与 git 的 sha256；不一致就先
   把主机那份拉回留副本，再覆盖。** 违反的代价已经付过一次了（上面第二条）。
+
+## §71 零 shot:族外靶离线定形 —— §13 那七把各 2,090 次的 shim 全在家族五张 vtable 之外,主靶 `0xCC4220` 的指纹与派发位钉死(2026-10-27,离线)
+
+**授权级别**：离线。零 shot、无实机动作、无注入;本节只读 exe 拷贝(`NS_STELLARIS_EXE` → `/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe`,
+sha256 `9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56`)与三份既有 artifact。
+本节是窗口计划 `2026-10-27-live-window-out-of-family-witness.md` 的 Task 1,产物是 Task 2/4 的常量来源。
+
+### §71.1 定形出来的四个值
+
+| 项 | 值 | 来源 |
+|---|---|---|
+| 主靶 RVA | `0xCC4220` | structures §13 :412(七把 2,090 里表序第一把) |
+| 主靶绑的 vtable | `0x25460F0` | §13 同表;map 行 `vtable 0x025460f0  slot0 0x0015ccc0  ExecuteActual(slot2) 0x00cc4220` |
+| 24 B 前序 | `48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08` | §71.5(命令与逐指令边界) |
+| 族外七张 vtable | `0x25460F0 / 0x250E188 / 0x254FA18 / 0x25531E8 / 0x2551620 / 0x2553178 / 0x2553140` | §71.3 |
+| 兜底靶 | `0x6BE150`(`.pdata` 函数 `0x6be150..0x6be23c`) | §71.4,启用条件见 §71.6 |
+
+**§13 那张表在这份 exe 拷贝上逐字复核过**(九行同计数段),不只是转述:
+
+```
+  shim   0xe99c10  vtable  0x254a190  x2165      ← 2,165
+  shim   0xe586d0  vtable  0x24c52b0  x2096      ← 2,096
+  shim   0xcc4220  vtable  0x25460f0  x2090   ┐
+  shim   0x974840  vtable  0x250e188  x2090   │
+  shim   0xde40c0  vtable  0x254fa18  x2090   ├ 七把 plateau
+  shim   0xe98720  vtable  0x25531e8  x2090   │
+  shim   0xe58d80  vtable  0x2551620  x2090   │
+  shim   0xe9b580  vtable  0x2553178  x2090   │
+  shim   0xe96e90  vtable  0x2553140  x2090   ┘
+```
+
+2,090 是 2026-09-29 那份读数的**静态对应物**。本窗口之前**不假定**它在 4.4.4 当前场景、当前存档上仍然成立 ——
+§13 自己的原话就是 `Next capture should correlate this number against the live system count … before claiming it`
+(structures :425)。§74(Task 10)才是那次复采。
+
+### §71.2 段①:普查表 28 个 `func_start` × map 的 `ExecuteActual(slot2)` 列
+
+脚本:`scripts/scratch/2026-10_live_window_shim_witness/join_family_boundary.py`(本窗口新写,一次性探针,保留原 basename)。
+原始输出逐字:
+
+```
+# map_vtables=1805 map_distinct_slot2=543 census_shim_rows=25
+# callers_tsv_rows=62 distinct_func_start=28
+## ① 普查表 func_start 与 map 的 ExecuteActual(slot2) 列
+of 28 distinct func_start, 27 appear as some vtable's slot2; 1 do not —— 缺席 = 不在**这份静态集合**里,不是「族外」的证明
+present=27 absent=1
+  absent 0x6be150
+```
+
+判读:28 个里有 27 个就在 floor map 的 543 个 `slot2` 值里 —— 与 §62.2 的口径 1(裸扫 `.rdata` 命中数逐函数 1–365)
+同一批函数自证。唯一缺席的是 `0x6BE150`(§66 那条 `origin=not_examined` 的候选,`token_id_use_sites_4_4_4.tsv:94000`
+给它挂的静态名字是 `animation`)。
+
+**边界**:map 是**下限**(只收 slot[1] 仍是 base Execute 的那批,AGENTS 段3 第 3 行)。所以「缺席」只等于
+「不在这份静态集合里」,不等于「不参与 vtable 派发」,更不等于「族外」。§71.4 用三口径把它问到底。
+
+### §71.3 段②:七把 shim 的 vtable × 家族五张 = 空集(这条是「族外」的直接读数)
+
+家族五张 = `0x24B1D98 / 0x24EAAC0 / 0x25F4440 / 0x2606F00 / 0x2606FE0`(§57.2 观测 4 / §60.6)。
+原始输出逐字:
+
+```
+## ② §13 七把 shim 的 vtable × 家族五张
+family_five=0x24b1d98 0x24eaac0 0x25f4440 0x2606f00 0x2606fe0
+census_rows_with_count_2090=7 (其余 18 行计数不同,单列)
+  shim 0xcc4220 vtable 0x25460f0 x2090 family=no
+  shim 0x974840 vtable 0x250e188 x2090 family=no
+  shim 0xde40c0 vtable 0x254fa18 x2090 family=no
+  shim 0xe98720 vtable 0x25531e8 x2090 family=no
+  shim 0xe58d80 vtable 0x2551620 x2090 family=no
+  shim 0xe9b580 vtable 0x2553178 x2090 family=no
+  shim 0xe96e90 vtable 0x2553140 x2090 family=no
+intersection={} EXPECT_EMPTY=True
+```
+
+（七行 = census 里计数恰为 2,090 的那批;同一文件另有 18 行计数不同 —— 2,096 / 2,165 / 2,442 … 54,003 ——
+本脚本把它们单列、不并进七把。这条口径防的是「把完全不同的执行体凑成七张表」。)
+
+**补一条同源读数(不在计划文本里,定靶需要它)**:把这七把 shim **自己**当对象再过一遍 §62.2 三口径,七把**全部**是
+「命中 1 处 / 命中前一槽 = `0x1d08520` / 命中 −0x10 落进 map 基址」= 3/3:
+
+```
+target 0xcc4220 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+  hit@rdata+0x1b4100 prev=0x1d08520
+target 0x974840 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xde40c0 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xe98720 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xe58d80 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xe9b580 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+target 0xe96e90 hits=1 prev_is_base_execute=1/1 hit_minus_0x10_in_map=1/1
+```
+
+⇒ 「族外」的**准确含义**是:「**派发位与证人相同,表不同**」—— 每把 shim 都是自己那张 vtable 的 **slot[2]**
+(`ExecuteActual`,`[vptr+0x10]`),而 slot[1] 就是 base Execute `0x1D08520`。
+**槽位要分开写**(2026-10-27 终审更正,本节读数未受影响):证人靶 `0x3B01A0` 也在 slot[2],与这七把 shim
+是**同一个派发位**;而 donor 靶 `0x3AFD30` 在 **slot[1]**(`[vptr+0x08]`,Execute 的覆写,donor_exec_probe.zig
+头注释自述)—— 它比 shim 早一槽,**不是**同一个派发位。所以「族外」差的不是派发位而是**表**:七张 vtable
+既不在家族五张里,也不是 base Execute 的 slot[2]。
+
+**这一条同时给出两个方向的界**:
+- 正面:`calls>0` 能证明「一个 vtable 派发的 `ExecuteActual` 真的执行了」,形状与家族内证人**可比** —— 这正是 §57.4
+  第三档缺的那类「执行确实发生」的独立证据形态。
+- 反面:「不在家族五张」**只等于**「不在这五张里」。家族五张是 §57.2 那张**有界集合**,不是 CEffect 全体
+  (1,805 是下限,AGENTS 段3 第 3 行)。所以任何写法都不能升格成「它不是 CEffect」或「族外没有另一份表」
+  (Review Focus 3)。
+
+### §71.4 段③:缺席候选 `0x6BE150` 的三口径 = 三零,以及它作为兜底靶的性质
+
+```
+target 0x6be150 hits=0 prev_is_base_execute=0/0 hit_minus_0x10_in_map=0/0
+```
+
+三口径**全 0**:`.rdata` 里没有任何 8 对齐 qword 指向它 ⇒ 它既不是 floor map 里任何一张 vtable 的槽,也没有别的
+vtable 引它 ⇒ **它不是 vtable 派发的执行体**,是被直接 `call` 进去的普通函数(`.pdata` 给它的边界是
+`0x6be150..0x6be23c`,0xec 字节;猜它是 `animation` 的那条名字来自 `token_id_use_sites` 的静态挂靠,不是本节读数)。
+
+这也决定了它的**用途边界**:它**不能**当「同形证人」(它不经过 `[vptr+0x10]`),只能当主靶装不上时的**备用活体**,
+而且它的 `calls>0` 连「一个 `ExecuteActual` 跑了」都证不出来。
+
+### §71.5 24 B 前序:命令、逐指令边界、以及 36 vs 24 的取舍
+
+```
+$ python3 scripts/scratch/2026-10_c4_sentinel_window/pin_prologue.py cc4220 24
+# exe=/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
+# rva=0xcc4220 bytes=36/36 section=.text
+48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08 48 8b da 48 8b f1 40 80 e7 01 74 26
+```
+
+`pin_prologue.py` 的第二个参数按**十六进制**解析,所以 `24` = 36 字节(退出码 0、落在 `.text`)。36 B 里
+**前 24 字节恰好是 6 条完整指令**(指纹长度就取这 24;理由同 donor/证人:指纹要吃满的必须是定长指令序列,
+而不是某条指令的中间):
+
+| 字节 | 指令 |
+|---|---|
+| `48 89 5c 24 08` | `mov [rsp+8], rbx` |
+| `48 89 6c 24 10` | `mov [rsp+0x10], rbp` |
+| `48 89 74 24 18` | `mov [rsp+0x18], rsi` |
+| `57` | `push rdi` |
+| `48 83 ec 20` | `sub rsp, 0x20` |
+| `0f b6 79 08` | `movzx edi, byte [rcx+8]` |
+
+后 12 B(`48 8b da` `mov rbx,rdx` / `48 8b f1` `mov rsi,rcx` / `40 80 e7 01` `and dil,1` / `74 26` `je +0x26`)
+属于同一个函数头、不在指纹里;`install()` 的指纹门只比对**前 24**。
+
+**函数头确认**:`scripts/disrva.py 0xcc4220 --len=40` 从 `0xcc4220` 起就是这 6 条,无前导;
+`scripts/pdata.py 0xcc4220` 给出 `func 0xcc4220..0xcc48ab (0x68b bytes) unwind 0x271f460`
+⇒ `0xCC4220` 是**函数起点**,不是中段。函数体第一件事是把 `rcx` 当对象读 `[rcx+8]` 的一个 bool
+(`movzx edi, byte [rcx+8]` → `and dil,1`)再 `je` 分两路 —— 与「`+8` 是 `CEffect` 家族的启用位」这一读法同形,
+但本节只用它做指纹,不做类归属推断。
+
+### §71.6 靶的取舍与有界含义(落进 Task 2/4 的三行诚实条款)
+
+- **主靶 = `0xCC4220`**;`-5 UnexpectedPrologue` ⇒ **停手留证,不换靶硬绕**(Global Constraints);兜底靶 `0x6BE150`
+  只在主靶装不上、且人明确点了名的那一窗口里启用 —— 它是「备用活体」,不是同形证人(§71.4)。
+- `calls == 0` **不是** §57.4 第三档的正面证据,只是「本窗口没观测到」。
+- `calls > 0` 只证明**这个执行体在跑**,**不**证明它按 system 走(§13 :425 的 `correlate before claiming it` 未做)。
+- 七张表的命中是**形状**判据不是身份判据(§57.5 第 2 条);「不在七张里」≠「族外没有另一份表」。
+
+### §71.7 移交
+
+Task 2 抄 §71.1 的 24 B 串 + 七张 vtable,Task 4 抄同一串做围栏常量(不运行时读盘)。Task 8 的两发实机窗是本节
+唯一的实机后续;若 `verdict` 落非证据档,分档措辞归 §72,本节不改写。
+
+## §72 族外证人第一次正读:`0xCC4220` 120 s 内 `calls=2016`、`h0=2016`(表首 `0x25460F0`)、`unmatched=0` ⇒ `shim_hit_named` —— 一个**族外派发位**的执行体确实在跑(2026-10-27,点名 ×2)
+
+**授权级别**：同一窗口两段点名。第一段「**开始吧**」= 起进程 + 载入;第二段「**继续正式窗,接受『引擎在跑』由
+supervisor 读数作证**」= 频率窗 + 正式窗两发。本段含这两发 `0xCC4220` 只读 shot,**不含**族内重打、scope、census。
+
+### §72.1 进程、字节与上线门
+
+- pid **30260**,hwnd 461052,`exe_base=0x7ff7a6030000`、`image_size=0x3927000`(与 §70 同一份 exe)。
+- 上线字节 `C:\temp\sqjs_c4.dll`,sha256 `17c2b8251d7e7faeec92481d27d963b7f73ed5cde51203426279c720aff1e840`
+  (= 本场 `zig-out/bin/stellaris_quickjs.dll`;81 个导出,`C4ShimProbe*` 八名齐)。**整文件 sha 只当出处。**
+- 主机侧驱动对账(§70.6 的规矩,覆盖前做):`c2_witness_probe.py` = `9254c512…` = git HEAD;
+  `c2_scope_probe.py` = `9cca999f…` = `fcadef2`(§68 那一窗);`execspy.js` = `7f1a9405…` = `b47da01^` ——
+  **三份都对得上已记录的 git 版本**,不是未记录的现场改动 ⇒ 覆盖不丢东西,无需先拉回副本。本窗口新上传
+  `c2_shim_probe.py` = `791f3a8e…`、`execspy.py` = `1b535ad5…`;四份文件的 `Get-FileHash` 与本地逐字相同。
+- 覆盖前的旧 DLL 是 `6613e324…`(§69/§70 那两发的字节)。**两份字节的读数不可逐位比对**,只能并排讨论。
+
+### §72.2 环境读数、launcher 样本,以及一条仪器缺陷(控制台吃键)
+
+- `just awake check` → `STATE=serving DESKTOP=unlocked detail=Default age=2.5s pid=5624 session=1/1`。
+- `just game status` → `STATUS=no_game`(无遗留进程)。
+- **计划 Task 7 Step 5 的 `just launch --continuelastsave` 是笔误**:`launch_stellaris.py` 没有这个旗标(它走
+  `steam://rungameid/281990`),会直接 `unrecognized arguments`。改发裸 `just launch`,而**游戏自己的命令行**确实带
+  `--continuelastsave`(由 Paradox launcher 加),所以 §69.1 的机制复现:一次就落在战役内(日期 2300.07.25)。
+- launcher 三档样本(§92 那条线用):`inner_exit code=0` ⇒ **本轮无 23 样本**;但点击轨迹值得记 —— attempt 1/2 用的是
+  `rect=(-32000,-32000,-31763,-31961)` 的**屏外矩形**(`owns_foreground=None` 然后 `False`),attempt 3 才拿到
+  `rect=(-11,0,2153,1020)`、`owns_foreground=True` 并 handoff 成功。即「窗口矩形还没准备好就去点」是本轮的真实形态。
+- **新缺陷(判读陷阱 9 的补充)**:任何 UI 交互(`just game shot`、点击)都会因失焦让 Stellaris **自己暂停**;而
+  **游戏内控制台开着会吃掉空格键** —— `ns_game_log.jsonl` 17:04:14 有 `console_observed open=true px=1300`,那段时间
+  `just game unpause` 静默无效、`status` 一直读 `paused note=paused_no_window`。可用的纪律:
+  **`just game console_close`(或先查控制台)→ `status` 读到 `playing` → 立刻装,中间不碰 UI**。本节两发的入场
+  读数就是这样拿到的(见下),不是「pause 了却以为在跑」。这不推翻 §59.1 证伪的「控制台 ⇒ 暂停」,那是**另一条**
+  因果句。
+
+### §72.3 频率窗(`--poll-s 20`)
+
+```
+[shim] LAYOUT entry=48 stats=64 ring=256 mask=0 version=1
+[shim] C4ShimProbeInstall rc=0
+STATS: calls=0 samples=0 invalid_self=0 unmatched=0 h0=0 h1=0 h2=0 h3=0 h4=0 h5=0 h6=0 patch_size=15 installed=1 mask=0
+VERDICT: no_calls_inconclusive
+[shim] C4ShimProbeUninstall rc=0 / verify=0 / host alive
+```
+
+20 s 静默。**这一发不是判据**,它的用途是「这靶子在当前场景到底跑不跑」——同一进程里紧接着的正式窗给出了相反的
+读数(§72.4),所以两发并排读才是本窗口最有信息量的一对:**靶子不是死的,静默是窗口内的分布问题**。
+
+### §72.4 正式窗(120 s,本段判决来源)—— 原始读数
+
+```
+STATS: calls=2016 samples=2016 invalid_self=0 unmatched=0 h0=2016 h1=0 h2=0 h3=0 h4=0 h5=0 h6=0 patch_size=15 installed=1 mask=0
+VERDICT: shim_hit_named 表首=0x25460f0
+[shim] unmatched 分区(证人侧,计数侧不可分):unmatched_rows=0 rva_zero=0 in_image=0 at_or_above_image=0
+[shim] the ring wrapped at 256 records: …
+[shim] C4ShimProbeUninstall rc=0
+[shim] verify=0
+[shim] host alive
+```
+
+`#meta` 首行逐字(产物 = `evidence/logs/shim_probe_4_4_4.tsv`):
+
+```
+#meta exe_base=0x7ff7a6030000 image_size=0x3927000 image_end=0x7ff7a9957000 dll=sqjs_c4.dll dll_sha256=17c2b8251d7e7faeec92481d27d963b7f73ed5cde51203426279c720aff1e840 target_rva=0xcc4220 mask=0x0 poll_s=120.0 layout=entry=48 stats=64 ring=256 mask=0 version=1 calls=2016 samples=2016 entries=256 tiers=h0=2016/h1=0/h2=0/h3=0/h4=0/h5=0/h6=0/unmatched=0/invalid_self=0 verdict=shim_hit_named named_table=0x25460f0 install_rc=0 stats=calls=2016 samples=2016 invalid_self=0 unmatched=0 h0=2016 h1=0 h2=0 h3=0 h4=0 h5=0 h6=0 patch_size=15 installed=1 mask=0 unmatched_rows=0 rva_zero=0 in_image=0 at_or_above_image=0
+```
+
+环里 256 条(全部 `matched=1`、`table_index=0`、`table_rva=0x25460f0`):
+
+| 字段 | distinct | 读数 | 含义 |
+|---|---|---|---|
+| `self_vtable_rva` | **1** | `0x25460f0` | 七张表里只用了族外表序第一张,与 `h0=2016`/其余 `h*=0` 一致 |
+| `caller_rva` | **1** | `0x1d0857a` | = **base Execute `0x1D08520` + 0x5A** ⇒ 调用点是 base Execute 体内那一发 `call [rax+0x10]`(§10 的口径),不是外来直调 |
+| `self_ptr` | **256** | 256 个互不相同 | 抽样到的 256 条各是不同对象(环只有 256 槽,`2016` 次里这段被覆盖) |
+| `ctx_ptr` | **1** | `0xee7fd00` | 全程一个 ctx |
+| `a3` | **1** | `0x1` | 恒定 |
+| `a4` | **1** | `0x7ff7a81b7bd4` | = `exe_base + 0x1817bd4`,模块内代码地址(与 §53.5 对证人靶 `arg4` 的读法同形) |
+
+时间形状:进度行每 10 s 一条,**前 6 条全 0,第 7 条起 2016 并保持到窗末** ⇒ 一次突发落在窗口第 60–70 s 之间,
+之后 50 s 平在 2016,没有第二次。
+
+### §72.5 这份读数的有界含义(三条诚实条款,写死)
+
+1. **它证到的是**:一个**族外 vtable**(`0x25460F0`)的 slot[2] `ExecuteActual` 在这 120 s 里**真的执行了 2,016 次**,
+   派发点是 base Execute 体内 `+0x5A` 那一发。这是 §57.4 第三档一直缺的「**执行确实发生**」形态的**正面证人**,
+   而且它的 `unmatched=0`/`invalid_self=0` 让「这条 trace 是我们自己的读数」这一层也站得住(不是 ring 空转)。
+2. **它没说**:
+   - **不是 per-system**:`2,016` 与 §13 那份 2026-09-29 的 `2,090` 数量级相近,但**场景不同**(那次是另一个存档/时段),
+     相关性(`§13 :425` 的 `correlate … before claiming it`)是 §74 的事。本节不写「同一集合走了一遍」以外的任何循环语义。
+   - **不是对家族的表态**:本节读的是 `0x25460F0`,与 `0x3AFD30`/`0x3B01A0` 那五张表无关;家族那边是否执行,本发**一个字都没说**。
+   - **不是身份判据**:七张表命中 = 形状判据(§57.5 第 2 条);「命中表 0」不等于「这个类是 X」。
+3. **新增未排除项**:一次突发 + 其余 110 s 静默这一形态,至少三种读法分不开 ——
+   (a) 某个一次性遍历(载入后/事件结算)确实只走一遍;(b) 该遍历发生在别的 tick 节奏上、本窗只碰上一轮;
+   (c) 该执行体只在特定状态下被走到,而本窗 100 s 的静止期里状态没到。本仪器不区分这三者。
+   另:§72.3 的 20 s 静默与 §72.4 的突发**同进程**且相邻 40 s 内,说明「安静」在本靶上是**窗口内分布**的现象,
+   不是存在性现象 —— 以后任何「本仪器安静」的说法都必须带上窗口长度与突发时刻。
+
+### §72.6 复现命令行
+
+```bash
+# 前置:just game console_close → just game status 读到 STATUS=playing(中间不碰 UI)
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "python C:\\temp\\c2_shim_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 20  --settle-s 2 --out C:/temp/c4_shim_freq.tsv"    # 频率窗
+ssh -o ServerAliveInterval=15 Windows_Jiaolong "python C:\\temp\\c2_shim_probe.py C:\\temp\\sqjs_c4.dll --mask 0 --poll-s 120 --settle-s 2 --out C:/temp/c4_shim_probe.tsv"  # 正式窗
+scripts/scratch/2026-10_scope_shot/pull_slice.sh c4_shim_probe.tsv evidence/logs/shim_probe_4_4_4.tsv
+```
+
+### §72.7 移交
+
+- 条件性第三发(同进程族内 slot[2] 重打,`witness_shot.cmd`)的**触发条件已经满足**(本发 `calls>0`),但它是新的一次
+  install ⇒ 要另一次点名。它的价值是把「族外确实在跑」(本节)与「族内是否在跑」摆进同一个进程的两窗。
+- **§74 的 B2 复采**(`census_run.cmd`,压最后)仍未打;本窗口的 `2016` 与它要复采的七把 shim 计数是两条不同的
+  读数口径,不要混。
+- scope(Task 9)未打;§68.8 表第 ② 行原样保留。

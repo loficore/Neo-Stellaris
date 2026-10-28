@@ -26,7 +26,9 @@ import json
 import os
 import sys
 
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+# Pyright types sys.stdout as TextIO (no reconfigure) even though the real object is a
+# TextIOWrapper — the same idiom every driver in this tree uses. Annotation only.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[union-attr]
 
 from c2_scope_probe import load_vtable_map
 
@@ -44,6 +46,24 @@ def _int_or_none(text):
         return int(text, 16)
     except ValueError:
         return None
+
+
+def _read_text(path):
+    """Read a text input; a missing/unreadable file is a usage error, not a crash."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError as exc:
+        raise SystemExit(f'cannot read {path}: {exc}') from exc
+
+
+def _write_text(path, text):
+    """Write a text output; a bad path is a usage error, same rule as reads."""
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+    except OSError as exc:
+        raise SystemExit(f'cannot write {path}: {exc}') from exc
 
 
 def parse_object_rows(text):
@@ -92,20 +112,19 @@ def load_candidate_map(path):
     shift skipped all 172,296 rows and `new_only_hits=0` nearly became the finding).
     """
     out = {}
-    with open(path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if line.startswith('#') or not line.strip():
-                continue
-            cols = line.split()
-            if len(cols) < 9 or cols[0] != 'vtable' or cols[3] != 'slot0':
-                continue
-            try:
-                vtable_rva = int(cols[1], 16)
-                run = int(cols[2].split('=', 1)[1])
-                slots = [int(cols[i + 1], 16) for i in (3, 5, 7)]
-            except (ValueError, IndexError):
-                continue
-            out[vtable_rva] = (run, *slots)
+    for line in _read_text(path).splitlines():
+        if line.startswith('#') or not line.strip():
+            continue
+        cols = line.split()
+        if len(cols) < 9 or cols[0] != 'vtable' or cols[3] != 'slot0':
+            continue
+        try:
+            vtable_rva = int(cols[1], 16)
+            run = int(cols[2].split('=', 1)[1])
+            slots = [int(cols[i + 1], 16) for i in (3, 5, 7)]
+        except (ValueError, IndexError):
+            continue
+        out[vtable_rva] = (run, *slots)
     if not out:
         raise ValueError(f'{path}: 0 candidate rows parsed — refusing to re-ask against an '
                          f'empty shape set')
@@ -148,8 +167,7 @@ def main(argv=None):
     ap.add_argument('--json', dest='json_path')
     args = ap.parse_args(argv)
 
-    with open(args.tsv, 'r', encoding='utf-8') as f:
-        rows = parse_object_rows(f.read())
+    rows = parse_object_rows(_read_text(args.tsv))
     floor, allv = load_vtable_map(args.floor), load_candidate_map(args.allv)
     result = reclassify(rows, floor, allv)
 
@@ -167,8 +185,7 @@ def main(argv=None):
     if args.json_path:
         payload = dict(result)
         payload['input_sets'] = {'floor': len(floor), 'shape': len(allv)}
-        with open(args.json_path, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, indent=1, sort_keys=True)
+        _write_text(args.json_path, json.dumps(payload, indent=1, sort_keys=True))
     return 0
 
 

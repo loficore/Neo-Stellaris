@@ -110,6 +110,11 @@ def main(argv: list[str]) -> int:
     for name in wanted:
         print(f"{name} RVA from PE reparse: 0x{targets[name]:x}")
 
+    # The world-state gate (spec §1): a shot that cannot prove the premise
+    # must not inject.  The refusal happens BEFORE inject_dll — "injected,
+    # then noticed the premise was false" is the failure mode this removes.
+    from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+    gate_install('sanity')
     inject_dll(pid, dll_path)
     assert_game_alive(pid)
     base = resolve_base_address(pid, os.path.basename(dll_path))

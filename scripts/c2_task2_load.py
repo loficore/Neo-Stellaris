@@ -23,6 +23,11 @@ pid = resolve_pid("stellaris")
 # string handed to the remote LoadLibraryA. Windows default per P10.
 dll_path = sys.argv[1] if len(sys.argv) > 1 else r"C:\temp\sqjs_c2.dll"
 
+# The world-state gate (spec §1): a shot that cannot prove the premise
+# must not inject.  The refusal happens BEFORE inject_dll — "injected,
+# then noticed the premise was false" is the failure mode this removes.
+from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+gate_install('task2')
 inject_dll(pid, dll_path)
 assert_game_alive(pid)
 base = resolve_base_address(pid, os.path.basename(dll_path))

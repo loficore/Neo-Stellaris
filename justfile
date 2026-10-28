@@ -28,8 +28,13 @@ chokepoints-check:
 
 check: build test fence host-tests chokepoints-check
 
+# NOTE: the world-state machine is TWO files and they must travel together with
+# its Windows halves — world_state.py is the pure machine (one directory up in
+# the repo, bare-name on the wire), world_probe.py takes the reading, ns_world.py
+# is the CLI.  Leaving any of them out makes the CLI fail on the host with an
+# import error that reads like the tool is broken.
 deploy:
-    scp scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py scripts/windows/keep_awake.py scripts/windows/popup_geometry.py scripts/windows/popup_identity.py scripts/windows/popup_guard.py scripts/windows/popup_ocr.py {{WIN_HOST}}:{{WIN_TEMP}}/
+    scp scripts/world_state.py scripts/windows/world_probe.py scripts/windows/ns_world.py scripts/windows/session_bridge.py scripts/windows/game_supervisor.py scripts/windows/launch_stellaris.py scripts/windows/keep_awake.py scripts/windows/popup_geometry.py scripts/windows/popup_identity.py scripts/windows/popup_guard.py scripts/windows/popup_ocr.py {{WIN_HOST}}:{{WIN_TEMP}}/
 
 # Launch Stellaris through Steam (launcher clicks included; stays paused).
 launch *args:

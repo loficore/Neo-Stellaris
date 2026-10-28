@@ -1,7 +1,11 @@
 // execspy.js — drives the log-only base-Execute detour inside stellaris.exe.
 // All engine access goes through the DLL's own recorder; this script only calls exports.
 
-var DLL_NAME = 'stellaris_quickjs.dll';
+// DLL_NAME is overridable from the driver (NS_LIVE_DLL's basename, passed as
+// NS_DLL_NAME): the whole channel resolves exports through this name, so pointing
+// the driver at another file without this override would look for a module that is
+// not in the process. Default stays the shipped name.
+var DLL_NAME = (typeof NS_DLL_NAME !== 'undefined') ? NS_DLL_NAME : 'stellaris_quickjs.dll';
 // ExecHookLayout writes five u32s; never hand it a smaller buffer than it fills.
 var LAYOUT_BYTES = 32;
 

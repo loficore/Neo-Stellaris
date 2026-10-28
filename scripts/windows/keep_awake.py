@@ -18,6 +18,11 @@ ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED`)掐掉「空闲 → 关屏 → 唤醒�
 (与 `supervisor_ready`/`console_gate` 同一形状)。
 """
 
+# This module is Windows-only: it reads Win32 through ``ctypes``, which a
+# static checker on the Linux host cannot resolve.  It resolves on the box
+# that runs the daemon.
+# pyright: reportAttributeAccessIssue=false
+
 import argparse
 import ctypes
 import json
