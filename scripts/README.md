@@ -26,6 +26,7 @@
 | `pe_disrva.py` | 反汇编**任一份 PE**（路径必填；本仓库用它读自己的 `stellaris_quickjs.dll`，不是 `stellaris.exe`）的 RVA 区间，标注 call 目标与 rip 操作数解析到的 RVA，只解码可执行段；结束 RVA 不含，或传指令条数 | —（示例：§48 产物的 `js_rc` 97 字节 / 29 条；区间随重链移动，测试从 `quickjs.c:1494:12` 记录反查） |
 | `pdata.py` | x64 `.pdata`(RUNTIME_FUNCTION) → 精确函数边界，无需分析 | — |
 | `exec_frame_sites.py` | 把 shot 产物的 caller 行**按字节反解真实站点**（不是 `-5` 估值）：回看窗内枚举恰好结束于返回点的 call/jmp 边界并定 `form`（rel32/mem/thunk/ambiguous/none），join `.pdata` 函数边界与调用点普查 | `exec_frame_sites_4_4_4.tsv` |
+| `join_family_boundary.py` | §71 族外边界的三口径离线定形（§71 三口径读数的**生产者**）：段① 普查表 28 个 `func_start` 里哪些是某张 vtable 的 slot[2]、段② §13 七把 shim 的 vtable × 家族五张（期望空集）、段③ `.rdata` 8 对齐 qword 命中 / 命中前一槽是不是 `0x1d08520` / 命中回退 `0x10` 落不落进 1,805 张 map；无参跑①②③，带 RVA 只跑③；退出码 0 = 读完、2 = 环境问题。**口径边界：map 是下限，不是全量** | —（读数落取证卷 §71.1/§71.3/§72.9；原件冻结在 `scripts/scratch/2026-10_live_window_shim_witness/join_family_boundary.py`） |
 | `pestr.py` | 读某 RVA 的字节 / C 串 | — |
 | `strfind.py` | 按名字定位镜像里的精确 C 串 | — |
 | `strrefs.py` | 某 keyword 串的所有副本 + rip 引用这些副本的代码点（"还有谁注册了这名字？"） | — |
@@ -93,6 +94,10 @@
 | `test_c4_wiring_probe.py` | 上述的纯函数判读测试（记录/统计解码、spec 打包、列扫描、capture/apply verdict），无游戏、无 Windows API |
 | `c2_donor_probe.py` | C4 取证：donor 一族虚 Execute `0x3AFD30` 的只读采样 shot（§57.4 点名的靶子）——只读 `[self+0]` join 五张家族表，`ctx`/`a3`/`a4` 按值记录不解引用；默认 `--mask 0` 每条落环、频率先按 20 s 窗口的 `calls` 增量测再定分母；verdict 值域**没有第三档**（`no_calls` 只算 ENVIRONMENT），两条代码档都要 `installed==1`（否则记 `counter_desync`），tier 2 是**交给静态查表的接力**而非「运行时生成的表成立」（`unmatched` 同时吸收 code-address `self+0`、`toRva`→0 与真实 `SizeOfImage` 外的尾巴，环侧按 image span 三分区写进 `#meta`）；artifact 先写统计再 drain，坏 drain 只留 `entries_error`；`-2` 不重试、`-7` 打印 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`、绝不 FreeLibrary。门序、依赖码与三条判读陷阱见 `docs/offline-tooling.md`；**实机一次 shot，本计划只建好不跑** |
 | `test_c2_donor_probe.py` | 上述的离线围栏：`EXPECTED_CODE`/`FAMILY_VTABLES` 两条钉回权威（exe 逐字节 + 取证卷 §57.2 观测 4 那一行），加 12 条判读与契约测试（layout 6 词契约、48 B entry、12 键 stats、两档证据 verdict、值域里不许有 `no_donor_family_execution`，以及终修新增的 `installed` 门、image span 三分区、meta-only artifact、`entries_error`、`verify` 升级不看 `installed_ok`、`run()` 先写 artifact 再 drain 的写序保护），共 **14 passed**，无游戏、无 Windows API |
+| `c2_shim_probe.py` | 族外证人 guard（§72）：靶 `0xCC4220` = §13 那七把各 2,090 次的 exec shim 里的第一把（它是 vtable `0x25460F0` 的 **slot[2]**，与 donor/witness 同一个派发位，但那张表**不在家族五张**里）；只读 `[self+0]` join **族外七张**表、`ctx`/`a3`/`a4` 按值记录不解引用；`--mask 0` 的语义是「每条调用都记」；频率先按 20 s 窗口的 `calls` 增量测再定分母；verdict 两条代码档 `shim_hit_named`/`shim_hit_unknown_table`（**没有第三档**：`no_calls` 只算 ENVIRONMENT），两条都要 `installed==1`（否则 `counter_desync`）；`-2` 不重试、`-7` 打 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`、绝不 FreeLibrary。**它只答身份**：它的 `h1..h6` 不携带其余六把 shim 的信息（取证卷 §72.8），逐把计数是 census 那条通道的活（§74）。门序与四条判读陷阱见 `docs/offline-tooling.md` |
+| `test_c2_shim_probe.py` | 上述的离线围栏：donor 的 14 条平移换靶 + 24 B 前序逐字节钉回 exe（`disrva.py` 读）+ 七张族外表钉回取证卷 §71.1，共 **15 passed**，无游戏、无 Windows API |
+| `c2_witness_probe.py` | 族内 slot[2] 证人 guard（§69）：靶 `0x3B01A0`，join 家族五张；与 donor 同形但换靶换表，`-2` 不重试、绝不 FreeLibrary；两窗读数（`calls=0`/120 s）落取证卷 §69 |
+| `test_c2_witness_probe.py` | 上述的离线围栏：donor 的 14 条平移换靶 + `test_verdicts_has_no_tier3_value` + 前序钉回 exe，共 **16 passed**，无游戏、无 Windows API |
 | `c2_selfabort_repro.py` | §45 自检器（原 `scratch/2026-10_abortexit/dll_abort_repro.py`，原件冻结留档）：**零游戏、零注入、零 dispatch** —— 把出货字节装进本脚本自己拥有的子 python，按门序跑 `C2Sanity` → `C2DiagQJSInto`，退出码 3 且无 `SURVIVED` ⇒ 死因是我们自己的产物（`abort()`）。修复循环每改一次就重跑这一条命令。观测通道四条：`BASE`/`LOGADDR`/`SANITY`/`WITNESS`，加上 Task 1 的环形记录器 `MFREC`（**读取线程**每 ~2 ms 一次，不是调用后的 dump —— 主线程死在调用内部，dump 那行永远轮不到；调用后那次以 `post` 标签保留，给 Task 4 验收用）。用法与判读陷阱见 `docs/offline-tooling.md` |
 | `dll_ubsan_site.py` | §45 的离线符号化器（原 `scratch/2026-10_abortexit/ubsan_site.py`，原件冻结留档）：不属注入通道，是它**只读文件**的那一半 —— 无符号无 debug 段的 DLL 里用 `.rdata`/`.data` 的 UBSan `TypeMismatchData` 记录 + `.pdata` 函数区间把 panic 钉到源文件行号（`site <类型名>` / `func <vma>`；当前产物：141 sites、`func 0x18000bd9b` → `quickjs.c:1494:12`，与 §45.3 一致）。DLL 路径走参数：**第一个参数不是 `site`/`func` 就是路径**（大写 `.DLL` 与无扩展名的 scp 名都算，旧规则会静默去分析默认产物），没给才落到仓库自己的 `zig-out/bin/stellaris_quickjs.dll`。退出码三种意思：0=有匹配、1=读到了但零匹配（这是结论）、**2=没能读到产物**（缺文件/截断/非 PE，一行 stderr 而非 traceback） |
 | `test_c2_harness.py` | 上述全部的主机侧测试：Linux 上跑，无游戏、无 Windows API（**135 passed**，含 §44 的 `CONTEXT` 偏移/尺寸与 `capture_thread_state` 调用次序假 kernel32 测试、§44.3 两个对照工具的判读函数（`c2_control_cpuwatch` 的 CPU 前进量口径、`c2_control_suspendcap` 的 capable/incapable/partial 三分）、§45 两个提升工具的关键行集合与 `func` 模式报告）。§44 的字节可比性由**活门** `c2_init_threadstate.assert_same_bytes_as_s42` 守着（sha 不是 §42 那份就拒绝 dispatch）；`test_s42_sha_constant_stays_pinned_to_s42s_bytes` 钉的是那枚常量的**不可改写**（§42 的历史身份 `863917f2…`，不是「本树构建出什么」—— 本计划故意改 `quickjs_wrapper.c`，树里的产物 `77c0c35e…` 必然与它不同，旧的同树等式只能靠撤销计划内工作来满足，故作废）|
@@ -120,6 +125,10 @@
 | `popup_identity.py` | 弹窗身份的纯核：文本/几何指纹与名单解析（stdlib-only，Linux 可 import） |
 | `popup_guard.py` | 处置判据与熔断：名单/预算/同 id 连见的 `decide_action`，阈值只在这里定义 |
 | `popup_ocr.py` | OCR 单一出口：`ocr_texts()` 永不 raise，返回 `(texts, status, ms)`；`warm\|<png>` CLI 量加载与每帧成本 |
+| `popup_geometry.py` | 弹窗几何指纹那半边（纯像素，无 OCR）：`_panel_bbox` 的三个门与关闭点换算；`popup_identity.py` / `popup_guard.py` 的几何侧输入 |
+| `ns_world.py` | 世界状态机的唯一入口（CLI）：一行输出 `STATE=… EVIDENCE=… NEXT=…`，退出码 `0` 合法 / `2` 拒绝 / `3` 阻塞 / `4` 锁僵死；子命令 `status`/`probe`/`assert-ready`/`unblock`/`quit`/`abort`/`pull`；纯状态机在 `scripts/world_state.py` |
+| `world_probe.py` | 取一次状态读数：复用 `game_supervisor.py` 的像素分类器（**阈值一个不改**），证据里保留全部原始计数与 `crop_sha256`；`ns_world.py` 的读数那一半 |
+| `session_bridge.py` | SSH 落在 session 0、游戏在 session 1 时的那条通道（`schtasks /run /I`）；没有它 `ns_world.py` 在 agent 的实际工作方式下不可用 |
 
 ## 一次性探针：`scratch/`
 

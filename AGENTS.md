@@ -15,7 +15,7 @@ registration pipeline and identify extension points for new effects/triggers.
 |---|---|
 | 取证 §1–§15(热路径、detour、CEffect 类图、被证伪的注册链) | `evidence/analysis/runtime_444_structures.md` |
 | 取证 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
-| 取证 §24–§70(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两次 shot §58–§59、零 shot 帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 第一次 shot 只读采样=静默窗口 §67、scope 深跟读第二次 shot=修正仪器后第一发 `scope_candidate`(§56 误配仪器下已 14 条命中)且两条边非血缘 §68、同族 slot[2] 证人 shot 与载入窗口 §69、证人+donor 载入后重打与 spec §4 判决落点 §70) | `evidence/analysis/runtime_444_c1_validation.md` |
+| 取证 §24–§72.8(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两次 shot §58–§59、零 shot 帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 第一次 shot 只读采样=静默窗口 §67、scope 深跟读第二次 shot=修正仪器后第一发 `scope_candidate`(§56 误配仪器下已 14 条命中)且两条边非血缘 §68、同族 slot[2] 证人 shot 与载入窗口 §69、证人+donor 载入后重打与 spec §4 判决落点 §70、族外靶离线定形 §71、族外证人第一次正读 §72、`h1..h6=0` 的口径 §72.8、`0xCC4220` 三条静态路线 §72.9、scope 新形状一发(预算 27,`verdict_d2=no_depth2_lead` ⇒ §68.8 ② 触发)§73、B2 复采(七把仍个个相等但值 2,090→2,494,`hist_overflow=0`)§74) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
 | 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
 | world_state 窗口状态机(agent 唯一入口 `ns_world`、租约与惰性 `RESTORE_INCOMPLETE`、反刷预算、黄金集、OCR 换型读数) | `docs/offline-tooling.md` 的「scripts/windows/ns_world.py」一节 |
@@ -159,6 +159,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x3B1420` | effect `[vptr+0x98]` base impl = **bool 谓词**,不是 parse(§52 的 detour 点) | §23.1 §52 |
 | `0x3AFD30` | donor `hidden_effect` 的 `[vptr+0x08]` Execute 覆写;**第一次 shot 只读采样已打 = §67**:`calls=0`/120 s 静默,verdict `no_calls_inconclusive`(该档不含 §57.4 第三档资格,安静只读作「没观测到」);**载入战役后同进程重打 = §70**(pid 15500,`--mask 0`,`calls=0`/120 s,同一 verdict,装拆 `rc=0`/`verify=0`/host alive) | §52 §67 §70 |
 | `0x3B01A0` | donor 表 slot[2] `+0x10` = **instantiate helper**,上表那个消费者的另一身份;**证人靶,两窗已打 = §69**:20 s 频率窗 + 120 s 正式窗,`--mask 0`,载入战役后仍 `calls=0`,verdict `no_calls_inconclusive` ⇒ 第三档资格不成立(§69.5 三行诚实条款) | §57.2 §69 |
+| `0xCC4220` | §13 那七把各 2,090 次的 exec shim 之首 = **族外派发位**执行体(vtable `0x25460F0` 的 slot[2];常量钉在 `src/dll/shared/offsets.zig:241`);**第一次正读已打 = §72**:120 s 窗 `calls=2016`/`h0=2016`/`unmatched=0` ⇒ `shim_hit_named`,`caller_rva`(环里 256 条 = 最后 256 次)全 = base Execute+0x5A(前 1,760 次未记录)。**判读提示**:`c2_shim_probe` 只钩它一个 ⇒ 它的 `h1..h6=0` 由仪器口径结构决定(窗内**全量** `unmatched=0` 闭合),**不携带**其余六把 shim 的信息 —— 逐把计数是 census 那条通道的活(§74) | structures §13;c1_validation §71/§72/§72.8/§72.9/**§74**(复采:七把 2,494 × 7、`hist_overflow=0`) |
 | `0x2606FE0` | donor effect vtable,25 槽可复制(slot[1]=Execute、slot[2]=instantiate、slot[19]=谓词) | §52 |
 | `0x89F960` / `0x8A0450` | `GetScriptedEffect` / `GetScriptedTrigger` — **不是 getter**;唯一副作用是重复定义告警 | §27 |
 | `0x1C91C30` | 上述重复告警走的 logger | §27 |
