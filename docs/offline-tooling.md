@@ -1722,7 +1722,8 @@ just game stop | quit
 现在 `classify_window(rows, bbox, gold, w, h)` 多收窗口尺寸:`popup_geometry.row_kind` 把 **`x0 >= 0.70w`**
 的行整条剔出选项集,并在 **`0.30w <= x1 <= 0.70w`** 出现 ≥2 行时判 `dialog`(第一次接触窗的选项圆圈
 `x≈1090..1121`、选项文本 `x≈1284..1452`,outliner `x0≈1849`)。**不传 `w`/`h` 时行为与旧版逐字一致**,
-老调用点不动。夹具 `scripts/windows/tests/fixtures/first_contact_2160x1440.png` 是事件带裁片
+老调用点不动;daemon 自己的两个调用点走 `classify_window_at_reference`(把归一化后的 `REF_W`/`REF_H` 传进去,
+否则新判据永远不会生效)。夹具 `scripts/windows/tests/fixtures/first_contact_2160x1440.png` 是事件带裁片
 (1728×1008,由 `scripts/scratch/2026-10_popup_fixture/crop_fixture.py` 生成并断言裁前/裁后同判 `dialog`;
 **不要缩放**,阈值按像素算)。
 
