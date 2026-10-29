@@ -22,6 +22,8 @@ libs/quickjs/libquickjs.a
 .playwright-mcp/
 .pi/
 .qoder/
+# project-scoped MCP config: holds machine-local absolute paths
+opencode.json
 
 # === IDA Pro local artifacts ===
 evidence/session_id.txt
@@ -45,6 +47,8 @@ evidence/xrefs/token_id_use_sites_4_4_4.tsv
 
 # === Private planning folder (superpowers plans/specs), never tracked ===
 docs/superpowers/
+# Agent scratch (SDD ledgers, review packages, host dumps, screenshots)
+.superpowers/
 
 # === Plan tickets (omo-slim-plan), same rule: plans stay out of the tree ===
 .plans/
