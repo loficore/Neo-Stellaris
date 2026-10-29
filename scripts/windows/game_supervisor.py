@@ -169,6 +169,17 @@ def classify_window(rows, bbox, gold_px: int, w=None, h=None) -> str:
     return "none"
 
 
+def classify_window_at_reference(rows, bbox, gold_px: int) -> str:
+    """``classify_window`` on the daemon's normalized (2160x1440) readings.
+
+    ``_norm_geometry`` already scales rows/bbox/gold to ``REF_W``/``REF_H``,
+    so this is the call site that turns the 2026-10-29 row-band rule on: the
+    outliner band is a fraction of *this* size.  A 3-argument call would keep
+    the old behaviour and never see the rule (issue #31's silent ``window=none``).
+    """
+    return classify_window(rows, bbox, gold_px, REF_W, REF_H)
+
+
 def choose_row(policy: str, rows, rng: random.Random):
     """Return a 0-based row index, or ``None`` when the policy cannot apply."""
     if not rows:
@@ -1092,7 +1103,7 @@ def _restore(hwnd: int, restore) -> None:
                 window_rect(hwnd))
         except OSError:
             return
-        if classify_window(nrows, nbbox, ngold) != "none":
+        if classify_window_at_reference(nrows, nbbox, ngold) != "none":
             return
         press_space(hwnd)
 
@@ -1463,7 +1474,7 @@ def serve(args, once: bool = False) -> int:
                         state["last_bbox"] = stats["bbox"]
                     nrows, nbbox, ngold = _norm_geometry(
                         stats["rows"], stats["bbox"], stats["gold"], rect)
-                    window = classify_window(nrows, nbbox, ngold)
+                    window = classify_window_at_reference(nrows, nbbox, ngold)
                     if window == "none":
                         state["last_bbox"] = None
         if window != "choice":

@@ -892,3 +892,14 @@ def test_click_refused_makes_the_cli_exit_2():
     assert gs.EXIT_REFUSED == 2
     line = gs._status_line(rec)
     assert "window=none" in line and "bbox=" in line
+
+
+def test_reference_classifier_turns_the_outliner_rule_on():
+    outliner = [{"x0": 1849, "x1": 1943, "y0": y, "y1": y + 6}
+                for y in (216, 390, 480, 570)]
+    central = [{"x0": 1090, "x1": 1121, "y0": 868, "y1": 897},
+               {"x0": 1284, "x1": 1452, "y0": 814, "y1": 816}]
+    # The daemon normalizes to REF_W/REF_H; the 3-arg call would keep the old
+    # rule and read this window as none (issue #31's silent drop).
+    assert gs.classify_window_at_reference(outliner, None, 2846) == "none"
+    assert gs.classify_window_at_reference(central, None, 2846) == "dialog"
