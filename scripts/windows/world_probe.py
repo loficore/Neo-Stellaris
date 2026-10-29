@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+import sys
 import time
 
 #: The classifier vocabularies spec §5 works with.  A reading outside its

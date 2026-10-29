@@ -7692,3 +7692,103 @@ sha256sum zig-out/bin/stellaris_quickjs.dll      # 与 §78.2 的两列逐字相
 ```
 
 **下一发(§77 那台仪器)的实机读数改记 §79** —— 本节占了 §78 这个号。
+
+## §79 求值槽第一发:`calls=1`(不是 787)⇒ 求值槽**不是**每系统一次;`ctx+0x278` 是标量 0x3fba 不是 vtable;`self_vtable_rva` 与 §76.6 对得上(2026-10-29,点名 ×1)
+
+靶 = §77 钉死的触发求值槽共用基体 `0x1A91A80`(`[vptr+0x28]`,352 张表共用)。仪器 = §77 的静态形状 +
+`C4TrigEval*` 九导出 + `scripts/c2_trigger_eval_probe.py`(48 B Entry、1,024 槽 ctx 去重表、三档证据)。
+实测在 **pid 10680**、战役 `_1474567734` 的 `autosave_2234.01.01.sav`(sha `a80c469a…`,N = **787** 系统 /
+1,217 边,`save_hypergraph.py` 重建)上完成;装拆均 `rc=0` / `verify_rc=0` / `host_alive=1`。
+
+### §79.1 这一发之前的三个通道/仪器缺陷(都实测到,两个当场修了)
+
+1. **`world_probe.py` 缺 `import sys`**(本仓**也是**,不是主机陈旧):`gate_install` 的拒绝分支
+   `print(..., file=sys.stderr)` 抛 `NameError`,把**拒绝理由**吞掉,驱动只留下一段 traceback。
+   已修 + 围栏 `scripts/windows/tests/test_sys_imports.py`(扫整个 `windows/` 族:`sys.` 必须配 `import sys`)。
+2. **主机侧 `session_bridge.py` 陈旧**(缺 §76 那次加的 `_printable`):驱动跑完、回显输出时
+   `UnicodeEncodeError` 崩在 `print(output)`,把整段 stdout 吃掉。已 `just deploy` 对齐。
+3. **事件窗检测盲区(未修,交下一份计划)**:游戏里弹了一个**第一次接触**窗(维林集体意识,三个选项),
+   而**两个检测器都看不见它** —— `world_probe` 的 bbox = `None`(暗面板不匹配亮度剖面)⇒ 世界状态判
+   `IN_GAME_PAUSED_CLEAN` ⇒ **门拒绝开火**(fail-closed,行为正确);daemon 的 `classify_window` = `none` ⇒
+   `acquire_or_refuse(state,"click_option")` 不发租约 ⇒ `just game click` 被**静默丢弃**
+   (`_handle_command` 的 `lease is None` 分支是 `pass`,不写日志)。**只有人手工点**能过(§72.2 先例)。
+   附带实测:daemon 的「金色行」检测在**银河地图**上把右侧大纲栏当成事件选项(`handled` 涨到 14),
+   它点的是 outliner 的行,不是选项。
+
+### §79.2 上线两道门(§70.6)
+
+```
+DLL    C:/temp/sqjs_c6.dll          sha256 cbaa63c6e85ee4669c2a7aee408db290b0646886b9065100fdcdf05f58ba2961
+驱动   C:/temp/c2_trigger_eval_probe.py  sha256 7f0aa61b1697f7cd03d228e213f1ae70b543f938b4abf01dbc32d3cb276ce516
+```
+两份都与本机 `zig build` / git HEAD 的产物**逐字相同**(主机侧 `Get-FileHash` 原样对上)。launcher 一次
+成功(`inner_exit code=0`,`stellaris_pid=10680`;点击轨迹 attempt 1/2 就在**屏内** `rect=(-11,-11,2171,1379)`、
+`owns_foreground=True` —— 与 §72.2 的屏外矩形样本相反,三档诊断本轮无 23 样本)。
+
+### §79.3 读数(artifact `evidence/logs/c5_trig_eval_4_4_4.tsv`)
+
+| 窗 | token | delivered / marker | calls | token_matched | distinct_ctx | verdict |
+|---|---|---|---|---|---|---|
+| A `neo_effect` | 68636 | 1 / **0** | 0 | 0 | 0 | `script_refused` |
+| B `is_rim_system` | 18203 | 1 / **1** | **1** | 1 | **1** | `ctx_single` |
+| poll(120 s) | 18203 | — | 0 增量 | 0 | 1(绝对) | `no_calls` |
+
+唯一一行(`#meta` 之后):
+
+```
+token  ctx_tag  sub_vtable_rva  self_vtable_rva  occurrences  ctx_ptr    a3    sub_obj
+18203  0x1      0x0             0x26938f8        1            0x7fed50   0x80  0x3fba
+```
+
+### §79.4 判读
+
+1. **求值槽不是「每次求值」都走。** 脚本确实按系统求值了(窗 B 的 `marker=1`,§76 同一形状的
+   `TS_RIM_` 标记在 `game.log` 里出现),但目标函数在整个窗口只被调 **1** 次 ⇒ §76.6 把 `+0x28` 写成
+   「每次求值走的那一个」**不成立**;它至少是**每次实例化/每脚本一次**这一档。
+2. **`ctx` 是低地址区里的小对象**:`ctx_ptr = 0x7fed50`,落在 §56.8 记过的那个 `MEM_PRIVATE` RW 8 KB 区
+   (base `0x7fe000`)。两格读都成功(所以那两页**确已提交**),不是「读不到」。
+3. **`ctx+0x158 = 1`** —— §77.1 ③ 的两个合法值之一 ✓(类型门成立)。
+4. **`ctx+0x278 = 0x3fba` 是标量,不是 vtable**:`0x3fba` 远低于镜像基址(本次 `0x7ff96be20000`)⇒
+   `sub_vtable_rva = 0` 读成「那里不是一个对象」,**不是**「我们认不出来」。§77.1 ② 的「被当对象传出去」
+   只说明**引擎**把 `&ctx[0x278]` 传下去,不说明那一格是 vtable。
+5. **`self_vtable_rva = 0x26938F8`** = §76.6 记的 `is_rim_system` 的 vtable ⇒ self-vtable 的 join 是正确的
+   (这条同时证明 I-6 的诚实条款没有被触发:没有 predicate 残留)。
+6. **`a3 = 0x80`** —— 与 §76 记的谓词第 2 实参 `X = 0x80` **同值**;两个槽的「掩码量」疑似同一个常量。
+
+### §79.5 这一发**不能**说的
+
+1. **`calls=1` 不等于「这条路上没有 per-system 路径」。** 它只说**这个槽**不是每系统一次;每系统的
+   东西一定在别的槽/别的函数里(§76 的谓词槽是 11 次,也不是 787)。
+2. **窗口只有 120 s。** 脚本的 787 次求值发生在窗 B 的 marker 之前;poll 窗 120 s 内 0 增量。更长窗口
+   是否会再调,本发未测。
+3. **`ctx` 的语义仍未定**:它是「解析上下文」这一档,**不是**「某个星系」。所以 C5 §2 那格
+   「星系对象句柄从哪来」**仍然未观测** —— 这一发给出的是**负结论**:求值槽不是入口。
+4. **`0x3fba` 未定性**(16,314):可能是枚举/位域/计数,本发只记值,不做猜测。
+
+### §79.6 复现命令
+
+```bash
+just awake start                                   # 机器重启过,守护进程没起来 ⇒ 先拉起
+just launch                                        # 裸命令;Paradox launcher 自己加 --continuelastsave
+just game start && just game unpause
+just win "python C:/temp/session_bridge.py C:/temp/ns_world.py status"    # → IN_GAME_RUNNING
+just win "python C:/temp/session_bridge.py --timeout-s 900 C:/temp/c2_trigger_eval_probe.py \\
+  C:/temp/sqjs_c6.dll --systems 787 --script-file C:/temp/ts_scripts.txt \\
+  --poll-s 120 --out C:/temp/c4_trig_eval.tsv"
+scp Windows_Jiaolong:C:/temp/c4_trig_eval.tsv evidence/logs/c5_trig_eval_4_4_4.tsv
+```
+
+`ts_scripts.txt` 的两行 = `scripts/scratch/2026-10_c5_data_plane/ts_scripts.txt` 逐字(与 §76 同一份;
+supervisor 日志里那条 `console effect every_system = { limit = { is_rim_system = yes } log = "TS_RIM_[This.GetName]" }`
+是它的原文)。
+
+### §79.7 交下一份计划的四件事
+
+1. **事件窗检测盲区**(§79.1 ③):`world_probe._panel_bbox` 与 `classify_window` 都认不出「第一次接触」类暗面板;
+   后果是 `install` 与 `click_option` **同时**失效,而失败是**静默**的(`pass`)。修法两条都要:检测器认这一类窗,
+   且 `lease is None` 分支必须**说话**(写日志 + 非零退出)。
+2. **每系统路径在哪**:求值槽与谓词槽都是「实例化档」(1 次 / 11 次),而 787 次逐系统求值确实发生了。
+   下一靶应在**求值循环**里找(§75.3 的 `0x34A01B` 调用点所在的函数,往上找循环体)。
+3. **`ctx` 那个低地址区**(`0x7fe000`/8 KB,§56.8 也见过)到底是什么:同一区域两次独立读数都指到它,
+   值得单独一发只读普查(它可能是引擎的「求值暂存区」)。
+4. **`a3 = 0x80` 与 §76 的 `X = 0x80` 同值**:两个槽的第 2/第 3 实参是否是同一个掩码常量,值得静态确认。

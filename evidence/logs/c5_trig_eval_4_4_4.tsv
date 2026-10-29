@@ -1,0 +1,31 @@
+# target_rva	0x1a91a80
+# systems	787
+# poll_s	120.0
+# settle_s	3.0
+# overall_verdict	ctx_single
+# verdict_a	script_refused
+# verdict_b	ctx_single
+# verdict_poll	no_calls
+# stats_a_raw	calls=0 token_matched=0 distinct_ctx=0 dedupe_full=0 ctx_null=0 patch_size=15 installed=1 verify=0 last_token=0 last_tag=0
+# stats_a_delta	calls=0 ctx_null=0 dedupe_full=0 distinct_ctx=0 installed=1 last_tag=0 last_token=0 patch_size=15 token_matched=0 verify=0
+# stats_b_raw	calls=1 token_matched=1 distinct_ctx=1 dedupe_full=0 ctx_null=0 patch_size=15 installed=1 verify=0 last_token=18203 last_tag=1
+# stats_b_delta	calls=1 ctx_null=0 dedupe_full=0 distinct_ctx=1 installed=1 last_tag=1 last_token=18203 patch_size=15 token_matched=1 verify=0
+# stats_poll_delta	calls=0 ctx_null=0 dedupe_full=0 distinct_ctx=1 installed=1 last_tag=1 last_token=18203 patch_size=15 token_matched=0 verify=0
+# stats_final	calls=1 token_matched=1 distinct_ctx=1 dedupe_full=0 ctx_null=0 patch_size=15 installed=1 verify=0 last_token=18203 last_tag=1
+# delivered_a	1
+# delivered_b	1
+# marker_a	0
+# marker_b	1
+# armed_a	68636
+# armed_b	18203
+# script_wait_s	180.0
+# uninstall_rc	0
+# verify_rc	0
+# host_alive	1
+# trigger_token	68636
+# layout	version=1 entry_size=48 ring_len=256 stats_size=56 target_rva=27859584 prologue_len=32
+# dll	sqjs_c6.dll
+# dll_sha256	cbaa63c6e85ee4669c2a7aee408db290b0646886b9065100fdcdf05f58ba2961
+# module_base	0x7ff96be20000
+token	ctx_tag	sub_vtable_rva	self_vtable_rva	occurrences	ctx_ptr	a3	sub_obj
+18203	0x1	0x0	0x26938f8	1	0x7fed50	0x80	0x3fba
