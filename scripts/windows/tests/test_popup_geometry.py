@@ -73,3 +73,10 @@ def test_window_enum_record_keeps_every_candidate():
     assert rec["event"] == "window_candidates" and rec["candidates_n"] == 2
     assert [r["hwnd"] for r in rec["rects"]] == [0x1001, 0x1002]
     assert rec["rects"][1]["rect"] == [879, 555, 1939, 1105]
+
+
+def test_first_contact_rows_are_central_not_outliner():
+    rows = [{"x0": 1090, "x1": 1121, "y0": 868, "y1": 897},   # 黄选项圆圈
+            {"x0": 1284, "x1": 1425, "y0": 810, "y1": 816},   # 选项文本
+            {"x0": 1849, "x1": 1902, "y0": 216, "y1": 222}]   # outliner 行
+    assert pg.row_kind(rows, 2160, 1440) == "central"

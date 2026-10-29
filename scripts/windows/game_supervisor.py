@@ -27,7 +27,8 @@ import subprocess
 import sys
 import time
 
-from popup_geometry import panel_bbox, window_enum_record
+from popup_geometry import (option_rows, panel_bbox, row_kind,
+                            window_enum_record)
 from popup_guard import bump, count_attempt, decide_action
 from popup_identity import fingerprint, geometry_signature, load_allowlist
 
@@ -141,20 +142,29 @@ def classify_pause(red_px: int, green_px: int) -> str:
     return "unknown"
 
 
-def classify_window(rows, bbox, gold_px: int) -> str:
+def classify_window(rows, bbox, gold_px: int, w=None, h=None) -> str:
     """``choice`` when golden option rows sit in the right-hand column.
 
     ``bbox`` is ``[x0, y0, x1, y1]`` of a detected bright panel, or ``None``
     when the band profile found none.  It is informational: the choice
     window is a dark panel, so its rows decide even without a bbox.  Rows
     are golden-text runs in full-resolution window coordinates.
+
+    ``w``/``h`` are the window size.  Passing them enables the 2026-10-29
+    rule (issue #31): rows that start in the right-edge outliner band are not
+    options, and a central band with >=2 golden rows *is* a dialog -- the
+    first-contact window is a dark panel whose bbox profile is ``None``.
+    Omitting them keeps the old three-argument behaviour byte for byte.
     """
-    wide = [r for r in rows
+    kept = rows if w is None or h is None else option_rows(rows, w)
+    wide = [r for r in kept
             if r.get("x0", 0) >= CHOICE_ROW_LEFT_MIN
             and r.get("x1", 0) >= CHOICE_ROW_RIGHT_MIN]
     if gold_px >= CHOICE_GOLD_MIN and len(wide) >= CHOICE_ROW_COUNT_MIN:
         return "choice"
     if bbox:
+        return "dialog"
+    if w is not None and h is not None and row_kind(rows, w, h) == "central":
         return "dialog"
     return "none"
 

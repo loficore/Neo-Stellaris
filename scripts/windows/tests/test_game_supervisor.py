@@ -842,3 +842,15 @@ def test_a_dismiss_listed_geometry_id_in_the_file_still_holds(tmp_path):
                         allow_path=str(p))
     assert got["popup_id"].startswith("geom:") and got["allow_status"] == "ok"
     assert (got["action"], got["reason"]) == ("hold", "unclassified_hold")
+
+
+def test_outliner_only_rows_are_not_a_window():
+    rows = [{"x0": 1849, "x1": 1943, "y0": y, "y1": y + 6} for y in (216, 390, 480, 570)]
+    assert gs.classify_window(rows, None, 2846, 2160, 1440) != "dialog"
+    assert gs.classify_window(rows, None, 2846, 2160, 1440) != "choice"
+
+
+def test_first_contact_window_is_a_dialog():
+    rows = [{"x0": 1090, "x1": 1121, "y0": 868, "y1": 897},
+            {"x0": 1284, "x1": 1452, "y0": 814, "y1": 816}]
+    assert gs.classify_window(rows, None, 2846, 2160, 1440) == "dialog"
