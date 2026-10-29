@@ -1232,14 +1232,25 @@ def _handle_command(cmd, hwnd, state):
         lease = acquire_or_refuse(state, "click_option")
         rect = window_rect(hwnd)
         if lease is None:
-            pass
+            # Never a silent drop (issue #31): the caller must be able to tell
+            # "clicked but nothing happened" from "never clicked".
+            probe = state.get("probe") or {}
+            window = (probe.get("window") or {})
+            _log({"event": "click_refused", "action": "click_option",
+                  "reason": "lease_denied", "x": cmd["x"], "y": cmd["y"],
+                  "pause": (probe.get("pause") or {}).get("state"),
+                  "console": (probe.get("console") or {}).get("state"),
+                  "window": window.get("kind"), "bbox": window.get("bbox")})
+            state["cmd_refused"] = True
         elif _inside(rect, cmd["x"], cmd["y"]):
             if focus(hwnd):
                 _launch()._click_at(cmd["x"], cmd["y"])
                 state["console_open"] = None
                 _consume(state, lease)
             else:
-                _log({"event": "click_refused", "x": cmd["x"], "y": cmd["y"]})
+                _log({"event": "click_refused", "x": cmd["x"], "y": cmd["y"],
+                      "reason": "focus"})
+                state["cmd_refused"] = True
     elif verb == "console" and hwnd:
         kind, arg = console_send_plan(state)
         if kind == "refuse":
@@ -1396,6 +1407,7 @@ def serve(args, once: bool = False) -> int:
         cmd = parse_command(line) if line else None
         if cmd:
             last_cmd = line
+            state["cmd_refused"] = False
             _log({"event": "command", "line": line})
             try:
                 quit_now, one_shot = _handle_command(cmd, hwnd, state)
@@ -1554,9 +1566,11 @@ def serve(args, once: bool = False) -> int:
                 "pid": pid, "hwnd": hwnd, "state": paused, "note": note,
                 "want": state["want"], "policy": state["policy"],
                 "red": red, "green": green, "handled": handled,
-                "window": {"bright": round(stats["bright"], 3),
+                "window": {"kind": window,
+                           "bright": round(stats["bright"], 3),
                            "gold": stats["gold"], "rows": len(stats["rows"]),
                            "bbox": stats["bbox"]},
+                "cmd_refused": bool(state.get("cmd_refused")),
                 "speed_sha": state["speed_sha"], "shot": state["shot"],
                 "console_open": state.get("console_open", False),
                 "console_px": state.get("console_px"),
@@ -1588,7 +1602,9 @@ def _status_line(rec) -> str:
             f"pid={rec.get('pid')} hwnd={rec.get('hwnd')} age={age}s "
             f"want={rec.get('want')} policy={rec.get('policy')} "
             f"handled={rec.get('handled')} cmd={rec.get('last_cmd')} "
-            f"speed={rec.get('speed_sha')}")
+            f"speed={rec.get('speed_sha')} "
+            f"window={(rec.get('window') or {}).get('kind')} "
+            f"bbox={(rec.get('window') or {}).get('bbox')}")
 
 
 def _delete_task() -> None:
@@ -1655,6 +1671,21 @@ def cmd_stop(args) -> int:
     return 1
 
 
+EXIT_REFUSED = 2
+
+
+def command_refused(rec, line: str | None = None) -> bool:
+    """``True`` when the daemon published a refusal for the command it consumed.
+
+    Pure: the CLI reads the heartbeat record it already prints.  ``line`` is
+    optional so the test can ask the question without reproducing the wire
+    line.  A refusal must change the exit code -- "consumed" is not "clicked".
+    """
+    if not rec or not rec.get("cmd_refused"):
+        return False
+    return line is None or rec.get("last_cmd") == line
+
+
 def cmd_status(args) -> int:
     print(_status_line(_read_status()))
     return 0
@@ -1668,7 +1699,13 @@ def cmd_send(args) -> int:
         return 2
     atomic_write_text(CMD_PATH, line + "\n")
     time.sleep(args.wait_s)
-    print(_status_line(_read_status()))
+    rec = _read_status()
+    if command_refused(rec, line):
+        print(f"REFUSED {line}: the daemon consumed it but did not act; "
+              f"see {LOG_PATH}")
+        print(_status_line(rec))
+        return EXIT_REFUSED
+    print(_status_line(rec))
     return 0
 
 

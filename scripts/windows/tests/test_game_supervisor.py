@@ -854,3 +854,41 @@ def test_first_contact_window_is_a_dialog():
     rows = [{"x0": 1090, "x1": 1121, "y0": 868, "y1": 897},
             {"x0": 1284, "x1": 1452, "y0": 814, "y1": 816}]
     assert gs.classify_window(rows, None, 2846, 2160, 1440) == "dialog"
+
+
+def test_click_without_lease_logs_and_does_not_raise(monkeypatch):
+    logged = []
+    monkeypatch.setattr(gs, "acquire_or_refuse", lambda *a, **k: None)
+    monkeypatch.setattr(gs, "window_rect", lambda hwnd: (0, 0, 2160, 1440))
+    monkeypatch.setattr(gs, "_log", lambda rec: logged.append(rec))
+
+    def no_click(*a, **k):
+        raise AssertionError("a refused click must not reach the clicker")
+
+    monkeypatch.setattr(gs, "_launch", no_click)
+    state = {"probe": {"pause": {"state": "paused"},
+                       "console": {"state": "closed"},
+                       "window": {"kind": "none", "bbox": None}}}
+    quit_now, one_shot = gs._handle_command(
+        {"verb": "click", "x": 1105, "y": 846}, 67634, state)
+    assert (quit_now, one_shot) == (False, None)
+    refused = [r for r in logged if r.get("event") == "click_refused"]
+    assert len(refused) == 1
+    rec = refused[0]
+    assert rec["action"] == "click_option" and rec["reason"] == "lease_denied"
+    assert (rec["pause"], rec["console"], rec["window"]) == ("paused", "closed", "none")
+    assert state["cmd_refused"] is True
+
+
+def test_click_refused_makes_the_cli_exit_2():
+    rec = {"last_cmd": "click 1105 846", "cmd_refused": True,
+           "state": "paused", "note": "ok", "pid": 10680, "hwnd": 67634,
+           "want": "playing", "policy": "first", "handled": 14,
+           "speed_sha": [0, 0],
+           "window": {"kind": "none", "bbox": None}}
+    assert gs.command_refused(rec, "click 1105 846") is True
+    assert gs.command_refused(rec, "click 1 2") is False
+    assert gs.command_refused({"last_cmd": "click 1105 846"}) is False
+    assert gs.EXIT_REFUSED == 2
+    line = gs._status_line(rec)
+    assert "window=none" in line and "bbox=" in line
