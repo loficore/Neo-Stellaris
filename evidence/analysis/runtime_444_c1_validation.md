@@ -7792,3 +7792,89 @@ supervisor 日志里那条 `console effect every_system = { limit = { is_rim_sys
 3. **`ctx` 那个低地址区**(`0x7fe000`/8 KB,§56.8 也见过)到底是什么:同一区域两次独立读数都指到它,
    值得单独一发只读普查(它可能是引擎的「求值暂存区」)。
 4. **`a3 = 0x80` 与 §76 的 `X = 0x80` 同值**:两个槽的第 2/第 3 实参是否是同一个掩码常量,值得静态确认。
+
+## §80 逐系统循环定位:A1 注册点 / A2 循环体 / A3 三条证伪判据(2026-10-29,离线,零 shot)
+
+§79 的负结论把「787 次逐系统求值发生在哪」从求值槽(`+0x28`,1 次)和谓词槽(`+0x80`,11 次)上摘掉了
+—— 两个槽都是**实例化档**。本节改从 `every_system` 这个迭代器**自己的注册点**入手:先定名字是哪个
+函数拼的、注册函数在哪、它建的对象的 create 是谁(§80.1),再读 create 出来的对象的「按系统」循环
+(§80.2),最后用三条**可证伪**的判据钉候选承载寄存器(§80.3)。三小节都只读 exe 拷贝。
+
+### §80.1 `every_system` 的名字由 `0x192AFE0` 拼(`"every_" + "system"`),注册函数是 `0x19682F0`
+
+**三件事。**
+
+**① 拼接器 = `0x192AFE0..0x192B0C5`。** 它把 `0x2668DD8` 处的 6 B 字面量 `"every_"` 与入参名字
+拼接(`0x15F420` 是 `std::string` 的 `operator+`);同一模板的兄弟:`0x192B350` 拼 `"random_"`(前缀在
+`0x2668DD0`,7 B),`0x192B690` 拼 `"ordered_"`(`movabs rax, 0x5F6465726564726F`)。前缀是**代码里的
+立即数/字面量**,不是从别处读的变量。`every_system` 那次调用在 `0x196860C`:
+
+```
+  01968600  lea     rdx, [rip + 0xb11ea1]  ; -> 0x247a4a8  "system"
+  01968607  lea     rcx, [rsp + 0x50]
+  0196860c  call    0x14192afe0  ; -> 0x192afe0  "every_" + 入参
+  01968612  mov     rcx, rax
+  01968615  call    0x141d13270  ; -> 0x1d13270  GetOrAddToken
+```
+
+⇒ 运行时拼出的名字 = `"every_" + "system"` = `every_system`。这与计划背景里那条实测一致:
+`b"every_system\0"` 在 exe 里不存在,`b"every_"` 只在名字池。
+
+**② 注册函数 = `0x19682F0..0x1968BE6`(0x8F6 B)。** 它的**唯一**直接调用者是
+`0x1165D0..0x1165E9` —— 一个静态初始化 thunk(`call 0x19682F0` 之后 `jmp 0x218556C`),**不在** §19 的
+101 个注册函数区间里。计划里「对命中的 concat_fn 找它的调用者(应当是 101 个注册函数之一)」这一句
+按字面不成立:**字面量所在的那个函数自己就是注册函数**,再往上只有 static init。`0x19682F0` 同时落在
+§19 的两个区间内(`0x1930E70..0x196D3E6` 与 `0x195A580..0x19A7268` 在 `0x195A580..0x196D3E6` 重叠),
+所以「落在 §19 区间内」这一条判据成立,但「它是被 §19 注册函数调用的拼接器」不成立。
+
+**③ 它建的对象(原样窗口,`mint @0x1968615` 起的对象构造段):**
+
+```
+  0x196867f  mov     rbx, qword ptr [rip + 0x1a0c062]   ; -> 0x33746e8 (ScriptedEffectDB)
+  0x1968686  test    rbx, rbx
+  0x1968689  jne     0x19686ac
+  0x196868b  lea     ecx, [rbx + 0x70]                  ; rbx==0 ⇒ size 0x70
+  0x196868e  call    0x2185218                          ; operator new(0x70)
+  0x196869d  call    0x3aeba0                           ; db ctor(§21 的 effects 拉起)
+  0x19686a5  mov     qword ptr [rip + 0x1a0c03c], rax   ; -> 0x33746e8
+  0x19686ac  mov     ecx, 0x10
+  0x19686b1  call    0x2185218                          ; operator new(0x10)
+  0x19686bd  mov     qword ptr [rax + 8], rsi           ; +8 = 拼好的名字("every_system")
+  0x19686c1  lea     rcx, [rip + 0xcfdfa8]              ; -> 0x2666670
+  0x19686c8  mov     qword ptr [rax], rcx               ; +0 = class_info
+  0x19686ce  mov     edx, r14d                          ; token id(0x1968615 的 eax)
+  0x19686d4  call    0x3aef60                           ; BST insert(db, id, value)
+  class_info qwords: 0x14034c090, 0x141a74eb0, 0x14034c090, 0x141a75010
+```
+
+⇒ value = `new(0x10){ class_info = 0x2666670, name = "every_system" }`;`0x2666670` 的 qword[1] =
+`0x141A74EB0` ⇒ **create = `0x1A74EB0`**(§80.2 的入口,按 §75.1/§23.2 的 class_info 读法)。
+docstring 是 `0x2669D98` = `"Iterate through all systems"`。
+
+**附带发现(对 §80.2 有用):一个注册函数注册同族的四个 keyword。** 同一个 `0x19682F0` 里还有三个
+mint 点,前缀分别来自不同拼接器:
+
+| mint | 前缀 | 运行时名字 | class_info | create | 目标 db |
+|---|---|---|---|---|---|
+| `0x1968364` | `random_`(`0x192B350`) | `random_system` | `0x26665D0` | `0x1A74E10` | effect `0x33746E8`(`0x3AEF60`) |
+| `0x19684C9` | `ordered_`(`0x192B690`) | `ordered_system` | `0x26665C0` | `0x1A74E60` | effect `0x33746E8`(`0x3AEF60`) |
+| `0x1968615` | `every_`(`0x192AFE0`) | **`every_system`** | `0x2666670` | **`0x1A74EB0`** | effect `0x33746E8`(`0x3AEF60`) |
+| `0x1968890` / `0x1968ADD` | trigger 侧(`count_` 等) | `any_system` 族 | `0x2666690` | `0x1A74F50` | trigger `0x32611C8`(`0x348150`) |
+
+前两行与第三行的 class_info qword 都是逐条读出来的;**第四行只读了插入调用与 class_info 地址,
+未逐条核对 create**(A2 不用 trigger 侧)。
+
+**这一节不能说的。** ① `every_system` 是「静态两段拼起来」的名字:拼接器读 6 B 前缀 + 入参
+`"system"` 有代码支持,但没有实机把 token 名字读回来;② `0x1165D0` 只说明注册发生在静态初始化期,
+**不说明**它早于任何求值(时序仍按 §19:插入早于第一次引用该 keyword 的求值);③ `0x1A74EB0` 是
+「create」是按 `class_info` qword[1] 的 §75.1 读法,**不是** call-site 证人。
+
+**复现:**
+
+```bash
+python3 scripts/scratch/2026-10_per_system_loop/find_iterator.py
+```
+
+探针输出里的原始行:`# functions in 0x195a580..0x19a7268 with a 'system' lea: 13 (deduped;
+.pdata chained records merged)`、`# of which the literal is exactly 'system': 1`、
+`## registrar=0x19682f0 ...`、`mint @0x1968615 ... join=0x192afe0 prefix='every_' class_info=0x2666670`。
