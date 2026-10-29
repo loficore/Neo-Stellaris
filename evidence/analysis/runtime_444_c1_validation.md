@@ -7878,3 +7878,102 @@ python3 scripts/scratch/2026-10_per_system_loop/find_iterator.py
 探针输出里的原始行:`# functions in 0x195a580..0x19a7268 with a 'system' lea: 13 (deduped;
 .pdata chained records merged)`、`# of which the literal is exactly 'system': 1`、
 `## registrar=0x19682f0 ...`、`mint @0x1968615 ... join=0x192afe0 prefix='every_' class_info=0x2666670`。
+
+### §80.2 `every_system` 的逐系统循环:边界 `0x1A762A0..0x1A76335`,容器是 4 B id 向量,候选承载 = scope 结构里的 id/对象格
+
+§80.1 的 create `0x1A74EB0` 写出的 vtable 是 `0x26562D0`。槽 `+0x70` = **`0x1A76130`**,而这个槽正是
+`CEffect` 家族「把子效果带到某个 scope 里去走一遍」的那个虚位:基类实现 `0x3B1330` 在槽 `+0x70`
+里递归每个子效果(`[self+0x10]` 向量、`[self+0x1c]` 计数,stride 8);`every_system` 把它覆写成
+**先枚举、再逐个 scope 下发**。
+
+**① 枚举来源(两次虚调,不在循环里)。**
+
+```
+  01a76205  mov     rax, qword ptr [r14]
+  01a7620d  mov     rcx, r14
+  01a76210  call    qword ptr [rax + 0xe8]      ; 计数
+  01a76216  mov     edi, eax
+  ...
+  01a7626a  mov     rax, qword ptr [r14]
+  01a7626d  mov     r9, qword ptr [rbx + 8]      ; 目标向量(dword 数组)
+  01a76271  lea     r8, [rbp + 0xc0]             ; ← 过滤后的实际条数写这里
+  01a7627d  mov     rcx, r14
+  01a76280  call    qword ptr [rax + 0xf0]      ; 填 id
+```
+
+`+0xE8` = `0x1A798C0`:`[[0x3260BB0]+0x59C]`(一个 dword 计数);`+0xF0` = `0x1A8CC50` →
+`0x19307D0`,后者是真正的枚举器:
+
+```
+  019307da  mov     rax, qword ptr [rip + 0x19303cf]  ; -> 0x3260bb0
+  019307e7  mov     rdx, qword ptr [rax + 0x590]      ; 容器基址
+  019307ee  movsxd  rax, dword ptr [rax + 0x59c]      ; 原始条数
+  019307f5  lea     rdi, [rdx + rax*4]                ; end = base + n*4
+  ...
+  01930842  cmp     byte ptr [rax + 0x137c], 0        ; 逐对象的过滤位
+  01930849  je      0x141930857
+  0193084b  mov     ecx, dword ptr [rax + 8]          ; 只收 [obj+8](4 B)
+  01930851  mov     dword ptr [rbx], ecx
+  01930853  add     rbx, 4
+  01930857  add     rdx, 4                            ; stride = 4 B
+  0193085b  cmp     rdx, rdi
+  0193085e  jne     0x141930810
+```
+
+⇒ 容器 = `[[0x3260BB0]+0x590]` 的 **dword 向量**(原始条数 `[[0x3260BB0]+0x59C]`),元素尺寸 4 B;
+过滤条件是 `[obj+0x137C] != 0`,写进输出数组的是 `[obj+8]`(4 B)。`+0xF0` 把**过滤后的条数**写回
+`[rbp+0xC0]`,循环用的是这个数,不是原始条数。
+
+**② 循环本体(`0x1A762A0..0x1A76335`,原样):**
+
+```
+  01a76289  cmp     dword ptr [rbp + 0xc0], r12d      ; r12d = 0
+  01a76290  jle     0x141a7633b                       ; 0 条 ⇒ 直接收尾
+  01a76296  mov     rdi, r12                          ; i = 0(字节偏移)
+  01a762a0  mov     rax, qword ptr [rbx + 8]          ; ← 列表头读取
+  01a762a4  mov     r8d, dword ptr [rdi + rax]        ; ← 第 i 个 id(4 B)
+  01a762a8  mov     rax, qword ptr [r14 + 0x180]     ; 本对象的掩码(=0x80,ctor 写死)
+  01a762af  mov     qword ptr [rsp + 0x28], rax      ; scope+0x08 = 0x80
+  01a762b4  mov     dword ptr [rsp + 0x30], r8d      ; scope+0x10 = id
+  01a762b9  cmp     rax, 0x10
+  01a762bd  jne     0x141a7630c                       ; 掩码 != 0x10 ⇒ 对象格 = NULL
+  ...                                               ; 掩码 == 0x10 才去 0x3260FF8 里按 id 解对象
+  01a7630c  mov     rax, r12
+  01a7630f  mov     qword ptr [rsp + 0x34], rax      ; scope+0x14 = 对象指针(本掩码下 = 0)
+  01a76319  mov     r8, r15
+  01a7631c  lea     rdx, [rsp + 0x20]                ; ← 本轮的 scope 结构
+  01a76321  mov     rcx, r14
+  01a76324  call    0x1403b1330                       ; ← 每轮的下发:子效果 × 本 scope
+  01a76329  inc     esi
+  01a7632b  add     rdi, 4                            ; ← 迭代推进(stride 4)
+  01a7632f  cmp     esi, dword ptr [rbp + 0xc0]
+  01a76335  jl      0x141a762a0
+```
+
+三条要求的指令:
+
+| 角色 | 指令 |
+|---|---|
+| 列表头读取 | `0x1A762A0  mov rax,[rbx+8]`(容器基址;`rbx` 是 `0x1A8F080` 造的那个数组头) |
+| 迭代推进 | `0x1A76329 inc esi` + `0x1A762B` 处的 `0x1A7632B add rdi,4`,上界 `[rbp+0xC0]`,`0x1A76335 jl` |
+| 每轮的调用/写入 | `0x1A76324 call 0x3B1330`(`self, &scope, r15`);scope 三格在 `0x1A762AF/0x1A762B4/0x1A7630F` 写入 |
+
+⇒ **循环边界 = `0x1A762A0..0x1A76335`**(函数 `0x1A76130..0x1A7643D`,slot `+0x70`)。
+
+**③ 候选承载 `S`。** 本轮内变化、且被后续调用带进参数的只有两样:元素 **id**(`r8d`,来自
+`[rdi+[rbx+8]]`)和它写进的 **scope 结构**(栈上 `[rsp+0x20]`,三格 `+0x08` mask、`+0x10` id、
+`+0x14` 对象)。唯一被带进 `0x3B1330` 的是 **scope 结构的地址**(`rdx`),所以候选 `S` 取
+**scope 结构里的对象格 `[scope+0x14]`**,其次才是 id 格 `[scope+0x10]`。
+
+- 它从哪来:先由 `0x19307D0` 从 `[[0x3260BB0]+0x590]` 的 dword 向量里过滤出 id(条件是
+  `[obj+0x137C] != 0`,写的是 `[obj+8]`);循环里再用掩码决定是否拿 id 去 `0x3260FF8` 里解对象。
+- **本掩码(0x80)下对象格恒为 0**:`cmp rax,0x10 / jne` 分支把 `rax` 置成 `r12`(=0)。也就是说
+  `every_system` 轮内下发的 scope 是 `{mask=0x80, id, obj=NULL}` —— 对象要到下一层再解。
+- 旁证:`0x80` 与 §76 的谓词第 2 实参 `X`、§79 的 `a3` **同值**;本节给出它的静态出处:
+  `every_system` 的 create 里 `mov edx,0x80`(`0x1A74EC8`),ctor 存进 `[obj+0x180]`。
+
+**这一节不写的结论。** ① **不说** `S` 就是星系对象 —— 本掩码下它是 NULL,id 才是身份;
+② **不说**这个槽是「运行期执行」而不是「装载期按 scope 解析」:§24.4.2 把这个虚位记成
+`parse`(按静态形状),本节只证明「它按 id 列表逐轮把子效果带进 scope 结构」,**parse 还是
+execute 是 §80.3 判据 1 要问的第一件事**;③ 过滤器 `[obj+0x137C]` 的语义未定(可能是
+「已生成/有效」),`787` 是本节的预期分母,不是读数。
