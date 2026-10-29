@@ -1717,6 +1717,25 @@ just game stop | quit
     ⇒ 「这张证据图能不能读」不是传输方式的函数,是**那个 id 会不会再出现**的函数;取 `text:*` 可以 scp,
     取 `geom:*` 要预期半写,判定得靠可解码的那一份。别把半写读成「daemon 写坏了图」。
 
+**窗口判据改了(2026-10-29,issue #31):「中央带金色行」,右缘 outliner 不算。** 陷阱 5 那条
+「`x0>=1150 && x1>=1450` 的宽金色行」在银河地图上会把右侧大纲栏读成选项(`handled` 涨到 14、屏上没有窗)。
+现在 `classify_window(rows, bbox, gold, w, h)` 多收窗口尺寸:`popup_geometry.row_kind` 把 **`x0 >= 0.70w`**
+的行整条剔出选项集,并在 **`0.30w <= x1 <= 0.70w`** 出现 ≥2 行时判 `dialog`(第一次接触窗的选项圆圈
+`x≈1090..1121`、选项文本 `x≈1284..1452`,outliner `x0≈1849`)。**不传 `w`/`h` 时行为与旧版逐字一致**,
+老调用点不动。夹具 `scripts/windows/tests/fixtures/first_contact_2160x1440.png` 是事件带裁片
+(1728×1008,由 `scripts/scratch/2026-10_popup_fixture/crop_fixture.py` 生成并断言裁前/裁后同判 `dialog`;
+**不要缩放**,阈值按像素算)。
+
+**`click_refused`(2026-10-29,issue #31):「命令被消费」≠「点过」。** `_handle_command` 的 `click` 分支在
+`acquire_or_refuse` 返回 `None` 时不再 `pass`,而是写一条 jsonl:
+`{"event":"click_refused","action":"click_option","reason":"lease_denied","x":…,"y":…,"pause":…,
+"console":…,"window":…,"bbox":…}`(读数取上一拍 `state["probe"]`);`focus` 失败那条也带 `reason:"focus"`。
+CLI 侧由纯函数 `command_refused(rec, line)` 判心跳里的 `cmd_refused` + `last_cmd`,命中时
+**退出码 2**(`EXIT_REFUSED`)并在 stdout 打一行 `REFUSED <line>`;daemon 里这条路径**只记日志、不抛**
+(抛了会停主循环)。状态心跳同时多两格:`window.kind`(与 `window.bbox` 并列,`none`/`dialog`/`choice`
+在 `status` 行里现在能分开读)与 `cmd_refused`。
+
+
 ### `scripts/execspy.py [observe_seconds] [--uninstall-only]` —— §13 shim census 的复采通道
 
 **用法**:Windows 侧跑 `python C:\temp\execspy.py 60`(默认 45 s)。它把 DLL 装进正在跑的游戏、等
