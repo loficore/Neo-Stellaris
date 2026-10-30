@@ -8248,3 +8248,219 @@ neo_ps_monthly = { effect = { every_system = { log = "PS_HIT" } } }
 **这一节不能说的**:① 不判 `0x3B1330` 一定在 parse 期 —— 只能说「执行期的第一跳不经过它」;
 ② 不说 `0x3B01A0` 里就有逐系统循环 —— 那要读完才知道;③ 不把本节的线索当结论,下一任计划
 (`2026-10-30-parse-vs-execute.md`)的第一个任务就是读它。
+
+### §82.1 三组离线读数:`0x17F7920` 的分支、`0x3B01A0` 的形状、`0x3B1330` 的调用者桶(2026-10-30,离线,零 shot)
+
+生产者:`scripts/scratch/2026-10_parse_or_execute/read_execute_chain.py`(只读 exe 拷贝)。三组读数**都在
+下面原样贴着**,连探针自己的五条断言一起(全过才打印 `PASS`)。本节**不判层** —— 判读是 §82.2 的活;
+这里只把「读到什么」钉住,尤其是每个数字的出处是**哪条指令**。
+
+**读数 ① `0x17F7920` 是 7 条指令,不是 6 条。** §82 的七行是完整的:`mov r9,[rcx+0x180]` →
+`cmp r8d,0x3f92` → `jne 0x3b01a0` → `add rcx,0xc0` → `mov r8,r9` → `mov rax,[rcx]` →
+`jmp [rax+0x28]`。探针断言的就是这七条(第一条的完整操作数、`cmp` 的立即数、`jne` 的目标、
+末条的 `[rax+0x28]`)。**分支的两侧都写着**:`0x3F92` 命中时走 `jmp [rax+0x28]`
+(`rcx` 先 `add 0xc0`,即把 `self+0xC0` 交给 `[vtable+0x28]`),不命中时直接 `jmp 0x3B01A0`。
+
+**读数 ①b `0x3F92` 这个 immediate 在 `.text` 里的分布。** 4 B 字节命中 23 处;其中 **13 处**能归到一条
+`cmp`/`mov` 指令上 —— **12 条 `cmp r8d, 0x3f92`**(`0xA53C71`、`0x17F8F98`、`0x17FE1C2`、`0x18AD057`、
+`0x18AD627`、`0x18ADBF7`、`0x18AE1C7`、`0x18AE8C7`、`0x191B041`、`0x1B0F5C1`、`0x1B5AFD8`、`0x1B6C60A`)
+加 **1 条 `mov edx, 0x3f92`**(`0x19F95A`,落在 §17 那个 token-name driver 的整段函数
+`0x172E50..0x1AF1E7` 里)。另外 10 处**不归属**:
+- 9 处落在**没有 `.pdata` 记录**的叶函数里(`0x3AF4E3`、`0x17F7723`、`0x17F792A`、`0x17F8233`、`0x1841B26`、
+  `0x1AE4313`、`0x1B717AF`、`0x1B71A03`、`0x1B74673`)。`0x17F7920` 本身就是这样一个叶函数(它不写栈、
+  不动非易失寄存器,所以不需要 unwind 记录);同一个 immediate 从 `0x17F7927`(带 REX 前缀的
+  `cmp r8d,…`)与 `0x17F7928`(无前缀的 `cmp eax,…`)都能解出合法指令,所以**探针拒绝给这些地址
+  归属指令**,只报地址 —— 这是口径,不是漏读。
+- 1 处(`0x161C24A`)落在一条 `call 0x16201E0` 的 `rel32` 里,是字节巧合。
+
+⇒ `0x3F92` 在静态里确实是**一类被反复比较的 id**,12 个比较点分布在 12 个互不相同的函数里;它同时是
+一个**被立即数传给别人的值**(`0x19F95A` 的 `mov edx`)。
+
+**读数 ② `0x3B01A0` 的形状(`.pdata` 0x3B01A0..0x3B0F7E = 3,550 B / 712 insns)。**
+- `call qword ptr [reg + 0x70]`:**0 处**;
+- 直接 `call 0x3B1330`:**0 处**;
+- 「容器基址 + 4/8 步长」的索引内存:**3 处,都不是容器迭代** —— `0x3B04D7` / `0x3B05E9` 是**switch 跳表**
+  (`lea rdx,[rip-…]` + `movzx eax,[rdx+rax+…]` + `jmp rcx` 三连);`0x3B0C77` 是
+  `[rax+0x10]` 指向的 **8 B 元素数组**按 `[obj+0x1c]` 计数取第 `i-1` 个(`mov rdx,[rax+rcx*8-8]`),
+  取出来的元素随即被读 `[rdx+0x20]` 并 `cmp eax, 0x2712`。探针另报的 `add rcx, 8` 在 `0x3B0C46`,
+  与 `0x3B0C77` **不在同一条直线上**(中间隔 0x31 B、跨分支),探针不把两者读成一个循环。
+- rip 相对全局读取:**19 个不同目标**;`0x33746E8`(effect db)**被读 4 次**,**`0x3260BB0`(galaxy db)一次都没有**,
+  `+0x590` 这个容器读点也**一次都没有**。
+
+**读数 ③ `0x3B1330` 的全部直接调用者:3 处、3 个函数**(`scripts/fastcalls.py` 与本探针的字节级 `E8` 扫描
+**逐条相等**;`fastcalls` 写出的 `evidence/xrefs/callers_0x3b1330_buckets.tsv` 内容未变):
+
+| 调用点 | 所在函数 | 该地址在 `.rdata` 里被几个槽装着 | 直接 `E8` 调用该函数的函数数 |
+|---|---|---|---|
+| `0x17F6004` | `0x17F5FC0..0x17F6071`(177 B) | 1 | 0 |
+| `0x1A1B2D4` | `0x1A1B0E0..0x1A1B3ED`(781 B) | 101 | 0 |
+| `0x1A76324` | `0x1A76130..0x1A7643D`(781 B) | 202 | 0 |
+
+`0x3B1330` 自己在 `.rdata` 里作为 8 B qword 命中 **761** 次(§24.4.2 在 1,581 个 class_info 的子集上量到
+**723** 个 vtable 把放在 `+0x70`)。**槽号不报**:探针最初用一个「往回走连续 `.text` 指针」的启发式定
+vtable 起点,三个桶都读出 `+0x808` —— 那是**跨过了紧挨着的相邻 vtable**(它们是连续排布、没有 RTTI 分隔的),
+读数因此弃用;`.rdata` 槽计数不依赖任何假设。
+
+三个桶的函数头都贴在上面(第一个 `0x17F5FC0` 先 `mov rcx,[rcx+0xC8]` 再 `call 0x356BE0`;另两个是同一
+形状的 `push rbp/r12/r14/r15` + `lea rbp,[rsp-0x90]` + `sub rsp,0x190`)。
+
+**这一节不能说的。** ① 不说 `0x3F92` 的语义 —— 只能报「12 个函数在比较它、token-name driver 里有人把
+它以立即数传给别处」;② 不说 `0x3B01A0` 里那段 8 B 元素遍历是**哪一类**对象(只报 `[obj+0x10]`/`[obj+0x1c]`
+这两个位移与 `[rdx+0x20]` 的比较,和 §24.4.2 记的子效果向量同形,但同形不是同一个东西);
+③ 不说三个调用者「都在 parse 侧」—— 它们的**唯一**共同静态事实是「都不是被直接调用的」(直接调用者
+各 0)、且都装在 vtable 里;`parse` 这个标签在 §24.4.2 是给 `0x3B1330` 自己用的,不是给它的调用者用的;
+④ 不说 761 与 723 的差是 38 个 vtable —— 两个数的统计口径不同(前者是全 `.rdata` 的 qword 命中,
+后者是在 class_info 子集上按 `+0x70` 量的)。
+
+**复现:**
+
+```bash
+python3 scripts/scratch/2026-10_parse_or_execute/read_execute_chain.py
+```
+
+**原始输出**(连 `PASS` 一起):
+
+```
+## 1. 0x17f7920 — every_system ExecuteActual (slot[2])
+  0x17f7920  mov     r9, qword ptr [rcx + 0x180]
+  0x17f7927  cmp     r8d, 0x3f92
+  0x17f792e  jne     0x3b01a0
+  0x17f7934  add     rcx, 0xc0
+  0x17f793b  mov     r8, r9
+  0x17f793e  mov     rax, qword ptr [rcx]
+  0x17f7941  jmp     qword ptr [rax + 0x28]
+  instruction count = 7 (terminal: jmp)
+  branch: cmp r8d, 0x3f92 @0x17f7927 -> jne 0x3b01a0
+  taken path: jmp qword ptr [rax + 0x28] @0x17f7941
+
+## 1b. immediate 0x3f92 sites in .text
+  raw 4-byte hits = 23
+  imm @0x19f95b  func 0x172e50..0x1af1e7  0x19f95a  mov     edx, 0x3f92
+  imm @0x3af4e3  leaf / no .pdata (not attributable) or data  -
+  imm @0xa53c74  func 0xa53b50..0xa53d35  0xa53c71  cmp     r8d, 0x3f92
+  imm @0x161c24a  func 0x161c220..0x161c263  0x161c249  call    0x16201e0
+  imm @0x17f7723  leaf / no .pdata (not attributable) or data  -
+  imm @0x17f792a  leaf / no .pdata (not attributable) or data  -
+  imm @0x17f8233  leaf / no .pdata (not attributable) or data  -
+  imm @0x17f8f9b  func 0x17f8f70..0x17f902d  0x17f8f98  cmp     r8d, 0x3f92
+  imm @0x17fe1c5  func 0x17fe1b0..0x17fe207  0x17fe1c2  cmp     r8d, 0x3f92
+  imm @0x1841b26  leaf / no .pdata (not attributable) or data  -
+  imm @0x18ad05a  func 0x18ad050..0x18ad0f9  0x18ad057  cmp     r8d, 0x3f92
+  imm @0x18ad62a  func 0x18ad620..0x18ad6c9  0x18ad627  cmp     r8d, 0x3f92
+  imm @0x18adbfa  func 0x18adbf0..0x18adc99  0x18adbf7  cmp     r8d, 0x3f92
+  imm @0x18ae1ca  func 0x18ae1c0..0x18ae269  0x18ae1c7  cmp     r8d, 0x3f92
+  imm @0x18ae8ca  func 0x18ae8c0..0x18ae969  0x18ae8c7  cmp     r8d, 0x3f92
+  imm @0x191b044  func 0x191b010..0x191b0da  0x191b041  cmp     r8d, 0x3f92
+  imm @0x1ae4313  leaf / no .pdata (not attributable) or data  -
+  imm @0x1b0f5c4  func 0x1b0f5a0..0x1b0f630  0x1b0f5c1  cmp     r8d, 0x3f92
+  imm @0x1b5afdb  func 0x1b5afc0..0x1b5b082  0x1b5afd8  cmp     r8d, 0x3f92
+  imm @0x1b6c60d  func 0x1b6c5e0..0x1b6c682  0x1b6c60a  cmp     r8d, 0x3f92
+  imm @0x1b717af  leaf / no .pdata (not attributable) or data  -
+  imm @0x1b71a03  leaf / no .pdata (not attributable) or data  -
+  imm @0x1b74673  leaf / no .pdata (not attributable) or data  -
+  decoded into a cmp/mov carrying the immediate = 13
+
+## 2. 0x3b01a0 — instantiate-by-token-id consumer (§23.1)
+  .pdata extent 0x3b01a0..0x3b0f7e (3550 B, 712 insns)
+  call qword ptr [reg + 0x70]        : 0
+  indexed mem (base + idx*4|8)       : 3
+  add/sub reg, 4|8                   : 1
+  direct call 0x3b1330              : 0
+  direct call targets (rva x count): 0x156310 x1, 0x1565a0 x2, 0x1577b0 x1, 0x15d0d0 x1, 0x15efd0 x1, 0x15f770 x2, 0x22c4a0 x1, 0x2423d0 x1, 0x3472f0 x1, 0x34c180 x1, 0x3533b0 x1, 0x353e20 x2, 0x356170 x2, 0x3561a0 x2, 0x3927b0 x2, 0x3aeba0 x2, 0x3af060 x1, 0x3afa50 x1, 0x3afb40 x1, 0x5e2ef0 x1, 0x17f6550 x1, 0x1c886b0 x1, 0x1c89700 x5, 0x1c91020 x1, 0x1c91c30 x3, 0x1c9e350 x1, 0x1cc4450 x7, 0x1d0ba00 x1, 0x1d0c9f0 x3, 0x1d156e0 x3, 0x2181c34 x1, 0x2185218 x5, 0x2185254 x1
+  rip-relative global reads          : 19 distinct -> 0x0 x2, 0x2465918 x1, 0x247a4f0 x1, 0x247a4f4 x1, 0x247b078 x1, 0x247b098 x1, 0x24c7860 x1, 0x24e90e8 x1, 0x24e90f0 x1, 0x24ea600 x2, 0x24ea640 x1, 0x24ea830 x1, 0x24ea860 x1, 0x24ea868 x1, 0x26159c8 x1, 0x26159e8 x1, 0x2615bc0 x1, 0x2615be0 x1, 0x33746e8 x4
+  reads galaxy db 0x3260bb0   : no   ([+0x590] container read: no)
+  reads effect db 0x33746e8   : YES   ([+0x590] container read: no)
+    indexed: 0x3b04d7  mov     ecx, dword ptr [rdx + rax*4 + 0x3b0dc8]
+           0x3b04bf  ja      0x3b08d0
+           0x3b04c5  movsxd  rax, ecx
+           0x3b04c8  lea     rdx, [rip - 0x3b04cf]
+           0x3b04cf  movzx   eax, byte ptr [rdx + rax + 0x3b0dd0]
+           0x3b04de  add     rcx, rdx
+           0x3b04e1  jmp     rcx
+           0x3b04e3  cmp     ecx, 0x2e58
+           0x3b04e9  jg      0x3b055a
+    indexed: 0x3b05e9  mov     ecx, dword ptr [rdx + rax*4 + 0x3b0ed0]
+           0x3b05d1  ja      0x3b08d0
+           0x3b05d7  movsxd  rax, ecx
+           0x3b05da  lea     rdx, [rip - 0x3b05e1]
+           0x3b05e1  movzx   eax, byte ptr [rdx + rax + 0x3b0ed8]
+           0x3b05f0  add     rcx, rdx
+           0x3b05f3  jmp     rcx
+           0x3b05f5  cmp     ecx, 0x3f71
+           0x3b05fb  jg      0x3b0700
+    indexed: 0x3b0c77  mov     rdx, qword ptr [rax + rcx*8 - 8]
+           0x3b0c69  cmp     dword ptr [rax + 0x1c], 0
+           0x3b0c6d  je      0x3b0cb2
+           0x3b0c6f  movsxd  rcx, dword ptr [rax + 0x1c]
+           0x3b0c73  mov     rax, qword ptr [rax + 0x10]
+           0x3b0c7c  test    rdx, rdx
+           0x3b0c7f  je      0x3b0cb2
+           0x3b0c81  mov     eax, dword ptr [rdx + 0x20]
+           0x3b0c84  cmp     eax, 0x2712
+    step: 0x3b0c46  add     rcx, 8
+           0x3b0c34  je      0x3b0c62
+           0x3b0c36  cmp     r12d, 0x28df
+           0x3b0c3d  je      0x3b0c62
+           0x3b0c3f  mov     rcx, qword ptr [rbp + 0x530]
+           0x3b0c4a  lea     rdx, [rbp + 0x538]
+           0x3b0c51  call    0x22c4a0
+           0x3b0c56  mov     rsi, qword ptr [rbp + 0x538]
+           0x3b0c5d  jmp     0x3b0db2
+
+## 3. callers of 0x3b1330
+  --- scripts/fastcalls.py ---
+  3 direct code sites to 0x3b1330 in .text
+  in 3 functions
+  
+    1 sites  0x17f5fc0..0x17f6071 (0xb1)  -
+    1 sites  0x1a1b0e0..0x1a1b3ed (0x30d)  -
+    1 sites  0x1a76130..0x1a7643d (0x30d)  -
+  
+  wrote evidence/xrefs/callers_0x3b1330_buckets.tsv
+  --- own E8 scan: 3 sites in 3 functions ---
+  .rdata qword hits for 0x3b1330: 761 (§24.4.2 measured 723 vtables carrying it at +0x70)
+
+  * bucket 0x17f5fc0..0x17f6071 (177 B), 1 site(s): 0x17f6004
+      0x17f5fc0  mov     qword ptr [rsp + 8], rbx
+      0x17f5fc5  push    rdi
+      0x17f5fc6  sub     rsp, 0x190
+      0x17f5fcd  mov     rdi, r8
+      0x17f5fd0  mov     rbx, rcx
+      0x17f5fd3  xor     r9d, r9d
+      0x17f5fd6  mov     r8, rdx
+      0x17f5fd9  lea     rdx, [rsp + 0x20]
+      0x17f5fde  mov     rcx, qword ptr [rcx + 0xc8]
+      0x17f5fe5  call    0x356be0
+      .rdata slots installing this address: 1  (first: 0x2615a58)
+      direct E8 callers of this function: 0
+
+  * bucket 0x1a1b0e0..0x1a1b3ed (781 B), 1 site(s): 0x1a1b2d4
+      0x1a1b0e0  mov     qword ptr [rsp + 0x18], rbx
+      0x1a1b0e5  mov     qword ptr [rsp + 0x20], rsi
+      0x1a1b0ea  push    rbp
+      0x1a1b0eb  push    rdi
+      0x1a1b0ec  push    r12
+      0x1a1b0ee  push    r14
+      0x1a1b0f0  push    r15
+      0x1a1b0f2  lea     rbp, [rsp - 0x90]
+      0x1a1b0fa  sub     rsp, 0x190
+      0x1a1b101  mov     r15, r8
+      .rdata slots installing this address: 101  (first: 0x2651e90, 0x2652560, 0x2652758)
+      direct E8 callers of this function: 0
+
+  * bucket 0x1a76130..0x1a7643d (781 B), 1 site(s): 0x1a76324
+      0x1a76130  mov     qword ptr [rsp + 0x18], rbx
+      0x1a76135  mov     qword ptr [rsp + 0x20], rsi
+      0x1a7613a  push    rbp
+      0x1a7613b  push    rdi
+      0x1a7613c  push    r12
+      0x1a7613e  push    r14
+      0x1a76140  push    r15
+      0x1a76142  lea     rbp, [rsp - 0x90]
+      0x1a7614a  sub     rsp, 0x190
+      0x1a76151  mov     r15, r8
+      .rdata slots installing this address: 202  (first: 0x2651f90, 0x2652088, 0x2652180)
+      direct E8 callers of this function: 0
+
+PASS
+```
