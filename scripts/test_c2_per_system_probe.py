@@ -269,3 +269,14 @@ def test_resident_module_refuses():
         refuse_if_resident("sqjs_c7.dll", 0x7FF6_0000)
     assert exc.value.code == 2
     refuse_if_resident("sqjs_c7.dll", None)
+
+
+# --- live-path helpers (pure parts only) ------------------------------------------
+
+
+def test_script_sends_is_the_transport_count():
+    log = "PS_HIT alpha\nPS_HIT beta\n"
+    assert mod.count_marker(log, "PS_HIT") == 2
+    assert mod.count_marker(log, None) == 0
+    assert mod.count_marker("", "PS_HIT") == 0
+    assert "script_sends=2" in build_meta(script_sends=2, log_hits=2)

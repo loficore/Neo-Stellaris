@@ -272,3 +272,279 @@ def refuse_if_resident(dll_name, base):
     """A same-name module already mapped means the loader reuses the old image."""
     if base:
         raise SystemExit(EXIT_REFUSED)
+
+
+# --- live path (Windows only; not exercised by the host tests) ---------------------
+
+
+def count_marker(text, marker):
+    """How many times the engine's own receipt line appears in the log delta."""
+    if not marker or not text:
+        return 0
+    return text.count(marker)
+
+
+def _signed32(value):
+    value &= 0xFFFF_FFFF
+    return value - 0x1_0000_0000 if value & 0x8000_0000 else value
+
+
+def _write_artifact(path, meta, rows):
+    """Meta first, then rows: the artifact is what survives a lost stdout."""
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        for line in meta:
+            handle.write(f"#meta {line}\n")
+        for line in rows:
+            handle.write(line + "\n")
+
+
+def read_container(pid, exe_base):
+    """One live read of the galaxy id vector. `None` = unreadable (never an exception)."""
+    import c2_harness as harness
+
+    try:
+        obj = struct.unpack("<Q", harness.read_memory(pid, exe_base + GALAXY_DB_RVA, 8))[0]
+        count = struct.unpack("<I", harness.read_memory(pid, obj + GALAXY_COUNT_OFF, 4))[0]
+        if not 0 < count <= 1_000_000:      # an out-of-range count is a reading, not a licence
+            return None
+        vec = struct.unpack("<Q", harness.read_memory(pid, obj + GALAXY_IDS_OFF, 8))[0]
+        blob = harness.read_memory(pid, vec, count * 4)
+        return {"raw_count": count, "ids": decode_container(blob, count)}
+    except Exception:                        # noqa: BLE001 — an unreadable read is a verdict
+        return None
+
+
+def read_stats(pid, base, exports, buf):
+    import c2_harness as harness
+
+    harness.call_remote_with_arg(pid, base, exports["C5PerSystemStatsInto"], buf)
+    raw = harness.read_memory(pid, buf, STATS_SIZE)
+    text = raw.split(b"\x00", 1)[0].decode("ascii", "replace")
+    return parse_stats(text)
+
+
+def drain_entries(pid, base, exports, buf):
+    import c2_harness as harness
+
+    count = harness.call_remote_with_arg(pid, base, exports["C5PerSystemDrainInto"], buf)
+    count = min(count & 0xFFFF_FFFF, RING_LEN)
+    if count == 0:
+        return []
+    blob = harness.read_memory(pid, buf, count * ENTRY_SIZE)
+    return [decode_entry(blob[i * ENTRY_SIZE:(i + 1) * ENTRY_SIZE]) for i in range(count)]
+
+
+def send_script(cmd_file, script, game_log, wait_s):
+    """Send one console script; return `(delivered, hits)`.
+
+    `delivered` is the transport receipt (the supervisor's `.seen` key moved). `hits` is
+    the engine-side receipt: how many times the script's own `log = "…"` marker appeared
+    in the log delta. A delivered-but-unmarked script was refused by the engine.
+    """
+    import time
+
+    from c4_wiring_probe import GAME_LOG, _file_size_or_none, _read_text_from
+
+    log_path = os.path.expanduser(game_log or GAME_LOG)
+    offset = _file_size_or_none(log_path)
+    seen_path = os.path.splitext(cmd_file)[0] + ".seen"
+
+    def _seen():
+        try:
+            with open(seen_path, encoding="ascii", errors="replace") as handle:
+                return handle.read().strip()
+        except OSError:
+            return None
+
+    before = _seen()
+    tmp = cmd_file + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as handle:
+        handle.write("console " + script + "\n")
+    os.replace(tmp, cmd_file)
+
+    marker = script_marker(script)
+    deadline = time.time() + wait_s
+    delivered = False
+    while time.time() < deadline:
+        if _seen() != before:
+            delivered = True
+            break
+        time.sleep(0.25)
+    if not delivered:
+        return False, 0
+
+    while time.time() < deadline:
+        try:
+            hits = count_marker(_read_text_from(log_path, offset) or "", marker)
+        except OSError:
+            hits = 0
+        if hits:
+            return True, hits
+        time.sleep(0.25)
+    return True, 0
+
+
+def gate_module(pid, dll_path, needed):
+    """Check the export names in the FILE, gate the world state, then inject."""
+    import c2_harness as harness
+
+    exports = harness.list_exports(dll_path)
+    missing = [name for name in needed if name not in exports]
+    if missing:
+        print(f"[persystem] {dll_path} is missing {missing} — refusing to inject", file=sys.stderr)
+        raise SystemExit(EXIT_REFUSED)
+
+    dll_name = os.path.basename(dll_path.replace("\\", "/"))
+    print(f"[persystem] pid={pid}  dll={dll_path}")
+    try:
+        resident = harness.resolve_base_address(pid, dll_name)
+    except RuntimeError:
+        resident = None
+    refuse_if_resident(dll_name, resident)
+
+    from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+
+    gate_install("persystem")
+    harness.inject_dll(pid, dll_path)
+    harness.assert_game_alive(pid)
+    base = harness.resolve_base_address(pid, dll_name)
+    print(f"[persystem] {dll_name} base: 0x{base:x}")
+
+    head = harness.read_memory(pid, base, 2)
+    assert head == b"MZ", f"bad header at 0x{base:x}: {head!r}"
+    sanity = _signed32(harness.call_remote(pid, base, exports["C2Sanity"]))
+    assert sanity == 42, f"C2Sanity returned {sanity}, expected 42"
+    harness.assert_game_alive(pid)
+    print("[persystem] C2Sanity == 42, game alive — dispatch authorized")
+    return base, exports
+
+
+def run(dll_path, out_path, *, systems, save_name, script_file, game_log=None,
+        cmd_file=DEFAULT_CMD_FILE, poll_s=120.0, settle_s=3.0, script_wait_s=180.0):
+    """One shot in one game process. Cleanup runs in a finally; never FreeLibrary."""
+    import time
+
+    import c2_harness as harness
+
+    preflight_paths(script_file, cmd_file)
+    dll_sha = sha_gate(dll_path)
+    print(f"[persystem] dll={dll_path} sha256={dll_sha}")
+
+    pid = harness.resolve_pid("stellaris.exe")
+    needed = [name for name in harness.list_exports(dll_path) if name.startswith("C5PerSystem")]
+    base, exports = gate_module(pid, dll_path, needed)
+    exe_base = harness.resolve_base_address(pid, "stellaris.exe")
+
+    stats_buf = harness.remote_alloc(pid, STATS_SIZE)
+    drain_cap = RING_LEN * ENTRY_SIZE
+    drain_buf = harness.remote_alloc(pid, drain_cap)
+
+    layout_buf = harness.remote_alloc(pid, LAYOUT_WORDS * 4)
+    harness.call_remote_with_arg(pid, base, exports["C5PerSystemLayout"], layout_buf)
+    layout = decode_layout(struct.unpack("<6I", harness.read_memory(pid, layout_buf, LAYOUT_WORDS * 4)))
+
+    harness.call_remote(pid, base, exports["C5PerSystemReset"])
+    install_rc = _signed32(harness.call_remote(pid, base, exports["C5PerSystemInstall"]))
+    decision = install_decision(install_rc, layout)
+    harness.assert_game_alive(pid)
+
+    meta = {
+        "dll": os.path.basename(dll_path.replace("\\", "/")),
+        "dll_sha256": dll_sha,
+        "module_base": f"0x{base:x}",
+        "exe_base": f"0x{exe_base:x}",
+        "systems": systems,
+        "save_name": save_name,
+        "install_rc": install_rc,
+        "install_decision": decision,
+        "layout_target_rva": f"0x{layout['target_rva']:x}",
+        "overall_verdict": "instrument_broken" if decision != "ok" else "",
+        "host_alive": 1,
+        "entries_error": 0,
+    }
+    if decision != "ok":
+        _write_artifact(out_path, build_meta(**meta), [])
+        return meta
+
+    rows, container, hits, sends = [], None, 0, 0
+    uninstall_rc, verify_rc, alive = None, None, False
+    try:
+        time.sleep(settle_s)
+        before = read_stats(pid, base, exports, stats_buf)
+        container = read_container(pid, exe_base)
+
+        script = open(script_file, encoding="utf-8").read().strip().splitlines()[0]
+        sends = 1
+        delivered, hits = send_script(cmd_file, script, game_log, script_wait_s)
+        print(f"[persystem] script delivered={delivered} hits={hits}")
+
+        deadline = time.time() + poll_s
+        after = before
+        while time.time() < deadline:
+            time.sleep(1.0)
+            after = read_stats(pid, base, exports, stats_buf)
+            if after["matched"] >= systems or (hits and after["matched"] >= hits):
+                break
+
+        harness.call_remote_with_arg(pid, base, exports["C5PerSystemSetDrainCap"], drain_cap)
+        rows = drain_entries(pid, base, exports, drain_buf)
+
+        delta = {key: after[key] - before[key] for key in STATS_KEYS}
+        delta["installed"] = after["installed"]
+        delta["verify"] = after["verify"]
+        delta["patch_size"] = after["patch_size"]
+        meta.update({
+            "stats_delta": " ".join(f"{k}={delta[k]}" for k in STATS_KEYS),
+            "container_raw_count": (container or {}).get("raw_count", -1),
+            "container_ids_sha256": hashlib.sha256(
+                b"".join(struct.pack("<I", i) for i in (container or {}).get("ids", []))
+            ).hexdigest(),
+            "log_hits": hits,
+            "script_sends": sends,
+            "entries": len(rows),
+        })
+        meta["overall_verdict"] = verdict(delta, rows, container, expected=systems,
+                                          script_sends=sends, log_hits=hits, layout=layout)
+    finally:
+        uninstall_rc = _signed32(harness.call_remote(pid, base, exports["C5PerSystemUninstall"]))
+        verify_rc = _signed32(harness.call_remote(pid, base, exports["C5PerSystemVerify"]))
+        time.sleep(settle_s)
+        try:
+            harness.assert_game_alive(pid)
+            alive = True
+        except Exception:                    # noqa: BLE001 — a dead host is a reading
+            alive = False
+        if uninstall_rc == -7 or verify_rc != 0:
+            print("RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY", file=sys.stderr)
+
+    meta.update({"uninstall_rc": uninstall_rc, "verify_rc": verify_rc, "host_alive": int(alive)})
+    _write_artifact(out_path, build_meta(**meta), artifact_rows(rows))
+    print(f"[persystem] verdict={meta['overall_verdict']}  artifact={out_path}")
+    return meta
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("dll", nargs="?", default=r"C:\temp\sqjs_c7.dll")
+    parser.add_argument("--systems", type=int, required=True,
+                        help="current campaign's star count (no default: 787 belongs elsewhere)")
+    parser.add_argument("--save-name", required=True)
+    parser.add_argument("--script-file", required=True)
+    parser.add_argument("--game-log", default=None)
+    parser.add_argument("--cmd-file", default=DEFAULT_CMD_FILE)
+    parser.add_argument("--poll-s", type=float, default=120.0)
+    parser.add_argument("--settle-s", type=float, default=3.0)
+    parser.add_argument("--script-wait-s", type=float, default=180.0)
+    parser.add_argument("--out", default="C:/temp/c5_per_system.tsv")
+    args = parser.parse_args(argv)
+
+    meta = run(args.dll, args.out, systems=args.systems, save_name=args.save_name,
+               script_file=args.script_file, game_log=args.game_log, cmd_file=args.cmd_file,
+               poll_s=args.poll_s, settle_s=args.settle_s, script_wait_s=args.script_wait_s)
+    return 0 if meta.get("overall_verdict") in EVIDENCE_VERDICTS else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
