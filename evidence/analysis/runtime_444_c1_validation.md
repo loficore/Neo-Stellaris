@@ -8019,3 +8019,82 @@ hand-off,写在计划文件末尾)。
 > 初始化」不准确 —— `0x24B88E8` 是**相邻另一个栈对象**(`[rbp-0x70]`)的 vtable;`[rsp+0x20]` 这一张是
 > `0x1A761D0` 的 `call 0x399710` 初始化的。判据 1 的结论(`下`)不依赖这句:vtable 归属与本链是否同层
 > 无关。
+
+## §81 第七把 guard:逐系统下发点的靶位与第一发(2026-10-30)
+
+§80 把循环体读完了,但它的 hand-off(§80.4)只写到「下一发要问什么」,没写「用哪把仪器、
+补丁打在哪一字节」。本节补这一层,并在 §81.1 给出靶位的逐字节闸;§81.2 留给那一发本身。
+
+### §81.1 靶位闸:补丁是 `0x3B1330` 的前 15 字节,不是循环头(2026-10-30,离线,零 shot)
+
+**① 补丁窗口。** `0x3B1330..0x3B133F`,15 字节 = 三条 5 B 指令,第 4 条从 `0x3B133F` 开始:
+
+```
+  003b1330  48895c2408            mov     qword ptr [rsp + 8], rbx
+  003b1335  48896c2410            mov     qword ptr [rsp + 0x10], rbp
+  003b133a  4889742418            mov     qword ptr [rsp + 0x18], rsi
+  003b133f  57                    push    rdi                     ; ← 第 4 条,补丁窗口之外
+```
+
+`detour.zig` 的 `decodePrologueLength(…, 14)` 走三条 `mov`(5+5+5)正好落在 ≥14 的第一个指令
+边界上 ⇒ 15 B 是唯一解,不需要 NOP 填充,也不会切断半条指令。
+
+**② 过滤器。** `every_system` 的 create(`0x1A74EB0`)写出的 vtable 是 `0x26562D0`;它的
+`+0x70` = **`0x1A76130`**(逐系统循环体,§80.2),`+0x98` = `0x3B1420`(effect 谓词基体,§23.1)。
+即这一族在「把子效果带进 scope」那个虚位上覆写了基类 `0x3B1330`。
+
+**③ 每轮的下发点。** 循环体里 `0x1A76321 mov rcx, r14` + `0x1A76324 call 0x3B1330`:
+rcx = 本对象(self),rdx = 本轮 scope 结构(`lea rdx,[rsp+0x20]`),r8 = r15。
+所以「钩 `0x3B1330`、按 `[self] == 0x26562D0` 过滤」= 「数 `every_system` 的逐系统下发次数」,
+且每次的 scope 指针就是 rdx。
+
+**④ 容器读点(§80.2 的补充)。** 枚举器 `0x19307D0`:
+
+```
+  019307da  mov  rax, [rip + 0x19303cf]        ; -> 0x3260bb0
+  019307e7  mov  rdx, [rax + 0x590]            ; 向量基址
+  019307ee  movsxd rax, [rax + 0x59c]          ; 原始条数
+  01930815  mov  r8d, [rdx]                    ; ← 容器元素 = 完整 32 位 id
+  01930839  cmp  [rax + 8], r8d                ; 用它核对对象身份
+  0193084b  mov  ecx, [rax + 8]                ; 写进输出的是同一个 4 B 值
+  01930842  cmp  byte [rax + 0x137c], 0        ; 过滤位:0 ⇒ 这一条不计入
+```
+
+⇒ 容器 dword 集与 guard 收到的 id 集**本应相等**;两个例外都写清:
+(a) 查表落空时回落默认对象(`0x193083f mov rax, r9`),它的 `[obj+8]` 可能不在容器里;
+(b) `[obj+0x137C] == 0` 让**下发条数小于原始条数** —— 这是引擎自己的语义,不是判负。
+
+**⑤ 反证:循环头 `0x1A762A0` 不是合法补丁点。** 那里之后的两条指令:
+
+```
+  01a762af  4889442428            mov  qword ptr [rsp + 0x28], rax   ; 写本轮 scope 的 mask 格
+  01a7632f  3b75c0                cmp  esi, dword ptr [rbp + 0xc0]   ; 读过滤后的上界
+```
+
+`detour` 是 C-ABI 调用:被调函数体跑在 detour 的帧上(`rsp`/`rbp` 都是 detour 的)。
+`[rsp+0x20]` 那个 scope 结构与 `[rbp+0xC0]` 那个上界都会落到 detour 的栈上 ⇒ 循环要么读错上界、
+要么把 scope 写到别处。**所以补丁只能打函数入口(`0x3B1330`),不能打循环体内部** ——
+这条也解释了 §80.3 判据 1 为什么只能静态读:它依赖的 `[rbp+0xC0]` 本来就是栈局部量。
+
+**复现:**
+
+```bash
+python3 scripts/scratch/2026-10_per_system_shot/patch_point.py
+```
+
+原始输出:
+
+```
+patch window 0x3b1330..0x3b133f = 48895c240848896c24104889742418
+  next instruction 0x3b133f: push rdi
+vtable 0x26562d0: +0x70 -> 0x1a76130, +0x98 -> 0x3b1420
+call site 0x1a76324: mov rcx, r14 ; call 0x3b1330
+galaxy db 0x3260bb0: +0x590 vector, +0x59c count, id = [obj+8] and the element is the full 32-bit id
+loop head is NOT a patch point: 0x1A762AF writes [rsp+0x28], 0x1A7632F reads [rbp+0xc0]
+PASS
+```
+
+**这一节不能说的。** ① `0x3B1330` 是 base effect parse,这个函数**所有** effect 类都会走到;
+「按 vtable 过滤后剩下的就是 `every_system` 的下发」依赖的是 `[self]` 那一格,不是调用点。
+② 15 B 窗口里的三条 `mov` 有两条写 `[rsp+…]` —— 入口 hook 下这是合法的(detour 的 `call orig`
+在同一个栈上完成整个被调函数体),但同一形状若挪到函数中部就不合法(见 ⑤)。
