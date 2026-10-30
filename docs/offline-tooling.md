@@ -1591,6 +1591,56 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**37 条**),
 无游戏、无 Windows API。
 
+## 实机调试:桌面通道(`win-desktop` MCP)
+
+agent 自己能看屏幕、按**元素**点、打字 —— 用来替代「让操作者去点一下」的那类动作(事件窗、控制台投递、
+launcher 卡住)。它是主机上的一个 [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) 进程,
+不是本仓库的脚本。
+
+**主机侧(一次性)**:
+
+```powershell
+uv python install 3.14
+uv tool install windows-mcp --python 3.14
+# 配置在 %USERPROFILE%\.windows-mcp\config.toml:
+#   [server] transport="streamable-http" host="127.0.0.1" port=8000 auth_key="<token>"
+#   [tools]  exclude=[PowerShell,Registry,FileSystem,Clipboard,Process,Notification,Scrape,MultiSelect,MultiEdit]
+# 计划任务 NSWinMCP:动作是 C:\temp\ns_winmcp.cmd
+#   start "" /min "<uv tool venv>\Scripts\python.exe" -m windows_mcp serve
+schtasks /run /tn NSWinMCP /I      # 或登录时自动起
+```
+
+**控制端(Linux)**:
+
+```bash
+ssh -N -L 18000:127.0.0.1:8000 Windows_Jiaolong   # 本地 8000 已被别的服务占用
+# ~/.config/opencode/opencode.json:
+#   mcp.servers.win-desktop = {type:"remote", url:"http://127.0.0.1:18000/mcp",
+#                              oauth:false, headers:{Authorization:"Bearer <token>"}}
+opencode mcp list                  # 期望 win-desktop connected
+```
+
+工具集(**白名单**,12 个):`Screenshot` / `Snapshot`(UIA 树,给元素 label)/ `Click` / `Type` /
+`Shortcut` / `Scroll` / `Move` / `Wait` / `WaitFor` / `App` / `DisplayInventory` / `ControlStatus`。
+`PowerShell`、`Registry`、`FileSystem` 等**被排除** —— 这台机器上的 shell 通道仍然是 SSH,不从这里走。
+
+**判读陷阱(四条,与本仓库踩过的坑同源)**:
+
+1. **必须跑在交互会话(当前是 session 1)**。跑在 session 0 时它会在启动阶段直接死:
+   `RuntimeError: No active interactive desktop for physical input control`。计划任务的
+   principal 要是「只在用户登录时运行」,并且用 `schtasks /run /I` 起;`Get-CimInstance Win32_Process`
+   看 `SessionId` 是唯一的确认方式。
+2. **本地端口不要用 8000**:本机 8000 已有服务,`ssh -L 8000:…` 会 `bind: Address already in use`,
+   而 curl 会静默打到那个服务上(返回 HTML)。本仓库固定用 **18000**。
+3. **坐标是缩放过的**:`Screenshot` 返回 `Screenshot Coordinate Scale`(本机 1.3333,原图 2160×1440
+   → 图 1590×1073)。要按元素点就优先用 `Snapshot` 给的 `label`,不要从截图里量像素再乘。
+4. **它自己的桌面控制权**:物理鼠标一动,控制权会被收回(默认 10 s 空闲后才交还);这是好事,但意味着
+   「点了没反应」要先看 `ControlStatus`,不要先怀疑页面。
+
+**与既有通道的分工**:`game_supervisor` 仍然是无人值守的策略执行者(暂停/窗口策略/状态机);
+`win-desktop` 只做**需要人眼人手**的那一层(认元素、点选项、在控制台里打字)。它不替代、
+也不修改 `world_state` 的判据。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
