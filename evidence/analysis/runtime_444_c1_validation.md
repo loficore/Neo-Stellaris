@@ -8098,3 +8098,47 @@ PASS
 「按 vtable 过滤后剩下的就是 `every_system` 的下发」依赖的是 `[self]` 那一格,不是调用点。
 ② 15 B 窗口里的三条 `mov` 有两条写 `[rsp+…]` —— 入口 hook 下这是合法的(detour 的 `call orig`
 在同一个栈上完成整个被调函数体),但同一形状若挪到函数中部就不合法(见 ⑤)。
+
+### §81.2 逐系统下发两发:仪器活着,但两次都没让 `every_system` 的循环跑起来(2026-10-30,点名 ×2,同一进程 pid 19892)
+
+**第一发(`sqjs_c7.dll`,存档 `autosave_2240.01.01.sav`,N=787)**:`install_rc=0` / `verify_rc=0` /
+`host_alive=1`;**容器首读成功** —— `[[0x3260BB0]+0x59C] = 787`,向量 787 个 dword,
+`container_ids_sha256=5ce3c051…`(这是本卷第一次在运行中的进程里读到那张表)。但
+`calls=0 / matched=0`,`log_hits=1` ⇒ 判词 `no_calls`(环境档)。
+
+读数本身是**一条负结论加一条新事实**:
+- 控制台 `effect every_system = { log = "PS_HIT" }` 在 game.log 里只留**一行**(`17:30:49`,
+  `effect_impl.cpp:21978`),即 effect 的**子效果被直接执行了一次**,没有走 `+0x70`(`0x1A76130`);
+- 离线复核 `0x3B1330` 的子分发:`0x3B1390 mov rcx,[rbx] / mov rax,[rcx] / call [rax+0x70]`
+  ⇒ 只有被当作**子效果**分发时才会进那个循环。控制台把根 effect 直接展开,不经过这一步。
+
+**第二发(`sqjs_c8.dll`,同一存档,脚本改成嵌套)`effect if = { limit = { always = yes }
+every_system = { log = "PS_HIT" } }`**:`install_rc=0` / `verify_rc=0` / `host_alive=1`,
+`stats_delta` 里 **`calls=5`**(钩子确实挂在 `0x3B1330` 上、真的被调了五次)、`matched=0`、
+`log_hits=0` ⇒ 判词 `script_refused`(环境档)。`calls=5` 与 `log_hits=0` 合起来说明:那五次是
+**游戏自己的 effect 执行**,我们的脚本没被引擎执行(投递的成功回执 `.seen` 有,引擎侧 marker 没有)。
+
+**两发都不是对「循环是不是每系统」的表态**;它们把三件仪器/环境事实钉住了:
+
+1. **钩子活着**:第二发的 `calls=5` 是 `0x3B1330` 真的被调用过的直接证据(第一发 `calls=0` 是因为
+   整个窗口没有 effect 执行)。过滤器 `[self] == 0x26562D0` 这一格**还没被考到**(两次都没有
+   `every_system` 实例经过),所以 `matched=0` 不能读成「过滤器错了」。
+2. **控制台不是一条可靠的 effect 驱动通道**:根 effect 展开时跳过 `+0x70`(第一发),嵌套形状又
+   撞上投递期的事件窗抢焦点(第二发,`log_hits=0`)。同一窗口里 `game.log` 连续出现
+   `first_contact*.x added info about event selection`,每次事件都暂停游戏并抢前台。
+3. **通道侧的三条新事实**(与 #32 同一个失效面,已记 issue #32):`game_supervisor` 的
+   `click` / `choose` 在 `WINDOW_UNSTABLE` 状态下**直接拒绝**(`REFUSED_click_option`),不会真的点;
+   而 session 1 里的 `pythonw` 一次性任务可以直接 `SetForegroundWindow + mouse_event` 把事件窗点掉
+   (本窗口用它把第一次接触窗答掉后 `STATUS=playing`);同名 DLL **不能再注入**(`LoadLibrary` 复用
+   已映射的镜像),第二发因此换名 `sqjs_c8.dll`(§76.7 的同一条)。
+
+**这一节不能说的。** ① 不能把 `no_calls` / `script_refused` 读成「循环不存在」;② 不能把
+`calls=5` 读成「循环被调了 5 次」—— 那是 `0x3B1330` 的**全量**调用,过滤器一个都没命中;
+③ `container_ids_sha256` 只证明两次读的是同一批 id,不证明它们就是 `system_id`。
+
+**产物**:`evidence/logs/per_system_probe_4_4_4.tsv`(第一发)、
+`evidence/logs/per_system_probe_4_4_4_firing2.tsv`(第二发)。
+
+**下一发要改的不是判据,是驱动方式**:让 `every_system` 从一条**游戏自己的** effect 链上被分发
+(例如一个 on_action / 事件体,或 `every_owned_planet` 这类已知会走子分发的根),而不是控制台根 effect;
+或者先把「事件窗抢焦点」这条通道缺陷修掉(#32),再让控制台投递可复现。
