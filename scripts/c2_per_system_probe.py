@@ -74,6 +74,9 @@ VERDICTS = (
     "loop_not_per_system",
     "per_system_loop_filtered",
     "per_system_loop",
+    "loop_not_invoked",
+    "loop_partial_watch",
+    "per_system_loop_watch",
 )
 EVIDENCE_VERDICTS = (
     "ids_out_of_range",
@@ -81,6 +84,9 @@ EVIDENCE_VERDICTS = (
     "loop_not_per_system",
     "per_system_loop_filtered",
     "per_system_loop",
+    "loop_not_invoked",
+    "loop_partial_watch",
+    "per_system_loop_watch",
 )
 
 EXIT_REFUSED = 2               # pre-fire refusals (same code as `gate_install`)
@@ -193,6 +199,44 @@ def verdict(stats, rows, container, *, expected, script_sends, log_hits, layout=
     if per_run == container["raw_count"]:
         return "per_system_loop"
     return "per_system_loop_filtered"
+
+
+def verdict_watch(stats, rows, container, *, expected):
+    """Watch-only judgement: no console script — the game's own scripts dispatch.
+
+    Without a script there is no "one send = one run", so the invariant becomes
+    **whole runs**: `matched` must be an exact multiple of the raw container size and the
+    distinct ids must cover the whole container. A partial cover is not a system-count
+    mismatch — it is "the game dispatched some systems", which is `loop_partial_watch`.
+    """
+    if stats["installed"] == 1 and stats["verify"] != 0:
+        return "instrument_broken"
+    if stats["calls"] == 0:
+        return "no_calls"
+    if stats["matched"] == 0:
+        return "loop_not_invoked"
+    if stats["dedupe_full"] != 0:
+        return "dedupe_full"
+    if not container or not container.get("ids"):
+        return "container_unreadable"
+    if container["raw_count"] != len(container["ids"]):
+        return "container_unreadable"
+    if container["raw_count"] != expected:
+        return "dispatch_denominator_mismatch"
+
+    guard_ids = {row["id"] for row in rows}
+    if any(not (1 <= eid <= expected) for eid in guard_ids):
+        return "ids_out_of_range"
+    if not guard_ids <= set(container["ids"]):
+        return "ids_not_in_container"
+
+    raw = container["raw_count"]
+    if stats["matched"] % raw != 0 or stats["distinct_ids"] != raw:
+        return "loop_partial_watch"
+    occurrences = {row["occurrences"] for row in rows}
+    if len(occurrences) != 1:
+        return "loop_partial_watch"
+    return "per_system_loop_watch"
 
 
 def install_decision(rc, layout):
@@ -419,14 +463,16 @@ def gate_module(pid, dll_path, needed):
     return base, exports
 
 
-def run(dll_path, out_path, *, systems, save_name, script_file, game_log=None,
-        cmd_file=DEFAULT_CMD_FILE, poll_s=120.0, settle_s=3.0, script_wait_s=180.0):
+def run(dll_path, out_path, *, systems, save_name, script_file=None, game_log=None,
+        cmd_file=DEFAULT_CMD_FILE, poll_s=120.0, settle_s=3.0, script_wait_s=180.0,
+        watch_only=False):
     """One shot in one game process. Cleanup runs in a finally; never FreeLibrary."""
     import time
 
     import c2_harness as harness
 
-    preflight_paths(script_file, cmd_file)
+    if not watch_only:
+        preflight_paths(script_file, cmd_file)
     dll_sha = sha_gate(dll_path)
     print(f"[persystem] dll={dll_path} sha256={dll_sha}")
 
@@ -473,18 +519,26 @@ def run(dll_path, out_path, *, systems, save_name, script_file, game_log=None,
         before = read_stats(pid, base, exports, stats_buf)
         container = read_container(pid, exe_base)
 
-        script = open(script_file, encoding="utf-8").read().strip().splitlines()[0]
-        sends = 1
-        delivered, hits = send_script(cmd_file, script, game_log, script_wait_s)
-        print(f"[persystem] script delivered={delivered} hits={hits}")
+        if watch_only:
+            # No console script: the game's own monthly scripts do the dispatching.
+            deadline = time.time() + poll_s
+            after = before
+            while time.time() < deadline:
+                time.sleep(1.0)
+                after = read_stats(pid, base, exports, stats_buf)
+        else:
+            script = open(script_file, encoding="utf-8").read().strip().splitlines()[0]
+            sends = 1
+            delivered, hits = send_script(cmd_file, script, game_log, script_wait_s)
+            print(f"[persystem] script delivered={delivered} hits={hits}")
 
-        deadline = time.time() + poll_s
-        after = before
-        while time.time() < deadline:
-            time.sleep(1.0)
-            after = read_stats(pid, base, exports, stats_buf)
-            if after["matched"] >= systems or (hits and after["matched"] >= hits):
-                break
+            deadline = time.time() + poll_s
+            after = before
+            while time.time() < deadline:
+                time.sleep(1.0)
+                after = read_stats(pid, base, exports, stats_buf)
+                if after["matched"] >= systems or (hits and after["matched"] >= hits):
+                    break
 
         harness.call_remote_with_arg(pid, base, exports["C5PerSystemSetDrainCap"], drain_cap)
         rows = drain_entries(pid, base, exports, drain_buf)
@@ -503,8 +557,13 @@ def run(dll_path, out_path, *, systems, save_name, script_file, game_log=None,
             "script_sends": sends,
             "entries": len(rows),
         })
-        meta["overall_verdict"] = verdict(delta, rows, container, expected=systems,
-                                          script_sends=sends, log_hits=hits, layout=layout)
+        if watch_only:
+            meta["mode"] = "watch"
+            meta["overall_verdict"] = verdict_watch(delta, rows, container, expected=systems)
+        else:
+            meta["mode"] = "script"
+            meta["overall_verdict"] = verdict(delta, rows, container, expected=systems,
+                                              script_sends=sends, log_hits=hits, layout=layout)
     finally:
         uninstall_rc = _signed32(harness.call_remote(pid, base, exports["C5PerSystemUninstall"]))
         verify_rc = _signed32(harness.call_remote(pid, base, exports["C5PerSystemVerify"]))
@@ -531,7 +590,10 @@ def main(argv=None):
     parser.add_argument("--systems", type=int, required=True,
                         help="current campaign's star count (no default: 787 belongs elsewhere)")
     parser.add_argument("--save-name", required=True)
-    parser.add_argument("--script-file", required=True)
+    parser.add_argument("--script-file", default=None,
+                        help="console script; omit it with --watch-only")
+    parser.add_argument("--watch-only", action="store_true",
+                        help="send nothing: let the game's own scripts dispatch")
     parser.add_argument("--game-log", default=None)
     parser.add_argument("--cmd-file", default=DEFAULT_CMD_FILE)
     parser.add_argument("--poll-s", type=float, default=120.0)
@@ -540,9 +602,12 @@ def main(argv=None):
     parser.add_argument("--out", default="C:/temp/c5_per_system.tsv")
     args = parser.parse_args(argv)
 
+    if not args.watch_only and not args.script_file:
+        parser.error("--script-file is required unless --watch-only is given")
     meta = run(args.dll, args.out, systems=args.systems, save_name=args.save_name,
                script_file=args.script_file, game_log=args.game_log, cmd_file=args.cmd_file,
-               poll_s=args.poll_s, settle_s=args.settle_s, script_wait_s=args.script_wait_s)
+               poll_s=args.poll_s, settle_s=args.settle_s, script_wait_s=args.script_wait_s,
+               watch_only=args.watch_only)
     return 0 if meta.get("overall_verdict") in EVIDENCE_VERDICTS else 1
 
 

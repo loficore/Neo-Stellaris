@@ -34,6 +34,7 @@ from c2_per_system_probe import (
     script_marker,
     sha_gate,
     verdict,
+    verdict_watch,
 )
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -280,3 +281,35 @@ def test_script_sends_is_the_transport_count():
     assert mod.count_marker(log, None) == 0
     assert mod.count_marker("", "PS_HIT") == 0
     assert "script_sends=2" in build_meta(script_sends=2, log_hits=2)
+
+
+# --- watch-only mode (no console script: let the game's own scripts dispatch) -----
+
+
+def test_watch_per_system_loop_requires_full_runs_and_full_coverage():
+    rows = _rows(GALAXY)
+    stats = _stats(matched=787 * 2, distinct_ids=787)
+    for row in rows:
+        row["occurrences"] = 2
+    assert verdict_watch(stats, rows, _container(GALAXY), expected=787) == "per_system_loop_watch"
+
+
+def test_watch_loop_partial_when_matched_is_not_a_multiple():
+    rows = _rows(GALAXY[:500])
+    stats = _stats(matched=500, distinct_ids=500)
+    assert verdict_watch(stats, rows, _container(GALAXY), expected=787) == "loop_partial_watch"
+
+
+def test_watch_loop_not_invoked_is_environment():
+    stats = _stats(calls=5, matched=0)
+    assert verdict_watch(stats, [], _container(GALAXY), expected=787) == "loop_not_invoked"
+
+
+def test_watch_no_calls_is_environment():
+    assert verdict_watch(_stats(calls=0, matched=0), [], _container(GALAXY),
+                         expected=787) == "no_calls"
+
+
+def test_watch_instrument_broken_wins():
+    stats = _stats(verify=-1)
+    assert verdict_watch(stats, _rows(GALAXY), _container(GALAXY), expected=787) == "instrument_broken"
