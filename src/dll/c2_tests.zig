@@ -8,9 +8,11 @@
 const std = @import("std");
 
 const trigger_eval = @import("c2/trigger_eval_probe.zig");
+const per_system = @import("c2/per_system_probe.zig");
 
 comptime {
     _ = trigger_eval;
+    _ = per_system;
 }
 
 test {
