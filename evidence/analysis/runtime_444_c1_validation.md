@@ -8618,3 +8618,55 @@ PASS
 python C:/temp/c2_per_system_probe.py C:\temp\sqjs_c12.dll --systems 788 \
     --save-name loadwin_c12 --watch-only --poll-s 300 --allow-window --out C:/temp/ps_load5.tsv
 ```
+
+### §82.2.2 补发:载入窗**拿到了** —— 一次完整读档期间 `0x3B1330` 是 **0**(2026-10-31 00:1x,点名 ×1,`--watch-only 300`)
+
+§82.2.1 记的是「载入侧未取」。本节补上那一发,并且**不改写** §82.2.1(它的四条成因仍然成立)。
+
+**做法。** 同一把 guard(`0x3B1330` 前 15 B),同一进程 pid 16100,`--watch-only --poll-s 300
+--allow-window`,存档 `autosave_2281.01.01.sav`,`--systems 788`。窗口内由 agent 自己完成
+`载入游戏 → 选中子存档 → 读取存档` 三步(截图逐步确认),载入在点击后约 8 s 内完成。
+
+**载入确实发生了,证据是屏幕而不是推断。** 点击前一张:载入对话框开着、`autosave_2281.01.01.sav`
+那一行高亮、右下 `读取存档` 已可用;点击后一张:对话框关闭、地图回到 **2281.01.01**、状态暂停。
+时钟也自洽:点击前战役时间已经走到 2281.02.x,载入把它拉回 2281.01.01。
+
+**读数**(`evidence/logs/per_system_probe_4_4_4_load_watch.tsv`):
+
+```
+calls=0  matched=0  distinct_ids=0  dedupe_full=0  null_scope=0
+patch_size=15  installed=1  verify=0  install_rc=0  uninstall_rc=0  host_alive=1
+container_raw_count=788  container_ids_sha256=400ca2e3…  gate=operator_override
+overall_verdict=no_calls
+```
+
+**判读(按 §82.2.1 的判据表)。** 「载入窗 `calls` ≫ 空转窗」**不成立**:空转窗 0(本轮四次 +§81.3/
+§81.4 两次)、载入窗 **0** ⇒ 落判据表的第二行 —— **「该路径与载入无关」**,与 §82.2 的
+`execute`(有条件)同向,而**读脚本那侧一次调用都没有观测到**。
+
+**这一发为什么有分量(而不是又一条 0)。** ① 计数器是**累计**的,不做采样:这 300 s 里的每一次
+`0x3B1330` 都会进 `calls`,所以「载入只占 8 s」不会把窗口里的调用漏掉;② `install_rc=0` /
+`patch_size=15` / `installed=1` / `verify=0` 说明补丁真的落在靶上、真的被卸下;③ 同一窗口里容器
+`788` 与 sha `400ca2e3…` 都读得到,说明进程在载入前后都是活的、可读的(不是「载入把进程弄死了所以
+没调用」)。
+
+**这一发不能说的(三条)。**
+
+1. **不能说「读档期绝对不经过 `0x3B1330`」。** 这是一次读档、一个存档、一个窗口;它否掉的是「读档
+   会大量调用它」这一形态,不是「任何读脚本路径都不可能」。
+2. **不能把它当成 `execute` 的证明。** 它只把 `parse_only` 的**实证**面也压到 0(§82.1 ② 的静态面
+   是「实例化消费者 0 调用」,这里是「一次真实读档 0 调用」);`execute` 仍带着 §82.2 那个条件
+   (派发 `+0x70` 的一侧须是执行侧)。
+3. **不能把 `gate=operator_override` 当无条件读数。** 前提仍是「状态机误报、屏幕是干净战役」(§82.2.1)。
+
+**两笔通道事实(记在这里,后面还会撞到)。**
+
+- **`win-desktop` 的 `USER_CONTROL` 有卡死形态。** 上游 0.8.8 的控制闸是「人碰键鼠后须空闲 10 s」,
+  而指示器卡住时会**一直**报 `USER_CONTROL`(`wait_seconds=0`、`generation` 不涨)—— 本轮就是这一档,
+  处置 = 重启计划任务 `NSWinMCP`(`schtasks /end` + `/run /I`),重启后 `ControlStatus` 立刻回到
+  `ready`。**agent 侧不需要人来点。**
+- **两个 `stellaris.exe` 会让驱动直接拒。** `c2_harness.resolve_base_address` 用
+  `Get-Process stellaris | Modules` **跨进程**取基址,两个实例 ⇒ `ambiguous base: 'stellaris.exe'
+  appears 2 times`。本轮 pid 16100(可见、有窗口)与 18184(23:59 起的无窗口副本)并存,处置是关掉后者;
+  **这是本轮唯一一次 `Stop-Process`** —— 对象是一个没有窗口、没有战役的副本,不是驱动那条 `WM_CLOSE`
+  路径,也不在「不许 kill」保护的那个对象上。代价:若那个副本其实是一局在跑的战役,它会被丢掉。
