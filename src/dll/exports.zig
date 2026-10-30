@@ -208,6 +208,8 @@ const c2_shim_probe = @import("c2/shim_witness_probe.zig");
 const c2_trigger_pred = @import("c2/trigger_pred_probe.zig");
 /// C5 数据面第二发(§77):触发求值槽 `0x1A91A80` 的只读 guard。
 const c2_trigger_eval = @import("c2/trigger_eval_probe.zig");
+/// C5 数据面第三发(§81):逐系统下发点 `0x3B1330` 的只读 guard。
+const c2_per_system = @import("c2/per_system_probe.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
@@ -962,6 +964,75 @@ export fn C4TrigEvalDrainInto(out: [*]u8) callconv(.c) u32 {
 /// 重置)。因此必须在 Install 之前调用。
 export fn C4TrigEvalReset() callconv(.c) void {
     c2_trigger_eval.reset();
+}
+
+// ---------------------------------------------------------------------------
+// C5 data plane, third shot (§81): the per-system dispatch point 0x3B1330
+// ---------------------------------------------------------------------------
+
+/// 安装码表(与六支兄弟逐字同构):0 成功 | -2 本进程已装 / predicate armed | -3 未找到
+/// stellaris.exe | -4 目标已被 hook | -5 指纹不符 | -6 patch 过宽。
+/// 一进程一次 install 额度,所以 -2 不重试。
+fn perSystemInstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.AlreadyInstalled, error.PatchActive => -2,
+        error.ModuleNotFound => -3,
+        error.AlreadyHooked => -4,
+        error.UnexpectedPrologue => -5,
+        error.PatchTooWide => -6,
+        else => -1,
+    };
+}
+
+/// 卸载折叠表:-7 = RestoreIncomplete,其余 -1。
+fn perSystemUninstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.RestoreIncomplete => -7,
+        else => -1,
+    };
+}
+
+/// 只记录 `0x3B1330` 上 `[self] == every_system vtable` 的调用。码表见 perSystemInstallCode。
+export fn C5PerSystemInstall() callconv(.c) i32 {
+    c2_per_system.install() catch |err| return perSystemInstallCode(err);
+    return 0;
+}
+
+/// 0 = 引擎字节已验证还原。-7 = RestoreIncomplete:不要信任该进程,且**绝不 FreeLibrary**。
+export fn C5PerSystemUninstall() callconv(.c) i32 {
+    c2_per_system.uninstall() catch |err| return perSystemUninstallCode(err);
+    return 0;
+}
+
+/// 原样透传模块约定:0 一致 | -1 装着但 hook 丢了 | -2 已卸但引擎字节不符 | -3 从未解析到靶。
+export fn C5PerSystemVerify() callconv(.c) i32 {
+    return c2_per_system.verify();
+}
+
+/// 六个布局词:[version, Entry size, RING_LEN, Stats size, 靶 RVA, vtable RVA]。
+export fn C5PerSystemLayout(out: [*]u32) callconv(.c) u32 {
+    const words: *[6]u32 = @ptrCast(out);
+    return c2_per_system.layoutInto(words);
+}
+
+export fn C5PerSystemStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_per_system.statsInto(out[0..512]));
+}
+
+/// 必须先声明缓冲大小:满环是 2048 * 32 = 65,536 B,而 stats 文本缓冲只有 512 B。
+/// `call_remote_with_arg` 只能传一个寄存器,所以容量用 setter 声明。
+export fn C5PerSystemSetDrainCap(cap: u32) callconv(.c) i32 {
+    c2_per_system.setDrainCap(cap);
+    return 0;
+}
+
+export fn C5PerSystemDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_per_system.drainInto(out);
+}
+
+/// 清计数 + 环 + 去重表 + drain 容量;不卸载 hook,也不清镜像窗口(必须在 Install 之前调)。
+export fn C5PerSystemReset() callconv(.c) void {
+    c2_per_system.reset();
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.

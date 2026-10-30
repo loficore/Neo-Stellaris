@@ -144,7 +144,10 @@ def test_list_exports_recovers_all_known_names():
                  "C2EvalProbeOnePlusOne", "C2EvalStressOne",
                  "C1EffectId", "C2ExecInstall", "C2ExecProbeInstall",
                  "C2ExecProbeUninstall", "C2ExecProbeVerify", "C2ExecDisarm",
-                 "C2ExecStatsInto", "C2ExecProbeStatsInto"):
+                 "C2ExecStatsInto", "C2ExecProbeStatsInto",
+                 "C5PerSystemInstall", "C5PerSystemUninstall", "C5PerSystemVerify",
+                 "C5PerSystemLayout", "C5PerSystemStatsInto", "C5PerSystemSetDrainCap",
+                 "C5PerSystemDrainInto", "C5PerSystemReset"):
         assert name in exports, f"missing real export {name!r}"
     # RVAs are distinct positive integers, proving a real directory walk.
     rvas = list(exports.values())

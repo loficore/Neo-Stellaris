@@ -16,6 +16,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const offsets = @import("../shared/offsets.zig");
 const windows = @import("../hooking/windows.zig");
+const detour_mod = @import("../hooking/detour.zig");
+const predicate_hook = @import("predicate_hook.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -360,7 +362,9 @@ pub fn resetForTest() void {
 }
 
 // ---------------------------------------------------------------------------
-// Assembly state (install/uninstall/verify land in Task 3)
+// Assembly: fingerprint gate + install / uninstall / verify
+// (shape copied from trigger_eval_probe.zig — same family prologue gate, saved_code
+// snapshot, restoreTarget, flushInstructionCache)
 // ---------------------------------------------------------------------------
 
 pub const InstallError = error{
@@ -374,18 +378,105 @@ pub const InstallError = error{
     DetourUnavailable,
 };
 
+/// Guard state is private to this module — same discipline as the other six guards.
 var installed = false;
+var hook: ?detour_mod.Hook = null;
+var orig: ?*anyopaque = null;
 var target_addr: usize = 0;
+var saved_code: [32]u8 = [_]u8{0} ** 32;
 
+/// Two refusals before installing: this guard is already in, or the predicate detour is
+/// armed. With the predicate armed `[self+0]` may point at our own DLL's vtable copy, and a
+/// self-vtable read in that state is not an engine reading.
 pub fn preflightChecks(already_installed: bool, patch_active: bool) InstallError!void {
     if (already_installed) return error.AlreadyInstalled;
     if (patch_active) return error.PatchActive;
 }
 
-/// 0 = consistent. Not installed: -3 when the target was never resolved this session.
+pub const OrigFn = *const fn (u64, u64, u64) callconv(.c) u64;
+
+/// `0x3B1330` takes `(self, scope, a3)`. The one call site we read statically
+/// (`0x1A76324`) discards the result, so forwarding the raw `rax` is the safe choice.
+fn dispatchDetour(self: u64, scope: u64, a3: u64) callconv(.c) u64 {
+    recordCall(@intCast(self), @intCast(scope));
+    const f: OrigFn = @ptrCast(orig orelse return 0);
+    return f(self, scope, a3);
+}
+
+pub fn install() InstallError!void {
+    if (!is_windows) return error.Unsupported;
+    // `objectsWerePatched()` is sticky: the predicate detour's uninstall restores the
+    // target's prologue but never undoes its object writes.
+    try preflightChecks(installed, predicate_hook.isInstalled() or predicate_hook.objectsWerePatched());
+
+    const target = windows.moduleFunction(RVA_DISPATCH) catch return error.ModuleNotFound;
+    if (detour_mod.isHooked(target)) return error.AlreadyHooked;
+
+    target_addr = @intFromPtr(target);
+
+    const tb: [*]const u8 = @ptrCast(target);
+    for (EXPECTED_CODE, 0..) |byte, i| {
+        if (tb[i] != byte) return error.UnexpectedPrologue;
+    }
+    @memcpy(&saved_code, tb[0..saved_code.len]);
+
+    const base = @intFromPtr(target) - RVA_DISPATCH;
+    setImageBounds(base, base + 0x400_0000);
+
+    const h = detour_mod.installHookArmed(target, @ptrCast(@constCast(&dispatchDetour)), &orig) catch
+        return error.DetourUnavailable;
+    if (h.patch_size > saved_code.len) {
+        detour_mod.removeHook(&h) catch {};
+        restoreTarget(h.patch_size) catch {};
+        orig = null;
+        return error.PatchTooWide;
+    }
+    hook = h;
+    installed = true;
+    stats.patch_size = h.patch_size;
+    std.log.info("c2.per_system_probe: installed detour at 0x{x}", .{RVA_DISPATCH});
+}
+
+/// Copy our own snapshot of the prologue back. The authoritative restore: it does not depend
+/// on `removeHook` reading a trampoline that is still intact (that memory is retired).
+fn restoreTarget(len: usize) !void {
+    var guard = try windows.ProtectGuard.change(@ptrFromInt(target_addr), len, .execute_readwrite);
+    defer guard.deinit();
+    const dst: [*]u8 = @ptrFromInt(target_addr);
+    @memcpy(dst[0..len], saved_code[0..len]);
+    windows.flushInstructionCache(@ptrFromInt(target_addr), len);
+}
+
+/// A no-op when not installed — the driver still calls it after a failed install.
+pub fn uninstall() !void {
+    if (!installed) return;
+    const h = hook orelse return;
+    detour_mod.removeHook(&h) catch {};
+    hook = null;
+    installed = false;
+    try restoreTarget(h.patch_size);
+    orig = null; // only once the engine bytes are ours again
+    if (!fingerprintMatches()) return error.RestoreIncomplete;
+    std.log.info("c2.per_system_probe: uninstalled detour", .{});
+}
+
+fn fingerprintMatches() bool {
+    if (target_addr == 0) return false;
+    const tb: [*]const u8 = @ptrFromInt(target_addr);
+    for (EXPECTED_CODE, 0..) |byte, i| {
+        if (tb[i] != byte) return false;
+    }
+    return true;
+}
+
+/// 0 = consistent. Installed: the hook must still be in the detour table. Not installed: we
+/// resolved the target this session and the engine bytes are intact.
+/// -1 hook lost | -2 bytes differ | -3 the target was never resolved this session.
 pub fn verify() i32 {
     if (target_addr == 0) return -3;
-    return 0;
+    const target: *anyopaque = @ptrFromInt(target_addr);
+    if (installed) return if (detour_mod.isHooked(target)) 0 else -1;
+    return if (fingerprintMatches()) 0 else -2;
 }
 
 pub fn isInstalled() bool {
