@@ -8196,3 +8196,30 @@ effect 跑起来(测试 mod 的 `on_monthly_pulse`,或 §81.2 那条嵌套脚本
   而是**注入的鼠标事件本身没被游戏接收**(键盘同一时刻是通的)。
 
 **产物**:`evidence/logs/per_system_probe_4_4_4_watch2.tsv`。
+
+### §81.5 测试 mod 第一发:月度脉冲没有留下 `PS_HIT` —— 尚不能区分「mod 没加载」与「`+0x70` 是 parse 期」(2026-10-30,点名 ×1)
+
+**做了什么**:在主机上建了一个最小 mod(`mod/neo_ps_probe`,只做一件事):
+
+```
+on_monthly_pulse = { on_actions = { neo_ps_monthly } }
+neo_ps_monthly = { effect = { every_system = { log = "PS_HIT" } } }
+```
+
+`dlc_load.json` 改成 `enabled_mods=["mod/neo_ps_probe.mod"]`,存档先备份(`C:\temp\ps_save_backup.sav`),
+然后用 `stellaris.exe --continuelastsave` 直接在 session 1 起重载。
+
+**读数**:游戏跑到 2270 年(月度脉冲至少过了一次),`game.log` 里 **`PS_HIT` 计数 = 0**;
+`error.log` 没有提到 `neo_ps_probe`;`debug.log` 也没有。
+
+**两种解释,这一发分不开**:
+
+1. **mod 没被加载** —— 手写 `dlc_load.json` 可能不生效(launcher 的 `mods_registry.json` 里没有我们的条目,
+   而游戏是不是只认 launcher 写的那份,尚未确认);
+2. **`+0x70` 是 parse 期而不是执行期** —— 如果 `every_system` 在**运行时**由 `ExecuteActual`
+   直接展开子效果(与控制台根 effect 的读数一致,§81.2),那么月度脉冲即使真的跑了 `every_system`,
+   也不会经过 `0x3B1330`;本发的 `PS_HIT` 计数为 0 就同时说明「日志 effect 也没跑」,更像是第 1 种。
+
+**下一发要先分开这两支,再谈循环**:① 用 launcher 的模组页启用(或把条目写进 `mods_registry.json` 并重启),
+确认 `PS_HIT` 每月出现;② 或者装好 guard 之后**重新载入存档**(parse 会重跑),看 `calls` 是否在载入窗口里
+跳起来 —— 跳 = parse 期,不跳 = 执行期。两支都只需要一次点名,不必再改仪器。
