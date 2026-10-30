@@ -8142,3 +8142,32 @@ every_system = { log = "PS_HIT" } }`**:`install_rc=0` / `verify_rc=0` / `host_al
 **下一发要改的不是判据,是驱动方式**:让 `every_system` 从一条**游戏自己的** effect 链上被分发
 (例如一个 on_action / 事件体,或 `every_owned_planet` 这类已知会走子分发的根),而不是控制台根 effect;
 或者先把「事件窗抢焦点」这条通道缺陷修掉(#32),再让控制台投递可复现。
+
+### §81.3 只读观察那一发:`0x3B1330` 在 180 s 的快速游戏里**一次都没被调用**(2026-10-30,点名 ×1,`--watch-only`,pid 20728)
+
+**做法**:装第七把 guard,**不发任何脚本**,让游戏自己跑 180 s(存档 `autosave_2240.01.01.sav`,N=787,
+游戏速度"快速",日期 2260.11.08)。读数:`stats_delta` 全零 —— `calls=0 / matched=0`;
+容器仍读到 787(`container_ids_sha256=5ce3c051…`);`install_rc=0 / verify_rc=0 / host_alive=1`。
+判词 `no_calls`(环境档)。
+
+**这条读数的意思,要说准**:它否掉的不是「循环不存在」,而是**「vanilla 的月度脚本在这 180 s 里没有
+从 `0x3B1330` 分发过任何 effect」**。与 §13 的普查并排看是自洽的:那 316,468 次调用走的是
+base Execute(`0x1D08520`)→ `[vptr+0x10]`(ExecuteActual);`+0x70`(`0x3B1330`)只在**「某个 effect
+把子效果带进 scope」**时才走(§80.2),而这一窗口里没有这样的父 effect 被执行。
+
+**本发的一条副作用,已单独记为通道缺陷**:gate 连拒 8 次,理由是
+`window=dialog ... reading: pause=playing console=closed window=dialog`;而同一时刻的
+`ns_game_shot.png` 里**屏幕上没有任何窗口**(星图 + 右侧 outliner + 底部栏,日期 2260.11.08)。
+⇒ 窗口分类器在「无窗」时**报了一个 dialog**(与 issue #31 的「真窗被读成 none / 被读成 console_panel」
+是同一个分类器的两侧)。本发因此用 `--allow-window`(操作者声明前提、跳过 `gate_install`)开火,
+artifact 里 `gate=operator_override` 是这一条的机器可读记号 —— **这一发的前提是人的声明,不是状态机。**
+
+**这一节不能说的。** ① 不能读成「循环不是每系统」;② 也不能读成「月度脚本不走这条路」——
+180 s、单存档、单速度,只覆盖了这一个窗口;③ `calls=0` 与 §81.2 第二发的 `calls=5` 不矛盾:
+后者那 5 次是窗口里恰好有 effect 在执行,不是月度 tick 的产物。
+
+**产物**:`evidence/logs/per_system_probe_4_4_4_watch.tsv`。
+
+**下一发的前提因此变了**:要拿到读数,必须让一个**确定会分发子效果的父 effect** 跑起来 ——
+要么在测试 mod 的 `on_monthly_pulse` 里写 `every_system = { … }`,要么先把 #32 的输入通道修到
+「控制台投递可复现」,再回到 §81.2 的嵌套脚本。两条都不需要再改仪器。

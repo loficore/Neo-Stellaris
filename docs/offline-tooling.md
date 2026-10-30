@@ -1582,7 +1582,13 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 然后是六列行:`id mask self_vtable_rva occurrences obj scope_ptr`。`--systems` **无默认值**:
 787 属于另一场存档,分母与存档名必须一起进 meta(§74.4 的两格欠账)。
 
-判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**31 条**),
+两种模式:`--script-file`(控制台投递,`script_sends=1`,判据按「每次发送 = 一轮」)与
+`--watch-only`(不发任何东西,只装 guard 等游戏自己的脚本,判据改成「整轮 + 全覆盖」:
+`matched` 是容器原始条数的整数倍、`distinct_ids == 原始条数`)。`--allow-window` 是**操作者声明前提**,
+跳过 `gate_install`(artifact 的 `gate=operator_override` 是它的记号)—— 只有在状态机与屏幕矛盾
+(§81.3 的 `window=dialog` 假阳性)且人当场确认时才用。
+
+判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**37 条**),
 无游戏、无 Windows API。
 
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
