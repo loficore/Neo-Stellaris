@@ -1540,6 +1540,51 @@ scp Windows_Jiaolong:C:/temp/c4_trig_eval.tsv evidence/logs/c5_trig_eval_4_4_4.t
 (不是 30);verdict 把 poll 窗算进去(`overall_verdict`);未送达的命令不会被下一条覆盖(`delivered` 假
 就停)。
 
+### `scripts/c2_per_system_probe.py [dll] --systems N --save-name NAME --script-file <path> [--poll-s 120] [--settle-s 3] [--script-wait-s 180] [--out C:/temp/c5_per_system.tsv] [--cmd-file C:/temp/ns_game_cmd.txt]`
+
+**第七把 guard,C5 数据面的第三发。** 靶是 base effect parse **`0x3B1330`**(§81.1):`every_system`
+的逐系统循环体每轮 `mov rcx,r14 ; call 0x3B1330`,所以「按 `[self] == vtable 0x26562D0` 过滤后的
+调用次数」就是下发次数。**不是循环头 `0x1A762A0`** —— 循环体内部写 `[rsp+0x28]`、读
+`[rbp+0xC0]`,而 C-ABI detour 让被调函数体跑在 detour 的帧上(§81.1 ⑤)。
+
+**这一发问三个数**:容器 `[[0x3260BB0]+0x590]` 的原始条数(`+0x59C`)与那批 4 B id;下发次数
+(`matched`);下发带过去的 id 去重后的个数(`distinct_ids`)。「每轮」= `matched / script_sends` ——
+每轮次数 == distinct id 数、id 都落在 `[1,N]` 且都在容器里,才是「每系统一次」。
+
+**verdict 值域(十二档)**:证据档 `per_system_loop` / `per_system_loop_filtered` /
+`loop_not_per_system` / `ids_out_of_range` / `ids_not_in_container`;环境或仪器档
+`instrument_broken`(永远优先)/ `script_refused` / `no_calls` / `filter_missed` / `dedupe_full` /
+`container_unreadable` / `dispatch_denominator_mismatch`。后六档**不是证据**。
+
+**门序**(照 §70.6 与兄弟驱动的家族纪律):`preflight_paths`(脚本路径 + 命令通道的名字**和**目录)
+→ `sha_gate`(打印并记录注入文件的 sha256;文件不在 `exit 2`)→ `gate_module`(八个导出 +
+`C2Sanity==42`)→ `refuse_if_resident`(同名模块已在进程里就拒绝,`LoadLibrary` 会复用旧镜像)→
+`gate_install("persystem")` → `inject_dll` → `C5PerSystemLayout` 对账 → `Reset` → `Install` →
+settle → 读基线 stats → **外部读容器** → 发脚本 → 等 `.seen` 与 `PS_HIT` 行数 → 读终止 stats →
+drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact(先 meta-only 再追加行)。
+`Install` 返回 `-2` **不重试**;`-7` 打 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`;**绝不 FreeLibrary**。
+
+**判读陷阱(本仪器专属,三条;都是「读数算术的三条纪律」的实例):**
+
+1. **`matched == 0` 有两种含义,靠日志分。** 循环没跑 ⇒ `no_calls`;跑了但过滤器错了 ⇒
+   `filter_missed`。分开它们的唯一独立量是脚本自己 `log = "PS_HIT"` 在 game.log 里留下的行数
+   (`log_hits`)。**看见 `matched=0` 先去数日志,不要先改脚本。**
+2. **`distinct_ids` 是下界。** 去重表 4,096 槽;`dedupe_full != 0` 时新的 distinct id 不再计数,
+   那一档(`dedupe_full`)不许用来支持任何结论。
+3. **容器是活数据。** `+0x590` 的向量随时会变;先读计数再读向量会得到一套从未同时存在的 id。
+   驱动只认**一次读足 `count*4` 字节**的 blob,长度对不上就直接 `container_unreadable`。
+   另:`per_system_loop_filtered`(每轮次数 < 原始条数)是引擎的过滤位 `[obj+0x137C] == 0`
+   在起作用,**不是**「循环不是每系统」。
+
+**artifact**:`#meta` 在前(含 `overall_verdict` / `systems` / `save_name` / `container_raw_count` /
+`container_ids_sha256` / `log_hits` / `script_sends` / `stats_delta` / `dll` / `dll_sha256` /
+`module_base` / `exe_base` / `uninstall_rc` / `verify_rc` / `host_alive` / `entries_error`),
+然后是六列行:`id mask self_vtable_rva occurrences obj scope_ptr`。`--systems` **无默认值**:
+787 属于另一场存档,分母与存档名必须一起进 meta(§74.4 的两格欠账)。
+
+判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**31 条**),
+无游戏、无 Windows API。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
