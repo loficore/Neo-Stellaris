@@ -32,6 +32,7 @@ python3 mod_registry.py --host <NS_WIN_HOST>  # 让主机上的 python 把三份
 """
 from __future__ import annotations
 
+import base64
 import json
 import pathlib
 import subprocess
@@ -113,7 +114,12 @@ def load_local(root):
 
 
 def load_host(host):
-    proc = subprocess.run(["ssh", host, "python -c " + json.dumps(REMOTE_SNIPPET)],
+    # The snippet has newlines; passing it through `json.dumps` inside a remote
+    # `python -c "..."` leaves literal `\n` and dies with SyntaxError (review
+    # I-1). Base64 keeps the wire one ASCII line, so the shell cannot rewrite it.
+    payload = base64.b64encode(REMOTE_SNIPPET.encode()).decode()
+    remote = "python -c \"import base64;exec(base64.b64decode('%s').decode())\"" % payload
+    proc = subprocess.run(["ssh", host, remote],
                           capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         raise SystemExit(f"remote python failed rc={proc.returncode}: {proc.stderr.strip()[:400]}")
@@ -132,27 +138,40 @@ def analyse(files):
     if isinstance(enabled, str):
         enabled = [enabled]
 
-    reg_paths, reg_names = [], []
+    reg_paths, reg_names, reg_enabled = [], [], []
     if files.get("registry"):
         try:
             reg = json.loads(files["registry"])
         except json.JSONDecodeError:
             reg = parse_paradox(files["registry"])
-        for m in reg.get("mods", []) if isinstance(reg.get("mods"), list) else []:
+        entries = reg.get("mods", [])
+        # The launcher writes `mods` as a list of objects; a flattened
+        # `key = { 0 = {...} }` shape shows up in hand-copied registries.
+        if isinstance(entries, dict):
+            entries = list(entries.values())
+        for m in entries if isinstance(entries, list) else []:
             if isinstance(m, dict):
                 reg_paths.append(m.get("path") or m.get("mod_file") or "")
                 reg_names.append(m.get("name") or "")
+                # An entry with no `enabled` key is the launcher's "listed"
+                # state; it counts as enabled because the launcher only writes
+                # the flag when it is false (§84.1's criterion is "present AND
+                # enabled", and the two must not be conflated -- review I-4).
+                reg_enabled.append(m.get("enabled", True) not in (False, "false", 0))
 
     descs = {name: parse_paradox(text) for name, text in (files.get("mods") or {}).items()}
 
     diff = {
-        "registry_not_in_dlc_load": [p for p in reg_paths if p and p not in enabled],
+        "registry_not_in_dlc_load": [p for p, en in zip(reg_paths, reg_enabled)
+                                     if p and en and p not in enabled],
+        "registry_disabled": [p for p, en in zip(reg_paths, reg_enabled) if p and not en],
         "dlc_load_not_in_registry": [p for p in enabled if p and p not in reg_paths],
     }
     judgements = [
         ("dlc_load.json", "enabled_mods", enabled,
          "游戏侧清单:这里是「游戏将要加载」的**唯一**输入之一(另一个是内建内容)"),
-        ("mods_registry.json", "mods[].path/name", list(zip(reg_paths, reg_names)),
+        ("mods_registry.json", "mods[].path/name/enabled",
+         list(zip(reg_paths, reg_names, reg_enabled)),
          "启动器注册库:channel_launcher 的判据是「有这一条 且 enabled」"),
         ("mod/*.mod", "path=/name=", {k: {kk: v.get(kk) for kk in ("name", "path", "supported_version")}
                                       for k, v in descs.items()},
@@ -196,12 +215,16 @@ def main(argv=None):
         print(f"| {f} | {field} | `{value}` | {why} |")
     print()
     print("## 两条通道的差异")
-    print(f"channel_launcher: 注册库 {len(diff['registry_not_in_dlc_load'])} 条不在 dlc_load.json 里")
+    print(f"channel_launcher: 注册库里 enabled、但 dlc_load.json 没有的:"
+          f" {len(diff['registry_not_in_dlc_load'])} 条")
     for p in diff["registry_not_in_dlc_load"]:
-        print(f"    - {p}")
+        print(f"    - {p}   ← 启动器没把它写进 dlc_load.json")
+    print(f"channel_launcher: 注册库里 disabled 的: {len(diff['registry_disabled'])} 条(不算差异,单独列)")
+    for p in diff["registry_disabled"]:
+        print(f"    - {p}   ← 启动器会把它从 dlc_load.json 里去掉")
     print(f"channel_direct: dlc_load.json 有 {len(diff['dlc_load_not_in_registry'])} 条不在注册库里")
     for p in diff["dlc_load_not_in_registry"]:
-        print(f"    - {p}")
+        print(f"    - {p}   ← 手写的 / 启动器不知道的;下一次 launcher 启动会被丢掉")
     print()
     print("## .mod 描述符")
     for name, d in descs.items():
