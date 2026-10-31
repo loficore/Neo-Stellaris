@@ -8899,3 +8899,102 @@ PASS
    下一问是 `0x260F498` 这个 class_info 的**插入点**(谁 `0x3AEF60` 它),以及 `[self+0xC0]` 子表
    (`0x25EBAB8`,`+0x70 = 0x3B1EF0`)的 `+0x70` 是什么语义。这两个问题都是静态的。
 
+## §84 通道欠账:mod 加载判据 + #32 的纯函数缺陷(2026-10-31,离线,零 shot)
+
+### §84.1 mod 加载判据 —— 游戏根本不读启动器的注册库(离线,零 shot)
+
+§81.5 的 `PS_HIT=0` 分不开「mod 没加载」与「不走 `+0x70`」。本节把它换成**文件层可复核**的判据,
+并且把游戏侧读点读出来:**`mods_registry.json` 这个字面量在 `stellaris.exe` 里一次都不出现**。
+
+生产者:`scripts/scratch/2026-10_mod_load/mod_registry.py`(只读;`--root <dir>` 读一份同布局目录、
+`--host <ssh-host>` 让主机上的 python 把三份文件打成 JSON 回传)。
+
+**游戏侧读点(exe 字面量扫描 + rip 相对引用索引,176,606 个目标)。**
+
+| 字面量(地址) | 引用点 | 所在函数 | 该函数是否也读 `mod/` |
+|---|---|---|---|
+| `dlc_load.json`(0x26CD7D8) | 0x1B8AA16 | 0x1B8A9D0..0x1B8ACEB | 否:它构造容器后 `call 0x1CC2630`(取文件),失败就经日志器 `0x1C91C30` 把文件名打出来 |
+| `enabled_mods`(0x26CD4A0) | 0x1B8AF34 | 0x1B8AE82..0x1B8AFC0 | 否 |
+| `disabled_dlcs`(0x26CD490) | 0x1B8AEA4 | 0x1B8AE82..0x1B8AFC0 | 否 |
+| `Error reading dlcs/mods arrays.`(0x26CD470) | 0x1B8AD89 | 0x1B8AD4A..0x1B8ADB5 | 否 |
+| `Expect only strings in dlcs/mods arrays.`(0x26CD560) | 0x1B8ADEB | 0x1B8ADC6..0x1B8AE09 | 否 |
+| `descriptor.mod`(0x26CD660) | 0x1B929F2 | 0x1B923C0..0x1B92E4F | **是**(同一函数里还有 `%s/ugc_%llu.mod` @0x1B92671、`Could not find files for mod: %s` @0x1B925D5) |
+| `Incorrect MOD descriptor: "`(0x26CD5A0) | 0x1B93891 | 0x1B93660..0x1B93ACC | 是(解析一个 `.mod`) |
+| `%s/ugc_%llu.mod`(0x26CD590) | 0x1B92FD9 | 0x1B92E50..0x1B93589 | 是 |
+| `Could not find archive for dlc/mod: %s`(0x26CD3D8) | 0x1B8CD93 | 0x1B8C520..0x1B8D337 | 是(把 `path=` 落到文件系统) |
+| `Folder not found for DLC/Mod %s path: %s`(0x26CD400) | 0x1B8D02F | 0x1B8C520..0x1B8D337 | 是 |
+| **`mods_registry.json`** | **0 处** | **未定位 —— 整个 exe 没有这个字面量** | 不适用 |
+
+⇒ **两条载入通道在文件层是不对称的**:
+
+- **游戏侧只认 `dlc_load.json` 的 `enabled_mods`**(字符串数组;`Expect only strings…` 是它自己的
+  类型检查)。它拿到名字之后**自己**去读 `mod/<name>.mod` 描述符(`descriptor.mod` 那条路),
+  再把 `path=` 落到文件系统(`Could not find archive/folder…` 两条错误)。
+- **启动器注册库 `mods_registry.json` 是启动器私有的**。游戏不读它 —— 它对游戏的影响**只有一条**:
+  启动器按它重写 `dlc_load.json`。这解释了 §81.5 的现象:手改的 `dlc_load.json` 在
+  `channel_launcher` 下会被覆盖,而 `channel_direct` 下才原样保留。
+
+**判据表(每条都能只靠文件复核)。**
+
+| 文件 | 字段 | 意味着什么 | 属于哪条通道 |
+|---|---|---|---|
+| `dlc_load.json` | `enabled_mods` 含 `mod/<x>.mod` | **游戏**会去解析这个描述符;这是唯一的「游戏侧清单」 | 两条都要 |
+| `dlc_load.json` | 手写内容在下一次启动后**仍在** | 这次是 `channel_direct`;被改写 = 走了启动器 | `channel_direct` 的判据 |
+| `mods_registry.json` | `mods[]` 里有 `path=mod/<x>.mod` 且 enabled | 启动器**会**把它写进 `dlc_load.json` | `channel_launcher` 的判据 |
+| `mod/<x>.mod` | `path=` 指向真实目录 | 游戏能落地;`path=` 错 = `Could not find files for mod` | 两条都要 |
+| `game.log` | 没有 `Could not find files for mod: <x>` | 弱判据:**只在 `enabled_mods` 已有它时**才有意义 | 两条都要 |
+
+**反例清单(不能当判据,逐条写清为什么)。**
+
+- **`.mod` 文件存在**:文件放好 ≠ 被清点;`enabled_mods` 里没有它,游戏连解析都不会做。
+- **`error.log` / `debug.log` 没提它**:沉默不是加载 —— 没条目时游戏根本不解析,自然不报错。
+- **artifact 里 `PS_HIT = 0`**:只说明那条 effect 没跑(§81.5),分不开「mod 没加载」与「不走 `+0x70`」。
+- **`stellaris.exe` 进程起来了**:进程与 mod 集无关,launcher 与直接起 exe 都能起进程。
+
+**这一节的一处欠账(必须写出来)。** 本节的**主机侧那一步没有执行**:2026-10-31 这台机器到
+`Windows_Jiaolong`(10.66.0.7:22)是 `No route to host`,`--host` 因此没能跑。已经跑的是
+`--root`(同一套代码路径,喂一份同布局的合成目录),证明探针在「有这三份文件」时能产出上表的差异;
+主机回来之后补跑一条命令即可:
+
+```
+python3 scripts/scratch/2026-10_mod_load/mod_registry.py --host Windows_Jiaolong
+```
+
+**这一节不能说的(两条)。** ① 不能说「注册库里 enable 了就一定加载」—— 游戏侧只认 `dlc_load.json`,
+如果启动器没把条目写进去,注册库再对也没用;② 不能说「`enabled_mods` 里有就一定会生效」——
+描述符解析失败(`Incorrect MOD descriptor`)与 `path=` 落空是另外两条失败面,本节只钉住「谁读哪个文件」。
+
+### §84.2 #32 的纯函数缺陷表(离线,零 shot)—— 两条,都只收紧
+
+**输入是怎么来的(先写诚实条款)。** §81.3 / §81.4 / §82.2.1 记的是**结论与屏幕描述**
+(`window=dialog` 而截图里是干净战役画面、`gate=operator_override`),**没有记像素统计**
+(`red_px`/`green_px`/`bright_px`/`gold_px`/`row_count`/`option_count` 都不在 artifact 里)。
+所以本节不是「把当时的读数抄成输入」,而是**按当时记录的屏幕形状重建最小输入**,并跑**修复前**的
+现行纯函数,看它会不会给出当时那个结论。这是「确认缺陷在纯函数里」,不是「复现那一帧」。
+
+**修复前(2026-10-31,现行 `game_supervisor.py`)的输出:**
+
+| 重建的输入 | 现行输出 | 当时记录的结论 |
+|---|---|---|
+| 4 条 outliner 行(`x0=1849,x1=1943`,`w=2160,h=1440`)+ `bbox=None` + `gold=2846` | `none` | —— |
+| **同样 4 条行 + `bbox=[200,300,1900,1300]`** | **`dialog`** | §81.3 的 `window=dialog`:**同一组行,只因为多了一个 bbox 就变成 dialog** |
+| 同上,走 `classify_window_at_reference` | **`dialog`** | §82.2.1 的「分类器报窗口、屏幕是干净战役」 |
+| `classify_console(800)` | **`True`(open)** | 没有实机读数;这是阈值带的缺陷,见 D2 |
+
+**缺陷表(只收能用纯函数表达的)。**
+
+| # | 现象 | 现有规则 | 误判形态 | 应加的规则 | 该规则的反例(必须仍然成立) | 测试名 |
+|---|---|---|---|---|---|---|
+| D1 | §81.3 / §82.2.1:屏幕上没有窗口,分类器报 `dialog`,gate 连拒 8 次 | `classify_window`:金色行判据之后**直接** `if bbox: return "dialog"` —— bbox 单独就能定案,行规则只在不带 bbox 时才被问到 | 干净战役画面的「高亮带包络」被当成面板;同一组行去掉 bbox 就是 `none`,加回来就是 `dialog` ⇒ 误判**完全**由 bbox 造成 | 带 `w`/`h` 且 `rows` 非空且 `row_kind(rows,w,h) == "outliner"` 时,bbox **不能**把结果提升成 `dialog` | ① 新闻窗(有 bbox、金色行不够宽)仍是 `dialog`;② 首触窗(无 bbox、central 行)仍是 `dialog`;③ 3 参数调用逐字节不变 | `test_hud_panel_does_not_promote_outliner_rows_to_a_dialog` |
+| D2 | 控制台开合:中亮帧被判成「开」 | `classify_console`:`bright_px >= 600` 就是 open | 面板的**开**读数在三次独立实机里都是 **2315**(文字是静态的,§54.10),`0`/`2` 是关;`600..1500` 这一段既不是关、也**不是那个面板**,却被当成「开」——是自信的误读 | open 的门槛抬到实测密度那一侧(`>= 1500`);`120..1500` 落 undecided(阻塞侧,spec §5) | `2315` 仍是 `True`;`0`/`2` 仍是 `False`;`300` 仍是 `None` | `test_console_open_needs_the_panels_own_density` |
+
+**两条都只收紧**:D1 只把 `dialog` 变 `none`,D2 只把 `True` 变 `None`。没有把 `--allow-window` 变成默认、
+没有给 `world_state` 加豁免、没有把分类器改成「永远不报窗口」。
+
+**不收进本计划的(留 issue #32,因为没有纯函数形态)。** ① `popup_hold_unclassified`(§82.2.1)是
+**弹窗身份**路线的结论,输入是帧而不是标量,改它要 `popup_identity`/OCR 那一层;② §81.4 的
+「注入鼠标到不了 Stellaris、键盘可以」是**输入通道**的环境事实,不在纯函数里;③ 事件窗抢焦与
+「控制台投递不可复现」是时序/焦点的实机问题。三条都需要实机窗口,本计划不碰。
+
+**门禁(修复前后都是同一批命令)。** 修复前:`cd scripts/windows && python3 -m pytest tests -q`
+→ `342 passed`(基线,用 `-k 'not <两条新测试>'` 复算仍是 342)。修复后:`344 passed`。
