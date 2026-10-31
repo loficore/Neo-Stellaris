@@ -8686,3 +8686,216 @@ overall_verdict=no_calls
 > 常态**,「谁在读 token」不能拿来分期。本节的 `parse_only`/`both` 判词因此只在**操作定义**
 > (实例化路径 = 读脚本期)下成立;换成「文本被读的那一刻就是 parse 期」这个定义,三个判词都要重写。
 > 这是本节口径的边界,不是又一条读数。
+
+## §83 `+0x70` 的派发方:40 个 in-family 函数逐个读,只挑出 2 个候选(2026-10-31,离线,零 shot)
+
+§82.2 留的那个条件——「`execute` 成立要一个条件:派发 `+0x70` 的那一侧是执行侧」——它要求
+「谁把子效果送进 scope」有一个**具名**的答案。本节只做两件事:① §83.1 把「既在 `.rdata` 里、
+又派发 `[+0x70]`」的 40 个函数逐个读到 base 寄存器的写入点;② §83.2 从里面挑出的候选往上游追。
+两节都**不判**「`every_system` 走的就是这一条」。
+
+### §83.1 40 个 in-family 函数的 base 来源表(离线,零 shot)
+
+生产者:`scripts/scratch/2026-10_plus70_dispatcher/dispatch_sites.py`(只读 exe 拷贝)。口径全文写在
+脚本 docstring 里,这里是摘要:
+
+- **单段站点** = `call/jmp [reg+0x70]`,`reg` 是寄存器(不含 `[rip+0x70]`)。两路合并:
+  `.pdata` 函数体逐个反汇编(3,528 条)+ `.pdata` 覆盖不到的区间(4.8% 的 `.text`,叶子函数
+  在这一路才看得见,23 条)。
+- **两段站点** = `mov reg,[x+0x70]` 之后 **≤2 条**内 `call/jmp reg`(同寄存器,中间不重写它)。
+- **in-family** = 含单段站点的函数,`start ∈ [0x17F0000, 0x1B00000)` 且 `start` 在 `.rdata` 里
+  作为 8 B 对齐 qword 出现 ≥1 次。
+- **effect-family vtable** = 在 `.rdata` 里存在地址 `H`(8 对齐、`slot−H ≤ 0x200`)使 `[H+0x08]`
+  等于 effect Execute `0x3AFD30`;表里给 `H` 与槽号。**不用**「往回走连续指针」的启发式(§82.1 已弃用)。
+
+**复现(末行 `PASS` 才算):**
+
+```
+python3 scripts/scratch/2026-10_plus70_dispatcher/dispatch_sites.py
+## single-stage = 3551  two-stage = 16  → /mnt/cache/tmp/dispatch_sites/sites.tsv
+## single-stage by path: body=3528, leaf=23
+## in-family 函数 = 40(0x17f0000..0x1b00000 内、自身在 .rdata 里有 qword 槽、且含单段站点)
+single-stage=3551 two-stage=16 in-family=40
+PASS
+```
+
+**与 §82.2 的三个数逐个对账**(这是本节对 §82.2 的独立复现,一处不一致就写出来):
+
+| 数 | §82.2 | 本探针 | 判读 |
+|---|---|---|---|
+| 单段站点 | 3,551 | **3,551**(函数体 3,528 + 叶子 23) | 逐字相等。两路的分工是本节补的:§82.2 没写叶子函数那一半 |
+| in-family 函数 | 40 | **40** | 逐字相等 |
+| 两段站点 | 15 | **16** | **不相等,且 §82.2 没记窗口。** 紧邻(=0 条插入)是 **0**、窗口 2 是 **16**、窗口 6 是 **151**。16 条的窗口 2 形状全是一个 `lea rdx,[栈]` 或 `mov rcx,…` 夹在中间。⇒ 该差不是读数错,是**口径缺省**;本节采用窗口 2 并把它写进口径 |
+
+**表。** `写指令` 是站点上游 6 条内最后一条写 base 寄存器的指令;`对象` 是这条写指令的**源基址寄存器**,
+`再一跳` 是那个寄存器在同一基本块里的写入。`判定` 按下面的机械规则填(不再逐行手写):
+
+1. **candidate** = 该函数本身装在 effect-family vtable 里 **且** 它派发的对象来自 effect 对象的字段
+   (本表只有 2 行,见下);
+2. **other-class** = 该函数**不在**任何 effect-family vtable 里(`effect-family vtable` 列 = `none`),
+   或者它在、但派发对象是 `this+固定偏移` 的子对象 / 全局单例的字段;
+3. **undetermined** = base 来自入参寄存器(or 跨基本块),本表 3 行。
+
+| func | extent | site | effect-family vtable | base | 写指令 | 对象 | 再一跳 | 判定 |
+|---|---|---|---|---|---|---|---|---|
+| 0x18015f0 | 0x180192d | 0x18016ff | none | rax | mov rax,[rcx] | rcx | lea rcx,[rsi+0x20] | other-class |
+| 0x1824a60 | 0x1825505 | 0x1824b18 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1824a60 | 0x1825505 | 0x1824b7f | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1826b90 | 0x1826d50 | 0x1826bcb | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1826f90 | 0x1827150 | 0x1826fcb | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1827490 | 0x182794c | 0x18275ba | none | rax | mov rax,[rcx] | rcx | lea rcx,[rbx+0x40] | other-class |
+| 0x1827490 | 0x182794c | 0x1827793 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1827990 | 0x1827bc4 | 0x18279d3 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x183f790 | 0x183f8d1 | 0x183f867 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rdi+0x20] | other-class |
+| 0x184af60 | 0x184b25a | 0x184b038 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x184b5d0 | 0x184bc7c | 0x184b9ac | 0x25fd818+0x108 | rax | mov rax,[rbx] | rbx | - | undetermined |
+| 0x184cb10 | 0x184cf27 | 0x184cc34 | none | rax | mov rax,[rcx] | rcx | - | other-class |
+| 0x184d190 | 0x184d619 | 0x184d2c3 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rbx+0x20] | other-class |
+| 0x18695f0 | 0x1869779 | 0x186976a | none | rax | mov rax,[rcx] | rcx | mov rcx,[rcx+0x1d78] | other-class |
+| 0x18718e0 | 0x187202c | 0x1871947 | 0x25fa3e0+0x28, 0x25fa2e0+0x128 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x18718e0 | 0x187202c | 0x1871d33 | 0x25fa3e0+0x28, 0x25fa2e0+0x128 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1876fd0 | 0x187743b | 0x1877110 | 0x25f77e8+0x28 | rax | mov rax,[rcx] | rcx | lea rcx,[r14+0x40] | other-class |
+| 0x1876fd0 | 0x187743b | 0x1877156 | 0x25f77e8+0x28 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x187cc20 | 0x187cfc6 | 0x187cd1f | none | rax | mov rax,[rcx] | rcx | add rcx,0x40 | other-class |
+| 0x18b07e0 | 0x18b0add | 0x18b08c7 | 0x25ebcf8+0x48, 0x25ebc18+0x128 | rax | mov rax,[rbx] | rbx | - | undetermined |
+| 0x18b0c30 | 0x18b0f2d | 0x18b0d17 | 0x25ebc18+0x48, 0x25ebaf8+0x168 | rax | mov rax,[rbx] | rbx | - | undetermined |
+| **0x18b7b70** | 0x18b7bab | 0x18b7b9d | 0x25fde58+0x70, 0x25fdd78+0x150 | rax | mov rax,[rcx] | rcx | - | **candidate** |
+| **0x18b7e30** | 0x18b7e6b | 0x18b7e5d | 0x25fdd78+0x70 | rax | mov rax,[rcx] | rcx | - | **candidate** |
+| 0x18c9900 | 0x18c9bb9 | 0x18c99b0 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18c9900 | 0x18c9bb9 | 0x18c9aad | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18ca180 | 0x18ca438 | 0x18ca230 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18ca180 | 0x18ca438 | 0x18ca32d | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18caa00 | 0x18caced | 0x18caab5 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18caa00 | 0x18caced | 0x18cabb2 | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18cb2b0 | 0x18cb565 | 0x18cb360 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18cb2b0 | 0x18cb565 | 0x18cb45d | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18cbb30 | 0x18cbdec | 0x18cbbe0 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18cbb30 | 0x18cbdec | 0x18cbcdd | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18ec730 | 0x18edbd2 | 0x18ed63d | 0x2641e20+0x48, 0x2641d20+0x148 | rax | mov rax,[rcx] | rcx | lea rcx,[r12+0x40] | other-class |
+| 0x190c230 | 0x190c96f | 0x190c605 | 0x25f7c48+0x48 | rax | mov rax,[rcx] | rcx | lea rcx,[r15+0x20] | other-class |
+| 0x190da10 | 0x190dd8c | 0x190db15 | none | rax | mov rax,[rbx] | rbx | - | other-class |
+| 0x190f4c0 | 0x190f743 | 0x190f57e | 0x25f4440+0x108 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x190f890 | 0x190fb13 | 0x190f94e | 0x25f4440+0x28 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1920df0 | 0x1920ea5 | 0x1920e69 | none | rax | mov rax,[rbx] | rbx | - | other-class |
+| 0x1a9a000 | 0x1a9a725 | 0x1a9a499 | none | rax | mov rax,[rsi] | rsi | - | other-class |
+| 0x1ac1430 | 0x1ac1801 | 0x1ac147d | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac1430 | 0x1ac1801 | 0x1ac1630 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac19e0 | 0x1ac1db1 | 0x1ac1a2d | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac19e0 | 0x1ac1db1 | 0x1ac1be0 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac1fe0 | 0x1ac23b1 | 0x1ac202d | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac1fe0 | 0x1ac23b1 | 0x1ac21e0 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac3480 | 0x1ac372f | 0x1ac34d8 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac60e0 | 0x1ac658e | 0x1ac61ae | none | rax | mov rax,[rcx] | rcx | lea rcx,[rsi+0x20] | other-class |
+| 0x1ac6fb0 | 0x1ac7539 | 0x1ac70ff | none | rax | mov rax,[rcx] | rcx | add rcx,0x40 | other-class |
+| 0x1acf000 | 0x1acf212 | 0x1acf0b7 | none | rax | mov rax,[rcx] | rcx | - | other-class |
+| 0x1acf2f0 | 0x1acf44b | 0x1acf35f | none | rax | mov rax,[rbx] | rbx | - | other-class |
+| 0x1af91c0 | 0x1af969e | 0x1af9210 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+
+合计 52 个站点 / 40 个函数:**candidate 2、undetermined 3、other-class 47**。
+
+**两个 candidate 的三条证据。** 它们形状完全一样,只有 getter 不同:
+
+```
+0x18b7b70 (59 B, 装在 0x25fde58+0x70 / 0x25fdd78+0x150;后者的 +0x08 == 0x3AFD30)
+  018b7b70  mov  [rsp+8], rbx
+  018b7b75  push rdi
+  018b7b76  sub  rsp, 0x20
+  018b7b7a  add  rcx, 0xc0              ; ← 站点 base 的上游:对象 = this+0xC0
+  018b7b81  mov  rdi, r8                ; 第三实参先存着
+  018b7b84  mov  rbx, rdx               ; 第二实参(scope)先存着
+  018b7b87  call 0x18be4e0              ; getter(this+0xC0, scope) -> rax
+  018b7b8c  mov  rcx, [rax]             ; ← 真正被派发的对象 = [[getter 返回值]]
+  018b7b8f  test rcx, rcx
+  018b7b92  je   0x18b7ba0              ; 空 ⇒ 什么都不派
+  018b7b94  mov  rax, [rcx]             ; ← base rax 的写入点(vtable)
+  018b7b97  mov  r8, rdi                ; 原样还回第三实参
+  018b7b9a  mov  rdx, rbx               ; 原样还回 scope
+  018b7b9d  call [rax+0x70]             ; ← 站点
+```
+
+- ① **站点**:`0x18B7B9D`(`0x18B7B94` 写 `rax = [rcx]`,`rcx` 由 `0x18B7B8C` 写成 getter 的返回解引用)。
+- ② **它是 effect vtable 方法**:函数 start 装在 `0x25FDD78+0x70` 与 `0x25FDE58+0x150`;
+  两个 head 的 `+0x08` 都等于 effect Execute `0x3AFD30`。
+- ③ **它把 (scope, r8) 原样转给被派发者**:`rdx`/`r8` 在调用前后不变 —— 这正是 `0x3B1330`
+  的 `(self, scope, r8)` 签名,而不是「带一个自己的栈缓冲」的别类调用。
+- `0x18B7E30` 是同一个形状,getter 换成 `0x18BEBF0`,装在 `0x25FDD78+0x70`。
+
+**47 个 other-class 为什么排除(不是「看着不像」)。** 三条可复核的理由,按表里哪一列出:
+
+1. `effect-family vtable = none`(38 行):该函数**根本不在** effect 家族任何 vtable 里 ——
+   用 `[H+0x08] == 0x3AFD30` 在它所有 `.rdata` 槽之前 0x200 内找不到 head。§82.2 抽读的
+   `0x18016FF`(本表第一行)就在这一类,与 §82.2 的判读一致。
+2. 在 effect 家族里、但派发对象是 `this+0x20 / this+0x40`(8 行):这是**同一个对象的次 vtable 子对象**
+   (`lea rcx,[reg+0x20]` / `add rcx,0x40`),不是子效果向量里的元素。
+3. 在 effect 家族里、但对象来自全局单例的字段(1 行):`0x18695F0` 的 `mov rcx,[rcx+0x1d78]` 前面是
+   `[rip+0x19F5C30]` 这个全局,**不是** effect 对象。
+
+**3 个 undetermined**:`0x184B9AC` / `0x18B08C7` / `0x18B0D17` 的 base 寄存器是 `rbx`,上游 6 条内
+没有写它的指令(来自函数入口或更早的基本块)。它们是 effect 家族方法,所以只差「对象是谁」这一跳。
+
+**这一节不能说的(三条)。**
+
+1. **不能把 `candidate` 读成「找到派发方了」。** 它只满足「effect vtable 方法 + 对象来自 `this+0xC0`」
+   这两条;`this+0xC0` 是**什么类**没读,`0x18BE4E0` 返回的是**谁**也没读。§83.2 才追上游。
+2. **不能把 47 个 other-class 读成「这 47 个与 effect 无关」。** 它们的**调用者**里可能有 effect;
+   本节排除的是「它们自己不是 effect 家族的派发点」,不是「effect 永不到这里」。
+3. **不能把 3,551 这个数当「只有 3,551 处派发 `+0x70`」。** 它是本节口径下**decode 成功的指令**里的数;
+   口径的边界(两路合并、`±1 B` 分歧、叶子函数那一半)都写在探针 docstring 里,换口径就要重算。
+
+### §83.2 两个候选的入口链:`dispatcher_partial` —— 追到的是「谁造这个对象」,不是「谁派活」(离线,零 shot)
+
+生产者:`scripts/scratch/2026-10_plus70_dispatcher/trace_entry.py`(rip 相对引用索引一次建成后缓存在
+`/mnt/cache/tmp/dispatch_sites/rip.jsonl`,176,606 个目标)。深度上限 4,每层做两件事:E8 反查直接调用者、
+`.rdata` 槽反查(`[H+0x08] == 0x3AFD30` 定 effect-family vtable 头)。
+
+**判决词:`dispatcher_partial`。** 两个候选都只追到 effect 机器内部(类自己的 create + class_info vtable),
+没有再往外接到「列表驱动 / on_action / event」那种入口。
+
+**链(两条形状完全相同,只有类不同):**
+
+```
+0x18b7b70  (+0x70 of vtable 0x25fde58)      E8 callers = 0
+   .rdata slot 0x25fdec8 = head 0x25fde58 + 0x70
+   ← code that installs head 0x25fde58: 0x189a67b  in 0x189a620..0x189a699
+      0x189a620: push rbx / sub rsp,0x20 / mov ecx,0xe8 / call 0x2185218 (operator new)
+                 call 0x2188170 (memset) / call 0x3afb40 (base ctor)
+                 lea rax,[rip-…] -> 0x25ebab8 ; mov [rbx+0xc0], rax   ; ← 子对象 @ +0xC0
+                 lea rax,[rip-…] -> 0x25fde58 ; mov [rbx], rax       ; ← 主 vtable
+                 lea rax,[rip-…] -> 0x25fab20 ; mov [rbx+8], rax     ; ← 次基 vtable
+      0x189a620 自身:E8 callers = 0;.rdata slot 0x260f498 + 0x00
+      0x260f498(class_info vtable):+0x00 = 0x189a620(create),+0x08/…
+                 = 0x34c090(共享 deleting destructor),+0x78 = 0x3b01a0(按 token 实例化)
+
+0x18b7e30  (+0x70 of vtable 0x25fdd78)      E8 callers = 0
+   .rdata slot 0x25fdde8 = head 0x25fdd78 + 0x70
+   ← 0x189a6fb in 0x189a6a0..0x189a719 (同类 create)
+   ← .rdata slot 0x260f488 + 0x00;class_info vtable 的 +0x88 = 0x3b01a0
+```
+
+**这条链说明的三件事(每件都有上面的读数支撑)。**
+
+1. **两个候选是「同一个对象内的两个基」上的 `+0x70`。** `0x25FDE58` 与 `0x25FDD78` 的 `+0x08` 都是
+   `0x3AFD30`(Execute)、`+0x98` 都是 `0x3B1420`(谓词基体)、`+0x70` 分别是 `0x18B7B70` / `0x18B7E30`。
+   它们是**同一族的两个类**的 parse/dispatch 槽,不是两个互不相干的东西。
+2. **类 A 有三个基 vtable。** create `0x189A620` 往同一个 0xE8 字节对象里写三张表:`[obj]=0x25FDE58`、
+   `[obj+8]=0x25FAB20`、`[obj+0xC0]=0x25EBAB8`。三张表里 effect 函数的**槽号不同**:
+   `0x25FAB20` 是 `+0x30 = 0x3B01A0`、`+0x90 = 0x3B1330`;`0x25EBAB8` 是 `+0x48 = 0x3AFD30`、
+   `+0xB0 = 0x3B1330`、`+0x70 = 0x3B1EF0`。⇒ **「`+0x70`」这个偏移在不同基上指不同东西**,
+   这正是 §82.2 那条「同一段代码可能在非 effect 对象上取 `+0x70`」的机制性解释。
+3. **候选派发的是 `[self+0xC0]` 上算出来的那个对象。** `0x18B7B70` 的 `+0x70` 槽不改 `rdx`/`r8`
+   (§83.1 证据 ③),它先 `call 0x18BE4E0(self+0xC0, scope)` 拿回一个指针,再 `mov rcx,[rax]` 解引用
+   之后派发。`0x18B7E30` 同形状、getter 是 `0x18BEBF0`。**getter 的返回值是什么类,本节没读**
+   —— 它只到「`this+0xC0` 这张子表(0x25EBAB8)派生的东西」这一步。
+
+**三条「不能说」(顺序即优先级)。**
+
+1. **判决词只覆盖追到的深度。** 4 层之内没有外部入口;这不等于第 5 层之后也没有。`0x189A620` 的
+   `class_info` 在 `.rdata` 里**没有静态 qword 引用**(class_info 对象是运行时 `lea`+堆分配的),
+   所以「谁把这个 class_info 插进 effect db」不是本条链能回答的 —— 那要追 `0x3AEF60` 的入参。
+2. **追到 create ≠ 知道它何时被调。** `0x3B01A0` 是**按 token 实例化**的那一侧(§23.1 / §82.1 ②),
+   它在 `every_system` 的 ExecuteActual(`0x17F7920`)与 `0x3AFD30` 的 token 循环里都被调到,
+   所以「这个类被造出来」在 parse 与 execute 两个窗口里都可能发生。本节不说「它在执行期被造」。
+3. **`dispatcher_partial` 的下一问不是「再打一发」,是「谁调这个持有者」。** 具体到本卷:
+   下一问是 `0x260F498` 这个 class_info 的**插入点**(谁 `0x3AEF60` 它),以及 `[self+0xC0]` 子表
+   (`0x25EBAB8`,`+0x70 = 0x3B1EF0`)的 `+0x70` 是什么语义。这两个问题都是静态的。
+
