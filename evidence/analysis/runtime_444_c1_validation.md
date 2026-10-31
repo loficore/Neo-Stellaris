@@ -8998,3 +8998,26 @@ python3 scripts/scratch/2026-10_mod_load/mod_registry.py --host Windows_Jiaolong
 
 **门禁(修复前后都是同一批命令)。** 修复前:`cd scripts/windows && python3 -m pytest tests -q`
 → `342 passed`(基线,用 `-k 'not <两条新测试>'` 复算仍是 342)。修复后:`344 passed`。
+
+> **§83.2 / §84.2 一处补记(2026-10-31,同一次执行的复审,只追加不改写)** —— 三处,都影响读法:
+>
+> ① **§83.2 的判决词对「家族成员」的口径敏感。** 初版把「函数装在 `[H+0x08] == 0x3AFD30` 的 vtable 里」
+> 当唯一判据,于是 class_info vtable(`0x260F498`)被判成「家族外」,判决词读成 `dispatcher_found`;
+> 改用「vtable 的 ±0x200 内出现 `{0x3AFD30, 0x3B1330, 0x3B01A0, 0x3B1420, 0x3B0F80, 0x3B1230}` 任一」
+> 之后同一个链读成 **`dispatcher_partial`**。**采用后者**,理由写在 §83.2 第 2 条:class_info vtable 的
+> `+0x78` 就是按 token 实例化的 `0x3B01A0`,它是 effect 机器的一部分,不是外部入口。⇒ 这个判决词
+> **依赖「什么算家族」的定义**,换定义要重判,不能只引结论。
+>
+> ② **§84.2 D1 的规则在复审后收紧了一次,`window=dialog` 的假阳性方向与「漏报」方向要分开看。**
+> 初版条件是 `row_kind(rows,w,h) == "outliner"`,它在「**一条**选项行 + 旁边常驻 outliner」的真实弹窗上
+> 也会命中 —— 而 `world_state` 把 `none` 当「没有窗口」(非阻塞侧),那是**更坏**的方向。
+> 现行条件是「**每一行**都是 outliner 行」(`option_rows(rows,w)` 为空才允许 bbox 失效),
+> 由 `test_one_option_row_plus_the_outliner_is_still_a_dialog` 先红后绿钉住;新闻窗在 5 参数与
+> `classify_window_at_reference` 两条路径上也补了断言(复审的 I-3)。⇒ §84.2「两条都只收紧」应读成
+> **「返回值的集合只收缩」**,而「分类器判 `none`」在闸门上等于放行,所以这一条必须同时有漏报面的测试。
+>
+> ③ **§84.1 的判据表把「有这一条」与「enabled」分开列了。** 判据表原本写「有这一条 **且** enabled」,
+> 而 `mod_registry.py` 的差异统计只比对了 path —— 一条 disabled 的条目会被报成「注册库有、dlc_load 没有」
+> 的假差异。现在 `enabled` 参与判定(缺省视为 listed/enabled),disabled 的条目单列一行
+> 「启动器会把它从 `dlc_load.json` 里去掉」。**这不是判据放宽**:`enabled=false` 的条目在当前通道下
+> 本来就不该出现在 `enabled_mods` 里。
