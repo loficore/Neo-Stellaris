@@ -254,6 +254,18 @@ pub const keyword_reg = struct {
     /// **绝对地址**,拿裸 RVA 去数会数出 0(本仓踩过一次,见 `scripts/scratch/2026-10_eval_slot/`)。
     pub const RVA_TRIGGER_EVAL: usize = 0x1A91A80;
 
+    /// §80.2 / §81.1 ③ — base effect parse。`every_system` 的逐系统循环体每轮
+    /// `mov rcx,r14 ; call 0x3B1330`,所以它同时是「所有 effect 都会走到」的入口与
+    /// 「按 `[self]` 过滤后的下发点」。补丁是它的前 15 字节(§81.1 ①)。
+    pub const RVA_EFFECT_BASE_PARSE: usize = 0x3B1330;
+
+    /// §80.1 / §81.1 ② — `every_system` 的 create(`0x1A74EB0`)写出的 vtable。
+    /// `+0x70 = 0x1A76130`(逐系统循环体),`+0x98 = 0x3B1420`(effect 谓词基体)。
+    pub const RVA_EVERY_SYSTEM_VTABLE: usize = 0x26562D0;
+
+    /// §80.2 / §81.1 ④ — 银河容器全局:`[+0x590]` 是 dword id 向量、`[+0x59C]` 是原始条数。
+    pub const RVA_GALAXY_MAP_DB: usize = 0x3260BB0;
+
     /// §24 — C1 borrows an official `class_info` instead of fabricating an object, so these two
     /// donors are data, not code we write. Aliasing is a shape the shipped game already uses: 9
     /// keyword `class_info`s serve 2-3 token ids each (`if`/`else_if`/`else` on `0x269DC98`), every
@@ -422,6 +434,15 @@ test "keyword_reg: descriptor fills the stride exactly" {
     try std.testing.expectEqual(@as(usize, 0x20), keyword_reg.TOKEN_STR_INLINE);
     try std.testing.expectEqual(keyword_reg.TOKEN_STRIDE, keyword_reg.TOKEN_STR_INLINE + 0x100);
     try std.testing.expectEqual(keyword_reg.TOKEN_STR_SIZE, keyword_reg.TOKEN_STR_CAP + 4); // adjacent u32s
+}
+
+test "keyword_reg: per-system dispatch anchors (§81.1)" {
+    // The new constants are read off the shipped exe in §81.1; the patch window, the
+    // every_system vtable and the galaxy container must not drift silently.
+    try std.testing.expectEqual(@as(usize, 0x3B1330), keyword_reg.RVA_EFFECT_BASE_PARSE);
+    try std.testing.expectEqual(@as(usize, 0x26562D0), keyword_reg.RVA_EVERY_SYSTEM_VTABLE);
+    try std.testing.expectEqual(@as(usize, 0x3260BB0), keyword_reg.RVA_GALAXY_MAP_DB);
+    try std.testing.expect(keyword_reg.RVA_EVERY_SYSTEM_VTABLE > 0x2392000); // .rdata, not .text
 }
 
 test "keyword_reg: anchors land in the sections they were read from" {

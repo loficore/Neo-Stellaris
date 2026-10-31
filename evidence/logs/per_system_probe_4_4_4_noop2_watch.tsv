@@ -1,0 +1,22 @@
+#meta container_ids_sha256=400ca2e3f9d144b6eafe2fc773dd1eeac0c9569b9e511a8cc8ca014d431741d7
+#meta container_raw_count=788
+#meta dll=sqjs_c11.dll
+#meta dll_sha256=b8a82f61300bc4794fd6306ca16aa3757ed52f2ec220e7786e297f6aae3db964
+#meta entries=0
+#meta entries_error=0
+#meta exe_base=0x7ff6266d0000
+#meta gate=operator_override
+#meta host_alive=1
+#meta install_decision=ok
+#meta install_rc=0
+#meta layout_target_rva=0x3b1330
+#meta log_hits=0
+#meta mode=watch
+#meta module_base=0x7ffb343a0000
+#meta overall_verdict=no_calls
+#meta save_name=loadwin_c11
+#meta script_sends=0
+#meta stats_delta=calls=0 matched=0 distinct_ids=0 dedupe_full=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=0
+#meta systems=788
+#meta uninstall_rc=0
+#meta verify_rc=0

@@ -7792,3 +7792,1232 @@ supervisor 日志里那条 `console effect every_system = { limit = { is_rim_sys
 3. **`ctx` 那个低地址区**(`0x7fe000`/8 KB,§56.8 也见过)到底是什么:同一区域两次独立读数都指到它,
    值得单独一发只读普查(它可能是引擎的「求值暂存区」)。
 4. **`a3 = 0x80` 与 §76 的 `X = 0x80` 同值**:两个槽的第 2/第 3 实参是否是同一个掩码常量,值得静态确认。
+
+## §80 逐系统循环定位:A1 注册点 / A2 循环体 / A3 三条证伪判据(2026-10-29,离线,零 shot)
+
+§79 的负结论把「787 次逐系统求值发生在哪」从求值槽(`+0x28`,1 次)和谓词槽(`+0x80`,11 次)上摘掉了
+—— 两个槽都是**实例化档**。本节改从 `every_system` 这个迭代器**自己的注册点**入手:先定名字是哪个
+函数拼的、注册函数在哪、它建的对象的 create 是谁(§80.1),再读 create 出来的对象的「按系统」循环
+(§80.2),最后用三条**可证伪**的判据钉候选承载寄存器(§80.3)。三小节都只读 exe 拷贝。
+
+### §80.1 `every_system` 的名字由 `0x192AFE0` 拼(`"every_" + "system"`),注册函数是 `0x19682F0`
+
+**三件事。**
+
+**① 拼接器 = `0x192AFE0..0x192B0C5`。** 它把 `0x2668DD8` 处的 6 B 字面量 `"every_"` 与入参名字
+拼接(`0x15F420` 是 `std::string` 的 `operator+`);同一模板的兄弟:`0x192B350` 拼 `"random_"`(前缀在
+`0x2668DD0`,7 B),`0x192B690` 拼 `"ordered_"`(`movabs rax, 0x5F6465726564726F`)。前缀是**代码里的
+立即数/字面量**,不是从别处读的变量。`every_system` 那次调用在 `0x196860C`:
+
+```
+  01968600  lea     rdx, [rip + 0xb11ea1]  ; -> 0x247a4a8  "system"
+  01968607  lea     rcx, [rsp + 0x50]
+  0196860c  call    0x14192afe0  ; -> 0x192afe0  "every_" + 入参
+  01968612  mov     rcx, rax
+  01968615  call    0x141d13270  ; -> 0x1d13270  GetOrAddToken
+```
+
+⇒ 运行时拼出的名字 = `"every_" + "system"` = `every_system`。这与计划背景里那条实测一致:
+`b"every_system\0"` 在 exe 里不存在,`b"every_"` 只在名字池。
+
+**② 注册函数 = `0x19682F0..0x1968BE6`(0x8F6 B)。** 它的**唯一**直接调用者是
+`0x1165D0..0x1165E9` —— 一个静态初始化 thunk(`call 0x19682F0` 之后 `jmp 0x218556C`),**不在** §19 的
+101 个注册函数区间里。计划里「对命中的 concat_fn 找它的调用者(应当是 101 个注册函数之一)」这一句
+按字面不成立:**字面量所在的那个函数自己就是注册函数**,再往上只有 static init。`0x19682F0` 同时落在
+§19 的两个区间内(`0x1930E70..0x196D3E6` 与 `0x195A580..0x19A7268` 在 `0x195A580..0x196D3E6` 重叠),
+所以「落在 §19 区间内」这一条判据成立,但「它是被 §19 注册函数调用的拼接器」不成立。
+
+**③ 它建的对象(原样窗口,`mint @0x1968615` 起的对象构造段):**
+
+```
+  0x196867f  mov     rbx, qword ptr [rip + 0x1a0c062]   ; -> 0x33746e8 (ScriptedEffectDB)
+  0x1968686  test    rbx, rbx
+  0x1968689  jne     0x19686ac
+  0x196868b  lea     ecx, [rbx + 0x70]                  ; rbx==0 ⇒ size 0x70
+  0x196868e  call    0x2185218                          ; operator new(0x70)
+  0x196869d  call    0x3aeba0                           ; db ctor(§21 的 effects 拉起)
+  0x19686a5  mov     qword ptr [rip + 0x1a0c03c], rax   ; -> 0x33746e8
+  0x19686ac  mov     ecx, 0x10
+  0x19686b1  call    0x2185218                          ; operator new(0x10)
+  0x19686bd  mov     qword ptr [rax + 8], rsi           ; +8 = 拼好的名字("every_system")
+  0x19686c1  lea     rcx, [rip + 0xcfdfa8]              ; -> 0x2666670
+  0x19686c8  mov     qword ptr [rax], rcx               ; +0 = class_info
+  0x19686ce  mov     edx, r14d                          ; token id(0x1968615 的 eax)
+  0x19686d4  call    0x3aef60                           ; BST insert(db, id, value)
+  class_info qwords: 0x14034c090, 0x141a74eb0, 0x14034c090, 0x141a75010
+```
+
+⇒ value = `new(0x10){ class_info = 0x2666670, name = "every_system" }`;`0x2666670` 的 qword[1] =
+`0x141A74EB0` ⇒ **create = `0x1A74EB0`**(§80.2 的入口,按 §75.1/§23.2 的 class_info 读法)。
+docstring 是 `0x2669D98` = `"Iterate through all systems"`。
+
+**附带发现(对 §80.2 有用):一个注册函数注册同族的四个 keyword。** 同一个 `0x19682F0` 里还有三个
+mint 点,前缀分别来自不同拼接器:
+
+| mint | 前缀 | 运行时名字 | class_info | create | 目标 db |
+|---|---|---|---|---|---|
+| `0x1968364` | `random_`(`0x192B350`) | `random_system` | `0x26665D0` | `0x1A74E10` | effect `0x33746E8`(`0x3AEF60`) |
+| `0x19684C9` | `ordered_`(`0x192B690`) | `ordered_system` | `0x26665C0` | `0x1A74E60` | effect `0x33746E8`(`0x3AEF60`) |
+| `0x1968615` | `every_`(`0x192AFE0`) | **`every_system`** | `0x2666670` | **`0x1A74EB0`** | effect `0x33746E8`(`0x3AEF60`) |
+| `0x1968890` / `0x1968ADD` | trigger 侧(`count_` 等) | `any_system` 族 | `0x2666690` | `0x1A74F50` | trigger `0x32611C8`(`0x348150`) |
+
+前两行与第三行的 class_info qword 都是逐条读出来的;**第四行只读了插入调用与 class_info 地址,
+未逐条核对 create**(A2 不用 trigger 侧)。
+
+**这一节不能说的。** ① `every_system` 是「静态两段拼起来」的名字:拼接器读 6 B 前缀 + 入参
+`"system"` 有代码支持,但没有实机把 token 名字读回来;② `0x1165D0` 只说明注册发生在静态初始化期,
+**不说明**它早于任何求值(时序仍按 §19:插入早于第一次引用该 keyword 的求值);③ `0x1A74EB0` 是
+「create」是按 `class_info` qword[1] 的 §75.1 读法,**不是** call-site 证人。
+
+**复现:**
+
+```bash
+python3 scripts/scratch/2026-10_per_system_loop/find_iterator.py
+```
+
+探针输出里的原始行:`# functions in 0x195a580..0x19a7268 with a 'system' lea: 13 (deduped;
+.pdata chained records merged)`、`# of which the literal is exactly 'system': 1`、
+`## registrar=0x19682f0 ...`、`mint @0x1968615 ... join=0x192afe0 prefix='every_' class_info=0x2666670`。
+
+### §80.2 `every_system` 的逐系统循环:边界 `0x1A762A0..0x1A76335`,容器是 4 B id 向量,候选承载 = scope 结构里的 id/对象格
+
+§80.1 的 create `0x1A74EB0` 写出的 vtable 是 `0x26562D0`。槽 `+0x70` = **`0x1A76130`**,而这个槽正是
+`CEffect` 家族「把子效果带到某个 scope 里去走一遍」的那个虚位:基类实现 `0x3B1330` 在槽 `+0x70`
+里递归每个子效果(`[self+0x10]` 向量、`[self+0x1c]` 计数,stride 8);`every_system` 把它覆写成
+**先枚举、再逐个 scope 下发**。
+
+**① 枚举来源(两次虚调,不在循环里)。**
+
+```
+  01a76205  mov     rax, qword ptr [r14]
+  01a7620d  mov     rcx, r14
+  01a76210  call    qword ptr [rax + 0xe8]      ; 计数
+  01a76216  mov     edi, eax
+  ...
+  01a7626a  mov     rax, qword ptr [r14]
+  01a7626d  mov     r9, qword ptr [rbx + 8]      ; 目标向量(dword 数组)
+  01a76271  lea     r8, [rbp + 0xc0]             ; ← 过滤后的实际条数写这里
+  01a7627d  mov     rcx, r14
+  01a76280  call    qword ptr [rax + 0xf0]      ; 填 id
+```
+
+`+0xE8` = `0x1A798C0`:`[[0x3260BB0]+0x59C]`(一个 dword 计数);`+0xF0` = `0x1A8CC50` →
+`0x19307D0`,后者是真正的枚举器:
+
+```
+  019307da  mov     rax, qword ptr [rip + 0x19303cf]  ; -> 0x3260bb0
+  019307e7  mov     rdx, qword ptr [rax + 0x590]      ; 容器基址
+  019307ee  movsxd  rax, dword ptr [rax + 0x59c]      ; 原始条数
+  019307f5  lea     rdi, [rdx + rax*4]                ; end = base + n*4
+  ...
+  01930842  cmp     byte ptr [rax + 0x137c], 0        ; 逐对象的过滤位
+  01930849  je      0x141930857
+  0193084b  mov     ecx, dword ptr [rax + 8]          ; 只收 [obj+8](4 B)
+  01930851  mov     dword ptr [rbx], ecx
+  01930853  add     rbx, 4
+  01930857  add     rdx, 4                            ; stride = 4 B
+  0193085b  cmp     rdx, rdi
+  0193085e  jne     0x141930810
+```
+
+⇒ 容器 = `[[0x3260BB0]+0x590]` 的 **dword 向量**(原始条数 `[[0x3260BB0]+0x59C]`),元素尺寸 4 B;
+过滤条件是 `[obj+0x137C] != 0`,写进输出数组的是 `[obj+8]`(4 B)。`+0xF0` 把**过滤后的条数**写回
+`[rbp+0xC0]`,循环用的是这个数,不是原始条数。
+
+**② 循环本体(`0x1A762A0..0x1A76335`,原样):**
+
+```
+  01a76289  cmp     dword ptr [rbp + 0xc0], r12d      ; r12d = 0
+  01a76290  jle     0x141a7633b                       ; 0 条 ⇒ 直接收尾
+  01a76296  mov     rdi, r12                          ; i = 0(字节偏移)
+  01a762a0  mov     rax, qword ptr [rbx + 8]          ; ← 列表头读取
+  01a762a4  mov     r8d, dword ptr [rdi + rax]        ; ← 第 i 个 id(4 B)
+  01a762a8  mov     rax, qword ptr [r14 + 0x180]     ; 本对象的掩码(=0x80,ctor 写死)
+  01a762af  mov     qword ptr [rsp + 0x28], rax      ; scope+0x08 = 0x80
+  01a762b4  mov     dword ptr [rsp + 0x30], r8d      ; scope+0x10 = id
+  01a762b9  cmp     rax, 0x10
+  01a762bd  jne     0x141a7630c                       ; 掩码 != 0x10 ⇒ 对象格 = NULL
+  ...                                               ; 掩码 == 0x10 才去 0x3260FF8 里按 id 解对象
+  01a7630c  mov     rax, r12
+  01a7630f  mov     qword ptr [rsp + 0x34], rax      ; scope+0x14 = 对象指针(本掩码下 = 0)
+  01a76319  mov     r8, r15
+  01a7631c  lea     rdx, [rsp + 0x20]                ; ← 本轮的 scope 结构
+  01a76321  mov     rcx, r14
+  01a76324  call    0x1403b1330                       ; ← 每轮的下发:子效果 × 本 scope
+  01a76329  inc     esi
+  01a7632b  add     rdi, 4                            ; ← 迭代推进(stride 4)
+  01a7632f  cmp     esi, dword ptr [rbp + 0xc0]
+  01a76335  jl      0x141a762a0
+```
+
+三条要求的指令:
+
+| 角色 | 指令 |
+|---|---|
+| 列表头读取 | `0x1A762A0  mov rax,[rbx+8]`(容器基址;`rbx` 是 `0x1A8F080` 造的那个数组头) |
+| 迭代推进 | `0x1A76329 inc esi` + `0x1A762B` 处的 `0x1A7632B add rdi,4`,上界 `[rbp+0xC0]`,`0x1A76335 jl` |
+| 每轮的调用/写入 | `0x1A76324 call 0x3B1330`(`self, &scope, r15`);scope 三格在 `0x1A762AF/0x1A762B4/0x1A7630F` 写入 |
+
+⇒ **循环边界 = `0x1A762A0..0x1A76335`**(函数 `0x1A76130..0x1A7643D`,slot `+0x70`)。
+
+**③ 候选承载 `S`。** 本轮内变化、且被后续调用带进参数的只有两样:元素 **id**(`r8d`,来自
+`[rdi+[rbx+8]]`)和它写进的 **scope 结构**(栈上 `[rsp+0x20]`,三格 `+0x08` mask、`+0x10` id、
+`+0x14` 对象)。唯一被带进 `0x3B1330` 的是 **scope 结构的地址**(`rdx`),所以候选 `S` 取
+**scope 结构里的对象格 `[scope+0x14]`**,其次才是 id 格 `[scope+0x10]`。
+
+- 它从哪来:先由 `0x19307D0` 从 `[[0x3260BB0]+0x590]` 的 dword 向量里过滤出 id(条件是
+  `[obj+0x137C] != 0`,写的是 `[obj+8]`);循环里再用掩码决定是否拿 id 去 `0x3260FF8` 里解对象。
+- **本掩码(0x80)下对象格恒为 0**:`cmp rax,0x10 / jne` 分支把 `rax` 置成 `r12`(=0)。也就是说
+  `every_system` 轮内下发的 scope 是 `{mask=0x80, id, obj=NULL}` —— 对象要到下一层再解。
+- 旁证:`0x80` 与 §76 的谓词第 2 实参 `X`、§79 的 `a3` **同值**;本节给出它的静态出处:
+  `every_system` 的 create 里 `mov edx,0x80`(`0x1A74EC8`),ctor 存进 `[obj+0x180]`。
+
+**这一节不写的结论。** ① **不说** `S` 就是星系对象 —— 本掩码下它是 NULL,id 才是身份;
+② **不说**这个槽是「运行期执行」而不是「装载期按 scope 解析」:§24.4.2 把这个虚位记成
+`parse`(按静态形状),本节只证明「它按 id 列表逐轮把子效果带进 scope 结构」,**parse 还是
+execute 是 §80.3 判据 1 要问的第一件事**;③ 过滤器 `[obj+0x137C]` 的语义未定(可能是
+「已生成/有效」),`787` 是本节的预期分母,不是读数。
+
+### §80.3 候选 `S` 的三条证伪判据:`下 / 上 / 未定`
+
+`S` = §80.2 循环(`0x1A762A0..0x1A76335`)写进 scope 结构的那一格:`[scope+0x14]`(对象指针,
+本掩码 0x80 下恒 0),其次 `[scope+0x10]`(id)。探针:`falsify_s.py`。
+
+**判据 1 —— `S` 与 §79 的 ctx 是不是同一层 ⇒ `下`。**
+证伪方式:若同层,§79 的两个判别量(`ctx+0x158` 的类型门、`ctx+0x278`)应在这条链上出现,或者
+scope 结构应能被送到 §77 的求值基体 `0x1A918E0` / 槽基体 `0x1A91A80`。读数:
+
+- 循环函数 `0x1A76130..0x1A7643D` 与派发器 `0x3B1330` 的**全部内存位移**里**没有 `0x158`**
+  (循环的位移集:`0x8,0x10,0x14,0x18,0x20,0x28,0x30,0x34,0x38,0x3c,0x40,0x44,0x48,0x50,0x58,
+  0x60,0x68,0x70,0x78,0xc0,0xc8,0xe8,0xf0,0x180,0x190` + 三个 rip 目标);
+- `0x1A918E0` 的 `.pdata` 调用者只有 5 个:`0x1904AA0`、`0x1A91A80`、`0x1B16C80`、`0x1B16F50`、
+  `0x1B854A0` —— **不含** `0x1A76130` / `0x3B1330`,也不含 `0x3B1330` 的下游子效果槽;
+- 循环写的那张 scope 结构是**栈上** `[rsp+0x20]`,由 `0x1A761D0` 的 `0x24B88E8` 形态初始化;
+  §79 的 ctx 是 `0x7FE000` 那个 8 KB 区里的**堆对象**(`ctx_ptr=0x7FED50`)。
+
+⇒ 两条不同层:§80.2 的 `S` **不是** §79 读到的那个 ctx(至少在 §79 的仪器口径下不是同一对象)。
+`0x80` 这个掩码值是两条链**唯一**共享的量(§76 的 `X`、§79 的 `a3`、`[obj+0x180]`)。
+
+**判据 2 —— `S` 的 stride 与系统数 ⇒ `上`。** 容器是 dword 向量
+`[[0x3260BB0]+0x590]`,原始条数 `[[0x3260BB0]+0x59C]`,枚举器两条 `add …,4`(`0x1930853`
+写、`0x1930857` 读);输出向量按**原始条数** resize(`0x1A76240` 的 `0x22A9B0`,上界 `edi`),
+过滤(`[obj+0x137C]!=0`)只把实际条数写回 `[rbp+0xC0]`,**不缩容**。⇒ `787 × 4 = 3,148 B`
+放得下,且循环上界用的是过滤后的条数(不是 787)。**没有**发现对 787 的任何越界风险。
+
+**判据 3 —— `S` 上有没有「id 形状」的字段 ⇒ `未定`。** id 是 `0x193084B` 的
+`mov ecx,[rax+8]`(4 B)写进输出数组的;循环里按 `and eax,0xffffff`(0x1A762D7)去查
+`0x3260FF8` 的哈希桶。**静态能说的止于此**:`[obj+8]` 是 4 B、`off < 0x100`、按 24 位哈希索引;
+**不能说**它落在 `[1, 787]` —— 这需要一次实机读数(读 `[[0x3260BB0]+0x590]` 的前 N 个 dword),
+本节的探针里没有比较指令可查(判据 3 的读数就是「没有范围比较」)。
+
+**结论。** 三条判据 `下 / 上 / 未定`,满足计划「至少一条下」。**下一发要问的**不是「S 是不是星系」,
+而是两个更便宜的量:① `[[0x3260BB0]+0x59C]` 与过滤后的 `[rbp+0xC0]` 在战役里是否 = 787;
+② `[obj+8]` 的取值集合是否落在 `[1, 787]`。两条都在**同一张表**上,一发只读读数即可(见 §80.4 的
+hand-off,写在计划文件末尾)。
+
+> **§80.3 一处用词更正(2026-10-29,同一次执行)**:上文说 scope 结构「由 `0x1A761D0` 的 `0x24B88E8` 形态
+> 初始化」不准确 —— `0x24B88E8` 是**相邻另一个栈对象**(`[rbp-0x70]`)的 vtable;`[rsp+0x20]` 这一张是
+> `0x1A761D0` 的 `call 0x399710` 初始化的。判据 1 的结论(`下`)不依赖这句:vtable 归属与本链是否同层
+> 无关。
+
+## §81 第七把 guard:逐系统下发点的靶位与第一发(2026-10-30)
+
+§80 把循环体读完了,但它的 hand-off(§80.4)只写到「下一发要问什么」,没写「用哪把仪器、
+补丁打在哪一字节」。本节补这一层,并在 §81.1 给出靶位的逐字节闸;§81.2 留给那一发本身。
+
+### §81.1 靶位闸:补丁是 `0x3B1330` 的前 15 字节,不是循环头(2026-10-30,离线,零 shot)
+
+**① 补丁窗口。** `0x3B1330..0x3B133F`,15 字节 = 三条 5 B 指令,第 4 条从 `0x3B133F` 开始:
+
+```
+  003b1330  48895c2408            mov     qword ptr [rsp + 8], rbx
+  003b1335  48896c2410            mov     qword ptr [rsp + 0x10], rbp
+  003b133a  4889742418            mov     qword ptr [rsp + 0x18], rsi
+  003b133f  57                    push    rdi                     ; ← 第 4 条,补丁窗口之外
+```
+
+`detour.zig` 的 `decodePrologueLength(…, 14)` 走三条 `mov`(5+5+5)正好落在 ≥14 的第一个指令
+边界上 ⇒ 15 B 是唯一解,不需要 NOP 填充,也不会切断半条指令。
+
+**② 过滤器。** `every_system` 的 create(`0x1A74EB0`)写出的 vtable 是 `0x26562D0`;它的
+`+0x70` = **`0x1A76130`**(逐系统循环体,§80.2),`+0x98` = `0x3B1420`(effect 谓词基体,§23.1)。
+即这一族在「把子效果带进 scope」那个虚位上覆写了基类 `0x3B1330`。
+
+**③ 每轮的下发点。** 循环体里 `0x1A76321 mov rcx, r14` + `0x1A76324 call 0x3B1330`:
+rcx = 本对象(self),rdx = 本轮 scope 结构(`lea rdx,[rsp+0x20]`),r8 = r15。
+所以「钩 `0x3B1330`、按 `[self] == 0x26562D0` 过滤」= 「数 `every_system` 的逐系统下发次数」,
+且每次的 scope 指针就是 rdx。
+
+**④ 容器读点(§80.2 的补充)。** 枚举器 `0x19307D0`:
+
+```
+  019307da  mov  rax, [rip + 0x19303cf]        ; -> 0x3260bb0
+  019307e7  mov  rdx, [rax + 0x590]            ; 向量基址
+  019307ee  movsxd rax, [rax + 0x59c]          ; 原始条数
+  01930815  mov  r8d, [rdx]                    ; ← 容器元素 = 完整 32 位 id
+  01930839  cmp  [rax + 8], r8d                ; 用它核对对象身份
+  0193084b  mov  ecx, [rax + 8]                ; 写进输出的是同一个 4 B 值
+  01930842  cmp  byte [rax + 0x137c], 0        ; 过滤位:0 ⇒ 这一条不计入
+```
+
+⇒ 容器 dword 集与 guard 收到的 id 集**本应相等**;两个例外都写清:
+(a) 查表落空时回落默认对象(`0x193083f mov rax, r9`),它的 `[obj+8]` 可能不在容器里;
+(b) `[obj+0x137C] == 0` 让**下发条数小于原始条数** —— 这是引擎自己的语义,不是判负。
+
+**⑤ 反证:循环头 `0x1A762A0` 不是合法补丁点。** 那里之后的两条指令:
+
+```
+  01a762af  4889442428            mov  qword ptr [rsp + 0x28], rax   ; 写本轮 scope 的 mask 格
+  01a7632f  3b75c0                cmp  esi, dword ptr [rbp + 0xc0]   ; 读过滤后的上界
+```
+
+`detour` 是 C-ABI 调用:被调函数体跑在 detour 的帧上(`rsp`/`rbp` 都是 detour 的)。
+`[rsp+0x20]` 那个 scope 结构与 `[rbp+0xC0]` 那个上界都会落到 detour 的栈上 ⇒ 循环要么读错上界、
+要么把 scope 写到别处。**所以补丁只能打函数入口(`0x3B1330`),不能打循环体内部** ——
+这条也解释了 §80.3 判据 1 为什么只能静态读:它依赖的 `[rbp+0xC0]` 本来就是栈局部量。
+
+**复现:**
+
+```bash
+python3 scripts/scratch/2026-10_per_system_shot/patch_point.py
+```
+
+原始输出:
+
+```
+patch window 0x3b1330..0x3b133f = 48895c240848896c24104889742418
+  next instruction 0x3b133f: push rdi
+vtable 0x26562d0: +0x70 -> 0x1a76130, +0x98 -> 0x3b1420
+call site 0x1a76324: mov rcx, r14 ; call 0x3b1330
+galaxy db 0x3260bb0: +0x590 vector, +0x59c count, id = [obj+8] and the element is the full 32-bit id
+loop head is NOT a patch point: 0x1A762AF writes [rsp+0x28], 0x1A7632F reads [rbp+0xc0]
+PASS
+```
+
+**这一节不能说的。** ① `0x3B1330` 是 base effect parse,这个函数**所有** effect 类都会走到;
+「按 vtable 过滤后剩下的就是 `every_system` 的下发」依赖的是 `[self]` 那一格,不是调用点。
+② 15 B 窗口里的三条 `mov` 有两条写 `[rsp+…]` —— 入口 hook 下这是合法的(detour 的 `call orig`
+在同一个栈上完成整个被调函数体),但同一形状若挪到函数中部就不合法(见 ⑤)。
+
+### §81.2 逐系统下发两发:仪器活着,但两次都没让 `every_system` 的循环跑起来(2026-10-30,点名 ×2,同一进程 pid 19892)
+
+**第一发(`sqjs_c7.dll`,存档 `autosave_2240.01.01.sav`,N=787)**:`install_rc=0` / `verify_rc=0` /
+`host_alive=1`;**容器首读成功** —— `[[0x3260BB0]+0x59C] = 787`,向量 787 个 dword,
+`container_ids_sha256=5ce3c051…`(这是本卷第一次在运行中的进程里读到那张表)。但
+`calls=0 / matched=0`,`log_hits=1` ⇒ 判词 `no_calls`(环境档)。
+
+读数本身是**一条负结论加一条新事实**:
+- 控制台 `effect every_system = { log = "PS_HIT" }` 在 game.log 里只留**一行**(`17:30:49`,
+  `effect_impl.cpp:21978`),即 effect 的**子效果被直接执行了一次**,没有走 `+0x70`(`0x1A76130`);
+- 离线复核 `0x3B1330` 的子分发:`0x3B1390 mov rcx,[rbx] / mov rax,[rcx] / call [rax+0x70]`
+  ⇒ 只有被当作**子效果**分发时才会进那个循环。控制台把根 effect 直接展开,不经过这一步。
+
+**第二发(`sqjs_c8.dll`,同一存档,脚本改成嵌套)`effect if = { limit = { always = yes }
+every_system = { log = "PS_HIT" } }`**:`install_rc=0` / `verify_rc=0` / `host_alive=1`,
+`stats_delta` 里 **`calls=5`**(钩子确实挂在 `0x3B1330` 上、真的被调了五次)、`matched=0`、
+`log_hits=0` ⇒ 判词 `script_refused`(环境档)。`calls=5` 与 `log_hits=0` 合起来说明:那五次是
+**游戏自己的 effect 执行**,我们的脚本没被引擎执行(投递的成功回执 `.seen` 有,引擎侧 marker 没有)。
+
+**两发都不是对「循环是不是每系统」的表态**;它们把三件仪器/环境事实钉住了:
+
+1. **钩子活着**:第二发的 `calls=5` 是 `0x3B1330` 真的被调用过的直接证据(第一发 `calls=0` 是因为
+   整个窗口没有 effect 执行)。过滤器 `[self] == 0x26562D0` 这一格**还没被考到**(两次都没有
+   `every_system` 实例经过),所以 `matched=0` 不能读成「过滤器错了」。
+2. **控制台不是一条可靠的 effect 驱动通道**:根 effect 展开时跳过 `+0x70`(第一发),嵌套形状又
+   撞上投递期的事件窗抢焦点(第二发,`log_hits=0`)。同一窗口里 `game.log` 连续出现
+   `first_contact*.x added info about event selection`,每次事件都暂停游戏并抢前台。
+3. **通道侧的三条新事实**(与 #32 同一个失效面,已记 issue #32):`game_supervisor` 的
+   `click` / `choose` 在 `WINDOW_UNSTABLE` 状态下**直接拒绝**(`REFUSED_click_option`),不会真的点;
+   而 session 1 里的 `pythonw` 一次性任务可以直接 `SetForegroundWindow + mouse_event` 把事件窗点掉
+   (本窗口用它把第一次接触窗答掉后 `STATUS=playing`);同名 DLL **不能再注入**(`LoadLibrary` 复用
+   已映射的镜像),第二发因此换名 `sqjs_c8.dll`(§76.7 的同一条)。
+
+**这一节不能说的。** ① 不能把 `no_calls` / `script_refused` 读成「循环不存在」;② 不能把
+`calls=5` 读成「循环被调了 5 次」—— 那是 `0x3B1330` 的**全量**调用,过滤器一个都没命中;
+③ `container_ids_sha256` 只证明两次读的是同一批 id,不证明它们就是 `system_id`。
+
+**产物**:`evidence/logs/per_system_probe_4_4_4.tsv`(第一发)、
+`evidence/logs/per_system_probe_4_4_4_firing2.tsv`(第二发)。
+
+**下一发要改的不是判据,是驱动方式**:让 `every_system` 从一条**游戏自己的** effect 链上被分发
+(例如一个 on_action / 事件体,或 `every_owned_planet` 这类已知会走子分发的根),而不是控制台根 effect;
+或者先把「事件窗抢焦点」这条通道缺陷修掉(#32),再让控制台投递可复现。
+
+### §81.3 只读观察那一发:`0x3B1330` 在 180 s 的快速游戏里**一次都没被调用**(2026-10-30,点名 ×1,`--watch-only`,pid 20728)
+
+**做法**:装第七把 guard,**不发任何脚本**,让游戏自己跑 180 s(存档 `autosave_2240.01.01.sav`,N=787,
+游戏速度"快速",日期 2260.11.08)。读数:`stats_delta` 全零 —— `calls=0 / matched=0`;
+容器仍读到 787(`container_ids_sha256=5ce3c051…`);`install_rc=0 / verify_rc=0 / host_alive=1`。
+判词 `no_calls`(环境档)。
+
+**这条读数的意思,要说准**:它否掉的不是「循环不存在」,而是**「vanilla 的月度脚本在这 180 s 里没有
+从 `0x3B1330` 分发过任何 effect」**。与 §13 的普查并排看是自洽的:那 316,468 次调用走的是
+base Execute(`0x1D08520`)→ `[vptr+0x10]`(ExecuteActual);`+0x70`(`0x3B1330`)只在**「某个 effect
+把子效果带进 scope」**时才走(§80.2),而这一窗口里没有这样的父 effect 被执行。
+
+**本发的一条副作用,已单独记为通道缺陷**:gate 连拒 8 次,理由是
+`window=dialog ... reading: pause=playing console=closed window=dialog`;而同一时刻的
+`ns_game_shot.png` 里**屏幕上没有任何窗口**(星图 + 右侧 outliner + 底部栏,日期 2260.11.08)。
+⇒ 窗口分类器在「无窗」时**报了一个 dialog**(与 issue #31 的「真窗被读成 none / 被读成 console_panel」
+是同一个分类器的两侧)。本发因此用 `--allow-window`(操作者声明前提、跳过 `gate_install`)开火,
+artifact 里 `gate=operator_override` 是这一条的机器可读记号 —— **这一发的前提是人的声明,不是状态机。**
+
+**这一节不能说的。** ① 不能读成「循环不是每系统」;② 也不能读成「月度脚本不走这条路」——
+180 s、单存档、单速度,只覆盖了这一个窗口;③ `calls=0` 与 §81.2 第二发的 `calls=5` 不矛盾:
+后者那 5 次是窗口里恰好有 effect 在执行,不是月度 tick 的产物。
+
+**产物**:`evidence/logs/per_system_probe_4_4_4_watch.tsv`。
+
+**下一发的前提因此变了**:要拿到读数,必须让一个**确定会分发子效果的父 effect** 跑起来 ——
+要么在测试 mod 的 `on_monthly_pulse` 里写 `every_system = { … }`,要么先把 #32 的输入通道修到
+「控制台投递可复现」,再回到 §81.2 的嵌套脚本。两条都不需要再改仪器。
+
+### §81.4 只读观察复采(第二发):同一读数的独立复现 —— `0x3B1330` 在 180 s 干净游戏里仍是 **0**(2026-10-30,点名 ×1,pid 13912)
+
+**做法**(与 §81.3 同一仪器、同一存档、同一 `--watch-only`,但这一次**窗口是干净的**):新进程
+pid 13912,`autosave_2240.01.01.sav`,游戏以"快速"跑满 180 s;窗口状态用**新装的桌面通道**
+(`win-desktop`)逐帧确认(见下),三个 25 s 采样点全部 `STATUS=playing`。
+读数:`calls=0 / matched=0`;容器 787;`install_rc=0 / verify_rc=0 / host_alive=1`。判词 `no_calls`。
+
+**这条复现的意思**:§81.3 的 0 **不是**「那 180 s 恰好被窗口挡住」。两次独立进程、两次 180 s、
+两次干净运行,`0x3B1330` 都是 0 ⇒ 在这个存档的这个窗口里,vanilla 的脚本没有从 base `+0x70`
+分发过 effect。**仪器与靶位都不必再怀疑**;要拿到读数,必须让一个**确定会分发子效果**的父
+effect 跑起来(测试 mod 的 `on_monthly_pulse`,或 §81.2 那条嵌套脚本 + 一条可靠的控制台投递)。
+
+**同窗口的通道事实(记在这里,因为它解释了"为什么是干净窗口")**:
+
+- 新装的 `win-desktop`(Windows-MCP,`docs/offline-tooling.md` 有启动与陷阱)在 session 1 里
+  能**截图**、能**发键盘**、能按窗口切换;本发的游戏就是它配合 `just launch` 起的。
+- **注入的鼠标点击到不了 Stellaris**(`Click` 返回成功、屏幕上无反应:选项行、对话框 ✖、暂停按钮
+  三处都试过),**键盘能到**:`Shortcut "space"` 真的让游戏从暂停跑到"快速",`Shortcut "enter"`
+  把"隐秘羞辱"那扇事件窗按默认选项答掉了(截图前后各一张)。⇒ 对这台机器,事件窗的自动化
+  路线应写成**键盘**(回车 = 默认项),不是坐标点击。
+- 这也顺手给 issue #31/#32 的"点了没反应"补了一个**第三种**解释:不是分类器错、也不是前台被抢,
+  而是**注入的鼠标事件本身没被游戏接收**(键盘同一时刻是通的)。
+
+**产物**:`evidence/logs/per_system_probe_4_4_4_watch2.tsv`。
+
+### §81.5 测试 mod 第一发:月度脉冲没有留下 `PS_HIT` —— 尚不能区分「mod 没加载」与「`+0x70` 是 parse 期」(2026-10-30,点名 ×1)
+
+**做了什么**:在主机上建了一个最小 mod(`mod/neo_ps_probe`,只做一件事):
+
+```
+on_monthly_pulse = { on_actions = { neo_ps_monthly } }
+neo_ps_monthly = { effect = { every_system = { log = "PS_HIT" } } }
+```
+
+`dlc_load.json` 改成 `enabled_mods=["mod/neo_ps_probe.mod"]`,存档先备份(`C:\temp\ps_save_backup.sav`),
+然后用 `stellaris.exe --continuelastsave` 直接在 session 1 起重载。
+
+**读数**:游戏跑到 2270 年(月度脉冲至少过了一次),`game.log` 里 **`PS_HIT` 计数 = 0**;
+`error.log` 没有提到 `neo_ps_probe`;`debug.log` 也没有。
+
+**两种解释,这一发分不开**:
+
+1. **mod 没被加载** —— 手写 `dlc_load.json` 可能不生效(launcher 的 `mods_registry.json` 里没有我们的条目,
+   而游戏是不是只认 launcher 写的那份,尚未确认);
+2. **`+0x70` 是 parse 期而不是执行期** —— 如果 `every_system` 在**运行时**由 `ExecuteActual`
+   直接展开子效果(与控制台根 effect 的读数一致,§81.2),那么月度脉冲即使真的跑了 `every_system`,
+   也不会经过 `0x3B1330`;本发的 `PS_HIT` 计数为 0 就同时说明「日志 effect 也没跑」,更像是第 1 种。
+
+**下一发要先分开这两支,再谈循环**:① 用 launcher 的模组页启用(或把条目写进 `mods_registry.json` 并重启),
+确认 `PS_HIT` 每月出现;② 或者装好 guard 之后**重新载入存档**(parse 会重跑),看 `calls` 是否在载入窗口里
+跳起来 —— 跳 = parse 期,不跳 = 执行期。两支都只需要一次点名,不必再改仪器。
+
+## §82 收口:靶的层还没定 —— `ExecuteActual` 的第一跳指向 `0x3B01A0`(2026-10-30,离线,零 shot)
+
+§81.2–§81.5 的四发实机读数全是环境档(控制台根 effect 不走 `+0x70`、watch 两次 0、mod 无回执)。
+把它们与 §80.2 的静态形状并排看,暴露的是**更基本的一问**:`0x3B1330` 到底是「读脚本期」还是
+「执行期」的路径。本节只记这一问的第一条静态线索,不展开。
+
+**`every_system` 的 ExecuteActual(slot[2])** = `0x17F7920`:
+
+```
+  017f7920  mov     r9, [rcx + 0x180]      ; 掩码(0x80)
+  017f7927  cmp     r8d, 0x3f92
+  017f792e  jne     0x3b01a0               ; ← scope kind ≠ 0x3F92 ⇒ 直接跳 0x3B01A0
+  017f7934  add     rcx, 0xc0
+  017f793b  mov     r8, r9
+  017f793e  mov     rax, [rcx]
+  017f7941  jmp     qword ptr [rax + 0x28]
+```
+
+`0x3B01A0` 是一个 `sub rsp, 0x5f0` 的大函数(§23/§57.2 记过它是「按 token id 查树 / 实例化」的那一侧)。
+**也就是说:运行时的第一条分支不是 `+0x70`(0x3B1330),而是 `0x3B01A0`。**
+
+**这一节不能说的**:① 不判 `0x3B1330` 一定在 parse 期 —— 只能说「执行期的第一跳不经过它」;
+② 不说 `0x3B01A0` 里就有逐系统循环 —— 那要读完才知道;③ 不把本节的线索当结论,下一任计划
+(`2026-10-30-parse-vs-execute.md`)的第一个任务就是读它。
+
+### §82.1 三组离线读数:`0x17F7920` 的分支、`0x3B01A0` 的形状、`0x3B1330` 的调用者桶(2026-10-30,离线,零 shot)
+
+生产者:`scripts/scratch/2026-10_parse_or_execute/read_execute_chain.py`(只读 exe 拷贝)。三组读数**都在
+下面原样贴着**,连探针自己的五条断言一起(全过才打印 `PASS`)。本节**不判层** —— 判读是 §82.2 的活;
+这里只把「读到什么」钉住,尤其是每个数字的出处是**哪条指令**。
+
+**读数 ① `0x17F7920` 是 7 条指令,不是 6 条。** §82 的七行是完整的:`mov r9,[rcx+0x180]` →
+`cmp r8d,0x3f92` → `jne 0x3b01a0` → `add rcx,0xc0` → `mov r8,r9` → `mov rax,[rcx]` →
+`jmp [rax+0x28]`。探针断言的就是这七条(第一条的完整操作数、`cmp` 的立即数、`jne` 的目标、
+末条的 `[rax+0x28]`)。**分支的两侧都写着**:`0x3F92` 命中时走 `jmp [rax+0x28]`
+(`rcx` 先 `add 0xc0`,即把 `self+0xC0` 交给 `[vtable+0x28]`),不命中时直接 `jmp 0x3B01A0`。
+
+**读数 ①b `0x3F92` 这个 immediate 在 `.text` 里的分布。** 4 B 字节命中 23 处;其中 **13 处**能归到一条
+`cmp`/`mov` 指令上 —— **12 条 `cmp r8d, 0x3f92`**(`0xA53C71`、`0x17F8F98`、`0x17FE1C2`、`0x18AD057`、
+`0x18AD627`、`0x18ADBF7`、`0x18AE1C7`、`0x18AE8C7`、`0x191B041`、`0x1B0F5C1`、`0x1B5AFD8`、`0x1B6C60A`)
+加 **1 条 `mov edx, 0x3f92`**(`0x19F95A`,落在 §17 那个 token-name driver 的整段函数
+`0x172E50..0x1AF1E7` 里)。另外 10 处**不归属**:
+- 9 处落在**没有 `.pdata` 记录**的叶函数里(`0x3AF4E3`、`0x17F7723`、`0x17F792A`、`0x17F8233`、`0x1841B26`、
+  `0x1AE4313`、`0x1B717AF`、`0x1B71A03`、`0x1B74673`)。`0x17F7920` 本身就是这样一个叶函数(它不写栈、
+  不动非易失寄存器,所以不需要 unwind 记录);同一个 immediate 从 `0x17F7927`(带 REX 前缀的
+  `cmp r8d,…`)与 `0x17F7928`(无前缀的 `cmp eax,…`)都能解出合法指令,所以**探针拒绝给这些地址
+  归属指令**,只报地址 —— 这是口径,不是漏读。
+- 1 处(`0x161C24A`)落在一条 `call 0x16201E0` 的 `rel32` 里,是字节巧合。
+
+⇒ `0x3F92` 在静态里确实是**一类被反复比较的 id**,12 个比较点分布在 12 个互不相同的函数里;它同时是
+一个**被立即数传给别人的值**(`0x19F95A` 的 `mov edx`)。
+
+**读数 ② `0x3B01A0` 的形状(`.pdata` 0x3B01A0..0x3B0F7E = 3,550 B / 712 insns)。**
+- `call qword ptr [reg + 0x70]`:**0 处**;
+- 直接 `call 0x3B1330`:**0 处**;
+- 「容器基址 + 4/8 步长」的索引内存:**3 处,都不是容器迭代** —— `0x3B04D7` / `0x3B05E9` 是**switch 跳表**
+  (`lea rdx,[rip-…]` + `movzx eax,[rdx+rax+…]` + `jmp rcx` 三连);`0x3B0C77` 是
+  `[rax+0x10]` 指向的 **8 B 元素数组**按 `[obj+0x1c]` 计数取第 `i-1` 个(`mov rdx,[rax+rcx*8-8]`),
+  取出来的元素随即被读 `[rdx+0x20]` 并 `cmp eax, 0x2712`。探针另报的 `add rcx, 8` 在 `0x3B0C46`,
+  与 `0x3B0C77` **不在同一条直线上**(中间隔 0x31 B、跨分支),探针不把两者读成一个循环。
+- rip 相对全局读取:**19 个不同目标**;`0x33746E8`(effect db)**被读 4 次**,**`0x3260BB0`(galaxy db)一次都没有**,
+  `+0x590` 这个容器读点也**一次都没有**。
+
+**读数 ③ `0x3B1330` 的全部直接调用者:3 处、3 个函数**(`scripts/fastcalls.py` 与本探针的字节级 `E8` 扫描
+**逐条相等**;`fastcalls` 写出的 `evidence/xrefs/callers_0x3b1330_buckets.tsv` 内容未变):
+
+| 调用点 | 所在函数 | 该地址在 `.rdata` 里被几个槽装着 | 直接 `E8` 调用该函数的函数数 |
+|---|---|---|---|
+| `0x17F6004` | `0x17F5FC0..0x17F6071`(177 B) | 1 | 0 |
+| `0x1A1B2D4` | `0x1A1B0E0..0x1A1B3ED`(781 B) | 101 | 0 |
+| `0x1A76324` | `0x1A76130..0x1A7643D`(781 B) | 202 | 0 |
+
+`0x3B1330` 自己在 `.rdata` 里作为 8 B qword 命中 **761** 次(§24.4.2 在 1,581 个 class_info 的子集上量到
+**723** 个 vtable 把放在 `+0x70`)。**槽号不报**:探针最初用一个「往回走连续 `.text` 指针」的启发式定
+vtable 起点,三个桶都读出 `+0x808` —— 那是**跨过了紧挨着的相邻 vtable**(它们是连续排布、没有 RTTI 分隔的),
+读数因此弃用;`.rdata` 槽计数不依赖任何假设。
+
+三个桶的函数头都贴在上面(第一个 `0x17F5FC0` 先 `mov rcx,[rcx+0xC8]` 再 `call 0x356BE0`;另两个是同一
+形状的 `push rbp/r12/r14/r15` + `lea rbp,[rsp-0x90]` + `sub rsp,0x190`)。
+
+**这一节不能说的。** ① 不说 `0x3F92` 的语义 —— 只能报「12 个函数在比较它、token-name driver 里有人把
+它以立即数传给别处」;② 不说 `0x3B01A0` 里那段 8 B 元素遍历是**哪一类**对象(只报 `[obj+0x10]`/`[obj+0x1c]`
+这两个位移与 `[rdx+0x20]` 的比较,和 §24.4.2 记的子效果向量同形,但同形不是同一个东西);
+③ 不说三个调用者「都在 parse 侧」—— 它们的**唯一**共同静态事实是「都不是被直接调用的」(直接调用者
+各 0)、且都装在 vtable 里;`parse` 这个标签在 §24.4.2 是给 `0x3B1330` 自己用的,不是给它的调用者用的;
+④ 不说 761 与 723 的差是 38 个 vtable —— 两个数的统计口径不同(前者是全 `.rdata` 的 qword 命中,
+后者是在 class_info 子集上按 `+0x70` 量的)。
+
+**复现:**
+
+```bash
+python3 scripts/scratch/2026-10_parse_or_execute/read_execute_chain.py
+```
+
+**原始输出**(连 `PASS` 一起):
+
+```
+## 1. 0x17f7920 — every_system ExecuteActual (slot[2])
+  0x17f7920  mov     r9, qword ptr [rcx + 0x180]
+  0x17f7927  cmp     r8d, 0x3f92
+  0x17f792e  jne     0x3b01a0
+  0x17f7934  add     rcx, 0xc0
+  0x17f793b  mov     r8, r9
+  0x17f793e  mov     rax, qword ptr [rcx]
+  0x17f7941  jmp     qword ptr [rax + 0x28]
+  instruction count = 7 (terminal: jmp)
+  branch: cmp r8d, 0x3f92 @0x17f7927 -> jne 0x3b01a0
+  taken path: jmp qword ptr [rax + 0x28] @0x17f7941
+
+## 1b. immediate 0x3f92 sites in .text
+  raw 4-byte hits = 23
+  imm @0x19f95b  func 0x172e50..0x1af1e7  0x19f95a  mov     edx, 0x3f92
+  imm @0x3af4e3  leaf / no .pdata (not attributable) or data  -
+  imm @0xa53c74  func 0xa53b50..0xa53d35  0xa53c71  cmp     r8d, 0x3f92
+  imm @0x161c24a  func 0x161c220..0x161c263  0x161c249  call    0x16201e0
+  imm @0x17f7723  leaf / no .pdata (not attributable) or data  -
+  imm @0x17f792a  leaf / no .pdata (not attributable) or data  -
+  imm @0x17f8233  leaf / no .pdata (not attributable) or data  -
+  imm @0x17f8f9b  func 0x17f8f70..0x17f902d  0x17f8f98  cmp     r8d, 0x3f92
+  imm @0x17fe1c5  func 0x17fe1b0..0x17fe207  0x17fe1c2  cmp     r8d, 0x3f92
+  imm @0x1841b26  leaf / no .pdata (not attributable) or data  -
+  imm @0x18ad05a  func 0x18ad050..0x18ad0f9  0x18ad057  cmp     r8d, 0x3f92
+  imm @0x18ad62a  func 0x18ad620..0x18ad6c9  0x18ad627  cmp     r8d, 0x3f92
+  imm @0x18adbfa  func 0x18adbf0..0x18adc99  0x18adbf7  cmp     r8d, 0x3f92
+  imm @0x18ae1ca  func 0x18ae1c0..0x18ae269  0x18ae1c7  cmp     r8d, 0x3f92
+  imm @0x18ae8ca  func 0x18ae8c0..0x18ae969  0x18ae8c7  cmp     r8d, 0x3f92
+  imm @0x191b044  func 0x191b010..0x191b0da  0x191b041  cmp     r8d, 0x3f92
+  imm @0x1ae4313  leaf / no .pdata (not attributable) or data  -
+  imm @0x1b0f5c4  func 0x1b0f5a0..0x1b0f630  0x1b0f5c1  cmp     r8d, 0x3f92
+  imm @0x1b5afdb  func 0x1b5afc0..0x1b5b082  0x1b5afd8  cmp     r8d, 0x3f92
+  imm @0x1b6c60d  func 0x1b6c5e0..0x1b6c682  0x1b6c60a  cmp     r8d, 0x3f92
+  imm @0x1b717af  leaf / no .pdata (not attributable) or data  -
+  imm @0x1b71a03  leaf / no .pdata (not attributable) or data  -
+  imm @0x1b74673  leaf / no .pdata (not attributable) or data  -
+  decoded into a cmp/mov carrying the immediate = 13
+
+## 2. 0x3b01a0 — instantiate-by-token-id consumer (§23.1)
+  .pdata extent 0x3b01a0..0x3b0f7e (3550 B, 712 insns)
+  call qword ptr [reg + 0x70]        : 0
+  indexed mem (base + idx*4|8)       : 3
+  add/sub reg, 4|8                   : 1
+  direct call 0x3b1330              : 0
+  direct call targets (rva x count): 0x156310 x1, 0x1565a0 x2, 0x1577b0 x1, 0x15d0d0 x1, 0x15efd0 x1, 0x15f770 x2, 0x22c4a0 x1, 0x2423d0 x1, 0x3472f0 x1, 0x34c180 x1, 0x3533b0 x1, 0x353e20 x2, 0x356170 x2, 0x3561a0 x2, 0x3927b0 x2, 0x3aeba0 x2, 0x3af060 x1, 0x3afa50 x1, 0x3afb40 x1, 0x5e2ef0 x1, 0x17f6550 x1, 0x1c886b0 x1, 0x1c89700 x5, 0x1c91020 x1, 0x1c91c30 x3, 0x1c9e350 x1, 0x1cc4450 x7, 0x1d0ba00 x1, 0x1d0c9f0 x3, 0x1d156e0 x3, 0x2181c34 x1, 0x2185218 x5, 0x2185254 x1
+  rip-relative global reads          : 19 distinct -> 0x0 x2, 0x2465918 x1, 0x247a4f0 x1, 0x247a4f4 x1, 0x247b078 x1, 0x247b098 x1, 0x24c7860 x1, 0x24e90e8 x1, 0x24e90f0 x1, 0x24ea600 x2, 0x24ea640 x1, 0x24ea830 x1, 0x24ea860 x1, 0x24ea868 x1, 0x26159c8 x1, 0x26159e8 x1, 0x2615bc0 x1, 0x2615be0 x1, 0x33746e8 x4
+  reads galaxy db 0x3260bb0   : no   ([+0x590] container read: no)
+  reads effect db 0x33746e8   : YES   ([+0x590] container read: no)
+    indexed: 0x3b04d7  mov     ecx, dword ptr [rdx + rax*4 + 0x3b0dc8]
+           0x3b04bf  ja      0x3b08d0
+           0x3b04c5  movsxd  rax, ecx
+           0x3b04c8  lea     rdx, [rip - 0x3b04cf]
+           0x3b04cf  movzx   eax, byte ptr [rdx + rax + 0x3b0dd0]
+           0x3b04de  add     rcx, rdx
+           0x3b04e1  jmp     rcx
+           0x3b04e3  cmp     ecx, 0x2e58
+           0x3b04e9  jg      0x3b055a
+    indexed: 0x3b05e9  mov     ecx, dword ptr [rdx + rax*4 + 0x3b0ed0]
+           0x3b05d1  ja      0x3b08d0
+           0x3b05d7  movsxd  rax, ecx
+           0x3b05da  lea     rdx, [rip - 0x3b05e1]
+           0x3b05e1  movzx   eax, byte ptr [rdx + rax + 0x3b0ed8]
+           0x3b05f0  add     rcx, rdx
+           0x3b05f3  jmp     rcx
+           0x3b05f5  cmp     ecx, 0x3f71
+           0x3b05fb  jg      0x3b0700
+    indexed: 0x3b0c77  mov     rdx, qword ptr [rax + rcx*8 - 8]
+           0x3b0c69  cmp     dword ptr [rax + 0x1c], 0
+           0x3b0c6d  je      0x3b0cb2
+           0x3b0c6f  movsxd  rcx, dword ptr [rax + 0x1c]
+           0x3b0c73  mov     rax, qword ptr [rax + 0x10]
+           0x3b0c7c  test    rdx, rdx
+           0x3b0c7f  je      0x3b0cb2
+           0x3b0c81  mov     eax, dword ptr [rdx + 0x20]
+           0x3b0c84  cmp     eax, 0x2712
+    step: 0x3b0c46  add     rcx, 8
+           0x3b0c34  je      0x3b0c62
+           0x3b0c36  cmp     r12d, 0x28df
+           0x3b0c3d  je      0x3b0c62
+           0x3b0c3f  mov     rcx, qword ptr [rbp + 0x530]
+           0x3b0c4a  lea     rdx, [rbp + 0x538]
+           0x3b0c51  call    0x22c4a0
+           0x3b0c56  mov     rsi, qword ptr [rbp + 0x538]
+           0x3b0c5d  jmp     0x3b0db2
+
+## 3. callers of 0x3b1330
+  --- scripts/fastcalls.py ---
+  3 direct code sites to 0x3b1330 in .text
+  in 3 functions
+  
+    1 sites  0x17f5fc0..0x17f6071 (0xb1)  -
+    1 sites  0x1a1b0e0..0x1a1b3ed (0x30d)  -
+    1 sites  0x1a76130..0x1a7643d (0x30d)  -
+  
+  wrote evidence/xrefs/callers_0x3b1330_buckets.tsv
+  --- own E8 scan: 3 sites in 3 functions ---
+  .rdata qword hits for 0x3b1330: 761 (§24.4.2 measured 723 vtables carrying it at +0x70)
+
+  * bucket 0x17f5fc0..0x17f6071 (177 B), 1 site(s): 0x17f6004
+      0x17f5fc0  mov     qword ptr [rsp + 8], rbx
+      0x17f5fc5  push    rdi
+      0x17f5fc6  sub     rsp, 0x190
+      0x17f5fcd  mov     rdi, r8
+      0x17f5fd0  mov     rbx, rcx
+      0x17f5fd3  xor     r9d, r9d
+      0x17f5fd6  mov     r8, rdx
+      0x17f5fd9  lea     rdx, [rsp + 0x20]
+      0x17f5fde  mov     rcx, qword ptr [rcx + 0xc8]
+      0x17f5fe5  call    0x356be0
+      .rdata slots installing this address: 1  (first: 0x2615a58)
+      direct E8 callers of this function: 0
+
+  * bucket 0x1a1b0e0..0x1a1b3ed (781 B), 1 site(s): 0x1a1b2d4
+      0x1a1b0e0  mov     qword ptr [rsp + 0x18], rbx
+      0x1a1b0e5  mov     qword ptr [rsp + 0x20], rsi
+      0x1a1b0ea  push    rbp
+      0x1a1b0eb  push    rdi
+      0x1a1b0ec  push    r12
+      0x1a1b0ee  push    r14
+      0x1a1b0f0  push    r15
+      0x1a1b0f2  lea     rbp, [rsp - 0x90]
+      0x1a1b0fa  sub     rsp, 0x190
+      0x1a1b101  mov     r15, r8
+      .rdata slots installing this address: 101  (first: 0x2651e90, 0x2652560, 0x2652758)
+      direct E8 callers of this function: 0
+
+  * bucket 0x1a76130..0x1a7643d (781 B), 1 site(s): 0x1a76324
+      0x1a76130  mov     qword ptr [rsp + 0x18], rbx
+      0x1a76135  mov     qword ptr [rsp + 0x20], rsi
+      0x1a7613a  push    rbp
+      0x1a7613b  push    rdi
+      0x1a7613c  push    r12
+      0x1a7613e  push    r14
+      0x1a76140  push    r15
+      0x1a76142  lea     rbp, [rsp - 0x90]
+      0x1a7614a  sub     rsp, 0x190
+      0x1a76151  mov     r15, r8
+      .rdata slots installing this address: 202  (first: 0x2651f90, 0x2652088, 0x2652180)
+      direct E8 callers of this function: 0
+
+PASS
+```
+
+### §82.2 判读:靶的层 = **execute**(有条件);`parse_only` 与 `both` 没有正面证据(2026-10-30,离线,零 shot)
+
+本节判 §82.1 的三组读数。**判决先写**:`0x3B1330` 不是读脚本期的路径 —— 它**建不了对象、也不在实例化
+路径上**;三态里唯一还站着的是 `execute`,但它成立要一个**条件**:派发 `+0x70` 的那一侧是执行侧。
+那个派发方**静态没定位到**,所以这是**条件判决**,判据交给 §82.2.1 的实机读数。
+
+**先更正 §82 与 §23.1 的一处词法:`0x3F92` 是 token id `limit`,不是「scope kind」。**
+`0x19F95A` 是一条**直线注册序列**里的一格:
+
+```
+0019f953  lea     r8, [rip + 0x2301f0a]  ; -> 0x24a1864  "limit"
+0019f95a  mov     edx, 0x3f92            ; ← compile-time token id
+0019f95f  lea     rcx, [rip + 0x33de47a] ; -> 0x357dde0  descriptor slot
+0019f966  call    0x141d15270           ; registrar: (slot, id, name) —— §20 / pipeline §20.2
+```
+
+同一序列的邻居(`0x3F8F..0x3F95`)依次注册 `minimum_height`、`map`、`arg`、**`limit`**、`evaluator`、
+`area`、`min_water_height`。⇒ `0x3F92` = `limit` 这个 keyword 的 token id。于是两个分支读起来是:
+
+- `0x17F7920`:`r8d`(= `[ctx+0x38]`,由 `0x3AFEEC` 在 `0x3AFFF8` 之前写入,即**当前 body token 的 id**)
+  == `limit` ⇒ `rcx = self+0xC0`、`jmp [rax+0x28]`(把那个对象当触发器求值);否则 ⇒ `0x3B01A0`(按这个
+  token id 实例化子效果)。§82 写的「scope kind `0x3F92`」应读成「当前 token 是 `limit`」。
+- 同理 `0x3B01A0` 头的 `cmp dword [rdx+0x38], 0xb`(§23.1 记作「a context-type check」)是**同一个字段**,
+  读法应是「当前 token id == 0xb」,不是类型门。
+
+这条更正**不改三态判决**,但它把 `every_system = { limit = { … } … }` 的两条分支钉死了:`limit` 走谓词,
+其它 token 走实例化。
+
+**四条证据,逐条判态。**
+
+| # | 读数(地址都在 §82.1 原样输出里) | 判 |
+|---|---|---|
+| ① `0x3B1330` 的调用者桶 | 3 个直接调用者 `0x17F6004` / `0x1A1B2D4` / `0x1A76324`;**每一个都在 `+0x70` 上**(`.rdata` 槽 1 / 101 / 202,用「`vptr+0x08 == 0x3AFD30`」独立复核);**三个函数各自的直接调用者都是 0 个**;`0x3B1330` 自己 761 个 `.rdata` 槽,其中 231 个能这样复核为 `+0x70` | **execute** —— 它只经虚位进入,读脚本的代码不会「直接调」它;而 `+0x70` 这一族的三个实现全在 effect 类里 |
+| ② `0x3B01A0` 的形状 | 712 条指令里 `call [reg+0x70]` **0 处**、直接 `call 0x3B1330` **0 处**;`0x3260BB0` 与 `+0x590` **一次都没读**;effect db `0x33746E8` 读 4 次 | **parse**(实例化侧)→ **证伪 `parse_only`** |
+| ③ `0x17F7920` 的分支 | `+0x10` 是**执行入口派发槽**:base Execute `0x1D08577` 与 effect Execute slot[1] `0x3AFD30`(`0x3AFFF8`)都 `call [rax+0x10]`;every_system 的 `+0x10` = `0x17F7920`(102 个槽全复核)。两条分支一条到 `[limit_vptr+0x28]`、一条到 `0x3B01A0`,**都不经过 `0x3B1330`** | **未定** —— §82 的「执行期第一跳不经过它」成立,但它**不能**反过来证明它属于 parse 期 |
+| ④ `0x3B1330` 自己的体 | `call [vptr+0x68](self, &scope, r8)` 造一个 scope;`[scope+0x14] != 0` 时 `0x34C960`;然后走 `[self+0x10]`(向量)/`[self+0x1c]`(计数)、stride 8,对每个子效果 `call [child_vptr+0x70](child, scope, r8)` | **execute** —— 它**不建对象**(只读已经建好的子向量),并且要一个新 scope 才能工作;实例化(②)才是建对象的那一侧 |
+
+**合成。**
+
+- **`parse_only` 被证伪**:读脚本期在这台引擎里就是「token → 对象」那一步(②,`+0x10` 的实例化侧,
+  create + 追加子向量 + 调子 `slot[1]`);那条路上对 `0x3B1330` 的调用是 **0**,派发 `+0x70` 也是 **0**。
+  再加 ④:它不产生任何对象。
+- **`both` 没有正面证据**:它要求某条读脚本路径**经虚位**派发 `+0x70`。这样的派发一处也没定位到:
+  `.text` 里 `call/jmp [reg+0x70]` 的单段站点 3,551 处、`mov reg,[x+0x70]; call reg` 的两段站点 15 处,
+  两段的全在 effect 代码区(`0x17F0000..0x1B00000`)之外;单段里落在这个区间、且自己也是 vtable 方法的
+  40 个函数,抽读的那个(`0x18016FF`)是**在别的类上取名字**再交给 logger `0x1C91C30`,不是对 effect 的派发。
+  ⇒ `both` 不排除,但没有任何一条正面读数。
+- **`execute` 是唯一还站着的**,但它的判据句要写全:**当且仅当**派发 `+0x70` 的那一侧属于执行侧。
+  静态能给的只是:这一族的所有入口都是虚位(`+0x70`),没有直接调用者;执行期的两条入口(`0x1D08520`、
+  `0x3AFD30`)都派发 `+0x10`,不派发 `+0x70`。**派发 `+0x70` 的函数本体没有定位到** —— 这是下一发要问的
+  唯一一个静态问题的残口,也是 §82.2.1 用实机读数去绕开它的原因(载入窗若不动 ⇒ 读脚本期不经过它)。
+
+对 §81.2 那句话的改写(计划「完成后」那一节的 `execute` 分支):**不是**「控制台根 effect 不走 `+0x70`,
+所以 `+0x70` 不是执行期」;准确的是「控制台投递的根 effect 经 `slot[1]`(`0x3AFD30`)→ 每 token 的
+`slot[2]`(`+0x10`)展开,`+0x70` 只在**父 effect 把子效果带进一个新 scope**时才被派发(`0x3B1330`),
+而 `every_system` 正好把那一步覆写成逐系统循环(`0x1A76130`)。
+
+**这一节不能说的(三条,顺序即优先级)。**
+
+1. **不能说「载入时跳 = 每系统一次」。** 载入窗的 `calls` 增量只回答「这条路径在载入期被走过」,
+   不回答「每系统一次」;分母问题(§82.1 读数 ③ 的 `matched` 与容器条数)完全是另一问。
+2. **不能说 `parse_only` 的证伪等于 `execute` 的证明。** 证伪靠的是「实例化路径 0 调用」这一条**负**读数;
+   `execute` 的正读数(派发 `+0x70` 的执行侧函数)**还没有**。
+3. **不能把 `0x3F92 = limit` 这条更正外推成「`[ctx+0x38]` 一定是 token id」。** 本节的读法是:它是
+   `0x3AFD30` 在 `0x3AFFF8` 之前从 `[ctx+0x38]` 取、被两个消费者(`0x17F7920`、`0x3B01A0`)与
+   `0x3AFEF3` 的 `cmp r8d, 0x438` 共用的**同一个字段**;「它是 token id」由 `0x3F92 = limit` 这条注册证据
+   支撑,不是由字段名支撑。字段在别处还装什么,本节没读。
+
+**§82.2.1 的判据(留给实机那一发,不在这里下结论)。** 两个窗口、同一进程、同一存档:
+**空转窗**(`playing`、无窗口、`--watch-only`)与**载入窗**(重载存档前后同一个 guard)。判读:
+
+| 读数 | 判 |
+|---|---|
+| `calls`(载入窗) ≫ `calls`(空转窗) | 读脚本期确实经过 `0x3B1330` ⇒ `both`(`parse_only` 已被 §82.1 ② 证伪) |
+| 两者相等(通常都是 0) | 没有观测到读脚本期的调用 ⇒ 与 `execute` 一致,**不等于**证明 `execute` |
+| `matched > 0` 而 `calls` 只有 `matched` 那么多 | 过滤器命中了 `every_system` 实例 —— 与本节无关的一档,单独记 |
+
+**`matched=0` 而 `calls>0` 不算命中**(§81.2 的 `calls=5` 就是这一档):它只说「有别的 effect 类在走
+这条虚位」,不说「`every_system` 的循环跑了」。
+
+### §82.2.1 实机:四次「非载入」窗都是 0;载入窗**未取到**(2026-10-30,点名 ×2,`--watch-only`)
+
+四发都落在同一个 `0x3B1330` guard 上(默认 DLL `C:\temp\sqjs_c{7,10,11}.dll`,sha `b8a82f61…`,
+`--watch-only`,`--allow-window`)。四次**没有一次**是「载入窗」,逐条写清,因为它们的 0 值各有各的
+分母,不能混着读。
+
+| 发 | pid | 窗口 | 窗口里实际发生了什么 | `calls` / `matched` | 容器 | artifact |
+|---|---|---|---|---|---|---|
+| c7 | 8640 | 60 s | 战役内、**运行中**(快速)、无窗口 | **0 / 0** | 788 | `per_system_probe_4_4_4_idle_watch.tsv` |
+| c8 | 8640 | 120 s | 载入对话框**开着,但右边那条子存档没被选中**,引擎没载入任何东西 | **0 / 0** | 788 | `per_system_probe_4_4_4_menu_watch.tsv` |
+| c10 | 16100 | 240 s | 同上(操作链没走完) | **0 / 0** | 788 | `per_system_probe_4_4_4_noop_watch.tsv` |
+| c11 | 16100 | 300 s | 无人点选,窗口内没发生载入 | **0 / 0** | 788 | `per_system_probe_4_4_4_noop2_watch.tsv` |
+
+四次共同读数:`install_rc=0` / `verify_rc=0` / `patch_size=15` / `installed=1` / `host_alive=1` /
+`dedupe_full=0` / `null_scope=0`。**钩子确实装上、确实卸下、宿主活着** —— 这些 0 不是仪器坏
+(`instrument_broken` 一档没出现)。
+
+**两条必须一起进 artfact 的口径。**
+
+1. **`gate=operator_override` ×4。** 四次都是「状态机与屏幕矛盾」才用 `--allow-window`:分类器
+   报 `popup_hold_unclassified`、`ns_world` 报 `NO_GAME`,而同一时刻 `win-desktop` 的截图是干净的
+   战役画面(2279.04.22、快速、无窗口)。**同一台机器上,真有事件窗时分类器是对的**(截图里那扇
+   「星系调查完毕」窗口出现后它立刻 `popup_hold_unclassified` 并暂停游戏)—— 所以 override 这一档
+   的读数只在「状态机误报、屏幕是干净战役」这个前提下成立。
+2. **容器是 788,不是 787。** §81.4 的 787 属于 `autosave_2240.01.01.sav`;本轮是同一战役的
+   2279/2281 存档,`container_raw_count=788`、`container_ids_sha256=400ca2e3…`(与 §81 的
+   `5ce3c051…` 不同)。c7 那发的 `--systems` 仍是 **787(陈旧元数据)** —— `no_calls` 判词不看分母,
+   所以读数不受影响,但 meta 里那一格不能当分母用;从 c8 起填的是 788。
+
+**载入窗为什么没取到(三条,逐条记,不合并)。**
+
+1. **c8 —— 少了一步选行。** 我只点了 `读取存档`,而对话框里**左边是战役、右边是该战役的子存档**;
+   没选子存档时,「读取存档」没有可读的对象,引擎什么都不做。这一发因此是「载入对话框开着」的
+   空转窗,不是载入窗。**人当场指出的就是这一条。**
+2. **c9 —— 载入真的发生了,读数被进程重启吃掉。** 那一发里日期从 `2281.02.13` 回到
+   `2281.01.01`(屏幕截图前后各一张),但收尾时 `C5PerSystemUninstall` 拿 `gle=5`:`stellaris.exe`
+   在我写 artifact 之前换了进程(pid 8640 → 16100)。**没有 artifact,读数不是 0 而是丢失**;guard
+   随进程消失,没有残留(不是 `RESTORE_INCOMPLETE`)。
+3. **c10 / c11 —— 操作侧没有第二次机会。** c10 的 `sqjs_c10.dll` 当时并不存在(驱动在 sha 门前
+   `exit 2`);c11 窗口是 300 s,但没有人点选,窗口内没有发生载入。
+
+**桌面通道的能力边界(记在这里,因为它决定了这一发谁做得了)。** `win-desktop` 的
+`ControlStatus` 全程停在 `state=user`(`wait_seconds=0`),而它的 12 个白名单工具里**没有**
+「收回 / 交还控制权」的动词 ⇒ agent 侧没有 API 可以自行夺回;截图经隧道回传被重置(2.1 MB 的 PNG
+只能过来 7.8 KB);ssh 一侧的进程落在 **session 0**,`EnumWindows` 看不见游戏窗口
+(`game_supervisor.find_game` → `NO_GAME`,`ns_world` 同样)。本轮新加的两个一次性工具把这一层补到
+「能按键、能起进程」:`ns_key.py`(经 `session_bridge.py` 在 session 1 里按扫描码)与 `ns_start.py`
+(在 session 1 里 `Popen` 游戏)。**但「选子存档 + 读取存档」这一步需要鼠标坐标与像素确认**,而像素
+确认正是当时拿不到的那一件 —— 这就是这一发停在「判据已写、载入侧未取」的全部原因。
+
+**判读(严格按 §82.2.1 的判据表)。**
+
+- **空转侧 = 0**:本轮四次 + §81.3 / §81.4 两次 180 s,共六次,`calls` 全是 0。
+- **载入侧 = 未取**:没有一次窗口真的载入过存档(c9 载入了,但读数丢了)。
+- 所以这一发**落在判据表的「两者相等 ⇒ 与 `execute` 一致」那一行之外** —— 那一行要求载入窗也有
+  读数。本发的结论只能写成:**「执行期的这条虚位在无载入的窗口里是 0;读脚本期有没有调用它,这一发
+  没有回答。」** 它**不**支持也**不**推翻 §82.2 的 `execute`(有条件)判决。
+
+**这一节不能说的(三条)。**
+
+1. **不能说「载入期不经过 `0x3B1330`」** —— 载入窗没有读数,这是本发最大的洞。
+2. **不能把四次 0 读成「执行期也不经过它」** —— §81.2 第二发在同一把 guard 上拿到过 `calls=5`
+   (那是 120 s 内有 5 次全量调用,过滤器一个没命中)。
+3. **不能把 `gate=operator_override` 的读数当无条件读数** —— 它们的前提是「状态机误报、屏幕是干净
+   战役」,而分类器在真窗上是对的。
+
+**要补这一发,只差一步。** `sqjs_c12.dll` 已按同一 sha 就位;补发所需的动作是「选中子存档 →
+`读取存档`」,窗口 300 s 够用。命令:
+
+```
+python C:/temp/c2_per_system_probe.py C:\temp\sqjs_c12.dll --systems 788 \
+    --save-name loadwin_c12 --watch-only --poll-s 300 --allow-window --out C:/temp/ps_load5.tsv
+```
+
+### §82.2.2 补发:载入窗**拿到了** —— 一次完整读档期间 `0x3B1330` 是 **0**(2026-10-31 00:1x,点名 ×1,`--watch-only 300`)
+
+§82.2.1 记的是「载入侧未取」。本节补上那一发,并且**不改写** §82.2.1(它的四条成因仍然成立)。
+
+**做法。** 同一把 guard(`0x3B1330` 前 15 B),同一进程 pid 16100,`--watch-only --poll-s 300
+--allow-window`,存档 `autosave_2281.01.01.sav`,`--systems 788`。窗口内由 agent 自己完成
+`载入游戏 → 选中子存档 → 读取存档` 三步(截图逐步确认),载入在点击后约 8 s 内完成。
+
+**载入确实发生了,证据是屏幕而不是推断。** 点击前一张:载入对话框开着、`autosave_2281.01.01.sav`
+那一行高亮、右下 `读取存档` 已可用;点击后一张:对话框关闭、地图回到 **2281.01.01**、状态暂停。
+时钟也自洽:点击前战役时间已经走到 2281.02.x,载入把它拉回 2281.01.01。
+
+**读数**(`evidence/logs/per_system_probe_4_4_4_load_watch.tsv`):
+
+```
+calls=0  matched=0  distinct_ids=0  dedupe_full=0  null_scope=0
+patch_size=15  installed=1  verify=0  install_rc=0  uninstall_rc=0  host_alive=1
+container_raw_count=788  container_ids_sha256=400ca2e3…  gate=operator_override
+overall_verdict=no_calls
+```
+
+**判读(按 §82.2.1 的判据表)。** 「载入窗 `calls` ≫ 空转窗」**不成立**:空转窗 0(本轮四次 +§81.3/
+§81.4 两次)、载入窗 **0** ⇒ 落判据表的第二行 —— **「该路径与载入无关」**,与 §82.2 的
+`execute`(有条件)同向,而**读脚本那侧一次调用都没有观测到**。
+
+**这一发为什么有分量(而不是又一条 0)。** ① 计数器是**累计**的,不做采样:这 300 s 里的每一次
+`0x3B1330` 都会进 `calls`,所以「载入只占 8 s」不会把窗口里的调用漏掉;② `install_rc=0` /
+`patch_size=15` / `installed=1` / `verify=0` 说明补丁真的落在靶上、真的被卸下;③ 同一窗口里容器
+`788` 与 sha `400ca2e3…` 都读得到,说明进程在载入前后都是活的、可读的(不是「载入把进程弄死了所以
+没调用」)。
+
+**这一发不能说的(三条)。**
+
+1. **不能说「读档期绝对不经过 `0x3B1330`」。** 这是一次读档、一个存档、一个窗口;它否掉的是「读档
+   会大量调用它」这一形态,不是「任何读脚本路径都不可能」。
+2. **不能把它当成 `execute` 的证明。** 它只把 `parse_only` 的**实证**面也压到 0(§82.1 ② 的静态面
+   是「实例化消费者 0 调用」,这里是「一次真实读档 0 调用」);`execute` 仍带着 §82.2 那个条件
+   (派发 `+0x70` 的一侧须是执行侧)。
+3. **不能把 `gate=operator_override` 当无条件读数。** 前提仍是「状态机误报、屏幕是干净战役」(§82.2.1)。
+
+**两笔通道事实(记在这里,后面还会撞到)。**
+
+- **`win-desktop` 的 `USER_CONTROL` 有卡死形态。** 上游 0.8.8 的控制闸是「人碰键鼠后须空闲 10 s」,
+  而指示器卡住时会**一直**报 `USER_CONTROL`(`wait_seconds=0`、`generation` 不涨)—— 本轮就是这一档,
+  处置 = 重启计划任务 `NSWinMCP`(`schtasks /end` + `/run /I`),重启后 `ControlStatus` 立刻回到
+  `ready`。**agent 侧不需要人来点。**
+- **两个 `stellaris.exe` 会让驱动直接拒。** `c2_harness.resolve_base_address` 用
+  `Get-Process stellaris | Modules` **跨进程**取基址,两个实例 ⇒ `ambiguous base: 'stellaris.exe'
+  appears 2 times`。本轮 pid 16100(可见、有窗口)与 18184(23:59 起的无窗口副本)并存,处置是关掉后者;
+  **这是本轮唯一一次 `Stop-Process`** —— 对象是一个没有窗口、没有战役的副本,不是驱动那条 `WM_CLOSE`
+  路径,也不在「不许 kill」保护的那个对象上。代价:若那个副本其实是一局在跑的战役,它会被丢掉。
+
+> **§82.2 一处用词更正(2026-10-31,同一次执行的复审,只追加不改写)** —— 两处:
+>
+> ① 合成里那句「`execute` 是**唯一还站着的**」与同一段「`both` **不排除**」强度冲突。按本节的读数,
+> 准确的说法是:**`parse_only` 在读脚本期 = 「token → 对象」这个操作定义下被证伪**(0x3B01A0 那一侧
+> 对 `0x3B1330` 与 `call [.+0x70]` 各 0 次);**`both` 既不成立也没被排除**(它要求一条尚未定位的
+> `+0x70` 派发);**`execute` 是唯一既未被证伪、又有正向静态读数支持的一态,但仍带着「派发方属于
+> 执行侧」这个条件**。标题里「`parse_only` 与 `both` 没有正面证据」按「没有**正面**读数」读:
+> 对 `parse_only` 本节有**反面**读数(②),对 `both` 连正反都没有。
+>
+> ② 本节把「读脚本期」操作化成「token → 对象」那条路,但没有写清一个反例面:**`0x3AFD30`(slot[1]
+> Execute)本身就是个读 token 的 lexer 循环**(`0x3AFEA0` 取 `[ctx+0x30]` 的下一个 token、
+> `0x3AFEF3` 比较 `[ctx+0x38]`、`0x3AFFF8` 按 token 派发 `+0x10`)—— 也就是说**「在执行期读文本」是
+> 常态**,「谁在读 token」不能拿来分期。本节的 `parse_only`/`both` 判词因此只在**操作定义**
+> (实例化路径 = 读脚本期)下成立;换成「文本被读的那一刻就是 parse 期」这个定义,三个判词都要重写。
+> 这是本节口径的边界,不是又一条读数。
+
+## §83 `+0x70` 的派发方:40 个 in-family 函数逐个读,只挑出 2 个候选(2026-10-31,离线,零 shot)
+
+§82.2 留的那个条件——「`execute` 成立要一个条件:派发 `+0x70` 的那一侧是执行侧」——它要求
+「谁把子效果送进 scope」有一个**具名**的答案。本节只做两件事:① §83.1 把「既在 `.rdata` 里、
+又派发 `[+0x70]`」的 40 个函数逐个读到 base 寄存器的写入点;② §83.2 从里面挑出的候选往上游追。
+两节都**不判**「`every_system` 走的就是这一条」。
+
+### §83.1 40 个 in-family 函数的 base 来源表(离线,零 shot)
+
+生产者:`scripts/scratch/2026-10_plus70_dispatcher/dispatch_sites.py`(只读 exe 拷贝)。口径全文写在
+脚本 docstring 里,这里是摘要:
+
+- **单段站点** = `call/jmp [reg+0x70]`,`reg` 是寄存器(不含 `[rip+0x70]`)。两路合并:
+  `.pdata` 函数体逐个反汇编(3,528 条)+ `.pdata` 覆盖不到的区间(4.8% 的 `.text`,叶子函数
+  在这一路才看得见,23 条)。
+- **两段站点** = `mov reg,[x+0x70]` 之后 **≤2 条**内 `call/jmp reg`(同寄存器,中间不重写它)。
+- **in-family** = 含单段站点的函数,`start ∈ [0x17F0000, 0x1B00000)` 且 `start` 在 `.rdata` 里
+  作为 8 B 对齐 qword 出现 ≥1 次。
+- **effect-family vtable** = 在 `.rdata` 里存在地址 `H`(8 对齐、`slot−H ≤ 0x200`)使 `[H+0x08]`
+  等于 effect Execute `0x3AFD30`;表里给 `H` 与槽号。**不用**「往回走连续指针」的启发式(§82.1 已弃用)。
+
+**复现(末行 `PASS` 才算):**
+
+```
+python3 scripts/scratch/2026-10_plus70_dispatcher/dispatch_sites.py
+## single-stage = 3551  two-stage = 16  → /mnt/cache/tmp/dispatch_sites/sites.tsv
+## single-stage by path: body=3528, leaf=23
+## in-family 函数 = 40(0x17f0000..0x1b00000 内、自身在 .rdata 里有 qword 槽、且含单段站点)
+single-stage=3551 two-stage=16 in-family=40
+PASS
+```
+
+**与 §82.2 的三个数逐个对账**(这是本节对 §82.2 的独立复现,一处不一致就写出来):
+
+| 数 | §82.2 | 本探针 | 判读 |
+|---|---|---|---|
+| 单段站点 | 3,551 | **3,551**(函数体 3,528 + 叶子 23) | 逐字相等。两路的分工是本节补的:§82.2 没写叶子函数那一半 |
+| in-family 函数 | 40 | **40** | 逐字相等 |
+| 两段站点 | 15 | **16** | **不相等,且 §82.2 没记窗口。** 紧邻(=0 条插入)是 **0**、窗口 2 是 **16**、窗口 6 是 **151**。16 条的窗口 2 形状全是一个 `lea rdx,[栈]` 或 `mov rcx,…` 夹在中间。⇒ 该差不是读数错,是**口径缺省**;本节采用窗口 2 并把它写进口径 |
+
+**表。** `写指令` 是站点上游 6 条内最后一条写 base 寄存器的指令;`对象` 是这条写指令的**源基址寄存器**,
+`再一跳` 是那个寄存器在同一基本块里的写入。`判定` 按下面的机械规则填(不再逐行手写):
+
+1. **candidate** = 该函数本身装在 effect-family vtable 里 **且** 它派发的对象来自 effect 对象的字段
+   (本表只有 2 行,见下);
+2. **other-class** = 该函数**不在**任何 effect-family vtable 里(`effect-family vtable` 列 = `none`),
+   或者它在、但派发对象是 `this+固定偏移` 的子对象 / 全局单例的字段;
+3. **undetermined** = base 来自入参寄存器(or 跨基本块),本表 3 行。
+
+| func | extent | site | effect-family vtable | base | 写指令 | 对象 | 再一跳 | 判定 |
+|---|---|---|---|---|---|---|---|---|
+| 0x18015f0 | 0x180192d | 0x18016ff | none | rax | mov rax,[rcx] | rcx | lea rcx,[rsi+0x20] | other-class |
+| 0x1824a60 | 0x1825505 | 0x1824b18 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1824a60 | 0x1825505 | 0x1824b7f | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1826b90 | 0x1826d50 | 0x1826bcb | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1826f90 | 0x1827150 | 0x1826fcb | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1827490 | 0x182794c | 0x18275ba | none | rax | mov rax,[rcx] | rcx | lea rcx,[rbx+0x40] | other-class |
+| 0x1827490 | 0x182794c | 0x1827793 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1827990 | 0x1827bc4 | 0x18279d3 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x183f790 | 0x183f8d1 | 0x183f867 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rdi+0x20] | other-class |
+| 0x184af60 | 0x184b25a | 0x184b038 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x184b5d0 | 0x184bc7c | 0x184b9ac | 0x25fd818+0x108 | rax | mov rax,[rbx] | rbx | - | undetermined |
+| 0x184cb10 | 0x184cf27 | 0x184cc34 | none | rax | mov rax,[rcx] | rcx | - | other-class |
+| 0x184d190 | 0x184d619 | 0x184d2c3 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rbx+0x20] | other-class |
+| 0x18695f0 | 0x1869779 | 0x186976a | none | rax | mov rax,[rcx] | rcx | mov rcx,[rcx+0x1d78] | other-class |
+| 0x18718e0 | 0x187202c | 0x1871947 | 0x25fa3e0+0x28, 0x25fa2e0+0x128 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x18718e0 | 0x187202c | 0x1871d33 | 0x25fa3e0+0x28, 0x25fa2e0+0x128 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1876fd0 | 0x187743b | 0x1877110 | 0x25f77e8+0x28 | rax | mov rax,[rcx] | rcx | lea rcx,[r14+0x40] | other-class |
+| 0x1876fd0 | 0x187743b | 0x1877156 | 0x25f77e8+0x28 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x187cc20 | 0x187cfc6 | 0x187cd1f | none | rax | mov rax,[rcx] | rcx | add rcx,0x40 | other-class |
+| 0x18b07e0 | 0x18b0add | 0x18b08c7 | 0x25ebcf8+0x48, 0x25ebc18+0x128 | rax | mov rax,[rbx] | rbx | - | undetermined |
+| 0x18b0c30 | 0x18b0f2d | 0x18b0d17 | 0x25ebc18+0x48, 0x25ebaf8+0x168 | rax | mov rax,[rbx] | rbx | - | undetermined |
+| **0x18b7b70** | 0x18b7bab | 0x18b7b9d | 0x25fde58+0x70, 0x25fdd78+0x150 | rax | mov rax,[rcx] | rcx | - | **candidate** |
+| **0x18b7e30** | 0x18b7e6b | 0x18b7e5d | 0x25fdd78+0x70 | rax | mov rax,[rcx] | rcx | - | **candidate** |
+| 0x18c9900 | 0x18c9bb9 | 0x18c99b0 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18c9900 | 0x18c9bb9 | 0x18c9aad | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18ca180 | 0x18ca438 | 0x18ca230 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18ca180 | 0x18ca438 | 0x18ca32d | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18caa00 | 0x18caced | 0x18caab5 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18caa00 | 0x18caced | 0x18cabb2 | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18cb2b0 | 0x18cb565 | 0x18cb360 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18cb2b0 | 0x18cb565 | 0x18cb45d | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18cbb30 | 0x18cbdec | 0x18cbbe0 | none | rax | mov rax,[rcx] | rcx | add rcx,0x20 | other-class |
+| 0x18cbb30 | 0x18cbdec | 0x18cbcdd | none | rax | mov rax,[r8] | r8 | - | other-class |
+| 0x18ec730 | 0x18edbd2 | 0x18ed63d | 0x2641e20+0x48, 0x2641d20+0x148 | rax | mov rax,[rcx] | rcx | lea rcx,[r12+0x40] | other-class |
+| 0x190c230 | 0x190c96f | 0x190c605 | 0x25f7c48+0x48 | rax | mov rax,[rcx] | rcx | lea rcx,[r15+0x20] | other-class |
+| 0x190da10 | 0x190dd8c | 0x190db15 | none | rax | mov rax,[rbx] | rbx | - | other-class |
+| 0x190f4c0 | 0x190f743 | 0x190f57e | 0x25f4440+0x108 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x190f890 | 0x190fb13 | 0x190f94e | 0x25f4440+0x28 | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x40] | other-class |
+| 0x1920df0 | 0x1920ea5 | 0x1920e69 | none | rax | mov rax,[rbx] | rbx | - | other-class |
+| 0x1a9a000 | 0x1a9a725 | 0x1a9a499 | none | rax | mov rax,[rsi] | rsi | - | other-class |
+| 0x1ac1430 | 0x1ac1801 | 0x1ac147d | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac1430 | 0x1ac1801 | 0x1ac1630 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac19e0 | 0x1ac1db1 | 0x1ac1a2d | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac19e0 | 0x1ac1db1 | 0x1ac1be0 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac1fe0 | 0x1ac23b1 | 0x1ac202d | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac1fe0 | 0x1ac23b1 | 0x1ac21e0 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac3480 | 0x1ac372f | 0x1ac34d8 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+| 0x1ac60e0 | 0x1ac658e | 0x1ac61ae | none | rax | mov rax,[rcx] | rcx | lea rcx,[rsi+0x20] | other-class |
+| 0x1ac6fb0 | 0x1ac7539 | 0x1ac70ff | none | rax | mov rax,[rcx] | rcx | add rcx,0x40 | other-class |
+| 0x1acf000 | 0x1acf212 | 0x1acf0b7 | none | rax | mov rax,[rcx] | rcx | - | other-class |
+| 0x1acf2f0 | 0x1acf44b | 0x1acf35f | none | rax | mov rax,[rbx] | rbx | - | other-class |
+| 0x1af91c0 | 0x1af969e | 0x1af9210 | none | rax | mov rax,[rcx] | rcx | lea rcx,[rax+0x20] | other-class |
+
+合计 52 个站点 / 40 个函数:**candidate 2、undetermined 3、other-class 47**。
+
+**两个 candidate 的三条证据。** 它们形状完全一样,只有 getter 不同:
+
+```
+0x18b7b70 (59 B, 装在 0x25fde58+0x70 / 0x25fdd78+0x150;后者的 +0x08 == 0x3AFD30)
+  018b7b70  mov  [rsp+8], rbx
+  018b7b75  push rdi
+  018b7b76  sub  rsp, 0x20
+  018b7b7a  add  rcx, 0xc0              ; ← 站点 base 的上游:对象 = this+0xC0
+  018b7b81  mov  rdi, r8                ; 第三实参先存着
+  018b7b84  mov  rbx, rdx               ; 第二实参(scope)先存着
+  018b7b87  call 0x18be4e0              ; getter(this+0xC0, scope) -> rax
+  018b7b8c  mov  rcx, [rax]             ; ← 真正被派发的对象 = [[getter 返回值]]
+  018b7b8f  test rcx, rcx
+  018b7b92  je   0x18b7ba0              ; 空 ⇒ 什么都不派
+  018b7b94  mov  rax, [rcx]             ; ← base rax 的写入点(vtable)
+  018b7b97  mov  r8, rdi                ; 原样还回第三实参
+  018b7b9a  mov  rdx, rbx               ; 原样还回 scope
+  018b7b9d  call [rax+0x70]             ; ← 站点
+```
+
+- ① **站点**:`0x18B7B9D`(`0x18B7B94` 写 `rax = [rcx]`,`rcx` 由 `0x18B7B8C` 写成 getter 的返回解引用)。
+- ② **它是 effect vtable 方法**:函数 start 装在 `0x25FDD78+0x70` 与 `0x25FDE58+0x150`;
+  两个 head 的 `+0x08` 都等于 effect Execute `0x3AFD30`。
+- ③ **它把 (scope, r8) 原样转给被派发者**:`rdx`/`r8` 在调用前后不变 —— 这正是 `0x3B1330`
+  的 `(self, scope, r8)` 签名,而不是「带一个自己的栈缓冲」的别类调用。
+- `0x18B7E30` 是同一个形状,getter 换成 `0x18BEBF0`,装在 `0x25FDD78+0x70`。
+
+**47 个 other-class 为什么排除(不是「看着不像」)。** 三条可复核的理由,按表里哪一列出:
+
+1. `effect-family vtable = none`(38 行):该函数**根本不在** effect 家族任何 vtable 里 ——
+   用 `[H+0x08] == 0x3AFD30` 在它所有 `.rdata` 槽之前 0x200 内找不到 head。§82.2 抽读的
+   `0x18016FF`(本表第一行)就在这一类,与 §82.2 的判读一致。
+2. 在 effect 家族里、但派发对象是 `this+0x20 / this+0x40`(8 行):这是**同一个对象的次 vtable 子对象**
+   (`lea rcx,[reg+0x20]` / `add rcx,0x40`),不是子效果向量里的元素。
+3. 在 effect 家族里、但对象来自全局单例的字段(1 行):`0x18695F0` 的 `mov rcx,[rcx+0x1d78]` 前面是
+   `[rip+0x19F5C30]` 这个全局,**不是** effect 对象。
+
+**3 个 undetermined**:`0x184B9AC` / `0x18B08C7` / `0x18B0D17` 的 base 寄存器是 `rbx`,上游 6 条内
+没有写它的指令(来自函数入口或更早的基本块)。它们是 effect 家族方法,所以只差「对象是谁」这一跳。
+
+**这一节不能说的(三条)。**
+
+1. **不能把 `candidate` 读成「找到派发方了」。** 它只满足「effect vtable 方法 + 对象来自 `this+0xC0`」
+   这两条;`this+0xC0` 是**什么类**没读,`0x18BE4E0` 返回的是**谁**也没读。§83.2 才追上游。
+2. **不能把 47 个 other-class 读成「这 47 个与 effect 无关」。** 它们的**调用者**里可能有 effect;
+   本节排除的是「它们自己不是 effect 家族的派发点」,不是「effect 永不到这里」。
+3. **不能把 3,551 这个数当「只有 3,551 处派发 `+0x70`」。** 它是本节口径下**decode 成功的指令**里的数;
+   口径的边界(两路合并、`±1 B` 分歧、叶子函数那一半)都写在探针 docstring 里,换口径就要重算。
+
+### §83.2 两个候选的入口链:`dispatcher_partial` —— 追到的是「谁造这个对象」,不是「谁派活」(离线,零 shot)
+
+生产者:`scripts/scratch/2026-10_plus70_dispatcher/trace_entry.py`(rip 相对引用索引一次建成后缓存在
+`/mnt/cache/tmp/dispatch_sites/rip.jsonl`,176,606 个目标)。深度上限 4,每层做两件事:E8 反查直接调用者、
+`.rdata` 槽反查(`[H+0x08] == 0x3AFD30` 定 effect-family vtable 头)。
+
+**判决词:`dispatcher_partial`。** 两个候选都只追到 effect 机器内部(类自己的 create + class_info vtable),
+没有再往外接到「列表驱动 / on_action / event」那种入口。
+
+**链(两条形状完全相同,只有类不同):**
+
+```
+0x18b7b70  (+0x70 of vtable 0x25fde58)      E8 callers = 0
+   .rdata slot 0x25fdec8 = head 0x25fde58 + 0x70
+   ← code that installs head 0x25fde58: 0x189a67b  in 0x189a620..0x189a699
+      0x189a620: push rbx / sub rsp,0x20 / mov ecx,0xe8 / call 0x2185218 (operator new)
+                 call 0x2188170 (memset) / call 0x3afb40 (base ctor)
+                 lea rax,[rip-…] -> 0x25ebab8 ; mov [rbx+0xc0], rax   ; ← 子对象 @ +0xC0
+                 lea rax,[rip-…] -> 0x25fde58 ; mov [rbx], rax       ; ← 主 vtable
+                 lea rax,[rip-…] -> 0x25fab20 ; mov [rbx+8], rax     ; ← 次基 vtable
+      0x189a620 自身:E8 callers = 0;.rdata slot 0x260f498 + 0x00
+      0x260f498(class_info vtable):+0x00 = 0x189a620(create),+0x08/…
+                 = 0x34c090(共享 deleting destructor),+0x78 = 0x3b01a0(按 token 实例化)
+
+0x18b7e30  (+0x70 of vtable 0x25fdd78)      E8 callers = 0
+   .rdata slot 0x25fdde8 = head 0x25fdd78 + 0x70
+   ← 0x189a6fb in 0x189a6a0..0x189a719 (同类 create)
+   ← .rdata slot 0x260f488 + 0x00;class_info vtable 的 +0x88 = 0x3b01a0
+```
+
+**这条链说明的三件事(每件都有上面的读数支撑)。**
+
+1. **两个候选是「同一个对象内的两个基」上的 `+0x70`。** `0x25FDE58` 与 `0x25FDD78` 的 `+0x08` 都是
+   `0x3AFD30`(Execute)、`+0x98` 都是 `0x3B1420`(谓词基体)、`+0x70` 分别是 `0x18B7B70` / `0x18B7E30`。
+   它们是**同一族的两个类**的 parse/dispatch 槽,不是两个互不相干的东西。
+2. **类 A 有三个基 vtable。** create `0x189A620` 往同一个 0xE8 字节对象里写三张表:`[obj]=0x25FDE58`、
+   `[obj+8]=0x25FAB20`、`[obj+0xC0]=0x25EBAB8`。三张表里 effect 函数的**槽号不同**:
+   `0x25FAB20` 是 `+0x30 = 0x3B01A0`、`+0x90 = 0x3B1330`;`0x25EBAB8` 是 `+0x48 = 0x3AFD30`、
+   `+0xB0 = 0x3B1330`、`+0x70 = 0x3B1EF0`。⇒ **「`+0x70`」这个偏移在不同基上指不同东西**,
+   这正是 §82.2 那条「同一段代码可能在非 effect 对象上取 `+0x70`」的机制性解释。
+3. **候选派发的是 `[self+0xC0]` 上算出来的那个对象。** `0x18B7B70` 的 `+0x70` 槽不改 `rdx`/`r8`
+   (§83.1 证据 ③),它先 `call 0x18BE4E0(self+0xC0, scope)` 拿回一个指针,再 `mov rcx,[rax]` 解引用
+   之后派发。`0x18B7E30` 同形状、getter 是 `0x18BEBF0`。**getter 的返回值是什么类,本节没读**
+   —— 它只到「`this+0xC0` 这张子表(0x25EBAB8)派生的东西」这一步。
+
+**三条「不能说」(顺序即优先级)。**
+
+1. **判决词只覆盖追到的深度。** 4 层之内没有外部入口;这不等于第 5 层之后也没有。`0x189A620` 的
+   `class_info` 在 `.rdata` 里**没有静态 qword 引用**(class_info 对象是运行时 `lea`+堆分配的),
+   所以「谁把这个 class_info 插进 effect db」不是本条链能回答的 —— 那要追 `0x3AEF60` 的入参。
+2. **追到 create ≠ 知道它何时被调。** `0x3B01A0` 是**按 token 实例化**的那一侧(§23.1 / §82.1 ②),
+   它在 `every_system` 的 ExecuteActual(`0x17F7920`)与 `0x3AFD30` 的 token 循环里都被调到,
+   所以「这个类被造出来」在 parse 与 execute 两个窗口里都可能发生。本节不说「它在执行期被造」。
+3. **`dispatcher_partial` 的下一问不是「再打一发」,是「谁调这个持有者」。** 具体到本卷:
+   下一问是 `0x260F498` 这个 class_info 的**插入点**(谁 `0x3AEF60` 它),以及 `[self+0xC0]` 子表
+   (`0x25EBAB8`,`+0x70 = 0x3B1EF0`)的 `+0x70` 是什么语义。这两个问题都是静态的。
+
+## §84 通道欠账:mod 加载判据 + #32 的纯函数缺陷(2026-10-31,离线,零 shot)
+
+### §84.1 mod 加载判据 —— 游戏根本不读启动器的注册库(离线,零 shot)
+
+§81.5 的 `PS_HIT=0` 分不开「mod 没加载」与「不走 `+0x70`」。本节把它换成**文件层可复核**的判据,
+并且把游戏侧读点读出来:**`mods_registry.json` 这个字面量在 `stellaris.exe` 里一次都不出现**。
+
+生产者:`scripts/scratch/2026-10_mod_load/mod_registry.py`(只读;`--root <dir>` 读一份同布局目录、
+`--host <ssh-host>` 让主机上的 python 把三份文件打成 JSON 回传)。
+
+**游戏侧读点(exe 字面量扫描 + rip 相对引用索引,176,606 个目标)。**
+
+| 字面量(地址) | 引用点 | 所在函数 | 该函数是否也读 `mod/` |
+|---|---|---|---|
+| `dlc_load.json`(0x26CD7D8) | 0x1B8AA16 | 0x1B8A9D0..0x1B8ACEB | 否:它构造容器后 `call 0x1CC2630`(取文件),失败就经日志器 `0x1C91C30` 把文件名打出来 |
+| `enabled_mods`(0x26CD4A0) | 0x1B8AF34 | 0x1B8AE82..0x1B8AFC0 | 否 |
+| `disabled_dlcs`(0x26CD490) | 0x1B8AEA4 | 0x1B8AE82..0x1B8AFC0 | 否 |
+| `Error reading dlcs/mods arrays.`(0x26CD470) | 0x1B8AD89 | 0x1B8AD4A..0x1B8ADB5 | 否 |
+| `Expect only strings in dlcs/mods arrays.`(0x26CD560) | 0x1B8ADEB | 0x1B8ADC6..0x1B8AE09 | 否 |
+| `descriptor.mod`(0x26CD660) | 0x1B929F2 | 0x1B923C0..0x1B92E4F | **是**(同一函数里还有 `%s/ugc_%llu.mod` @0x1B92671、`Could not find files for mod: %s` @0x1B925D5) |
+| `Incorrect MOD descriptor: "`(0x26CD5A0) | 0x1B93891 | 0x1B93660..0x1B93ACC | 是(解析一个 `.mod`) |
+| `%s/ugc_%llu.mod`(0x26CD590) | 0x1B92FD9 | 0x1B92E50..0x1B93589 | 是 |
+| `Could not find archive for dlc/mod: %s`(0x26CD3D8) | 0x1B8CD93 | 0x1B8C520..0x1B8D337 | 是(把 `path=` 落到文件系统) |
+| `Folder not found for DLC/Mod %s path: %s`(0x26CD400) | 0x1B8D02F | 0x1B8C520..0x1B8D337 | 是 |
+| **`mods_registry.json`** | **0 处** | **未定位 —— 整个 exe 没有这个字面量** | 不适用 |
+
+⇒ **两条载入通道在文件层是不对称的**:
+
+- **游戏侧只认 `dlc_load.json` 的 `enabled_mods`**(字符串数组;`Expect only strings…` 是它自己的
+  类型检查)。它拿到名字之后**自己**去读 `mod/<name>.mod` 描述符(`descriptor.mod` 那条路),
+  再把 `path=` 落到文件系统(`Could not find archive/folder…` 两条错误)。
+- **启动器注册库 `mods_registry.json` 是启动器私有的**。游戏不读它 —— 它对游戏的影响**只有一条**:
+  启动器按它重写 `dlc_load.json`。这解释了 §81.5 的现象:手改的 `dlc_load.json` 在
+  `channel_launcher` 下会被覆盖,而 `channel_direct` 下才原样保留。
+
+**判据表(每条都能只靠文件复核)。**
+
+| 文件 | 字段 | 意味着什么 | 属于哪条通道 |
+|---|---|---|---|
+| `dlc_load.json` | `enabled_mods` 含 `mod/<x>.mod` | **游戏**会去解析这个描述符;这是唯一的「游戏侧清单」 | 两条都要 |
+| `dlc_load.json` | 手写内容在下一次启动后**仍在** | 这次是 `channel_direct`;被改写 = 走了启动器 | `channel_direct` 的判据 |
+| `mods_registry.json` | `mods[]` 里有 `path=mod/<x>.mod` 且 enabled | 启动器**会**把它写进 `dlc_load.json` | `channel_launcher` 的判据 |
+| `mod/<x>.mod` | `path=` 指向真实目录 | 游戏能落地;`path=` 错 = `Could not find files for mod` | 两条都要 |
+| `game.log` | 没有 `Could not find files for mod: <x>` | 弱判据:**只在 `enabled_mods` 已有它时**才有意义 | 两条都要 |
+
+**反例清单(不能当判据,逐条写清为什么)。**
+
+- **`.mod` 文件存在**:文件放好 ≠ 被清点;`enabled_mods` 里没有它,游戏连解析都不会做。
+- **`error.log` / `debug.log` 没提它**:沉默不是加载 —— 没条目时游戏根本不解析,自然不报错。
+- **artifact 里 `PS_HIT = 0`**:只说明那条 effect 没跑(§81.5),分不开「mod 没加载」与「不走 `+0x70`」。
+- **`stellaris.exe` 进程起来了**:进程与 mod 集无关,launcher 与直接起 exe 都能起进程。
+
+**这一节的一处欠账(必须写出来)。** 本节的**主机侧那一步没有执行**:2026-10-31 这台机器到
+`Windows_Jiaolong`(10.66.0.7:22)是 `No route to host`,`--host` 因此没能跑。已经跑的是
+`--root`(同一套代码路径,喂一份同布局的合成目录),证明探针在「有这三份文件」时能产出上表的差异;
+主机回来之后补跑一条命令即可:
+
+```
+python3 scripts/scratch/2026-10_mod_load/mod_registry.py --host Windows_Jiaolong
+```
+
+**这一节不能说的(两条)。** ① 不能说「注册库里 enable 了就一定加载」—— 游戏侧只认 `dlc_load.json`,
+如果启动器没把条目写进去,注册库再对也没用;② 不能说「`enabled_mods` 里有就一定会生效」——
+描述符解析失败(`Incorrect MOD descriptor`)与 `path=` 落空是另外两条失败面,本节只钉住「谁读哪个文件」。
+
+### §84.2 #32 的纯函数缺陷表(离线,零 shot)—— 两条,都只收紧
+
+**输入是怎么来的(先写诚实条款)。** §81.3 / §81.4 / §82.2.1 记的是**结论与屏幕描述**
+(`window=dialog` 而截图里是干净战役画面、`gate=operator_override`),**没有记像素统计**
+(`red_px`/`green_px`/`bright_px`/`gold_px`/`row_count`/`option_count` 都不在 artifact 里)。
+所以本节不是「把当时的读数抄成输入」,而是**按当时记录的屏幕形状重建最小输入**,并跑**修复前**的
+现行纯函数,看它会不会给出当时那个结论。这是「确认缺陷在纯函数里」,不是「复现那一帧」。
+
+**修复前(2026-10-31,现行 `game_supervisor.py`)的输出:**
+
+| 重建的输入 | 现行输出 | 当时记录的结论 |
+|---|---|---|
+| 4 条 outliner 行(`x0=1849,x1=1943`,`w=2160,h=1440`)+ `bbox=None` + `gold=2846` | `none` | —— |
+| **同样 4 条行 + `bbox=[200,300,1900,1300]`** | **`dialog`** | §81.3 的 `window=dialog`:**同一组行,只因为多了一个 bbox 就变成 dialog** |
+| 同上,走 `classify_window_at_reference` | **`dialog`** | §82.2.1 的「分类器报窗口、屏幕是干净战役」 |
+| `classify_console(800)` | **`True`(open)** | 没有实机读数;这是阈值带的缺陷,见 D2 |
+
+**缺陷表(只收能用纯函数表达的)。**
+
+| # | 现象 | 现有规则 | 误判形态 | 应加的规则 | 该规则的反例(必须仍然成立) | 测试名 |
+|---|---|---|---|---|---|---|
+| D1 | §81.3 / §82.2.1:屏幕上没有窗口,分类器报 `dialog`,gate 连拒 8 次 | `classify_window`:金色行判据之后**直接** `if bbox: return "dialog"` —— bbox 单独就能定案,行规则只在不带 bbox 时才被问到 | 干净战役画面的「高亮带包络」被当成面板;同一组行去掉 bbox 就是 `none`,加回来就是 `dialog` ⇒ 误判**完全**由 bbox 造成 | 带 `w`/`h` 且 `rows` 非空且 `row_kind(rows,w,h) == "outliner"` 时,bbox **不能**把结果提升成 `dialog` | ① 新闻窗(有 bbox、金色行不够宽)仍是 `dialog`;② 首触窗(无 bbox、central 行)仍是 `dialog`;③ 3 参数调用逐字节不变 | `test_hud_panel_does_not_promote_outliner_rows_to_a_dialog` |
+| D2 | 控制台开合:中亮帧被判成「开」 | `classify_console`:`bright_px >= 600` 就是 open | 面板的**开**读数在三次独立实机里都是 **2315**(文字是静态的,§54.10),`0`/`2` 是关;`600..1500` 这一段既不是关、也**不是那个面板**,却被当成「开」——是自信的误读 | open 的门槛抬到实测密度那一侧(`>= 1500`);`120..1500` 落 undecided(阻塞侧,spec §5) | `2315` 仍是 `True`;`0`/`2` 仍是 `False`;`300` 仍是 `None` | `test_console_open_needs_the_panels_own_density` |
+
+**两条都只收紧**:D1 只把 `dialog` 变 `none`,D2 只把 `True` 变 `None`。没有把 `--allow-window` 变成默认、
+没有给 `world_state` 加豁免、没有把分类器改成「永远不报窗口」。
+
+**不收进本计划的(留 issue #32,因为没有纯函数形态)。** ① `popup_hold_unclassified`(§82.2.1)是
+**弹窗身份**路线的结论,输入是帧而不是标量,改它要 `popup_identity`/OCR 那一层;② §81.4 的
+「注入鼠标到不了 Stellaris、键盘可以」是**输入通道**的环境事实,不在纯函数里;③ 事件窗抢焦与
+「控制台投递不可复现」是时序/焦点的实机问题。三条都需要实机窗口,本计划不碰。
+
+**门禁(修复前后都是同一批命令)。** 修复前:`cd scripts/windows && python3 -m pytest tests -q`
+→ `342 passed`(基线,用 `-k 'not <两条新测试>'` 复算仍是 342)。修复后:`344 passed`。
+
+> **§83.2 / §84.2 一处补记(2026-10-31,同一次执行的复审,只追加不改写)** —— 三处,都影响读法:
+>
+> ① **§83.2 的判决词对「家族成员」的口径敏感。** 初版把「函数装在 `[H+0x08] == 0x3AFD30` 的 vtable 里」
+> 当唯一判据,于是 class_info vtable(`0x260F498`)被判成「家族外」,判决词读成 `dispatcher_found`;
+> 改用「vtable 的 ±0x200 内出现 `{0x3AFD30, 0x3B1330, 0x3B01A0, 0x3B1420, 0x3B0F80, 0x3B1230}` 任一」
+> 之后同一个链读成 **`dispatcher_partial`**。**采用后者**,理由写在 §83.2 第 2 条:class_info vtable 的
+> `+0x78` 就是按 token 实例化的 `0x3B01A0`,它是 effect 机器的一部分,不是外部入口。⇒ 这个判决词
+> **依赖「什么算家族」的定义**,换定义要重判,不能只引结论。
+>
+> ② **§84.2 D1 的规则在复审后收紧了一次,`window=dialog` 的假阳性方向与「漏报」方向要分开看。**
+> 初版条件是 `row_kind(rows,w,h) == "outliner"`,它在「**一条**选项行 + 旁边常驻 outliner」的真实弹窗上
+> 也会命中 —— 而 `world_state` 把 `none` 当「没有窗口」(非阻塞侧),那是**更坏**的方向。
+> 现行条件是「**每一行**都是 outliner 行」(`option_rows(rows,w)` 为空才允许 bbox 失效),
+> 由 `test_one_option_row_plus_the_outliner_is_still_a_dialog` 先红后绿钉住;新闻窗在 5 参数与
+> `classify_window_at_reference` 两条路径上也补了断言(复审的 I-3)。⇒ §84.2「两条都只收紧」应读成
+> **「返回值的集合只收缩」**,而「分类器判 `none`」在闸门上等于放行,所以这一条必须同时有漏报面的测试。
+>
+> ③ **§84.1 的判据表把「有这一条」与「enabled」分开列了。** 判据表原本写「有这一条 **且** enabled」,
+> 而 `mod_registry.py` 的差异统计只比对了 path —— 一条 disabled 的条目会被报成「注册库有、dlc_load 没有」
+> 的假差异。现在 `enabled` 参与判定(缺省视为 listed/enabled),disabled 的条目单列一行
+> 「启动器会把它从 `dlc_load.json` 里去掉」。**这不是判据放宽**:`enabled=false` 的条目在当前通道下
+> 本来就不该出现在 `enabled_mods` 里。
