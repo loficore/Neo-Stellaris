@@ -42,6 +42,11 @@ def test_news_window_is_a_dialog_not_a_choice():
     rows = [{"y0": 700, "y1": 720, "x0": 900, "x1": 1300},
             {"y0": 760, "y1": 780, "x0": 905, "x1": 1310}]
     assert gs.classify_window(rows, [880, 450, 1420, 940], 29930) == "dialog"
+    # §84.2 D1's counter-example ① at the size the daemon actually uses: the
+    # HUD rule must not swallow a news window (two rows land in the central
+    # band, so `kept` is non-empty and the bbox still decides).
+    assert gs.classify_window(rows, [880, 450, 1420, 940], 29930, 2160, 1440) == "dialog"
+    assert gs.classify_window_at_reference(rows, [880, 450, 1420, 940], 29930) == "dialog"
 
 
 def test_choice_rows_decide_even_without_a_panel_bbox():
@@ -867,6 +872,18 @@ def test_hud_panel_does_not_promote_outliner_rows_to_a_dialog():
     assert gs.classify_window(rows, [200, 300, 1900, 1300], 2846, 2160, 1440) == "none"
     # Same at the reference size the daemon actually classifies at.
     assert gs.classify_window_at_reference(rows, [200, 300, 1900, 1300], 2846) == "none"
+
+
+def test_one_option_row_plus_the_outliner_is_still_a_dialog():
+    # §84.2 D1's false-negative face (review I-2): a modal with ONE option row
+    # still shows the outliner beside it.  The HUD rule must not swallow it --
+    # "no window" is the non-blocking side of the gate, so a wrong "none" lets
+    # the clicker act on a live window.
+    rows = [{"x0": 1150, "x1": 1452, "y0": 861, "y1": 867},
+            {"x0": 1849, "x1": 1943, "y0": 216, "y1": 222},
+            {"x0": 1849, "x1": 1943, "y0": 390, "y1": 396}]
+    assert gs.classify_window(rows, [880, 450, 1420, 940], 2846, 2160, 1440) == "dialog"
+    assert gs.classify_window_at_reference(rows, [880, 450, 1420, 940], 2846) == "dialog"
 
 
 def test_console_open_needs_the_panels_own_density():

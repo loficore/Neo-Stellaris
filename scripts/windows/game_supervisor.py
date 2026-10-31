@@ -174,8 +174,12 @@ def classify_window(rows, bbox, gold_px: int, w=None, h=None) -> str:
         # must not outvote the row rule that already says these rows are the
         # outliner: without the bbox the same reading is ``none``, so letting
         # the bbox alone decide is exactly the "window=dialog, screen empty"
-        # false positive the gate kept refusing on.  Only narrows.
-        if w is not None and h is not None and rows and row_kind(rows, w, h) == "outliner":
+        # false positive the gate kept refusing on.
+        # The condition is "every row is an outliner row" (``kept`` empty), not
+        # row_kind=="outliner": a real modal with ONE option row still shows the
+        # outliner beside it, and row_kind calls that "outliner" too.  A wrong
+        # "none" is the non-blocking side of the gate -- the worse direction.
+        if w is not None and h is not None and rows and not kept:
             return "none"
         return "dialog"
     if w is not None and h is not None and row_kind(rows, w, h) == "central":
