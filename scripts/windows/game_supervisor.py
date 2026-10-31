@@ -83,7 +83,13 @@ WINDOW_KINDS = ("choice", "dialog", "none")
 CONSOLE_BOX_FRACTIONS = (120 / 2160, 640 / 1440, 400 / 2160, 880 / 1440)
 CONSOLE_BRIGHT_MIN = 180
 CONSOLE_CLOSED_MAX = 120
-CONSOLE_OPEN_MIN = 600
+# §84.2 D2: the open panel's own text is static, so three separate live reads
+# returned exactly 2315 (§54.10).  A frame in 600..1500 bright px inside this
+# box is therefore *not* that panel -- it is some other bright screen sharing
+# the box's coordinates.  Calling it "open" was a confident misreading; the
+# band up to the measured density now lands on the undecided side, which is the
+# blocking side (spec §5).  Old value was 600.
+CONSOLE_OPEN_MIN = 1500
 
 # Popup identity, evidence and OCR budget (plan 2026-10-25).  The allowlist is
 # DATA on the wire, not code: an absent or broken file means "hold everything",
@@ -163,6 +169,14 @@ def classify_window(rows, bbox, gold_px: int, w=None, h=None) -> str:
     if gold_px >= CHOICE_GOLD_MIN and len(wide) >= CHOICE_ROW_COUNT_MIN:
         return "choice"
     if bbox:
+        # §81.3 / §84.2 D1: the band profile finds an envelope on a clean
+        # campaign screen too (the map's bright HUD fills the band).  A bbox
+        # must not outvote the row rule that already says these rows are the
+        # outliner: without the bbox the same reading is ``none``, so letting
+        # the bbox alone decide is exactly the "window=dialog, screen empty"
+        # false positive the gate kept refusing on.  Only narrows.
+        if w is not None and h is not None and rows and row_kind(rows, w, h) == "outliner":
+            return "none"
         return "dialog"
     if w is not None and h is not None and row_kind(rows, w, h) == "central":
         return "dialog"

@@ -856,6 +856,29 @@ def test_first_contact_window_is_a_dialog():
     assert gs.classify_window(rows, None, 2846, 2160, 1440) == "dialog"
 
 
+def test_hud_panel_does_not_promote_outliner_rows_to_a_dialog():
+    # §81.3 / §84.2 D1: a clean campaign screen has an outliner and a bright HUD
+    # envelope.  The envelope alone must not outvote the row rule -- the same
+    # rows classify as "none" when the envelope is absent, so the bbox is the
+    # only thing that changed, and it changed the answer.  That is the false
+    # positive the gate kept refusing on.
+    rows = [{"x0": 1849, "x1": 1943, "y0": y, "y1": y + 6} for y in (216, 390, 480, 570)]
+    assert gs.classify_window(rows, None, 2846, 2160, 1440) == "none"
+    assert gs.classify_window(rows, [200, 300, 1900, 1300], 2846, 2160, 1440) == "none"
+    # Same at the reference size the daemon actually classifies at.
+    assert gs.classify_window_at_reference(rows, [200, 300, 1900, 1300], 2846) == "none"
+
+
+def test_console_open_needs_the_panels_own_density():
+    # §54.10 measured the open panel at 2315 bright px in three separate reads
+    # (its text is static) and the closed panel at 0/2.  A mid-bright frame is
+    # not that panel; calling it "open" is a confident misreading, and the
+    # undecided band is the blocking side (spec §5).
+    assert gs.classify_console(800) is None
+    assert gs.classify_console(2315) is True
+    assert gs.classify_console(2) is False
+
+
 def test_click_without_lease_logs_and_does_not_raise(monkeypatch):
     logged = []
     monkeypatch.setattr(gs, "acquire_or_refuse", lambda *a, **k: None)
