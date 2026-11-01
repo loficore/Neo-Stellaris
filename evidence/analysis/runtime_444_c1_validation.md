@@ -9197,3 +9197,72 @@ host_vtable	slot	target_rva	target_kind	base_register	base_subobject_offset	evid
 
 **未观测/欠账**:`+0x70` 何时被调 = 未观测(离线,零 shot);`0x156540`/`0x159730` 那 19 个
 `not_in_pdata` 槽目标为何形态(热补丁跳板?gap 内 shim?)本节不判。
+
+## §87 备用靶 0x1A76324:call 0x3B1330 下游对 [scope+0x10] 的读点(2026-11-01,离线,零 shot)
+
+**问题**:§80.2 的循环里 `0x1A76324` 每轮 `call 0x3B1330(self, &scope, r15)`,scope 帧在
+`[rsp+0x20]`(`+0x08` mask、`+0x10` id、`+0x14` obj)。先纠正一个容易读错的点:`0x1A76324` 本身
+**不是** `[scope+0x10]` 的读点,它是调用点;本轮问的是「`0x3B1330` 本体与它的一层 E8 目标里,
+谁按 scope 帧里的 id 去解对象」。探针 = `scripts/scratch/2026-11_child_effect_slot/child_effect_slot.py`。
+
+**口径(与计划 brief 的三处已裁定偏差)**:
+① base 回溯窗口从「前 6 条」放宽为**整个 extent 的线性回扫**,遇 `ret`/`jmp` 停,`je/jne` 条件跳转
+   对寄存器值透明、继续往回。
+② `call` 只对 **caller-saved** 寄存器是界:x64 ABI 下 `rbx/rbp/rsi/rdi/r12-r15` 跨 call 存活,
+   回扫穿过 call 仍成立。首版把 call 一律当界,产出 2 个假阴性 `-` 行(`3b1373` 的 rsi、`34ca39` 的
+   r14,写点分别在 12/49 条之前的 call 之后),修正后 `dash=0`。
+③ `push` 记为读不是写(防 `push r14` 这类序言被当写点)。
+非 `.pdata` 函数首的两个 E8 目标 `0x1cc4450`/`0x2185254`(半截/热补丁跳板)按一层口径 `skip`,
+不追。断言全过:`func_of(0x1a76324)=(0x1a76130,0x1a7643d)`、`func_of(0x3b1330)=(0x3b1330,0x3b1413)`、
+`0x1a76324 = call 0x3b1330`、`0x1a7631c = lea rdx,[rsp+0x20]`。
+
+**证据① —— 站点表(探针 stdout 原样,`PASS` 于 2026-11-01 实跑)**:
+
+```
+## one_level_E8_targets=34c960,34d5f0,1cc4450,2185254
+## args->34c960: r8=caller@3b136e:lea r8, [rsp + 0x20]@3b1363; rcx=caller@3b136e:mov rcx, rdi@3b136b; rdx=caller@3b136e:lea rdx, [rsp + 0x20]@3b1353
+## args->34d5f0: rcx=caller@3b13e9:lea rcx, [rsp + 0x20]@3b13e4
+## skip 1cc4450:不是 .pdata 函数首(一层口径不追半截)
+## skip 2185254:不是 .pdata 函数首(一层口径不追半截)
+site_rva	func_start	insn	base_register	disp	base_source	trace	insn_distance	call_path
+3b1335	3b1330	mov qword ptr [rsp + 0x10], rbp	rsp	0x10	stack	rsp(入参,函数内无写)	0	0
+3b1373	3b1330	mov rbx, qword ptr [rsi + 0x10]	rsi	0x10	self_or_other(rsi<-mov rsi, rcx@3b134a)	rsi<-mov rsi, rcx@3b134a	12	12
+3b1402	3b1330	mov rbx, qword ptr [r11 + 0x10]	r11	0x10	self_or_other(r11<-lea r11, [rsp + 0x70]@3b13fd)	r11<-lea r11, [rsp + 0x70]@3b13fd	1	1
+34c965	34c960	mov qword ptr [rsp + 0x10], rbp	rsp	0x10	stack	rsp(入参,函数内无写)	0	0
+34c97f	34c960	mov ecx, dword ptr [rcx + 0x10]	rcx	0x10	self_or_other(rcx(入参)<-caller@3b136e:mov rcx, rdi@3b136b)	rcx(入参)<-caller@3b136e:mov rcx, rdi@3b136b	0	0
+34ca39	34c960	mov dword ptr [r14 + 0x10], ebp	r14	0x10	self_or_other(r14<-mov r14, rcx@34c97c)	r14<-mov r14, rcx@34c97c	49	49
+34d5f0	34d5f0	mov qword ptr [rsp + 0x10], rbx	rsp	0x10	stack	rsp(入参,函数内无写)	0	0
+## rows=7 named=0 self_or_other=4 stack=3 dash=0
+## verdict=no_scope_id_read_depth1
+```
+
+(`call_path` 列在 parse_body 行统一为
+`1a7631c:lea rdx,[rsp+0x20] -> 1a76324:call 0x3b1330(rcx=self, r8=r15)`。)
+
+**证据② —— 两个同形字段的区分依据(逐站点 ±3 原文)**:
+- `[self+0x10]` = **effect 对象的子效果向量**(§80.2/§82.1 已钉)。`3b1373: mov rbx,[rsi+0x10]` 的
+  rsi 追到 `mov rsi, rcx@3b134a` = **入参 rcx = self**;紧随 `3b1377: movsxd rax,[rsi+0x1c]`、
+  `3b137b: lea rsi,[rbx+rax*8]`、循环体 `3b1390: mov rcx,[rbx]; 3b1393: mov rax,[rcx];
+  3b139c: call [rax+0x70]` —— 正是「子向量在 `[obj+0x10]`/计数 `[obj+0x1c]*8`」的 §24.4.2 形态。
+- `[scope+0x10]` = **scope 帧里的 id 格**。帧指针在 `0x3B1330` 的化身是 `rbp`
+  (`3b1347: mov rbp, rdx`)。整段 extent 内 `rbp` 只出现四次:序言 spill
+  (`3b1335: mov [rsp+0x10], rbp`)、入抄(3b1347)、`3b1399: mov rdx, rbp`(交给子对象的
+  `call [rax+0x70]`)、尾声从 spill 槽复原(`3b1406`)。**`[rbp+0x10]` 在本体零读点**。
+- 其余三行与帧无关:`34c97f`/`34ca39` 在 `0x34C960`(std::vector 扩容例程,元素 0x48)里读/写的是
+  **vector 自身的容量/size 字段**(`[rcx+0x10]` 与 begin `[rcx+8]`、`[rcx+0x14]` 三件套成对出现),
+  其 rcx/r14 追到的是 caller 的 rdi(`3b136b: mov rcx, rdi`,而 rdi = `0x3B1330` 的入参 r8,不是 rdx);
+  `34d5f0`/`3b1335`/`34c965` 全是 `[rsp+0x10]` 序言 spill。
+- 同 disp 不同栈的陷阱:`0x3b1353: lea rdx,[rsp+0x20]` 是 `0x3B1330` **自己的栈槽**(传给
+  `0x34C960` 当插入值),与循环帧 `[rsp+0x20]` 同偏移不同函数,不许混。
+
+**判决词 = `no_scope_id_read_depth1`**:一层口径内没有任何 `[+0x10]` 的 base 能追到入参 rdx
+(scope 帧)。帧继续往下走只剩一条边:`3b1399: mov rdx, rbp` → `3b139c: call [rax+0x70]`
+(子对象 vtable 的 slot[7] 型动态派发),静态一层不可达其全体目标 —— **不排除更深**。
+Step 4(scope_id_read_named 行追 id 落到哪个表)**不适用**:named=0,无行可追;按 brief
+「跨进动态派发就停、不猜」执行。
+
+**这条线只是 `0x3B1330` 驱动判负时的备用靶,本文不判 `every_system` 走它。**
+
+**未观测/欠账**:`0x3B1330` 何时被循环调用 = 未观测(离线,零 shot);§82.2 记其直接调用者共 3 处,
+本口径只复核 `0x1A76324` 这一条传参路径;`0x1cc4450`/`0x2185254` 两个半截目标的内部读点不在口径内;
+动态派发 `call [rax+0x70]` 的第二层下游 `+0x10` 读点未判。
