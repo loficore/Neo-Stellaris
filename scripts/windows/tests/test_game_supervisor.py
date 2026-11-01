@@ -42,6 +42,11 @@ def test_news_window_is_a_dialog_not_a_choice():
     rows = [{"y0": 700, "y1": 720, "x0": 900, "x1": 1300},
             {"y0": 760, "y1": 780, "x0": 905, "x1": 1310}]
     assert gs.classify_window(rows, [880, 450, 1420, 940], 29930) == "dialog"
+    # §84.2 D1's counter-example ① at the size the daemon actually uses: the
+    # HUD rule must not swallow a news window (two rows land in the central
+    # band, so `kept` is non-empty and the bbox still decides).
+    assert gs.classify_window(rows, [880, 450, 1420, 940], 29930, 2160, 1440) == "dialog"
+    assert gs.classify_window_at_reference(rows, [880, 450, 1420, 940], 29930) == "dialog"
 
 
 def test_choice_rows_decide_even_without_a_panel_bbox():
@@ -842,3 +847,99 @@ def test_a_dismiss_listed_geometry_id_in_the_file_still_holds(tmp_path):
                         allow_path=str(p))
     assert got["popup_id"].startswith("geom:") and got["allow_status"] == "ok"
     assert (got["action"], got["reason"]) == ("hold", "unclassified_hold")
+
+
+def test_outliner_only_rows_are_not_a_window():
+    rows = [{"x0": 1849, "x1": 1943, "y0": y, "y1": y + 6} for y in (216, 390, 480, 570)]
+    assert gs.classify_window(rows, None, 2846, 2160, 1440) != "dialog"
+    assert gs.classify_window(rows, None, 2846, 2160, 1440) != "choice"
+
+
+def test_first_contact_window_is_a_dialog():
+    rows = [{"x0": 1090, "x1": 1121, "y0": 868, "y1": 897},
+            {"x0": 1284, "x1": 1452, "y0": 814, "y1": 816}]
+    assert gs.classify_window(rows, None, 2846, 2160, 1440) == "dialog"
+
+
+def test_hud_panel_does_not_promote_outliner_rows_to_a_dialog():
+    # §81.3 / §84.2 D1: a clean campaign screen has an outliner and a bright HUD
+    # envelope.  The envelope alone must not outvote the row rule -- the same
+    # rows classify as "none" when the envelope is absent, so the bbox is the
+    # only thing that changed, and it changed the answer.  That is the false
+    # positive the gate kept refusing on.
+    rows = [{"x0": 1849, "x1": 1943, "y0": y, "y1": y + 6} for y in (216, 390, 480, 570)]
+    assert gs.classify_window(rows, None, 2846, 2160, 1440) == "none"
+    assert gs.classify_window(rows, [200, 300, 1900, 1300], 2846, 2160, 1440) == "none"
+    # Same at the reference size the daemon actually classifies at.
+    assert gs.classify_window_at_reference(rows, [200, 300, 1900, 1300], 2846) == "none"
+
+
+def test_one_option_row_plus_the_outliner_is_still_a_dialog():
+    # §84.2 D1's false-negative face (review I-2): a modal with ONE option row
+    # still shows the outliner beside it.  The HUD rule must not swallow it --
+    # "no window" is the non-blocking side of the gate, so a wrong "none" lets
+    # the clicker act on a live window.
+    rows = [{"x0": 1150, "x1": 1452, "y0": 861, "y1": 867},
+            {"x0": 1849, "x1": 1943, "y0": 216, "y1": 222},
+            {"x0": 1849, "x1": 1943, "y0": 390, "y1": 396}]
+    assert gs.classify_window(rows, [880, 450, 1420, 940], 2846, 2160, 1440) == "dialog"
+    assert gs.classify_window_at_reference(rows, [880, 450, 1420, 940], 2846) == "dialog"
+
+
+def test_console_open_needs_the_panels_own_density():
+    # §54.10 measured the open panel at 2315 bright px in three separate reads
+    # (its text is static) and the closed panel at 0/2.  A mid-bright frame is
+    # not that panel; calling it "open" is a confident misreading, and the
+    # undecided band is the blocking side (spec §5).
+    assert gs.classify_console(800) is None
+    assert gs.classify_console(2315) is True
+    assert gs.classify_console(2) is False
+
+
+def test_click_without_lease_logs_and_does_not_raise(monkeypatch):
+    logged = []
+    monkeypatch.setattr(gs, "acquire_or_refuse", lambda *a, **k: None)
+    monkeypatch.setattr(gs, "window_rect", lambda hwnd: (0, 0, 2160, 1440))
+    monkeypatch.setattr(gs, "_log", lambda rec: logged.append(rec))
+
+    def no_click(*a, **k):
+        raise AssertionError("a refused click must not reach the clicker")
+
+    monkeypatch.setattr(gs, "_launch", no_click)
+    state = {"probe": {"pause": {"state": "paused"},
+                       "console": {"state": "closed"},
+                       "window": {"kind": "none", "bbox": None}}}
+    quit_now, one_shot = gs._handle_command(
+        {"verb": "click", "x": 1105, "y": 846}, 67634, state)
+    assert (quit_now, one_shot) == (False, None)
+    refused = [r for r in logged if r.get("event") == "click_refused"]
+    assert len(refused) == 1
+    rec = refused[0]
+    assert rec["action"] == "click_option" and rec["reason"] == "lease_denied"
+    assert (rec["pause"], rec["console"], rec["window"]) == ("paused", "closed", "none")
+    assert state["cmd_refused"] is True
+
+
+def test_click_refused_makes_the_cli_exit_2():
+    rec = {"last_cmd": "click 1105 846", "cmd_refused": True,
+           "state": "paused", "note": "ok", "pid": 10680, "hwnd": 67634,
+           "want": "playing", "policy": "first", "handled": 14,
+           "speed_sha": [0, 0],
+           "window": {"kind": "none", "bbox": None}}
+    assert gs.command_refused(rec, "click 1105 846") is True
+    assert gs.command_refused(rec, "click 1 2") is False
+    assert gs.command_refused({"last_cmd": "click 1105 846"}) is False
+    assert gs.EXIT_REFUSED == 2
+    line = gs._status_line(rec)
+    assert "window=none" in line and "bbox=" in line
+
+
+def test_reference_classifier_turns_the_outliner_rule_on():
+    outliner = [{"x0": 1849, "x1": 1943, "y0": y, "y1": y + 6}
+                for y in (216, 390, 480, 570)]
+    central = [{"x0": 1090, "x1": 1121, "y0": 868, "y1": 897},
+               {"x0": 1284, "x1": 1452, "y0": 814, "y1": 816}]
+    # The daemon normalizes to REF_W/REF_H; the 3-arg call would keep the old
+    # rule and read this window as none (issue #31's silent drop).
+    assert gs.classify_window_at_reference(outliner, None, 2846) == "none"
+    assert gs.classify_window_at_reference(central, None, 2846) == "dialog"

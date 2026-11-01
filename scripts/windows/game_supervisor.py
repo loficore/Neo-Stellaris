@@ -27,7 +27,8 @@ import subprocess
 import sys
 import time
 
-from popup_geometry import panel_bbox, window_enum_record
+from popup_geometry import (option_rows, panel_bbox, row_kind,
+                            window_enum_record)
 from popup_guard import bump, count_attempt, decide_action
 from popup_identity import fingerprint, geometry_signature, load_allowlist
 
@@ -82,7 +83,13 @@ WINDOW_KINDS = ("choice", "dialog", "none")
 CONSOLE_BOX_FRACTIONS = (120 / 2160, 640 / 1440, 400 / 2160, 880 / 1440)
 CONSOLE_BRIGHT_MIN = 180
 CONSOLE_CLOSED_MAX = 120
-CONSOLE_OPEN_MIN = 600
+# §84.2 D2: the open panel's own text is static, so three separate live reads
+# returned exactly 2315 (§54.10).  A frame in 600..1500 bright px inside this
+# box is therefore *not* that panel -- it is some other bright screen sharing
+# the box's coordinates.  Calling it "open" was a confident misreading; the
+# band up to the measured density now lands on the undecided side, which is the
+# blocking side (spec §5).  Old value was 600.
+CONSOLE_OPEN_MIN = 1500
 
 # Popup identity, evidence and OCR budget (plan 2026-10-25).  The allowlist is
 # DATA on the wire, not code: an absent or broken file means "hold everything",
@@ -141,22 +148,54 @@ def classify_pause(red_px: int, green_px: int) -> str:
     return "unknown"
 
 
-def classify_window(rows, bbox, gold_px: int) -> str:
+def classify_window(rows, bbox, gold_px: int, w=None, h=None) -> str:
     """``choice`` when golden option rows sit in the right-hand column.
 
     ``bbox`` is ``[x0, y0, x1, y1]`` of a detected bright panel, or ``None``
     when the band profile found none.  It is informational: the choice
     window is a dark panel, so its rows decide even without a bbox.  Rows
     are golden-text runs in full-resolution window coordinates.
+
+    ``w``/``h`` are the window size.  Passing them enables the 2026-10-29
+    rule (issue #31): rows that start in the right-edge outliner band are not
+    options, and a central band with >=2 golden rows *is* a dialog -- the
+    first-contact window is a dark panel whose bbox profile is ``None``.
+    Omitting them keeps the old three-argument behaviour byte for byte.
     """
-    wide = [r for r in rows
+    kept = rows if w is None or h is None else option_rows(rows, w)
+    wide = [r for r in kept
             if r.get("x0", 0) >= CHOICE_ROW_LEFT_MIN
             and r.get("x1", 0) >= CHOICE_ROW_RIGHT_MIN]
     if gold_px >= CHOICE_GOLD_MIN and len(wide) >= CHOICE_ROW_COUNT_MIN:
         return "choice"
     if bbox:
+        # §81.3 / §84.2 D1: the band profile finds an envelope on a clean
+        # campaign screen too (the map's bright HUD fills the band).  A bbox
+        # must not outvote the row rule that already says these rows are the
+        # outliner: without the bbox the same reading is ``none``, so letting
+        # the bbox alone decide is exactly the "window=dialog, screen empty"
+        # false positive the gate kept refusing on.
+        # The condition is "every row is an outliner row" (``kept`` empty), not
+        # row_kind=="outliner": a real modal with ONE option row still shows the
+        # outliner beside it, and row_kind calls that "outliner" too.  A wrong
+        # "none" is the non-blocking side of the gate -- the worse direction.
+        if w is not None and h is not None and rows and not kept:
+            return "none"
+        return "dialog"
+    if w is not None and h is not None and row_kind(rows, w, h) == "central":
         return "dialog"
     return "none"
+
+
+def classify_window_at_reference(rows, bbox, gold_px: int) -> str:
+    """``classify_window`` on the daemon's normalized (2160x1440) readings.
+
+    ``_norm_geometry`` already scales rows/bbox/gold to ``REF_W``/``REF_H``,
+    so this is the call site that turns the 2026-10-29 row-band rule on: the
+    outliner band is a fraction of *this* size.  A 3-argument call would keep
+    the old behaviour and never see the rule (issue #31's silent ``window=none``).
+    """
+    return classify_window(rows, bbox, gold_px, REF_W, REF_H)
 
 
 def choose_row(policy: str, rows, rng: random.Random):
@@ -1082,7 +1121,7 @@ def _restore(hwnd: int, restore) -> None:
                 window_rect(hwnd))
         except OSError:
             return
-        if classify_window(nrows, nbbox, ngold) != "none":
+        if classify_window_at_reference(nrows, nbbox, ngold) != "none":
             return
         press_space(hwnd)
 
@@ -1222,14 +1261,25 @@ def _handle_command(cmd, hwnd, state):
         lease = acquire_or_refuse(state, "click_option")
         rect = window_rect(hwnd)
         if lease is None:
-            pass
+            # Never a silent drop (issue #31): the caller must be able to tell
+            # "clicked but nothing happened" from "never clicked".
+            probe = state.get("probe") or {}
+            window = (probe.get("window") or {})
+            _log({"event": "click_refused", "action": "click_option",
+                  "reason": "lease_denied", "x": cmd["x"], "y": cmd["y"],
+                  "pause": (probe.get("pause") or {}).get("state"),
+                  "console": (probe.get("console") or {}).get("state"),
+                  "window": window.get("kind"), "bbox": window.get("bbox")})
+            state["cmd_refused"] = True
         elif _inside(rect, cmd["x"], cmd["y"]):
             if focus(hwnd):
                 _launch()._click_at(cmd["x"], cmd["y"])
                 state["console_open"] = None
                 _consume(state, lease)
             else:
-                _log({"event": "click_refused", "x": cmd["x"], "y": cmd["y"]})
+                _log({"event": "click_refused", "x": cmd["x"], "y": cmd["y"],
+                      "reason": "focus"})
+                state["cmd_refused"] = True
     elif verb == "console" and hwnd:
         kind, arg = console_send_plan(state)
         if kind == "refuse":
@@ -1386,6 +1436,7 @@ def serve(args, once: bool = False) -> int:
         cmd = parse_command(line) if line else None
         if cmd:
             last_cmd = line
+            state["cmd_refused"] = False
             _log({"event": "command", "line": line})
             try:
                 quit_now, one_shot = _handle_command(cmd, hwnd, state)
@@ -1441,7 +1492,7 @@ def serve(args, once: bool = False) -> int:
                         state["last_bbox"] = stats["bbox"]
                     nrows, nbbox, ngold = _norm_geometry(
                         stats["rows"], stats["bbox"], stats["gold"], rect)
-                    window = classify_window(nrows, nbbox, ngold)
+                    window = classify_window_at_reference(nrows, nbbox, ngold)
                     if window == "none":
                         state["last_bbox"] = None
         if window != "choice":
@@ -1544,9 +1595,11 @@ def serve(args, once: bool = False) -> int:
                 "pid": pid, "hwnd": hwnd, "state": paused, "note": note,
                 "want": state["want"], "policy": state["policy"],
                 "red": red, "green": green, "handled": handled,
-                "window": {"bright": round(stats["bright"], 3),
+                "window": {"kind": window,
+                           "bright": round(stats["bright"], 3),
                            "gold": stats["gold"], "rows": len(stats["rows"]),
                            "bbox": stats["bbox"]},
+                "cmd_refused": bool(state.get("cmd_refused")),
                 "speed_sha": state["speed_sha"], "shot": state["shot"],
                 "console_open": state.get("console_open", False),
                 "console_px": state.get("console_px"),
@@ -1578,7 +1631,9 @@ def _status_line(rec) -> str:
             f"pid={rec.get('pid')} hwnd={rec.get('hwnd')} age={age}s "
             f"want={rec.get('want')} policy={rec.get('policy')} "
             f"handled={rec.get('handled')} cmd={rec.get('last_cmd')} "
-            f"speed={rec.get('speed_sha')}")
+            f"speed={rec.get('speed_sha')} "
+            f"window={(rec.get('window') or {}).get('kind')} "
+            f"bbox={(rec.get('window') or {}).get('bbox')}")
 
 
 def _delete_task() -> None:
@@ -1645,6 +1700,21 @@ def cmd_stop(args) -> int:
     return 1
 
 
+EXIT_REFUSED = 2
+
+
+def command_refused(rec, line: str | None = None) -> bool:
+    """``True`` when the daemon published a refusal for the command it consumed.
+
+    Pure: the CLI reads the heartbeat record it already prints.  ``line`` is
+    optional so the test can ask the question without reproducing the wire
+    line.  A refusal must change the exit code -- "consumed" is not "clicked".
+    """
+    if not rec or not rec.get("cmd_refused"):
+        return False
+    return line is None or rec.get("last_cmd") == line
+
+
 def cmd_status(args) -> int:
     print(_status_line(_read_status()))
     return 0
@@ -1658,7 +1728,13 @@ def cmd_send(args) -> int:
         return 2
     atomic_write_text(CMD_PATH, line + "\n")
     time.sleep(args.wait_s)
-    print(_status_line(_read_status()))
+    rec = _read_status()
+    if command_refused(rec, line):
+        print(f"REFUSED {line}: the daemon consumed it but did not act; "
+              f"see {LOG_PATH}")
+        print(_status_line(rec))
+        return EXIT_REFUSED
+    print(_status_line(rec))
     return 0
 
 

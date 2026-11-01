@@ -1540,6 +1540,113 @@ scp Windows_Jiaolong:C:/temp/c4_trig_eval.tsv evidence/logs/c5_trig_eval_4_4_4.t
 (不是 30);verdict 把 poll 窗算进去(`overall_verdict`);未送达的命令不会被下一条覆盖(`delivered` 假
 就停)。
 
+### `scripts/c2_per_system_probe.py [dll] --systems N --save-name NAME --script-file <path> [--poll-s 120] [--settle-s 3] [--script-wait-s 180] [--out C:/temp/c5_per_system.tsv] [--cmd-file C:/temp/ns_game_cmd.txt]`
+
+**第七把 guard,C5 数据面的第三发。** 靶是 base effect parse **`0x3B1330`**(§81.1):`every_system`
+的逐系统循环体每轮 `mov rcx,r14 ; call 0x3B1330`,所以「按 `[self] == vtable 0x26562D0` 过滤后的
+调用次数」就是下发次数。**不是循环头 `0x1A762A0`** —— 循环体内部写 `[rsp+0x28]`、读
+`[rbp+0xC0]`,而 C-ABI detour 让被调函数体跑在 detour 的帧上(§81.1 ⑤)。
+
+**这一发问三个数**:容器 `[[0x3260BB0]+0x590]` 的原始条数(`+0x59C`)与那批 4 B id;下发次数
+(`matched`);下发带过去的 id 去重后的个数(`distinct_ids`)。「每轮」= `matched / script_sends` ——
+每轮次数 == distinct id 数、id 都落在 `[1,N]` 且都在容器里,才是「每系统一次」。
+
+**verdict 值域(十二档)**:证据档 `per_system_loop` / `per_system_loop_filtered` /
+`loop_not_per_system` / `ids_out_of_range` / `ids_not_in_container`;环境或仪器档
+`instrument_broken`(永远优先)/ `script_refused` / `no_calls` / `filter_missed` / `dedupe_full` /
+`container_unreadable` / `dispatch_denominator_mismatch`。后六档**不是证据**。
+
+**门序**(照 §70.6 与兄弟驱动的家族纪律):`preflight_paths`(脚本路径 + 命令通道的名字**和**目录)
+→ `sha_gate`(打印并记录注入文件的 sha256;文件不在 `exit 2`)→ `gate_module`(八个导出 +
+`C2Sanity==42`)→ `refuse_if_resident`(同名模块已在进程里就拒绝,`LoadLibrary` 会复用旧镜像)→
+`gate_install("persystem")` → `inject_dll` → `C5PerSystemLayout` 对账 → `Reset` → `Install` →
+settle → 读基线 stats → **外部读容器** → 发脚本 → 等 `.seen` 与 `PS_HIT` 行数 → 读终止 stats →
+drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact(先 meta-only 再追加行)。
+`Install` 返回 `-2` **不重试**;`-7` 打 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`;**绝不 FreeLibrary**。
+
+**判读陷阱(本仪器专属,三条;都是「读数算术的三条纪律」的实例):**
+
+1. **`matched == 0` 有两种含义,靠日志分。** 循环没跑 ⇒ `no_calls`;跑了但过滤器错了 ⇒
+   `filter_missed`。分开它们的唯一独立量是脚本自己 `log = "PS_HIT"` 在 game.log 里留下的行数
+   (`log_hits`)。**看见 `matched=0` 先去数日志,不要先改脚本。**
+2. **`distinct_ids` 是下界。** 去重表 4,096 槽;`dedupe_full != 0` 时新的 distinct id 不再计数,
+   那一档(`dedupe_full`)不许用来支持任何结论。
+3. **容器是活数据。** `+0x590` 的向量随时会变;先读计数再读向量会得到一套从未同时存在的 id。
+   驱动只认**一次读足 `count*4` 字节**的 blob,长度对不上就直接 `container_unreadable`。
+   另:`per_system_loop_filtered`(每轮次数 < 原始条数)是引擎的过滤位 `[obj+0x137C] == 0`
+   在起作用,**不是**「循环不是每系统」。
+
+**artifact**:`#meta` 在前(含 `overall_verdict` / `systems` / `save_name` / `container_raw_count` /
+`container_ids_sha256` / `log_hits` / `script_sends` / `stats_delta` / `dll` / `dll_sha256` /
+`module_base` / `exe_base` / `uninstall_rc` / `verify_rc` / `host_alive` / `entries_error`),
+然后是六列行:`id mask self_vtable_rva occurrences obj scope_ptr`。`--systems` **无默认值**:
+787 属于另一场存档,分母与存档名必须一起进 meta(§74.4 的两格欠账)。
+
+两种模式:`--script-file`(控制台投递,`script_sends=1`,判据按「每次发送 = 一轮」)与
+`--watch-only`(不发任何东西,只装 guard 等游戏自己的脚本,判据改成「整轮 + 全覆盖」:
+`matched` 是容器原始条数的整数倍、`distinct_ids == 原始条数`)。`--allow-window` 是**操作者声明前提**,
+跳过 `gate_install`(artifact 的 `gate=operator_override` 是它的记号)—— 只有在状态机与屏幕矛盾
+(§81.3 的 `window=dialog` 假阳性)且人当场确认时才用。
+
+判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**37 条**),
+无游戏、无 Windows API。
+
+## 实机调试:桌面通道(`win-desktop` MCP)
+
+agent 自己能看屏幕、按**元素**点、打字 —— 用来替代「让操作者去点一下」的那类动作(事件窗、控制台投递、
+launcher 卡住)。它是主机上的一个 [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) 进程,
+不是本仓库的脚本。
+
+**主机侧(一次性)**:
+
+```powershell
+uv python install 3.14
+uv tool install windows-mcp --python 3.14
+# 配置在 %USERPROFILE%\.windows-mcp\config.toml:
+#   [server] transport="streamable-http" host="127.0.0.1" port=8000 auth_key="<token>"
+#   [tools]  exclude=[PowerShell,Registry,FileSystem,Clipboard,Process,Notification,Scrape,MultiSelect,MultiEdit]
+# 计划任务 NSWinMCP:动作是 C:\temp\ns_winmcp.cmd
+#   start "" /min "<uv tool venv>\Scripts\python.exe" -m windows_mcp serve
+schtasks /run /tn NSWinMCP /I      # 或登录时自动起
+```
+
+**控制端(Linux)**:
+
+```bash
+ssh -N -L 18000:127.0.0.1:8000 Windows_Jiaolong   # 本地 8000 已被别的服务占用
+# ~/.config/opencode/opencode.json:
+#   mcp.servers.win-desktop = {type:"remote", url:"http://127.0.0.1:18000/mcp",
+#                              oauth:false, headers:{Authorization:"Bearer <token>"}}
+opencode mcp list                  # 期望 win-desktop connected
+```
+
+工具集(**白名单**,12 个):`Screenshot` / `Snapshot`(UIA 树,给元素 label)/ `Click` / `Type` /
+`Shortcut` / `Scroll` / `Move` / `Wait` / `WaitFor` / `App` / `DisplayInventory` / `ControlStatus`。
+`PowerShell`、`Registry`、`FileSystem` 等**被排除** —— 这台机器上的 shell 通道仍然是 SSH,不从这里走。
+
+**判读陷阱(四条,与本仓库踩过的坑同源)**:
+
+1. **必须跑在交互会话(当前是 session 1)**。跑在 session 0 时它会在启动阶段直接死:
+   `RuntimeError: No active interactive desktop for physical input control`。计划任务的
+   principal 要是「只在用户登录时运行」,并且用 `schtasks /run /I` 起;`Get-CimInstance Win32_Process`
+   看 `SessionId` 是唯一的确认方式。
+2. **本地端口不要用 8000**:本机 8000 已有服务,`ssh -L 8000:…` 会 `bind: Address already in use`,
+   而 curl 会静默打到那个服务上(返回 HTML)。本仓库固定用 **18000**。
+3. **坐标是缩放过的**:`Screenshot` 返回 `Screenshot Coordinate Scale`(本机 1.3333,原图 2160×1440
+   → 图 1590×1073)。要按元素点就优先用 `Snapshot` 给的 `label`,不要从截图里量像素再乘。
+4. **它自己的桌面控制权**:物理鼠标一动,控制权会被收回(默认 10 s 空闲后才交还);这是好事,但意味着
+   「点了没反应」要先看 `ControlStatus`,不要先怀疑页面。
+5. **注入的鼠标到不了 Stellaris,键盘可以**(2026-10-30,pid 13912 实测):`Click` 三处(事件选项行、
+   对话框 ✖、暂停按钮)都返回成功但屏幕无变化;同一时刻 `Shortcut "space"` 让游戏从暂停跑到"快速",
+   `Shortcut "enter"` 把事件窗按**默认选项**答掉。⇒ 游戏内事件窗的自动化路线写成键盘(回车 = 默认项),
+   坐标点击留给普通窗口(Steam/launcher 已验证可用)。
+6. **控制台键在本局没有反应**:`` ` `` 与 `~` 各发一次,截图里都没有出现控制台输入框(该存档可能禁用了
+   控制台)。控制台投递仍走 `game_supervisor` 的 `console` 动词,不要假设桌面通道能替代它。
+
+**与既有通道的分工**:`game_supervisor` 仍然是无人值守的策略执行者(暂停/窗口策略/状态机);
+`win-desktop` 只做**需要人眼人手**的那一层(认元素、点选项、在控制台里打字)。它不替代、
+也不修改 `world_state` 的判据。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
@@ -1716,6 +1823,26 @@ just game stop | quit
     对远端 271,826 B。对照:`text_2188ca0b.png` 逐字节稳定且可解码 —— 那个 text id 只出现过一次(预算随后花完)。
     ⇒ 「这张证据图能不能读」不是传输方式的函数,是**那个 id 会不会再出现**的函数;取 `text:*` 可以 scp,
     取 `geom:*` 要预期半写,判定得靠可解码的那一份。别把半写读成「daemon 写坏了图」。
+
+**窗口判据改了(2026-10-29,issue #31):「中央带金色行」,右缘 outliner 不算。** 陷阱 5 那条
+「`x0>=1150 && x1>=1450` 的宽金色行」在银河地图上会把右侧大纲栏读成选项(`handled` 涨到 14、屏上没有窗)。
+现在 `classify_window(rows, bbox, gold, w, h)` 多收窗口尺寸:`popup_geometry.row_kind` 把 **`x0 >= 0.70w`**
+的行整条剔出选项集,并在 **`0.30w <= x1 <= 0.70w`** 出现 ≥2 行时判 `dialog`(第一次接触窗的选项圆圈
+`x≈1090..1121`、选项文本 `x≈1284..1452`,outliner `x0≈1849`)。**不传 `w`/`h` 时行为与旧版逐字一致**,
+老调用点不动;daemon 自己的两个调用点走 `classify_window_at_reference`(把归一化后的 `REF_W`/`REF_H` 传进去,
+否则新判据永远不会生效)。夹具 `scripts/windows/tests/fixtures/first_contact_2160x1440.png` 是事件带裁片
+(1728×1008,由 `scripts/scratch/2026-10_popup_fixture/crop_fixture.py` 生成并断言裁前/裁后同判 `dialog`;
+**不要缩放**,阈值按像素算)。
+
+**`click_refused`(2026-10-29,issue #31):「命令被消费」≠「点过」。** `_handle_command` 的 `click` 分支在
+`acquire_or_refuse` 返回 `None` 时不再 `pass`,而是写一条 jsonl:
+`{"event":"click_refused","action":"click_option","reason":"lease_denied","x":…,"y":…,"pause":…,
+"console":…,"window":…,"bbox":…}`(读数取上一拍 `state["probe"]`);`focus` 失败那条也带 `reason:"focus"`。
+CLI 侧由纯函数 `command_refused(rec, line)` 判心跳里的 `cmd_refused` + `last_cmd`,命中时
+**退出码 2**(`EXIT_REFUSED`)并在 stdout 打一行 `REFUSED <line>`;daemon 里这条路径**只记日志、不抛**
+(抛了会停主循环)。状态心跳同时多两格:`window.kind`(与 `window.bbox` 并列,`none`/`dialog`/`choice`
+在 `status` 行里现在能分开读)与 `cmd_refused`。
+
 
 ### `scripts/execspy.py [observe_seconds] [--uninstall-only]` —— §13 shim census 的复采通道
 

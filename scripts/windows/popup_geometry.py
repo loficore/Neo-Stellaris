@@ -15,6 +15,44 @@ from __future__ import annotations
 # tests/test_popup_geometry.py pins the two against each other.
 CLOSE_INSET = (96, 51)
 
+# Where an event window's options sit, as a fraction of the window width.
+# Measured on the 2026-10-29 first-contact window (2160x1440): the option
+# circle/text rows end at x=1121/1452 (0.52/0.67), while the galaxy map's
+# outliner rows start at x>=1520 (0.70).  The 0.70 right edge is the whole
+# rule: an outliner row is not an option, no matter how wide it is.
+CENTRAL_X1 = (0.30, 0.70)
+OUTLINER_X0 = 0.70
+
+
+def is_outliner_row(row, w: int) -> bool:
+    """``True`` for a row that starts in the right-edge outliner band."""
+    return row.get("x0", 0) >= OUTLINER_X0 * w
+
+
+def row_kind(rows, w: int, h: int) -> str:
+    """``"outliner" | "central" | "empty"`` by horizontal band, not by width.
+
+    ``w``/``h`` are the window size (rows are absolute screen coordinates;
+    only the x fractions are used).  ``central`` needs at least two rows whose
+    right edge lands inside ``[0.30w, 0.70w]`` -- the first-contact window's
+    option circle and option text both do.  ``h`` is accepted for callers
+    that also scale vertically; the band itself is horizontal.
+    """
+    if not rows:
+        return "empty"
+    lo, hi = CENTRAL_X1[0] * w, CENTRAL_X1[1] * w
+    central = [r for r in rows if lo <= r.get("x1", 0) <= hi]
+    if len(central) >= 2:
+        return "central"
+    if any(is_outliner_row(r, w) for r in rows):
+        return "outliner"
+    return "empty"
+
+
+def option_rows(rows, w: int):
+    """Rows that can be options: everything that does not start in the outliner."""
+    return [r for r in rows if not is_outliner_row(r, w)]
+
 
 def panel_bbox(row_bright: list[int], col_bright: list[int]) -> list[int] | None:
     """Bright-panel envelope ``[x0, y0, x1, y1]`` (inclusive) or ``None``.
