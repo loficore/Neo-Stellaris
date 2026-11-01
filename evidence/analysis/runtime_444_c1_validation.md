@@ -9496,3 +9496,51 @@ python C:/temp/session_bridge.py --timeout-s 400 C:/temp/c2_per_system_probe.py 
 
 **没动仓库里任何判定代码。** 本轮改的只有:测试 mod 的两个文件(仓库外)、`C:\temp` 里的部署副本、
 以及本节 + `docs/roadmap.md` 的 C5 行就地改写。`just check` 全绿。
+
+### §89.6 仪器缺口补上:`--watch-only --marker`,以及新的一档 `target_not_on_path`(2026-11-01,同一进程真机验证)
+
+§89.3 记了两笔欠账(① `--systems` 应写 788;② watch-only 的 `log_hits` 结构为 0、`no_calls` 与
+`filter_missed` 在 artifact 内不可分)。② 当轮就补掉了,并**在同一进程**上打了一发验证。
+
+**改了什么**(`scripts/c2_per_system_probe.py` + `scripts/test_c2_per_system_probe.py` 44→45 条):
+
+- `--marker TEXT`(只在 `--watch-only` 下合法;脚本模式下 marker 由 `script_marker` 从脚本里取,
+  两者同时给会被 `parser.error` 拒掉,退出码 2)。驱动在轮询**开始前**记下 game.log 的字节偏移,
+  轮询结束后只数那段增量,命中数进 `#meta log_hits=`,串进 `#meta marker=`;
+- `marker_hits` 的缺省是 **`None` 而不是 0** —— 0 会冒充「量过、循环没跑」;
+- 新 verdict **`target_not_on_path`**(进 `EVIDENCE_VERDICTS`,即 `exit 0`):`calls == 0` **且**
+  `marker_hits` 有命中 ⇒ 循环确凿跑过、detour 一次没响 ⇒ 靶不在执行路径上(对靶的负结论);
+  `calls == 0` 且 marker 无命中仍是 `no_calls`(环境档);`matched == 0` 且 marker 有命中则升为
+  `filter_missed`(过滤位对不上,是仪器侧),无 marker 时仍是 `loop_not_invoked`。
+
+**真机验证读数**(`C:\temp\c5_per_system_marker.tsv`,命令
+`… --watch-only --marker PS_HIT --systems 788 --poll-s 120`,经 `session_bridge` 进 session 1):
+
+```
+#meta marker=PS_HIT        #meta log_hits=8624
+#meta systems=788          #meta container_raw_count=788
+#meta stats_delta=calls=0 matched=0 distinct_ids=0 dedupe_full=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=0
+#meta gate=world_state     #meta install_rc=0   #meta layout_target_rva=0x3b1330
+#meta dll=sqjs_c9.dll      #meta dll_sha256=b8a82f61300bc4794fd6306ca16aa3757ed52f2ec220e7786e297f6aae3db964
+#meta overall_verdict=target_not_on_path
+#meta uninstall_rc=0       #meta verify_rc=0    #meta host_alive=1
+```
+
+`log_hits=8624 = 11 × 784`(120 s 窗内 11 个完整月度脉冲),`calls=0` ⇒ 与 §89.3 同一结论,但这次
+**artifact 自己就说得出**「循环跑了、靶没被调」,不需要窗外人工数日志。`systems=788` 与容器一致,
+§89.3 欠账 ① 也在这一发里对齐(那一发写的 787 是上一场存档的分母)。
+
+**改这一档时踩到的两个坑(照实记)。**
+
+1. **`--game-log` 缺省时算出 `hits=None`。** 第一版把 `game_log or ""` 直接喂给
+   `os.path.getsize`,空路径 stat 失败 ⇒ `offset=None` ⇒ 运行时打印 `marker=PS_HIT hits=None`,
+   artifact 里 `log_hits` 回落成 0。修法 = `resolve_game_log(game_log, default=None)`:
+   给了 `--game-log` 就用它,否则落到 `c4_wiring_probe.GAME_LOG`;`""` 与 `None` 同义,不再当路径用。
+   这条现在有一条会红的围栏(`test_resolve_game_log_falls_back_to_the_default_when_none_is_given`)。
+2. **同一个游戏进程里的第二发必须换 DLL 名。** `Uninstall` 只拆 hook、**不 `FreeLibrary`**(§45 的纪律),
+   所以 `refuse_if_resident` 会拒绝同名模块的第二次注入。本轮同一 pid 24852 上依次用了
+   `sqjs_c7.dll` → `sqjs_c8.dll` → `sqjs_c9.dll`(同一份字节、同一 sha256)。
+
+**这一节不能说的(两条)。** ① `target_not_on_path` 只覆盖被钩的**那一个** RVA 与**那一个**窗;
+`+0x70` 的其余 760 个槽、以及 parse/实例化侧都没被它触及。② `log_hits` 数的是**文本命中**,
+marker 选得太泛(marker 串同时出现在别的日志行里)会把它读大 —— 本轮的 `PS_HIT` 是测试 mod 独占的字面量。
