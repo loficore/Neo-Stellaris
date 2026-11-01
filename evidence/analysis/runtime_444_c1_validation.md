@@ -9021,3 +9021,316 @@ python3 scripts/scratch/2026-10_mod_load/mod_registry.py --host Windows_Jiaolong
 > 的假差异。现在 `enabled` 参与判定(缺省视为 listed/enabled),disabled 的条目单列一行
 > 「启动器会把它从 `dlc_load.json` 里去掉」。**这不是判据放宽**:`enabled=false` 的条目在当前通道下
 > 本来就不该出现在 `enabled_mods` 里。
+
+## §85 class_info 0x260F498 的插入点:谁把它交给 0x3AEF60(2026-11-01,离线,零 shot)
+
+**问题(§83.3 之问 ①)**:`0x260F498` 这个 class_info 是谁插入的 —— 引用点对不对得上插入调用。
+**输入是 exe 字节,不读任何 shot。** 探针:`scripts/scratch/2026-11_class_info_insertion/insertion_sites.py`
+(全量解码产物缓存 `/mnt/cache/tmp/class_info_insertion/find_refs_hits.json`,按 exe 大小+sha256+目标集重新键)。
+
+**引用口径(裁定,先于读数说清)**:`0x260F498` 单独一个 qword 在全镜像两种解码器下都是 **0 个引用**
+—— §83.2 所记的「`+0x00 = 0x189A620` create」其实是 class_info 块内第二 qword;块 **HEAD** 在
+`0x260F490`(`+0x00` = deleting dtor `0x34C090`,`+0x08` = create)。兄弟块 HEAD `0x260F480`
+(inverted_switch,create 在 `0x260F488`)同形。⇒ 探针按 A 族两块四址
+`{0x260F490, 0x260F498, 0x260F480, 0x260F488}` 问;`0x260F498`/`0x260F488` 零引用本身就是 datum
+(没人按 create 槽寻址,大家都拿 HEAD)。**插入形式含 tail `jmp` 不止 `call`**,已按实机字节钉死(见证据 ③)。
+
+**读数(探针 stdout 逐字)**:
+
+```
+## target 0x260f490: refs_find=1 refs_rip=1 diff=0
+## target 0x260f498: refs_find=0 refs_rip=0 diff=0
+## target 0x260f480: refs_find=1 refs_rip=1 diff=0
+## target 0x260f488: refs_find=0 refs_rip=0 diff=0
+ref_site	func_start	func_end	insn	ref_kind	contains_insert_call	insert_call_site	family_def
+fbbcb	fbb80	fbbea	lea rcx, [rip + 0x25138be] ; ->0x260f490	lea	1	fbbe5:effect_insert:jmp	neighborhood
+fbc3b	fbbf0	fbc5a	lea rcx, [rip + 0x251383e] ; ->0x260f480	lea	1	fbc55:effect_insert:jmp	neighborhood
+## verdict=insertion_named
+```
+
+`family_def=neighborhood`:定义 = vtable ±0x200 内出现
+`{0x3AFD30, 0x3B1330, 0x3B01A0, 0x3B1420, 0x3B0F80, 0x3B1230}` 任一(§83.2 补记 ① 采用的那个口径)。
+两行的 family 判定都来自插入调用所在函数体直接引用 `0x3AEF60`/`0x3AEBA0` 邻域,不是外延猜测。
+
+**判决词:`insertion_named`** —— 同一函数里既有对 class_info HEAD 的 `lea`,又有对 `0x3AEF60` 的
+尾跳转,指针直接作为实参(`r8` = 装着 HEAD 的 `new(0x10)` 块)。
+
+**证据 ①(函数 1,`0xfbb80..0xfbbea`,`disrva.py 0xfbb80 --len=0x6a`)**:class_info 指针来源 =
+`0x000fbbcb lea rcx,[rip+0x25138be] ; ->0x260f490` → `mov [rax],rcx`(rax = `new(0x10)`,0x000fbbb6);
+docstring = `0x2627190`(`Executes the first appropriate effect set for a specific trigger…`,写进 `[rax+8]`);
+插入调用两实参 = `edx=0x2814`(=10260)、`r8` = 该块、`rcx` = db;db 全局 = **effect `0x33746E8`**
+(`0x000fbb86` 读、缺失时 `new(0x70)+0x3AEBA0` 拉起后 `0x000fbbaa` 写回)。
+插入站点 = `0x000fbbe5 jmp 0x3aef60`,字节 `e9 76 33 2b 00`。
+
+**证据 ②(函数 2,`0xfbbf0..0xfbc5a`)**:同形;HEAD `0x260F480`、docstring `0x2627290`、
+`edx=0x4860`(=18528)、站点 `0x000fbc55 jmp 0x3aef60`(字节 `e9 06 33 2b 00`)。
+
+**证据 ③(Step 3 交叉核的口径注)**:`python3 scripts/fastcalls.py 0x3aef60`(307 sites/104 functions)
+与 `0x348150`(206 sites/104 functions)的 bucket **都不含** `0xfbb80`/`0xfbbf0` —— 这不是反例,
+是工具口径:`fastcalls.py` 只匹配 `E8 rel32` / `EB rel8` / `FF /2|/4`,**不含 `E9 rel32` 尾跳转**,
+而这两个站点正是 `E9`(`0xfbbe5`、`0xfbc55` 处字节已逐字抄出)。独立一侧由 `find_refs.py` 全量解码
+给出(`== 0x3aef60: 1056 references`,含 `jmp` 形态)。**换工具口径要重跑这一条。**
+
+**证据 ④(keyword 身份对账)**:`evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv` 第 306/307 行
+(array `0x23AC600`,thunk `0xfbb80`/`0xfbbf0`,db `0x33746E8`,token 10260/18528,field0 `0x260F490`/`0x260F480`,
+dtor 列 `0x34C090`,insert `0x3AEF60`)与本探针独立推出的四址、token、db 逐项一致 —— 两条通道同判。
+即 AGENTS.md 配方步骤 3 的静态对应物:**官方 effect `switch`/`inverted_switch` 的注册 stub 本身就是
+「先拉起 db、再 `new(0x10){HEAD, docstring}`、尾跳 `0x3AEF60`」的模板。**
+
+**欠账/边界**:trigger 侧(`0x348150`)这次没有与 A 族 class_info 相交的行 —— 不是「trigger 没有插入者」
+(bucket 里 104 个函数在),而是这两个 HEAD 不属于任何 trigger 插入函数。`0x189A620` create 本体没有读。
+
+**何时被调:未观测。** 本节不写「类的实例何时被创建」的结论 —— 注册 stub 自身的调用时机同样未观测
+(那是 `0x23AC600` thunk 数组的驱动问题,§17 旧账)。
+
+## §86 类 A 的 [self+0xC0] 子表:0x25EBAB8 的 +0x70 = 0x3B1EF0 是什么(2026-11-01,离线,零 shot)
+
+**问题(§83.3 之问 ②)**:§83.2 停在「getter 返回值是什么类没读」;本节把 `0x25EBAB8` 这张
+类 A 第三基表读完,并回答它的 `+0x70 = 0x3B1EF0` 的语义与两个 getter(`0x18BE4E0`/`0x18BEBF0`)
+的返回形态。探针:`scripts/scratch/2026-11_subobject_dispatch/subobject_dispatch.py`
+(只读 exe 拷贝;槽 qword 按装载形态存 **VA**,探针统一归一回 RVA)。
+
+**口径(裁定,先说清两处)**:① 计划断言「每个 `target_rva` 在 `.pdata` 内」对 48 槽全量**不成立**
+(19 槽目标在任何 RUNTIME_FUNCTION extent 之外,如 `0x156540`/`0x159730`)——处理是:断言只对
+`target_kind ∈ {func_head, mid_function}` 的行生效,越界槽以 `not_in_pdata` 显式带出,不删行。
+② `base_register`/`base_subobject_offset`/`evidence_site` 三列来自 host 侧字节:在
+`0x18B7B70..0x18B7B8B`(§83.2 的候选派发 stub,装在宿主主表 `+0x70`)里对齐解码重新定位到
+`0x18b7b7a add rcx,0xc0` → `0x18b7b87 call 0x18BE4E0`——注意该 stub 的 `.pdata` EndAddress
+`0x18b7b8b` 比最后一条 `call` 的真实结束点 `0x18b7b8c` **少一个字节**,探针按 +16 字节窗口越过
+extent 尾才看见这条 call;extent 截断往 §24.4 那个方向又添一例,这里是「截在函数自身末条指令中间」。
+
+**读数(TSV,探针 stdout 逐字;48 行全列)**:
+
+```
+host_vtable	slot	target_rva	target_kind	base_register	base_subobject_offset	evidence_site
+25ebab8	+0x0	18b3450	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x8	18bc000	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x10	156540	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x18	156570	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x20	18c641c	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x28	1568b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x30	156540	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x38	156570	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x40	18aad60	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x48	3afd30	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x50	1929500	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x58	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x60	3b1770	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x68	192a5a0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x70	3b1ef0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x78	3b2410	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x80	3b0f80	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x88	192a1b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x90	3b1230	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x98	1b2f30	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xa0	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xa8	349640	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xb0	3b1330	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xb8	241bd0	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xc0	1b4550	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xc8	15db30	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xd0	1929600	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xd8	3b1420	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xe0	3b1470	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xe8	3b14b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xf0	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xf8	3b2ad0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x100	3b2b40	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x108	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x110	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x118	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x120	18c6428	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x128	1568b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x130	156540	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x138	156570	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x140	18c61dc	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x148	1568b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x150	156540	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x158	156570	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x160	18b3490	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x168	3afd30	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x170	18b0ae0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x178	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0```
+
+**锚点复核(Step 1 断言,全过)**:`0x25EBAB8+0x48 = 0x3AFD30` ✓、`+0xB0 = 0x3B1330` ✓;
+主表 `0x25FDE58+0x08 = 0x3AFD30` ✓、`0x25FDD78+0x08 = 0x3AFD30` ✓(槽号按表分,主表 execute 在
+`+0x08`、子表 execute 在 `+0x48`,与 §83.2 一致,不混用)。族内槽点名:
+`+0x48→3afd30, +0x80→3b0f80, +0x90→3b1230, +0xb0→3b1330, +0xd8→3b1420, +0x168→3afd30`
+(注意 `0x168` 又是一个 `0x3AFD30` —— 同一张表里 execute 基体出现两次,槽号 `+0x48`/`+0x168`)。
+
+**判决词:`same_family_parse_dispatch`** —— 判据 = `+0x08 或 +0x48 == 0x3AFD30` 且
+`+0x90 或 +0xB0 == 0x3B1330`,本表走 `+0x48`/`+0xB0` 那组。
+
+**`family_def=neighborhood`**:定义 = vtable ±0x200 内出现
+`{0x3AFD30, 0x3B1330, 0x3B01A0, 0x3B1420, 0x3B0F80, 0x3B1230}` 任一(§83.2 补记 ①;与 §85 同一口径)。
+
+**Step 3 独立复核**:`python3 scripts/vtable.py 0x25ebab8 --slots 48 --callers` 的 `[0xe] +0x70 -> 3b1ef0`
+行与探针一致,且 48 个槽 qword 逐个数值对账 **mismatches=0**(另一条读取通道:`.rdata` 原始字节)。
+
+**`+0x70 = 0x3B1EF0` 的语义(按函数体,`0x3b1ef0..0x3b240b`,319 条对齐解码)**:
+- 它**不是**消费 token 流的 parse,也**不是** bool 谓词:返回值 `mov rax, rdi`(`0x3b23ee`)= 原样返回
+  输出实参;`self` 字段只读 `+0x00`(vtable)、`+0x10`/`+0x1c`(子向量指针 × 条数,§24.4.2 形状),
+  **没有任何 `[self+0x20]/+0x28/+0x38/+0x40]` 的 token 字段读**(探针 `token_field_reads=none`)。
+- 形态是**递归子表书写器**:先 `[self_vtable+0x58]`(`0x3b1f59`)拿 bool 门,再按深度把 `"   "`
+  (`0x24c7b50`,`r8d=3`,`0x3b1f76-0x3b1f8a` 循环 `sub rbx,1/jne`)与子代名/`'\n'`
+  (`0x247a4f0`,`0x3b2269`/`0x3b2273`)append 进 SSO 串(`0x1c89700` = append 通道,`0x1cc4450` = 释放);
+  对每个子代 `mov rax,[child]; call [rax+0x30]`(`0x3b20ab-0x3b20b8`,子代 slot[6])递归取串,
+  取回后再与自身 `[self_vtable+0x28]`(`0x3b1f9d`)的串头做前缀合并;还读全局 `0x3260BB0+0x150`
+  (`0x3b23c2`)与写 `0x3260B90` 字节、`[rsi+0x168]=0`(`0x3b23e7`)。
+- **`+0x70` 的语义按宿主表给出,不外推到其它基** —— `+0x58`/`+0x28`/`[child+0x30]` 这些被它派的槽,
+  在主表 `0x25FDE58`/`0x25FDD78` 上是别的函数;本节只宣告本表读数。
+- 直接调用点(`fastcalls.py 0x3b1ef0`,产物 `evidence/xrefs/callers_0x3b1ef0_buckets.tsv`):
+  2 条,`0x3af80e`(在 `0x3af7a0..0x3af8bd`)与 `0x1906bd2`(在 `0x1906b90..0x1906bfe`),两处都是
+  先 `test al,al` 门后调用、拿回串接着用(`0x3af814 lea rdx,[rax+0x10]`)。间接派发(经
+  `call [vtable+0x70]`)离线不计数。
+
+**getter 两枚(Step ④)**:`0x18BE4E0` 与兄弟 `0x18BEBF0`(同 `0x672` 长度、同 unwind 结构)在
+`0x18beb05`/`0x18bf215` 尾段把实活委托给 `0x18BE450`/`0x18BEB60`(同形,`0x83` 字节)。委托体读子对象
+(= 宿主 `this+0xC0` 处、vtable 为 `0x25EBAB8` 的对象)的 `+0x00`(vtable)/`+0x08`(元素向量)/
+`+0x14`(条数),按 16 B 步长遍历元素、对每个 `call [elem_vtable+0x10]` 拿 bool(`0x18be495`),
+命中 ⇒ 返回该元素(`0x18be4c6-0x18be4d1`),全不命中 ⇒ 返回 `lea rax,[sub+0x18]`(`0x18be4a2`)。
+⇒ **`getter_return_class = unknown`** —— 两条返回都是动态来源(元素或成员),委托体里
+**零条** `lea [rip->函数首/vtable]` 返回形态;宿主 `0x18B7B70` 随后的 `mov rcx,[rax]` 解引用的是
+「 whichever 返回对象的 [obj+0]」,离线给不出唯一类。getter 体内那枚
+`lea rax,[rip->0x25E9E40]`(`0x18be51e`)是**栈上临时迭代子**的 vtable(`0x18c6e80` 用、
+`0x18c6a90` 毁),不在返回路径上。
+
+**未观测/欠账**:`+0x70` 何时被调 = 未观测(离线,零 shot);`0x156540`/`0x159730` 那 19 个
+`not_in_pdata` 槽目标为何形态(热补丁跳板?gap 内 shim?)本节不判。
+
+## §87 备用靶 0x1A76324:call 0x3B1330 下游对 [scope+0x10] 的读点(2026-11-01,离线,零 shot)
+
+**问题**:§80.2 的循环里 `0x1A76324` 每轮 `call 0x3B1330(self, &scope, r15)`,scope 帧在
+`[rsp+0x20]`(`+0x08` mask、`+0x10` id、`+0x14` obj)。先纠正一个容易读错的点:`0x1A76324` 本身
+**不是** `[scope+0x10]` 的读点,它是调用点;本轮问的是「`0x3B1330` 本体与它的一层 E8 目标里,
+谁按 scope 帧里的 id 去解对象」。探针 = `scripts/scratch/2026-11_child_effect_slot/child_effect_slot.py`。
+
+**口径(与计划 brief 的三处已裁定偏差)**:
+① base 回溯窗口从「前 6 条」放宽为**整个 extent 的线性回扫**,遇 `ret`/`jmp` 停,`je/jne` 条件跳转
+   对寄存器值透明、继续往回。
+② `call` 只对 **caller-saved** 寄存器是界:x64 ABI 下 `rbx/rbp/rsi/rdi/r12-r15` 跨 call 存活,
+   回扫穿过 call 仍成立。首版把 call 一律当界,产出 2 个假阴性 `-` 行(`3b1373` 的 rsi、`34ca39` 的
+   r14,写点分别在 12/49 条之前的 call 之后),修正后 `dash=0`。
+③ `push` 记为读不是写(防 `push r14` 这类序言被当写点)。
+非 `.pdata` 函数首的两个 E8 目标 `0x1cc4450`/`0x2185254`(半截/热补丁跳板)按一层口径 `skip`,
+不追。断言全过:`func_of(0x1a76324)=(0x1a76130,0x1a7643d)`、`func_of(0x3b1330)=(0x3b1330,0x3b1413)`、
+`0x1a76324 = call 0x3b1330`、`0x1a7631c = lea rdx,[rsp+0x20]`。
+
+**证据① —— 站点表(探针 stdout 原样,`PASS` 于 2026-11-01 实跑)**:
+
+```
+## one_level_E8_targets=34c960,34d5f0,1cc4450,2185254
+## args->34c960: r8=caller@3b136e:lea r8, [rsp + 0x20]@3b1363; rcx=caller@3b136e:mov rcx, rdi@3b136b; rdx=caller@3b136e:lea rdx, [rsp + 0x20]@3b1353
+## args->34d5f0: rcx=caller@3b13e9:lea rcx, [rsp + 0x20]@3b13e4
+## skip 1cc4450:不是 .pdata 函数首(一层口径不追半截)
+## skip 2185254:不是 .pdata 函数首(一层口径不追半截)
+site_rva	func_start	insn	base_register	disp	base_source	trace	insn_distance	call_path
+3b1335	3b1330	mov qword ptr [rsp + 0x10], rbp	rsp	0x10	stack	rsp(入参,函数内无写)	0	0
+3b1373	3b1330	mov rbx, qword ptr [rsi + 0x10]	rsi	0x10	self_or_other(rsi<-mov rsi, rcx@3b134a)	rsi<-mov rsi, rcx@3b134a	12	12
+3b1402	3b1330	mov rbx, qword ptr [r11 + 0x10]	r11	0x10	self_or_other(r11<-lea r11, [rsp + 0x70]@3b13fd)	r11<-lea r11, [rsp + 0x70]@3b13fd	1	1
+34c965	34c960	mov qword ptr [rsp + 0x10], rbp	rsp	0x10	stack	rsp(入参,函数内无写)	0	0
+34c97f	34c960	mov ecx, dword ptr [rcx + 0x10]	rcx	0x10	self_or_other(rcx(入参)<-caller@3b136e:mov rcx, rdi@3b136b)	rcx(入参)<-caller@3b136e:mov rcx, rdi@3b136b	0	0
+34ca39	34c960	mov dword ptr [r14 + 0x10], ebp	r14	0x10	self_or_other(r14<-mov r14, rcx@34c97c)	r14<-mov r14, rcx@34c97c	49	49
+34d5f0	34d5f0	mov qword ptr [rsp + 0x10], rbx	rsp	0x10	stack	rsp(入参,函数内无写)	0	0
+## rows=7 named=0 self_or_other=4 stack=3 dash=0
+## verdict=no_scope_id_read_depth1
+```
+
+(`call_path` 列在 parse_body 行统一为
+`1a7631c:lea rdx,[rsp+0x20] -> 1a76324:call 0x3b1330(rcx=self, r8=r15)`。)
+
+**证据② —— 两个同形字段的区分依据(逐站点 ±3 原文)**:
+- `[self+0x10]` = **effect 对象的子效果向量**(§80.2/§82.1 已钉)。`3b1373: mov rbx,[rsi+0x10]` 的
+  rsi 追到 `mov rsi, rcx@3b134a` = **入参 rcx = self**;紧随 `3b1377: movsxd rax,[rsi+0x1c]`、
+  `3b137b: lea rsi,[rbx+rax*8]`、循环体 `3b1390: mov rcx,[rbx]; 3b1393: mov rax,[rcx];
+  3b139c: call [rax+0x70]` —— 正是「子向量在 `[obj+0x10]`/计数 `[obj+0x1c]*8`」的 §24.4.2 形态。
+- `[scope+0x10]` = **scope 帧里的 id 格**。帧指针在 `0x3B1330` 的化身是 `rbp`
+  (`3b1347: mov rbp, rdx`)。整段 extent 内 `rbp` 只出现四次:序言 spill
+  (`3b1335: mov [rsp+0x10], rbp`)、入抄(3b1347)、`3b1399: mov rdx, rbp`(交给子对象的
+  `call [rax+0x70]`)、尾声从 spill 槽复原(`3b1406`)。**`[rbp+0x10]` 在本体零读点**。
+- 其余三行与帧无关:`34c97f`/`34ca39` 在 `0x34C960`(std::vector 扩容例程,元素 0x48)里读/写的是
+  **vector 自身的容量/size 字段**(`[rcx+0x10]` 与 begin `[rcx+8]`、`[rcx+0x14]` 三件套成对出现),
+  其 rcx/r14 追到的是 caller 的 rdi(`3b136b: mov rcx, rdi`,而 rdi = `0x3B1330` 的入参 r8,不是 rdx);
+  `34d5f0`/`3b1335`/`34c965` 全是 `[rsp+0x10]` 序言 spill。
+- 同 disp 不同栈的陷阱:`0x3b1353: lea rdx,[rsp+0x20]` 是 `0x3B1330` **自己的栈槽**(传给
+  `0x34C960` 当插入值),与循环帧 `[rsp+0x20]` 同偏移不同函数,不许混。
+
+**判决词 = `no_scope_id_read_depth1`**:一层口径内没有任何 `[+0x10]` 的 base 能追到入参 rdx
+(scope 帧)。帧继续往下走只剩一条边:`3b1399: mov rdx, rbp` → `3b139c: call [rax+0x70]`
+(子对象 vtable 的 slot[7] 型动态派发),静态一层不可达其全体目标 —— **不排除更深**。
+Step 4(scope_id_read_named 行追 id 落到哪个表)**不适用**:named=0,无行可追;按 brief
+「跨进动态派发就停、不猜」执行。
+
+**这条线只是 `0x3B1330` 驱动判负时的备用靶,本文不判 `every_system` 走它。**
+
+**未观测/欠账**:`0x3B1330` 何时被循环调用 = 未观测(离线,零 shot);§82.2 记其直接调用者共 3 处,
+本口径只复核 `0x1A76324` 这一条传参路径;`0x1cc4450`/`0x2185254` 两个半截目标的内部读点不在口径内;
+动态派发 `call [rax+0x70]` 的第二层下游 `+0x10` 读点未判。
+
+## §88 星连图容器的版本/变更信号:候选 offset 与两侧站点（2026-11-01,离线,零 shot）
+
+**问题**:C5 需要「运行时星连图的版本/变更信号(缓存失效用)」。本轮零 shot 问:在 `0x3260BB0`
+的全体读者里,`disp ∈ [0x580,0x5C0)` 的哪个 offset **同时**存在「变更时写」与「读侧比较」两处站点。
+探针 = `scripts/scratch/2026-11_graph_version/graph_version_scan.py`。
+
+**口径**:① `riprefs.refs_for({0x3260BB0}, ".text", verify=True)` = 5,523 个读者站点,按 `.pdata`
+归桶 = 4,024 个函数;② 桶函数按 extent 对齐反汇编,收 `disp ∈ [0x580,0x5C0)` 的内存操作(无 index;
+base 为 rsp/rbp 或 rip 的直接剔除 —— 同 disp 不同对象,§87 的陷阱在这里同样成立);③ 判决只看
+`base_confirmed=1` 的行:base 线性回扫 ≤64 条追到 `mov/lea <b>, [rip->0x3260BB0]`(允许
+`mov b,r2` 逐跳;`call` 只对 caller-saved 是界,沿用 §87 裁定②);④ 写点向后 4 条找
+inc/add/mov imm 判「计数器更新」形态;⑤ 全量 853 行表存
+`evidence/xrefs/graph_version_sites_4_4_4.tsv`(内嵌文档会淹没判词,逐 offset 摘要如下)。
+
+**判词演变(诚实记录)**:首跑机械判决 = `version_signal_found`(+0x59C 记到 3 个「写」)。
+逐站点 ±3 原文手工复核证明是**探针分类错**:`idiv dword ptr [r13 + 0x59c]`(`9d117a`)的内存第一
+操作数是**除数 = 读**,写的是 eax/edx;紧随的 `9d1181: movsxd rcx, edx`、`9d1184: mov rax,
+qword ptr [r13 + 0x590]`、`9d118b: mov ebx, dword ptr [rax + rcx*4]` 表明这三处全是对 id 向量的
+**取模访问**(另两把同类:`c42355`、`db3e18`)。修正 `is_write`(排除 idiv/div/mul/imul)后重跑,
+判决 = **`no_version_signal`**。这就是 brief Step 3「写入发生在什么事件后 / 读侧是不是缓存键比较,
+两者缺一就降级」的执行结果:候选集合降级为空。
+
+**逐 offset 摘要(confirmed 口径,全量见 artifact)**:
+
+| offset | 全部站点 | confirmed | confirmed 写 | confirmed 读侧 cmp/test |
+|---|---|---|---|---|
+| 0x588 | 27 | 1 | 0 | 0 |
+| 0x590 | 281 | 60 | 0 | 0 |
+| 0x59C | 299 | 185 | **0** | 8 |
+| 其余 0x580..0x5BC(15 个) | 346 | 0 | 0 | 0 |
+
++0x59C 的读侧比较全是**边界/钳制**而非版本键 —— 例:`977215: cmp ecx, dword ptr [rax+0x59c]` →
+`jge`(索引 < 条数的检查)、`be4c63: cmp dword ptr [r8+0x59c], eax` → `jle`(钳制)。
+
+**判决词 = `no_version_signal`**:confirmed 口径内没有任何 offset 有「变更时写」站点(含修正前的
+3 个伪写,全表 write 形态的 +0x59C 站点为 0)。**平凡计数清单**:`+0x59C` = 原始条数(§80.2 已钉,
+本轮从读侧再钉死:它是边界比较与取模的除数,不是版本键)、`+0x590` = id 向量 begin(60 读零写)、
+`+0x588` = 相邻字段(1 读)。**「静态推断,未验证」标签生效。**
+
+**未观测/欠账**:① 容器的**变更方**(增量 +0x59C 的代码)不在本口径的读侧集合里 —— 它经参数/成员
+路径拿容器指针,不直接 rip 引用 `0x3260BB0`;要找版本信号得沿对象 ctor/mutation 另开一轮,本节不猜。
+② raw 853 行里的 `[rdi+0x588]`/`[rsi+0x590]` 写站点 base 追不到 rip 装载 ⇒ 是别的同 disp 大对象,
+不进判决。③ 何时被调 = 未观测(离线,零 shot)。
+**spec 联动**:判决不是 `version_signal_found` ⇒ `docs/c5-pilot2-spec.md` §2 该行**不改**,
+状态仍 `未观测`,欠账即本节。
+
+## §88 勘误补记(final review 轮,2026-11-01,离线,零 shot)
+
+fresh-context 评审对 §85–§88 提了 4 项 Important,全部判决词不受影响,按 append-only 勘误:
+
+1. **§88 逐 offset 摘要表算错**:"其余 0x580..0x5BC(15 个)"的全站点列应为 **246**,不是 346
+   (校验:853 = 27+281+299+246,与 §88 自己写的"全量 853 行"闭合;346 那一行使列和变 953)。
+2. **§88 confirmed 口径收紧**:`graph_version_scan.py` 首版 `base_confirmed()` 没实现它 docstring
+   声明的停规则(`ret/jmp` 只在 hops 为空时停;`call` 从不拦)。收紧为 ret/jmp 一律停、call 只对
+   callee-saved 放行后重跑:confirmed 246 → **244**,其中 +0x590 60 → **59**、+0x59C 185 → **184**
+   (被剔的两行在 `0xd669a0`:`d66bc6: mov rsi,[rdx+0x590]`、`d66bcd: movsxd rax,[rdx+0x59c]`,
+   base=rdx 是 caller-saved 且回扫越过了 call,不该算 confirmed);cmps=8、writes=0 不变 ⇒
+   判决仍是 `no_version_signal`。正文引用的 60/185 以本条为准;artifact 表(不含 confirmed 列)逐字节未变。
+3. **§87 的 scope 帧逃逸边是两条,不是一条**:除 `3b1399: mov rdx, rbp` → `3b139c: call [rax+0x70]`
+   外,还有 `3b1347: mov rbp, rdx` 之前分叉的 `3b1350: mov r8, rdx` → `3b1358: call [rax+0x68]`
+   —— 帧以 **r8** 身份交给 slot[+0x68] 的动态派发(发生在 `3b1363` 覆盖 r8 之前)。判决
+   `no_scope_id_read_depth1` 不受影响,但下一轮做 depth-2 遍历时必须同时扫 slot[+0x70] 与 slot[+0x68]
+   两个派发口的目标集,否则会漏掉 `+0x68` 那一支。
+4. **§87 的 `call_path` 列在首跑里是失效的**:探针把 tag 判定列误写成 `r[7]`(那是 insn_distance),
+   所以引用的 stdout 里第 9 列是距离的复读。修正为 `r[8]` 后重跑(task4_run3.log):parse_body 三行的
+   `call_path` 现在真是 `1a7631c:lea rdx,[rsp+0x20] -> 1a76324:call 0x3b1330(rcx=self, r8=r15)`,
+   e8_target 行为来源标签。站点集合七行、判决词、base_source 分类均未变。
