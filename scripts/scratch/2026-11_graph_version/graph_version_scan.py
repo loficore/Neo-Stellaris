@@ -77,15 +77,18 @@ def is_write(ins):
 
 
 def base_confirmed(ins_list, idx, base):
-    """回扫 base 是否来自 [rip->GLOBAL] 装载;返回 (0|1, 证据串)。"""
+    """回扫 base 是否来自 [rip->GLOBAL] 装载;返回 (0|1, 证据串)。
+    ret/jmp 一律停;call 只对 callee-saved 放行(评审轮修正:此前 call 从不拦,超出声明口径)。"""
     reg = base
     hops = []
     for k in range(idx - 1, max(-1, idx - 65), -1):
         i = ins_list[k]
         ops = i.operands
-        if not hops and i.mnemonic in STOP:
+        if i.mnemonic in STOP:
             return 0, "-"
-        if i.mnemonic == "call" and reg in CALLEE_SAVED and hops:
+        if i.mnemonic == "call":
+            if reg not in CALLEE_SAVED:
+                return 0, "-"
             continue
         if ops and ops[0].type == X86_OP_REG and rn(i, ops[0].reg) == reg:
             if i.mnemonic in ("mov", "lea") and len(ops) > 1 and ops[1].type == X86_OP_MEM \
@@ -99,8 +102,6 @@ def base_confirmed(ins_list, idx, base):
                 reg = nxt
                 continue
             return 0, "-"  # base 被别的来源写
-        if i.mnemonic in ("push", "pop", "call", "ret", "jmp"):
-            pass
     return 0, f"{reg}(窗口内无 rip 装载)"
 
 

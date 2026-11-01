@@ -9312,3 +9312,25 @@ qword ptr [r13 + 0x590]`、`9d118b: mov ebx, dword ptr [rax + rcx*4]` 表明这�
 不进判决。③ 何时被调 = 未观测(离线,零 shot)。
 **spec 联动**:判决不是 `version_signal_found` ⇒ `docs/c5-pilot2-spec.md` §2 该行**不改**,
 状态仍 `未观测`,欠账即本节。
+
+## §88 勘误补记(final review 轮,2026-11-01,离线,零 shot)
+
+fresh-context 评审对 §85–§88 提了 4 项 Important,全部判决词不受影响,按 append-only 勘误:
+
+1. **§88 逐 offset 摘要表算错**:"其余 0x580..0x5BC(15 个)"的全站点列应为 **246**,不是 346
+   (校验:853 = 27+281+299+246,与 §88 自己写的"全量 853 行"闭合;346 那一行使列和变 953)。
+2. **§88 confirmed 口径收紧**:`graph_version_scan.py` 首版 `base_confirmed()` 没实现它 docstring
+   声明的停规则(`ret/jmp` 只在 hops 为空时停;`call` 从不拦)。收紧为 ret/jmp 一律停、call 只对
+   callee-saved 放行后重跑:confirmed 246 → **244**,其中 +0x590 60 → **59**、+0x59C 185 → **184**
+   (被剔的两行在 `0xd669a0`:`d66bc6: mov rsi,[rdx+0x590]`、`d66bcd: movsxd rax,[rdx+0x59c]`,
+   base=rdx 是 caller-saved 且回扫越过了 call,不该算 confirmed);cmps=8、writes=0 不变 ⇒
+   判决仍是 `no_version_signal`。正文引用的 60/185 以本条为准;artifact 表(不含 confirmed 列)逐字节未变。
+3. **§87 的 scope 帧逃逸边是两条,不是一条**:除 `3b1399: mov rdx, rbp` → `3b139c: call [rax+0x70]`
+   外,还有 `3b1347: mov rbp, rdx` 之前分叉的 `3b1350: mov r8, rdx` → `3b1358: call [rax+0x68]`
+   —— 帧以 **r8** 身份交给 slot[+0x68] 的动态派发(发生在 `3b1363` 覆盖 r8 之前)。判决
+   `no_scope_id_read_depth1` 不受影响,但下一轮做 depth-2 遍历时必须同时扫 slot[+0x70] 与 slot[+0x68]
+   两个派发口的目标集,否则会漏掉 `+0x68` 那一支。
+4. **§87 的 `call_path` 列在首跑里是失效的**:探针把 tag 判定列误写成 `r[7]`(那是 insn_distance),
+   所以引用的 stdout 里第 9 列是距离的复读。修正为 `r[8]` 后重跑(task4_run3.log):parse_body 三行的
+   `call_path` 现在真是 `1a7631c:lea rdx,[rsp+0x20] -> 1a76324:call 0x3b1330(rcx=self, r8=r15)`,
+   e8_target 行为来源标签。站点集合七行、判决词、base_source 分类均未变。

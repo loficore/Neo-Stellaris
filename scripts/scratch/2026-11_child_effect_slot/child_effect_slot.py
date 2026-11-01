@@ -158,7 +158,7 @@ def main() -> int:
             "base_source", "trace", "insn_distance", "call_path"]
     print("\t".join(cols))
     for r in rows:
-        print("\t".join(r[:8] + (call_path if r[7] == "parse_body" else r[7],)))
+        print("\t".join(r[:8] + (call_path if r[8] == "parse_body" else r[8],)))
     for r in rows:
         if not (r[0] and r[5]):
             print(f"FAIL: 行必需列缺 {r}"); ok = False
