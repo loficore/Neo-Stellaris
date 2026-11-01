@@ -210,6 +210,7 @@ const c2_trigger_pred = @import("c2/trigger_pred_probe.zig");
 const c2_trigger_eval = @import("c2/trigger_eval_probe.zig");
 /// C5 数据面第三发(§81):逐系统下发点 `0x3B1330` 的只读 guard。
 const c2_per_system = @import("c2/per_system_probe.zig");
+const c2_exec_caller = @import("c2/exec_caller_probe.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
@@ -1033,6 +1034,69 @@ export fn C5PerSystemDrainInto(out: [*]u8) callconv(.c) u32 {
 /// 清计数 + 环 + 去重表 + drain 容量;不卸载 hook,也不清镜像窗口(必须在 Install 之前调)。
 export fn C5PerSystemReset() callconv(.c) void {
     c2_per_system.reset();
+}
+
+// ---------------------------------------------------------------------------
+// 第八把 guard — exec_caller(§90.4):`log` 效果入口 `0x185BF60`,记调用者 + scope 两格。
+// ---------------------------------------------------------------------------
+
+fn execCallerInstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.AlreadyInstalled, error.PatchActive => -2,
+        error.ModuleNotFound => -3,
+        error.AlreadyHooked => -4,
+        error.UnexpectedPrologue => -5,
+        error.PatchTooWide => -6,
+        else => -1,
+    };
+}
+
+fn execCallerUninstallCode(err: anyerror) i32 {
+    return switch (err) {
+        error.RestoreIncomplete => -7,
+        else => -1,
+    };
+}
+
+/// 只记录 `0x185BF60` 的调用者 RVA 与第二实参上的两格。码表同兄弟 guard。
+export fn C6ExecCallerInstall() callconv(.c) i32 {
+    c2_exec_caller.install() catch |err| return execCallerInstallCode(err);
+    return 0;
+}
+
+/// 0 = 引擎字节已验证还原。-7 = RestoreIncomplete:不要信任该进程,且**绝不 FreeLibrary**。
+export fn C6ExecCallerUninstall() callconv(.c) i32 {
+    c2_exec_caller.uninstall() catch |err| return execCallerUninstallCode(err);
+    return 0;
+}
+
+/// 原样透传模块约定:0 一致 | -1 装着但 hook 丢了 | -2 已卸但引擎字节不符 | -3 从未解析到靶。
+export fn C6ExecCallerVerify() callconv(.c) i32 {
+    return c2_exec_caller.verify();
+}
+
+/// 六个布局词:[version, Entry size, RING_LEN, Stats size, 靶 RVA, 0]。
+export fn C6ExecCallerLayout(out: [*]u32) callconv(.c) u32 {
+    const words: *[6]u32 = @ptrCast(out);
+    return c2_exec_caller.layoutInto(words);
+}
+
+export fn C6ExecCallerStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_exec_caller.statsInto(out[0..512]));
+}
+
+export fn C6ExecCallerSetDrainCap(cap: u32) callconv(.c) i32 {
+    c2_exec_caller.setDrainCap(cap);
+    return 0;
+}
+
+export fn C6ExecCallerDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_exec_caller.drainInto(out);
+}
+
+/// 清计数 + 环 + 去重表 + drain 容量;不卸载 hook(必须在 Install 之前调)。
+export fn C6ExecCallerReset() callconv(.c) void {
+    c2_exec_caller.reset();
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.

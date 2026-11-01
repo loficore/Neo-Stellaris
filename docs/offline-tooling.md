@@ -1605,6 +1605,43 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**45 条**),
 无游戏、无 Windows API。
 
+### `scripts/c2_exec_caller_probe.py [dll] --systems N --save-name NAME [--poll-s 120] [--out C:/temp/c5_exec_caller.tsv] [--allow-window]`
+
+**第八把 guard:C5 缺的那一格「谁在逐系统派发」+ 星系 id(§90.4 定的锚)。** 靶 = `log` 效果的实现
+`0x185BF60`(`effect_impl.cpp:21978` 的行号立即数 `0x55DA` 在 `.text` 里只出现一次)。为什么是它:
+§89.3 的实机读数证明它每月跑 784 次,§90.1 证明 `+0x70`/token 解释器那一族在同一窗口里整族沉默
+——它是目前**唯一确凿在執行路径上**的函数。
+
+**这一发问三件事**:① 每次调用的**返回地址**(= 谁在派发);② 第二实参按 §80.2 的形状读
+`+0x08`(mask)与 `+0x10`(id);③ 那批 id 去重后是否 ⊆ 银河容器 `[[0x3260BB0]+0x590]`、是否落在 `[1,N]`。
+模式只有一种(watch):不投递任何脚本,让游戏自己的月度脉冲驱动。
+
+**verdict 值域(十一档)**:证据档 `dispatch_named` / `ids_out_of_range` / `ids_not_in_container`;
+环境或仪器档 `instrument_broken`(永远优先)/ `no_calls` / `dedupe_full` / `container_unreadable` /
+`dispatch_denominator_mismatch` / `caller_unnamed` / `caller_mixed` / `scope_constant`。环境档**不是证据**。
+
+**门序**与兄弟驱动同一条:`sha_gate`(打印并记录注入文件 sha256;文件不在 `exit 2`)→ `gate_module`
+(八个导出 + `C2Sanity==42`)→ `refuse_if_resident`(同名模块已映射就拒绝)→ `gate_install("execcaller")`
+→ `inject_dll` → `C6ExecCallerLayout` 对账(靶必须 `0x185BF60`,第 6 词必须是 0:本仪器没有 vtable 过滤器)
+→ `Reset` → `Install` → settle → 读基线 stats → **外部读容器** → 轮询 → drain → `Uninstall` + `Verify`
++ settle + `assert_game_alive` → 写 artifact。`Install` 返回 `-2` 不重试;`-7` 打
+`RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`;**绝不 FreeLibrary**。
+
+**判读陷阱(本仪器专属,三条):**
+
+1. **返回地址只是「一层」调用者。** 它若也是虚派发(`call [rax+0x10]` 那种),一层不够 —— 下一发要
+   把这一层当新的锚再往上走一次;不要拿一层读成「最终派发方」。
+2. **`scope_constant` 说的是「不是那个形状」,不是「引擎没有 scope」。** 第二实参若其实是 §26/§53 那个
+   0x20 B 执行深度帧(`+0x08` 深度计数、`+0x10` helper),读出来的 id 就会是一个常数 —— 那一档只排除
+   「第二实参是逐系统 scope」这一种读法。
+3. **分母写容器原始条数。** `--systems` 无默认值;§89.3 那次容器是 **788**(上一场存档的 787 是错的分母)。
+   容器是活数据,只认一次读足的 blob(§81.1 ③)。
+
+**artifact**:`#meta` 在前(`overall_verdict` / `systems` / `save_name` / `container_raw_count` /
+`container_ids_sha256` / `stats_delta` / `dll` / `dll_sha256` / `module_base` / `exe_base` /
+`install_rc` / `uninstall_rc` / `verify_rc` / `host_alive` / `entries_error`),然后六列行:
+`caller_rva id mask occurrences self_ptr scope_ptr`。
+
 ## 实机调试:桌面通道(`win-desktop` MCP)
 
 agent 自己能看屏幕、按**元素**点、打字 —— 用来替代「让操作者去点一下」的那类动作(事件窗、控制台投递、

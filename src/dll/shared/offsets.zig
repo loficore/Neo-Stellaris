@@ -259,6 +259,12 @@ pub const keyword_reg = struct {
     /// 「按 `[self]` 过滤后的下发点」。补丁是它的前 15 字节(§81.1 ①)。
     pub const RVA_EFFECT_BASE_PARSE: usize = 0x3B1330;
 
+    /// §90.4 — `log` 效果的实现入口。判据:`effect_impl.cpp:21978` 的行号立即数 `0x55DA`
+    /// 在 `.text` 里只出现一次(`0x185C454`),所在函数 `0x185BF60..0x185C5B7`;正文取
+    /// `[this+0x38]`、日志正文由 `log = "…"` 提供。§89.3 已证明它每月跑 784 次,
+    /// 是**执行侧**唯一的锚(§90.1 证明 `+0x70` 那一族在同窗内整族沉默)。
+    pub const RVA_LOG_EFFECT_EXEC: usize = 0x185BF60;
+
     /// §80.1 / §81.1 ② — `every_system` 的 create(`0x1A74EB0`)写出的 vtable。
     /// `+0x70 = 0x1A76130`(逐系统循环体),`+0x98 = 0x3B1420`(effect 谓词基体)。
     pub const RVA_EVERY_SYSTEM_VTABLE: usize = 0x26562D0;
@@ -441,6 +447,7 @@ test "keyword_reg: per-system dispatch anchors (§81.1)" {
     // every_system vtable and the galaxy container must not drift silently.
     try std.testing.expectEqual(@as(usize, 0x3B1330), keyword_reg.RVA_EFFECT_BASE_PARSE);
     try std.testing.expectEqual(@as(usize, 0x26562D0), keyword_reg.RVA_EVERY_SYSTEM_VTABLE);
+    try std.testing.expectEqual(@as(usize, 0x185BF60), keyword_reg.RVA_LOG_EFFECT_EXEC);
     try std.testing.expectEqual(@as(usize, 0x3260BB0), keyword_reg.RVA_GALAXY_MAP_DB);
     try std.testing.expect(keyword_reg.RVA_EVERY_SYSTEM_VTABLE > 0x2392000); // .rdata, not .text
 }
