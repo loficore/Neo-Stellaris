@@ -9021,3 +9021,64 @@ python3 scripts/scratch/2026-10_mod_load/mod_registry.py --host Windows_Jiaolong
 > 的假差异。现在 `enabled` 参与判定(缺省视为 listed/enabled),disabled 的条目单列一行
 > 「启动器会把它从 `dlc_load.json` 里去掉」。**这不是判据放宽**:`enabled=false` 的条目在当前通道下
 > 本来就不该出现在 `enabled_mods` 里。
+
+## §85 class_info 0x260F498 的插入点:谁把它交给 0x3AEF60(2026-11-01,离线,零 shot)
+
+**问题(§83.3 之问 ①)**:`0x260F498` 这个 class_info 是谁插入的 —— 引用点对不对得上插入调用。
+**输入是 exe 字节,不读任何 shot。** 探针:`scripts/scratch/2026-11_class_info_insertion/insertion_sites.py`
+(全量解码产物缓存 `/mnt/cache/tmp/class_info_insertion/find_refs_hits.json`,按 exe 大小+sha256+目标集重新键)。
+
+**引用口径(裁定,先于读数说清)**:`0x260F498` 单独一个 qword 在全镜像两种解码器下都是 **0 个引用**
+—— §83.2 所记的「`+0x00 = 0x189A620` create」其实是 class_info 块内第二 qword;块 **HEAD** 在
+`0x260F490`(`+0x00` = deleting dtor `0x34C090`,`+0x08` = create)。兄弟块 HEAD `0x260F480`
+(inverted_switch,create 在 `0x260F488`)同形。⇒ 探针按 A 族两块四址
+`{0x260F490, 0x260F498, 0x260F480, 0x260F488}` 问;`0x260F498`/`0x260F488` 零引用本身就是 datum
+(没人按 create 槽寻址,大家都拿 HEAD)。**插入形式含 tail `jmp` 不止 `call`**,已按实机字节钉死(见证据 ③)。
+
+**读数(探针 stdout 逐字)**:
+
+```
+## target 0x260f490: refs_find=1 refs_rip=1 diff=0
+## target 0x260f498: refs_find=0 refs_rip=0 diff=0
+## target 0x260f480: refs_find=1 refs_rip=1 diff=0
+## target 0x260f488: refs_find=0 refs_rip=0 diff=0
+ref_site	func_start	func_end	insn	ref_kind	contains_insert_call	insert_call_site	family_def
+fbbcb	fbb80	fbbea	lea rcx, [rip + 0x25138be] ; ->0x260f490	lea	1	fbbe5:effect_insert:jmp	neighborhood
+fbc3b	fbbf0	fbc5a	lea rcx, [rip + 0x251383e] ; ->0x260f480	lea	1	fbc55:effect_insert:jmp	neighborhood
+## verdict=insertion_named
+```
+
+`family_def=neighborhood`:定义 = vtable ±0x200 内出现
+`{0x3AFD30, 0x3B1330, 0x3B01A0, 0x3B1420, 0x3B0F80, 0x3B1230}` 任一(§83.2 补记 ① 采用的那个口径)。
+两行的 family 判定都来自插入调用所在函数体直接引用 `0x3AEF60`/`0x3AEBA0` 邻域,不是外延猜测。
+
+**判决词:`insertion_named`** —— 同一函数里既有对 class_info HEAD 的 `lea`,又有对 `0x3AEF60` 的
+尾跳转,指针直接作为实参(`r8` = 装着 HEAD 的 `new(0x10)` 块)。
+
+**证据 ①(函数 1,`0xfbb80..0xfbbea`,`disrva.py 0xfbb80 --len=0x6a`)**:class_info 指针来源 =
+`0x000fbbcb lea rcx,[rip+0x25138be] ; ->0x260f490` → `mov [rax],rcx`(rax = `new(0x10)`,0x000fbbb6);
+docstring = `0x2627190`(`Executes the first appropriate effect set for a specific trigger…`,写进 `[rax+8]`);
+插入调用两实参 = `edx=0x2814`(=10260)、`r8` = 该块、`rcx` = db;db 全局 = **effect `0x33746E8`**
+(`0x000fbb86` 读、缺失时 `new(0x70)+0x3AEBA0` 拉起后 `0x000fbbaa` 写回)。
+插入站点 = `0x000fbbe5 jmp 0x3aef60`,字节 `e9 76 33 2b 00`。
+
+**证据 ②(函数 2,`0xfbbf0..0xfbc5a`)**:同形;HEAD `0x260F480`、docstring `0x2627290`、
+`edx=0x4860`(=18528)、站点 `0x000fbc55 jmp 0x3aef60`(字节 `e9 06 33 2b 00`)。
+
+**证据 ③(Step 3 交叉核的口径注)**:`python3 scripts/fastcalls.py 0x3aef60`(307 sites/104 functions)
+与 `0x348150`(206 sites/104 functions)的 bucket **都不含** `0xfbb80`/`0xfbbf0` —— 这不是反例,
+是工具口径:`fastcalls.py` 只匹配 `E8 rel32` / `EB rel8` / `FF /2|/4`,**不含 `E9 rel32` 尾跳转**,
+而这两个站点正是 `E9`(`0xfbbe5`、`0xfbc55` 处字节已逐字抄出)。独立一侧由 `find_refs.py` 全量解码
+给出(`== 0x3aef60: 1056 references`,含 `jmp` 形态)。**换工具口径要重跑这一条。**
+
+**证据 ④(keyword 身份对账)**:`evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv` 第 306/307 行
+(array `0x23AC600`,thunk `0xfbb80`/`0xfbbf0`,db `0x33746E8`,token 10260/18528,field0 `0x260F490`/`0x260F480`,
+dtor 列 `0x34C090`,insert `0x3AEF60`)与本探针独立推出的四址、token、db 逐项一致 —— 两条通道同判。
+即 AGENTS.md 配方步骤 3 的静态对应物:**官方 effect `switch`/`inverted_switch` 的注册 stub 本身就是
+「先拉起 db、再 `new(0x10){HEAD, docstring}`、尾跳 `0x3AEF60`」的模板。**
+
+**欠账/边界**:trigger 侧(`0x348150`)这次没有与 A 族 class_info 相交的行 —— 不是「trigger 没有插入者」
+(bucket 里 104 个函数在),而是这两个 HEAD 不属于任何 trigger 插入函数。`0x189A620` create 本体没有读。
+
+**何时被调:未观测。** 本节不写「类的实例何时被创建」的结论 —— 注册 stub 自身的调用时机同样未观测
+(那是 `0x23AC600` thunk 数组的驱动问题,§17 旧账)。
