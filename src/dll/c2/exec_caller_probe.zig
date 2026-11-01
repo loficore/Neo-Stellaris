@@ -242,11 +242,28 @@ pub fn recordDispatch(caller_rva: u32, id: u32, mask: u32, self_ptr: u64, scope:
     }
 }
 
+/// Diagnostic switch (§91.2). 0 = count only (no reads, no ring, no lock); 1 = count + the
+/// two engine reads, still no ring/lock; 2 = full.  It exists because "the hook kills the
+/// game" and "the recording path kills the game" look identical from outside (the process
+/// disappears, no WER entry), and a count-only build survived where the full one died.
+/// Ship with 2.
+const RECORD_MODE: u8 = 2;
+
 /// One call to the target: count it, resolve the caller RVA, then read the second argument's
 /// two scope cells when it is a readable pointer. Unreadable degrades to `null_scope`.
 pub fn recordCall(caller: usize, self: usize, scope: usize) void {
     _ = @atomicRmw(u64, &stats.calls, .Add, 1, .monotonic);
-    const caller_rva = toRva(caller);
+    if (RECORD_MODE == 0) return;
+    const caller_rva = if (RECORD_MODE == 1) 0 else toRva(caller);
+    if (RECORD_MODE == 1) {
+        // Reads only: still no ring, no dedupe table, no spinlock.
+        if (!plausible(scope) or readU64(scope) == null) {
+            _ = @atomicRmw(u64, &stats.null_scope, .Add, 1, .monotonic);
+            return;
+        }
+        @atomicStore(u32, &stats.last_id, readU32(scope, SCOPE_ID_OFF), .monotonic);
+        return;
+    }
     if (!plausible(scope)) {
         _ = @atomicRmw(u64, &stats.null_scope, .Add, 1, .monotonic);
         recordDispatch(caller_rva, 0, 0, @intCast(self), 0);
@@ -376,7 +393,17 @@ fn dispatchDetour(self: u64, scope: u64, a3: u64) callconv(.c) u64 {
     // engine's return address: `@returnAddress()` is the dispatch site, not our trampoline.
     recordCall(@returnAddress(), @intCast(self), @intCast(scope));
     const f: OrigFn = @ptrCast(orig orelse return 0);
-    return f(self, scope, a3);
+    // `.always_tail` is load-bearing, not a micro-optimisation (§91.1).  `detour.zig` builds
+    // the trampoline by copying the target's prologue **verbatim** and appending a `jmp` back,
+    // so the copied bytes see whatever `rsp` the caller of the trampoline left.  A plain `call`
+    // puts `rsp` 8 bytes lower than the engine's own call did, and this target's prologue is
+    // three `mov [rsp+0x10/0x18/0x20], reg` saves: shifted by 8 they restore `rbx`/`rsi`/`rdi`
+    // from the wrong slots, which corrupts three callee-saved registers per call and kills the
+    // game a few thousand dispatches later (2026-11-01: 3/3 shots died mid-burst).
+    // A tail jump keeps `rsp` exactly as the engine left it, so the copied saves land where the
+    // epilogue looks for them.  `.always_tail` makes the requirement a compile error rather
+    // than a codegen coincidence.
+    return @call(.always_tail, f, .{ self, scope, a3 });
 }
 
 pub fn install() InstallError!void {

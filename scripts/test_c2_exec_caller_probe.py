@@ -218,3 +218,21 @@ def test_resident_module_refuses():
     with pytest.raises(SystemExit) as exc:
         refuse_if_resident("sqjs_c10.dll", 0x7FF8EB220000)
     assert exc.value.code == 2
+
+
+def test_the_detour_forwards_with_a_tail_call():
+    """§91.1: the trampoline is a verbatim prologue copy, so `rsp` must not move by 8.
+
+    A plain `call` shifts it, and this target's prologue saves rbx/rsi/rdi into
+    `[rsp+0x10/0x18/0x20]` — shifted, the epilogue restores them from the wrong slots
+    (three corrupted callee-saved registers per dispatch; the game died 3/3 shots).
+    """
+    src = ZIG.read_text()
+    assert "@call(.always_tail, f," in src
+    assert "return f(self, scope, a3);" not in src
+
+
+def test_record_mode_default_is_the_full_path():
+    """§91.2: 0/1 are bisect builds (count-only / reads-only); the shipped value is 2."""
+    src = ZIG.read_text()
+    assert "const RECORD_MODE: u8 = 2;" in src
