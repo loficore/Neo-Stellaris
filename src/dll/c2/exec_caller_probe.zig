@@ -52,19 +52,8 @@ pub const Entry = extern struct {
     scope_ptr: u64 = 0,
 };
 
-pub const Stats = extern struct {
-    calls: u64 = 0,
-    distinct_ids: u64 = 0,
-    dedupe_full: u64 = 0, // 去重表满后没记上的次数(distinct_ids 于是只是下界)
-    null_scope: u64 = 0, // 第二实参空 / 不可读
-    patch_size: u64 = 0,
-    last_id: u32 = 0,
-    pad0: u32 = 0,
-};
-
 comptime {
     if (@sizeOf(Entry) != 32) @compileError("exec-caller Entry must be 32 bytes");
-    if (@sizeOf(Stats) != 48) @compileError("exec-caller Stats must be 48 bytes");
 }
 
 // ---------------------------------------------------------------------------
@@ -105,178 +94,93 @@ fn readU32(addr: usize, comptime off: usize) u32 {
 }
 
 // ---------------------------------------------------------------------------
-// The id dedupe table (pure, host-testable)
+// Recording — lock-free on purpose (§91.2)
 // ---------------------------------------------------------------------------
-
-pub const InsertResult = enum { new, seen, full };
-
-/// Open-addressed set of 4 B ids with linear probing. Pure data + pure methods.
-pub const IdTable = struct {
-    pub const SLOTS: usize = DISTINCT_SLOTS;
-    pub const NO_ROW: u16 = 0xFFFF;
-
-    keys: [SLOTS]u32 = undefined,
-    rows: [SLOTS]u16 = undefined,
-    used: [SLOTS]bool = [_]bool{false} ** SLOTS,
-    count: usize = 0,
-
-    fn slot(key: u32) usize {
-        const h = @as(u64, key) *% 0x9E3779B97F4A7C15;
-        return @intCast(h >> 52); // top 12 bits -> 4096 slots
-    }
-
-    pub fn insert(self: *IdTable, key: u32, row: u16) InsertResult {
-        var idx = slot(key);
-        var probes: usize = 0;
-        while (probes < SLOTS) : (probes += 1) {
-            if (!self.used[idx]) {
-                if (self.count == SLOTS) return .full;
-                self.used[idx] = true;
-                self.keys[idx] = key;
-                self.rows[idx] = row;
-                self.count += 1;
-                return .new;
-            }
-            if (self.keys[idx] == key) return .seen;
-            idx = (idx + 1) % SLOTS;
-        }
-        return .full;
-    }
-
-    pub fn rowOf(self: *const IdTable, key: u32) ?u16 {
-        var idx = slot(key);
-        var probes: usize = 0;
-        while (probes < SLOTS) : (probes += 1) {
-            if (!self.used[idx]) return null;
-            if (self.keys[idx] == key) {
-                const row = self.rows[idx];
-                return if (row == NO_ROW) null else row;
-            }
-            idx = (idx + 1) % SLOTS;
-        }
-        return null;
-    }
-
-    pub fn len(self: *const IdTable) usize {
-        return self.count;
-    }
-};
-
-// ---------------------------------------------------------------------------
-// Recording
-// ---------------------------------------------------------------------------
+//
+// The 2026-11-01 bisect left exactly one suspect: the old record path (spinlock + dedupe
+// table + ring under the lock) killed the game, while count-only and count-plus-reads both
+// survived.  This version appends one 32 B record per call under a single atomic index and
+// nothing else: no lock, no table, no nested calls on the engine thread.  Duplicate ids are
+// folded by the **driver** (Linux side), where a bad fold costs a column, not the process.
 
 var ring: [RING_LEN]Entry = undefined;
+
+/// Monotonic append index. `head > RING_LEN` means the ring overflowed; `stats.dropped`
+/// counts those samples so the artifact can say "this reading is truncated".
+var head: u64 = 0;
+
+pub const Stats = extern struct {
+    calls: u64 = 0,
+    dropped: u64 = 0, // samples that arrived after the ring filled (truncation marker)
+    null_scope: u64 = 0, // second argument unreadable / not 8-aligned
+    patch_size: u64 = 0,
+    last_id: u32 = 0,
+    last_caller: u32 = 0, // §91.3: single-slot caller capture (ring-free; the ring died 3/3)
+};
+
+/// Module-private state. `stats` is written from the engine thread, `head` is the ring index.
 var stats = Stats{};
-var ids = IdTable{};
-
-/// Rows are appended in first-seen order; the table slot of an id is not its row index.
-var row_count: usize = 0;
-
-/// The recording path is taken on engine threads: table + ring under one module-private
-/// spinlock (the `detour.zig` shape — `std.Io.Mutex` needs an Io context hook code has not).
-var rec_lock: u32 = 0;
-
-fn lockRec() void {
-    while (@atomicRmw(u32, &rec_lock, .Xchg, 1, .acquire) != 0) {}
-}
-
-fn unlockRec() void {
-    _ = @atomicRmw(u32, &rec_lock, .Xchg, 0, .release);
-}
 
 pub const Snapshot = struct {
     calls: u64,
-    distinct_ids: u64,
-    dedupe_full: u64,
+    dropped: u64,
     null_scope: u64,
     last_id: u32,
     samples: u32,
 };
 
 pub fn snapshot() Snapshot {
-    lockRec();
-    const rows: u32 = @intCast(@min(row_count, RING_LEN));
-    unlockRec();
+    const h = @atomicLoad(u64, &head, .monotonic);
     return .{
         .calls = @atomicLoad(u64, &stats.calls, .monotonic),
-        .distinct_ids = @atomicLoad(u64, &stats.distinct_ids, .monotonic),
-        .dedupe_full = @atomicLoad(u64, &stats.dedupe_full, .monotonic),
+        .dropped = @atomicLoad(u64, &stats.dropped, .monotonic),
         .null_scope = @atomicLoad(u64, &stats.null_scope, .monotonic),
         .last_id = @atomicLoad(u32, &stats.last_id, .monotonic),
-        .samples = rows,
+        .samples = @intCast(@min(h, RING_LEN)),
     };
 }
 
-/// Pure bookkeeping: counters + ring. The host tests drive this directly.
-pub fn recordDispatch(caller_rva: u32, id: u32, mask: u32, self_ptr: u64, scope: u64) void {
+/// `false` = no ring at all; the only caller information is `stats.last_caller`.
+/// 2026-11-01: every build that appended to the ring killed the game within a burst, while
+/// count-only and count-plus-reads survived, so the shipped default for this probe is the
+/// ring-free reading (§91.3). The ring code stays for the next instrument that can afford it.
+pub const RING_ENABLED = false;
+
+/// One recorded call. Pure: the host tests drive it directly.
+pub fn recordSample(caller_rva: u32, id: u32, mask: u32, self_ptr: u64, scope: u64) void {
     @atomicStore(u32, &stats.last_id, id, .monotonic);
-
-    lockRec();
-    defer unlockRec();
-
-    const row: u16 = if (row_count < RING_LEN) @as(u16, @intCast(row_count)) else IdTable.NO_ROW;
-    switch (ids.insert(id, row)) {
-        .seen => {
-            if (ids.rowOf(id)) |r| {
-                if (r < RING_LEN) ring[r].occurrences += 1;
-            }
-        },
-        .full => {
-            _ = @atomicRmw(u64, &stats.dedupe_full, .Add, 1, .monotonic);
-        },
-        .new => {
-            _ = @atomicRmw(u64, &stats.distinct_ids, .Add, 1, .monotonic);
-            if (row < RING_LEN) {
-                row_count += 1;
-                ring[row] = .{
-                    .caller_rva = caller_rva,
-                    .id = id,
-                    .mask = mask,
-                    .occurrences = 1,
-                    .self_ptr = self_ptr,
-                    .scope_ptr = scope,
-                };
-            }
-        },
+    if (!RING_ENABLED) {
+        @atomicStore(u32, &stats.last_caller, caller_rva, .monotonic);
+        return;
+    }
+    const slot = @atomicRmw(u64, &head, .Add, 1, .monotonic);
+    if (slot < RING_LEN) {
+        ring[@intCast(slot)] = .{
+            .caller_rva = caller_rva,
+            .id = id,
+            .mask = mask,
+            .occurrences = 1,
+            .self_ptr = self_ptr,
+            .scope_ptr = scope,
+        };
+    } else {
+        _ = @atomicRmw(u64, &stats.dropped, .Add, 1, .monotonic);
     }
 }
 
-/// Diagnostic switch (§91.2). 0 = count only (no reads, no ring, no lock); 1 = count + the
-/// two engine reads, still no ring/lock; 2 = full.  It exists because "the hook kills the
-/// game" and "the recording path kills the game" look identical from outside (the process
-/// disappears, no WER entry), and a count-only build survived where the full one died.
-/// Ship with 2.
-const RECORD_MODE: u8 = 2;
-
-/// One call to the target: count it, resolve the caller RVA, then read the second argument's
-/// two scope cells when it is a readable pointer. Unreadable degrades to `null_scope`.
+/// One call to the target: count it, resolve the caller RVA, read the second argument's two
+/// scope cells when it is a readable pointer, then append one sample. Unreadable degrades to
+/// `null_scope` plus a zeroed sample (so the call still shows up in the ring).
 pub fn recordCall(caller: usize, self: usize, scope: usize) void {
     _ = @atomicRmw(u64, &stats.calls, .Add, 1, .monotonic);
-    if (RECORD_MODE == 0) return;
-    const caller_rva = if (RECORD_MODE == 1) 0 else toRva(caller);
-    if (RECORD_MODE == 1) {
-        // Reads only: still no ring, no dedupe table, no spinlock.
-        if (!plausible(scope) or readU64(scope) == null) {
-            _ = @atomicRmw(u64, &stats.null_scope, .Add, 1, .monotonic);
-            return;
-        }
-        @atomicStore(u32, &stats.last_id, readU32(scope, SCOPE_ID_OFF), .monotonic);
-        return;
-    }
-    if (!plausible(scope)) {
+    const caller_rva = toRva(caller);
+    if (!plausible(scope) or readU64(scope) == null) {
         _ = @atomicRmw(u64, &stats.null_scope, .Add, 1, .monotonic);
-        recordDispatch(caller_rva, 0, 0, @intCast(self), 0);
+        recordSample(caller_rva, 0, 0, @intCast(self), @intCast(scope));
         return;
     }
-    if (readU64(scope) == null) {
-        _ = @atomicRmw(u64, &stats.null_scope, .Add, 1, .monotonic);
-        recordDispatch(caller_rva, 0, 0, @intCast(self), @intCast(scope));
-        return;
-    }
-    const id = readU32(scope, SCOPE_ID_OFF);
-    const mask = readU32(scope, SCOPE_MASK_OFF);
-    recordDispatch(caller_rva, id, mask, @intCast(self), @intCast(scope));
+    recordSample(caller_rva, readU32(scope, SCOPE_ID_OFF), readU32(scope, SCOPE_MASK_OFF),
+                 @intCast(self), @intCast(scope));
 }
 
 // ---------------------------------------------------------------------------
@@ -301,16 +205,16 @@ pub fn layoutInto(out: *[6]u32) u32 {
 pub fn statsInto(out: []u8) usize {
     const written = std.fmt.bufPrint(
         out,
-        "calls={d} distinct_ids={d} dedupe_full={d} null_scope={d} patch_size={d} installed={d} verify={d} last_id={d}\n",
+        "calls={d} dropped={d} null_scope={d} patch_size={d} installed={d} verify={d} last_id={d} last_caller={d}\n",
         .{
             @atomicLoad(u64, &stats.calls, .monotonic),
-            @atomicLoad(u64, &stats.distinct_ids, .monotonic),
-            @atomicLoad(u64, &stats.dedupe_full, .monotonic),
+            @atomicLoad(u64, &stats.dropped, .monotonic),
             @atomicLoad(u64, &stats.null_scope, .monotonic),
             stats.patch_size,
             @intFromBool(installed),
             verify(),
             @atomicLoad(u32, &stats.last_id, .monotonic),
+            @atomicLoad(u32, &stats.last_caller, .monotonic),
         },
     ) catch return 0;
     return written.len;
@@ -328,10 +232,9 @@ pub fn drainInto(out: [*]u8) u32 {
     const capacity = @min(drain_cap / @sizeOf(Entry), RING_LEN);
     if (capacity == 0) return 0;
     const dst: [*]Entry = @ptrCast(@alignCast(out));
-    lockRec();
-    defer unlockRec();
+    const have: usize = @intCast(@min(@atomicLoad(u64, &head, .monotonic), RING_LEN));
     var copied: u32 = 0;
-    while (copied < capacity and copied < row_count) : (copied += 1) {
+    while (copied < capacity and copied < have) : (copied += 1) {
         dst[copied] = ring[copied];
     }
     return copied;
@@ -340,16 +243,13 @@ pub fn drainInto(out: [*]u8) u32 {
 /// Clear counters + ring + table + drain capacity. Does not uninstall a hook and does not
 /// clear the image window (that is a property of the module, not of the counters).
 pub fn reset() void {
-    lockRec();
-    defer unlockRec();
     @atomicStore(u64, &stats.calls, 0, .monotonic);
-    @atomicStore(u64, &stats.distinct_ids, 0, .monotonic);
-    @atomicStore(u64, &stats.dedupe_full, 0, .monotonic);
+    @atomicStore(u64, &stats.dropped, 0, .monotonic);
     @atomicStore(u64, &stats.null_scope, 0, .monotonic);
     @atomicStore(u64, &stats.patch_size, 0, .monotonic);
     @atomicStore(u32, &stats.last_id, 0, .monotonic);
-    ids = IdTable{};
-    row_count = 0;
+    @atomicStore(u32, &stats.last_caller, 0, .monotonic);
+    @atomicStore(u64, &head, 0, .monotonic);
     @memset(std.mem.asBytes(&ring), 0);
     drain_cap = 0;
 }
@@ -495,8 +395,8 @@ test "Entry is 32 bytes with the driver's column order" {
     try std.testing.expectEqual(@as(usize, 24), @offsetOf(Entry, "scope_ptr"));
 }
 
-test "Stats is 48 bytes" {
-    try std.testing.expectEqual(@as(usize, 48), @sizeOf(Stats));
+test "Stats is 40 bytes" {
+    try std.testing.expectEqual(@as(usize, 40), @sizeOf(Stats));
 }
 
 test "layoutInto reports six words with the §90.4 target and no vtable filter" {
@@ -505,7 +405,7 @@ test "layoutInto reports six words with the §90.4 target and no vtable filter" 
     try std.testing.expectEqual(@as(u32, 1), words[0]);
     try std.testing.expectEqual(@as(u32, 32), words[1]);
     try std.testing.expectEqual(@as(u32, RING_LEN), words[2]);
-    try std.testing.expectEqual(@as(u32, 48), words[3]);
+    try std.testing.expectEqual(@as(u32, 40), words[3]);
     try std.testing.expectEqual(@as(u32, 0x185BF60), words[4]);
     try std.testing.expectEqual(@as(u32, 0), words[5]);
 }
@@ -518,49 +418,34 @@ test "EXPECTED_CODE pins the 15-byte patch window" {
     );
 }
 
-test "IdTable reports new, seen, and full" {
-    var table = IdTable{};
-    try std.testing.expectEqual(InsertResult.new, table.insert(7, 0));
-    try std.testing.expectEqual(InsertResult.seen, table.insert(7, 1));
-    var i: usize = 0;
-    while (i < DISTINCT_SLOTS) : (i += 1) _ = table.insert(@intCast(1000 + i), 2);
-    try std.testing.expectEqual(InsertResult.full, table.insert(999_999, 3));
-}
-
-test "one row per distinct id, occurrences counted on the same row" {
+test "ring-free mode keeps the caller in stats and writes no rows" {
     resetForTest();
-    recordDispatch(0x1D08520, 42, 0x80, 0xABC, 0x1000);
-    recordDispatch(0x1D08520, 42, 0x80, 0xABC, 0x1000);
+    recordSample(0x1D08520, 42, 0x80, 0xABC, 0x1000);
+    recordSample(0x1D08521, 43, 0x80, 0xABC, 0x1000);
     const s = snapshot();
-    try std.testing.expectEqual(@as(u64, 1), s.distinct_ids);
-    try std.testing.expectEqual(@as(u32, 1), s.samples);
-
+    try std.testing.expectEqual(@as(u32, 0), s.samples); // RING_ENABLED == false
+    try std.testing.expectEqual(@as(u32, 43), s.last_id);
+    try std.testing.expectEqual(@as(u32, 0x1D08521),
+        @atomicLoad(u32, &stats.last_caller, .monotonic));
     setDrainCap(@sizeOf(Entry));
     var buf: [@sizeOf(Entry)]u8 align(8) = undefined;
-    try std.testing.expectEqual(@as(u32, 1), drainInto(&buf));
-    const row: *Entry = @ptrCast(@alignCast(&buf));
-    try std.testing.expectEqual(@as(u32, 0x1D08520), row.caller_rva);
-    try std.testing.expectEqual(@as(u32, 2), row.occurrences);
-    try std.testing.expectEqual(@as(u32, 42), row.id);
-    try std.testing.expectEqual(@as(u32, 0x80), row.mask);
-    try std.testing.expectEqual(@as(u64, 0x1000), row.scope_ptr);
+    try std.testing.expectEqual(@as(u32, 0), drainInto(&buf));
 }
 
-test "the ring keeps the first RING_LEN distinct ids and never grows" {
+test "the ring path is compiled out by default (it is what killed the game)" {
     resetForTest();
-    var i: u32 = 0;
-    while (i < RING_LEN + 4) : (i += 1) recordDispatch(0x1D08520, 1 + i, 0x80, 0, 0x1000);
-    const s = snapshot();
-    try std.testing.expectEqual(@as(u32, RING_LEN), s.samples);
-    try std.testing.expectEqual(@as(u64, RING_LEN + 4), s.distinct_ids);
+    try std.testing.expect(!RING_ENABLED);
+    recordSample(0x1D08520, 7, 0x80, 0, 0x1000);
+    try std.testing.expectEqual(@as(u64, 0), snapshot().dropped);
+    try std.testing.expectEqual(@as(u32, 0), snapshot().samples);
 }
 
-test "statsInto writes one k=v line with all eight keys" {
+test "statsInto writes one k=v line with all seven keys" {
     resetForTest();
     var buf: [512]u8 = undefined;
     const n = statsInto(&buf);
-    const expected = "calls=0 distinct_ids=0 dedupe_full=0 null_scope=0 " ++
-        "patch_size=0 installed=0 verify=-3 last_id=0\n";
+    const expected = "calls=0 dropped=0 null_scope=0 " ++
+        "patch_size=0 installed=0 verify=-3 last_id=0 last_caller=0\n";
     try std.testing.expectEqualStrings(expected, buf[0..n]);
 }
 

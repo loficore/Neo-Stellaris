@@ -40,7 +40,6 @@ EXPORTS_ZIG = REPO_ROOT / "src/dll/exports.zig"
 def test_entry_size_matches_the_zig_module():
     src = ZIG.read_text()
     assert "@sizeOf(Entry) != 32" in src
-    assert "@sizeOf(Stats) != 48" in src
 
 
 def test_the_eight_exports_exist_in_the_zig_source():
@@ -53,7 +52,7 @@ def test_the_eight_exports_exist_in_the_zig_source():
 
 def test_stats_keys_match_the_dll_line():
     src = ZIG.read_text()
-    line = [ln for ln in src.splitlines() if "calls={d} distinct_ids={d}" in ln]
+    line = [ln for ln in src.splitlines() if "calls={d} dropped={d}" in ln]
     assert line, "statsInto format line not found"
     assert [key for key in STATS_KEYS if f"{key}={{d}}" in line[0]] == list(STATS_KEYS)
 
@@ -63,8 +62,7 @@ def test_stats_keys_match_the_dll_line():
 
 def _stats(**over):
     stats = dict.fromkeys(STATS_KEYS, 0)
-    stats.update({"calls": 12_544, "distinct_ids": 788, "patch_size": 15,
-                  "installed": 1, "verify": 0})
+    stats.update({"calls": 12_544, "patch_size": 15, "installed": 1, "verify": 0})
     stats.update(over)
     return stats
 
@@ -127,13 +125,13 @@ def test_build_meta_carries_the_target_and_the_save():
 
 def test_verdict_named_dispatch_is_evidence():
     rows = _rows(GALAXY)
-    reading = verdict(_stats(), rows, _container(GALAXY), expected=788)
+    reading = verdict(_stats(), rows, _container(GALAXY), expected=788, distinct=len(rows))
     assert reading == "dispatch_named"
     assert reading in EVIDENCE_VERDICTS
 
 
 def test_verdict_no_calls_is_environment():
-    assert verdict(_stats(calls=0, distinct_ids=0), [], _container(GALAXY), expected=788) == "no_calls"
+    assert verdict(_stats(calls=0), [], _container(GALAXY), expected=788) == "no_calls"
 
 
 def test_verdict_caller_unnamed_is_environment():
@@ -148,7 +146,7 @@ def test_verdict_caller_mixed_is_environment():
 
 def test_verdict_scope_constant_is_environment():
     rows = _rows([5])                   # one id for every call: not the per-system scope shape
-    assert verdict(_stats(distinct_ids=1), rows, _container(GALAXY), expected=788) == "scope_constant"
+    assert verdict(_stats(), rows, _container(GALAXY), expected=788, distinct=1) == "scope_constant"
 
 
 def test_verdict_ids_out_of_range_is_a_negative():
@@ -160,7 +158,7 @@ def test_verdict_ids_out_of_range_is_a_negative():
 def test_verdict_ids_not_in_container_is_a_negative():
     rows = _rows([1, 2, 3])             # 3 is in range but not in the container
     container = _container([1, 2, 5, 6, 7, 8, 9, 10, 11, 12])
-    assert verdict(_stats(distinct_ids=3), rows, container, expected=10) == "ids_not_in_container"
+    assert verdict(_stats(), rows, container, expected=10, distinct=3) == "ids_not_in_container"
 
 
 def test_verdict_denominator_mismatch():
@@ -173,10 +171,26 @@ def test_verdict_container_unreadable():
     assert verdict(_stats(), _rows([1]), None, expected=788) == "container_unreadable"
 
 
-def test_verdict_dedupe_full_is_never_evidence():
-    reading = verdict(_stats(dedupe_full=3), _rows(GALAXY), _container(GALAXY), expected=788)
-    assert reading == "dedupe_full"
+def test_verdict_caller_sampled_when_the_ring_is_off():
+    """§91.3: no rows + a caller in stats is a *sample*, not a proof of uniqueness."""
+    reading = verdict(_stats(last_caller=0x1D08520), [], _container(GALAXY), expected=788)
+    assert reading == "caller_sampled"
     assert reading not in EVIDENCE_VERDICTS
+    assert verdict(_stats(), [], _container(GALAXY), expected=788) == "no_rows"
+
+
+def test_verdict_ring_truncation_is_never_evidence():
+    reading = verdict(_stats(dropped=3), _rows(GALAXY), _container(GALAXY), expected=788,
+                      distinct=len(GALAXY))
+    assert reading == "ring_truncated"
+    assert reading not in EVIDENCE_VERDICTS
+
+
+def test_aggregate_folds_duplicates_from_the_ring():
+    rows = _rows([7, 7, 9])
+    folded = mod.aggregate(rows)
+    assert len(folded) == 2
+    assert {r["id"]: r["occurrences"] for r in folded} == {7: 2, 9: 1}
 
 
 def test_verdict_instrument_broken_wins():
@@ -232,7 +246,8 @@ def test_the_detour_forwards_with_a_tail_call():
     assert "return f(self, scope, a3);" not in src
 
 
-def test_record_mode_default_is_the_full_path():
-    """§91.2: 0/1 are bisect builds (count-only / reads-only); the shipped value is 2."""
+def test_the_recording_path_is_lock_free():
+    """§91.2: the spinlock + dedupe table killed the game; the ring append must stay lock-free."""
     src = ZIG.read_text()
-    assert "const RECORD_MODE: u8 = 2;" in src
+    assert "lockRec" not in src
+    assert "@atomicRmw(u64, &head, .Add, 1, .monotonic)" in src

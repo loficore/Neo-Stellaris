@@ -14,7 +14,7 @@
 **verdict 值域**(环境/仪器档在前):
 
   * `instrument_broken` —— layout 靶位不符 / 装着但 hook 丢了;
-  * `no_calls` / `dedupe_full` / `container_unreadable` / `dispatch_denominator_mismatch`
+  * `no_calls` / `ring_truncated` / `container_unreadable` / `dispatch_denominator_mismatch`
     / `caller_unnamed` / `caller_mixed` / `scope_constant` —— 环境或仪器档,**不是**证据;
   * `ids_out_of_range` / `ids_not_in_container` —— 判负;
   * `dispatch_named` —— 证据:调用者 RVA 唯一且落在镜像里、id 去重后 ⊆ 容器且落在 `[1,N]`。
@@ -52,19 +52,21 @@ PROLOGUE_LEN = 32               # EXPECTED_CODE length in the Zig module
 
 STATS_KEYS = (
     "calls",
-    "distinct_ids",
-    "dedupe_full",
+    "dropped",
     "null_scope",
     "patch_size",
     "installed",
     "verify",
     "last_id",
+    "last_caller",
 )
 
 VERDICTS = (
     "instrument_broken",
     "no_calls",
-    "dedupe_full",
+    "no_rows",
+    "ring_truncated",
+    "caller_sampled",
     "container_unreadable",
     "dispatch_denominator_mismatch",
     "caller_unnamed",
@@ -141,14 +143,30 @@ def decode_container(blob, count):
 # --- judgement --------------------------------------------------------------------
 
 
-def verdict(stats, rows, container, *, expected):
-    """The single judgement. Environment classes first; `instrument_broken` wins over all."""
+def aggregate(rows):
+    """Fold duplicate `(caller, id)` samples; the DLL no longer keeps a table (§91.2)."""
+    folded = {}
+    for row in rows:
+        key = (row["caller_rva"], row["id"], row["mask"])
+        if key in folded:
+            folded[key]["occurrences"] += row["occurrences"]
+        else:
+            folded[key] = dict(row)
+    return list(folded.values())
+
+
+def verdict(stats, rows, container, *, expected, distinct=None):
+    """The single judgement. Environment classes first; `instrument_broken` wins over all.
+
+    `distinct` is the deduplicated id count; it defaults to the row count when the caller has
+    already folded rows (the artifact path passes it explicitly).
+    """
     if stats["installed"] == 1 and stats["verify"] != 0:
         return "instrument_broken"
     if stats["calls"] == 0:
         return "no_calls"
-    if stats["dedupe_full"] != 0:
-        return "dedupe_full"
+    if stats["dropped"] != 0:
+        return "ring_truncated"
     if not container or not container.get("ids"):
         return "container_unreadable"
     if container["raw_count"] != len(container["ids"]):
@@ -156,6 +174,9 @@ def verdict(stats, rows, container, *, expected):
     if container["raw_count"] != expected:
         return "dispatch_denominator_mismatch"
 
+    if not rows:
+        # §91.3: the ring killed the game, so the shipped probe keeps one caller slot in stats.
+        return "caller_sampled" if stats["last_caller"] else "no_rows"
     callers = {row["caller_rva"] for row in rows}
     if not callers or 0 in callers:
         return "caller_unnamed"
@@ -167,7 +188,7 @@ def verdict(stats, rows, container, *, expected):
         return "ids_out_of_range"
     if not guard_ids <= set(container["ids"]):
         return "ids_not_in_container"
-    if stats["distinct_ids"] < 2:
+    if (distinct if distinct is not None else len(rows)) < 2:
         # One id for every call: the second argument is not the per-system scope shape.
         return "scope_constant"
     return "dispatch_named"
@@ -406,6 +427,7 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
         if not rows and early_rows:
             rows = early_rows
             meta["rows_from"] = "early"
+        rows = aggregate(rows)
 
         delta = {key: after[key] - before[key] for key in STATS_KEYS}
         delta["installed"] = after["installed"]
@@ -420,7 +442,11 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
             "script_sends": 0,
             "entries": len(rows),
         })
-        meta["overall_verdict"] = verdict(delta, rows, container, expected=systems)
+        distinct = len({row["id"] for row in rows})
+        meta["distinct_ids"] = distinct
+        meta["last_caller"] = f"0x{delta['last_caller']:x}"
+        meta["overall_verdict"] = verdict(delta, rows, container, expected=systems,
+                                          distinct=distinct)
     finally:
         uninstall_rc = _safe(lambda: _signed32(harness.call_remote(
             pid, base, exports["C6ExecCallerUninstall"])))
