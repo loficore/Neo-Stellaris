@@ -9266,3 +9266,49 @@ Step 4(scope_id_read_named 行追 id 落到哪个表)**不适用**:named=0,无�
 **未观测/欠账**:`0x3B1330` 何时被循环调用 = 未观测(离线,零 shot);§82.2 记其直接调用者共 3 处,
 本口径只复核 `0x1A76324` 这一条传参路径;`0x1cc4450`/`0x2185254` 两个半截目标的内部读点不在口径内;
 动态派发 `call [rax+0x70]` 的第二层下游 `+0x10` 读点未判。
+
+## §88 星连图容器的版本/变更信号:候选 offset 与两侧站点（2026-11-01,离线,零 shot）
+
+**问题**:C5 需要「运行时星连图的版本/变更信号(缓存失效用)」。本轮零 shot 问:在 `0x3260BB0`
+的全体读者里,`disp ∈ [0x580,0x5C0)` 的哪个 offset **同时**存在「变更时写」与「读侧比较」两处站点。
+探针 = `scripts/scratch/2026-11_graph_version/graph_version_scan.py`。
+
+**口径**:① `riprefs.refs_for({0x3260BB0}, ".text", verify=True)` = 5,523 个读者站点,按 `.pdata`
+归桶 = 4,024 个函数;② 桶函数按 extent 对齐反汇编,收 `disp ∈ [0x580,0x5C0)` 的内存操作(无 index;
+base 为 rsp/rbp 或 rip 的直接剔除 —— 同 disp 不同对象,§87 的陷阱在这里同样成立);③ 判决只看
+`base_confirmed=1` 的行:base 线性回扫 ≤64 条追到 `mov/lea <b>, [rip->0x3260BB0]`(允许
+`mov b,r2` 逐跳;`call` 只对 caller-saved 是界,沿用 §87 裁定②);④ 写点向后 4 条找
+inc/add/mov imm 判「计数器更新」形态;⑤ 全量 853 行表存
+`evidence/xrefs/graph_version_sites_4_4_4.tsv`(内嵌文档会淹没判词,逐 offset 摘要如下)。
+
+**判词演变(诚实记录)**:首跑机械判决 = `version_signal_found`(+0x59C 记到 3 个「写」)。
+逐站点 ±3 原文手工复核证明是**探针分类错**:`idiv dword ptr [r13 + 0x59c]`(`9d117a`)的内存第一
+操作数是**除数 = 读**,写的是 eax/edx;紧随的 `9d1181: movsxd rcx, edx`、`9d1184: mov rax,
+qword ptr [r13 + 0x590]`、`9d118b: mov ebx, dword ptr [rax + rcx*4]` 表明这三处全是对 id 向量的
+**取模访问**(另两把同类:`c42355`、`db3e18`)。修正 `is_write`(排除 idiv/div/mul/imul)后重跑,
+判决 = **`no_version_signal`**。这就是 brief Step 3「写入发生在什么事件后 / 读侧是不是缓存键比较,
+两者缺一就降级」的执行结果:候选集合降级为空。
+
+**逐 offset 摘要(confirmed 口径,全量见 artifact)**:
+
+| offset | 全部站点 | confirmed | confirmed 写 | confirmed 读侧 cmp/test |
+|---|---|---|---|---|
+| 0x588 | 27 | 1 | 0 | 0 |
+| 0x590 | 281 | 60 | 0 | 0 |
+| 0x59C | 299 | 185 | **0** | 8 |
+| 其余 0x580..0x5BC(15 个) | 346 | 0 | 0 | 0 |
+
++0x59C 的读侧比较全是**边界/钳制**而非版本键 —— 例:`977215: cmp ecx, dword ptr [rax+0x59c]` →
+`jge`(索引 < 条数的检查)、`be4c63: cmp dword ptr [r8+0x59c], eax` → `jle`(钳制)。
+
+**判决词 = `no_version_signal`**:confirmed 口径内没有任何 offset 有「变更时写」站点(含修正前的
+3 个伪写,全表 write 形态的 +0x59C 站点为 0)。**平凡计数清单**:`+0x59C` = 原始条数(§80.2 已钉,
+本轮从读侧再钉死:它是边界比较与取模的除数,不是版本键)、`+0x590` = id 向量 begin(60 读零写)、
+`+0x588` = 相邻字段(1 读)。**「静态推断,未验证」标签生效。**
+
+**未观测/欠账**:① 容器的**变更方**(增量 +0x59C 的代码)不在本口径的读侧集合里 —— 它经参数/成员
+路径拿容器指针,不直接 rip 引用 `0x3260BB0`;要找版本信号得沿对象 ctor/mutation 另开一轮,本节不猜。
+② raw 853 行里的 `[rdi+0x588]`/`[rsi+0x590]` 写站点 base 追不到 rip 装载 ⇒ 是别的同 disp 大对象,
+不进判决。③ 何时被调 = 未观测(离线,零 shot)。
+**spec 联动**:判决不是 `version_signal_found` ⇒ `docs/c5-pilot2-spec.md` §2 该行**不改**,
+状态仍 `未观测`,欠账即本节。
