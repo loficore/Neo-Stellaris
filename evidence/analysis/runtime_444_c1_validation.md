@@ -9082,3 +9082,118 @@ dtor 列 `0x34C090`,insert `0x3AEF60`)与本探针独立推出的四址、token�
 
 **何时被调:未观测。** 本节不写「类的实例何时被创建」的结论 —— 注册 stub 自身的调用时机同样未观测
 (那是 `0x23AC600` thunk 数组的驱动问题,§17 旧账)。
+
+## §86 类 A 的 [self+0xC0] 子表:0x25EBAB8 的 +0x70 = 0x3B1EF0 是什么(2026-11-01,离线,零 shot)
+
+**问题(§83.3 之问 ②)**:§83.2 停在「getter 返回值是什么类没读」;本节把 `0x25EBAB8` 这张
+类 A 第三基表读完,并回答它的 `+0x70 = 0x3B1EF0` 的语义与两个 getter(`0x18BE4E0`/`0x18BEBF0`)
+的返回形态。探针:`scripts/scratch/2026-11_subobject_dispatch/subobject_dispatch.py`
+(只读 exe 拷贝;槽 qword 按装载形态存 **VA**,探针统一归一回 RVA)。
+
+**口径(裁定,先说清两处)**:① 计划断言「每个 `target_rva` 在 `.pdata` 内」对 48 槽全量**不成立**
+(19 槽目标在任何 RUNTIME_FUNCTION extent 之外,如 `0x156540`/`0x159730`)——处理是:断言只对
+`target_kind ∈ {func_head, mid_function}` 的行生效,越界槽以 `not_in_pdata` 显式带出,不删行。
+② `base_register`/`base_subobject_offset`/`evidence_site` 三列来自 host 侧字节:在
+`0x18B7B70..0x18B7B8B`(§83.2 的候选派发 stub,装在宿主主表 `+0x70`)里对齐解码重新定位到
+`0x18b7b7a add rcx,0xc0` → `0x18b7b87 call 0x18BE4E0`——注意该 stub 的 `.pdata` EndAddress
+`0x18b7b8b` 比最后一条 `call` 的真实结束点 `0x18b7b8c` **少一个字节**,探针按 +16 字节窗口越过
+extent 尾才看见这条 call;extent 截断往 §24.4 那个方向又添一例,这里是「截在函数自身末条指令中间」。
+
+**读数(TSV,探针 stdout 逐字;48 行全列)**:
+
+```
+host_vtable	slot	target_rva	target_kind	base_register	base_subobject_offset	evidence_site
+25ebab8	+0x0	18b3450	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x8	18bc000	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x10	156540	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x18	156570	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x20	18c641c	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x28	1568b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x30	156540	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x38	156570	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x40	18aad60	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x48	3afd30	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x50	1929500	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x58	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x60	3b1770	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x68	192a5a0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x70	3b1ef0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x78	3b2410	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x80	3b0f80	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x88	192a1b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x90	3b1230	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x98	1b2f30	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xa0	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xa8	349640	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xb0	3b1330	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xb8	241bd0	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xc0	1b4550	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xc8	15db30	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xd0	1929600	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xd8	3b1420	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xe0	3b1470	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xe8	3b14b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xf0	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0xf8	3b2ad0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x100	3b2b40	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x108	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x110	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x118	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x120	18c6428	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x128	1568b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x130	156540	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x138	156570	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x140	18c61dc	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x148	1568b0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x150	156540	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x158	156570	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x160	18b3490	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x168	3afd30	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x170	18b0ae0	func_head	rcx	+0xC0	18b7b7a:add rcx,0xc0
+25ebab8	+0x178	159730	not_in_pdata	rcx	+0xC0	18b7b7a:add rcx,0xc0```
+
+**锚点复核(Step 1 断言,全过)**:`0x25EBAB8+0x48 = 0x3AFD30` ✓、`+0xB0 = 0x3B1330` ✓;
+主表 `0x25FDE58+0x08 = 0x3AFD30` ✓、`0x25FDD78+0x08 = 0x3AFD30` ✓(槽号按表分,主表 execute 在
+`+0x08`、子表 execute 在 `+0x48`,与 §83.2 一致,不混用)。族内槽点名:
+`+0x48→3afd30, +0x80→3b0f80, +0x90→3b1230, +0xb0→3b1330, +0xd8→3b1420, +0x168→3afd30`
+(注意 `0x168` 又是一个 `0x3AFD30` —— 同一张表里 execute 基体出现两次,槽号 `+0x48`/`+0x168`)。
+
+**判决词:`same_family_parse_dispatch`** —— 判据 = `+0x08 或 +0x48 == 0x3AFD30` 且
+`+0x90 或 +0xB0 == 0x3B1330`,本表走 `+0x48`/`+0xB0` 那组。
+
+**`family_def=neighborhood`**:定义 = vtable ±0x200 内出现
+`{0x3AFD30, 0x3B1330, 0x3B01A0, 0x3B1420, 0x3B0F80, 0x3B1230}` 任一(§83.2 补记 ①;与 §85 同一口径)。
+
+**Step 3 独立复核**:`python3 scripts/vtable.py 0x25ebab8 --slots 48 --callers` 的 `[0xe] +0x70 -> 3b1ef0`
+行与探针一致,且 48 个槽 qword 逐个数值对账 **mismatches=0**(另一条读取通道:`.rdata` 原始字节)。
+
+**`+0x70 = 0x3B1EF0` 的语义(按函数体,`0x3b1ef0..0x3b240b`,319 条对齐解码)**:
+- 它**不是**消费 token 流的 parse,也**不是** bool 谓词:返回值 `mov rax, rdi`(`0x3b23ee`)= 原样返回
+  输出实参;`self` 字段只读 `+0x00`(vtable)、`+0x10`/`+0x1c`(子向量指针 × 条数,§24.4.2 形状),
+  **没有任何 `[self+0x20]/+0x28/+0x38/+0x40]` 的 token 字段读**(探针 `token_field_reads=none`)。
+- 形态是**递归子表书写器**:先 `[self_vtable+0x58]`(`0x3b1f59`)拿 bool 门,再按深度把 `"   "`
+  (`0x24c7b50`,`r8d=3`,`0x3b1f76-0x3b1f8a` 循环 `sub rbx,1/jne`)与子代名/`'\n'`
+  (`0x247a4f0`,`0x3b2269`/`0x3b2273`)append 进 SSO 串(`0x1c89700` = append 通道,`0x1cc4450` = 释放);
+  对每个子代 `mov rax,[child]; call [rax+0x30]`(`0x3b20ab-0x3b20b8`,子代 slot[6])递归取串,
+  取回后再与自身 `[self_vtable+0x28]`(`0x3b1f9d`)的串头做前缀合并;还读全局 `0x3260BB0+0x150`
+  (`0x3b23c2`)与写 `0x3260B90` 字节、`[rsi+0x168]=0`(`0x3b23e7`)。
+- **`+0x70` 的语义按宿主表给出,不外推到其它基** —— `+0x58`/`+0x28`/`[child+0x30]` 这些被它派的槽,
+  在主表 `0x25FDE58`/`0x25FDD78` 上是别的函数;本节只宣告本表读数。
+- 直接调用点(`fastcalls.py 0x3b1ef0`,产物 `evidence/xrefs/callers_0x3b1ef0_buckets.tsv`):
+  2 条,`0x3af80e`(在 `0x3af7a0..0x3af8bd`)与 `0x1906bd2`(在 `0x1906b90..0x1906bfe`),两处都是
+  先 `test al,al` 门后调用、拿回串接着用(`0x3af814 lea rdx,[rax+0x10]`)。间接派发(经
+  `call [vtable+0x70]`)离线不计数。
+
+**getter 两枚(Step ④)**:`0x18BE4E0` 与兄弟 `0x18BEBF0`(同 `0x672` 长度、同 unwind 结构)在
+`0x18beb05`/`0x18bf215` 尾段把实活委托给 `0x18BE450`/`0x18BEB60`(同形,`0x83` 字节)。委托体读子对象
+(= 宿主 `this+0xC0` 处、vtable 为 `0x25EBAB8` 的对象)的 `+0x00`(vtable)/`+0x08`(元素向量)/
+`+0x14`(条数),按 16 B 步长遍历元素、对每个 `call [elem_vtable+0x10]` 拿 bool(`0x18be495`),
+命中 ⇒ 返回该元素(`0x18be4c6-0x18be4d1`),全不命中 ⇒ 返回 `lea rax,[sub+0x18]`(`0x18be4a2`)。
+⇒ **`getter_return_class = unknown`** —— 两条返回都是动态来源(元素或成员),委托体里
+**零条** `lea [rip->函数首/vtable]` 返回形态;宿主 `0x18B7B70` 随后的 `mov rcx,[rax]` 解引用的是
+「 whichever 返回对象的 [obj+0]」,离线给不出唯一类。getter 体内那枚
+`lea rax,[rip->0x25E9E40]`(`0x18be51e`)是**栈上临时迭代子**的 vtable(`0x18c6e80` 用、
+`0x18c6a90` 毁),不在返回路径上。
+
+**未观测/欠账**:`+0x70` 何时被调 = 未观测(离线,零 shot);`0x156540`/`0x159730` 那 19 个
+`not_in_pdata` 槽目标为何形态(热补丁跳板?gap 内 shim?)本节不判。
