@@ -9689,3 +9689,54 @@ vtable `0x26562D0` 的完整槽位(`python3 scripts/disrva.py` + `.rdata` 直读
    (§81.2 的三条「不能说」照旧)。
 3. **六发里有三发死因只到「记录路径」这一层**:是环写的时序、还是逐调用多出来的那一小段开工,
    **没有区分开**(需要 dump/调试器,本机没有)。下一任必须先把这一层分掉,再谈把 `caller_rva` 读出来。
+
+### §91.6 派发方读到了:`0x3B101F` 的返回地址 = `0x3B0F80` 里的 `call [rax+0x48]`(2026-11-02,实机一发 + 离线定位)
+
+**做法**:把环改成**有界采样**(只记前 `RING_CAP=8` 次,记满即关),这样每次调用最多做一次原子读;
+单槽 `last_caller` 同时保留。artifact `C:\temp\c5_c17.tsv`:
+
+```
+stats_delta=calls=787 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=786 last_caller=3870751
+#meta last_caller=0x3b101f   #meta gate=operator_override   #meta container_raw_count=787
+#meta host_alive=0           #meta died_mid_poll=1
+```
+
+- `last_caller = 0x3B101F` —— 在镜像 `.text` 内,是**调用点的返回地址**;
+- `last_id = 786` —— 同一发的 scope id,落在容器 id 集内(`[1,787]`)。
+
+**这个地址是什么**(离线直读 `scripts/disrva.py 0x3B0FA0`):
+
+```
+003b1000  mov  rax, qword ptr [rdi]
+003b1003  mov  rdx, rbp              ; ← 第二实参 = 逐系统 scope
+003b1006  mov  rcx, rdi              ; ← 第一实参 = 效果对象
+003b1009  call qword ptr [rax + 0xa8]   ; slot[21]:先问一次(谓词/前置)
+003b100f  test al, al
+003b1011  je   0x1403b1020
+003b1013  mov  rax, qword ptr [rdi]
+003b1016  mov  rdx, rbp
+003b1019  mov  rcx, rdi
+003b101c  call qword ptr [rax + 0x48]   ; ← 派发:slot[9],返回地址 = 0x3B101F
+003b101f  nop
+```
+
+⇒ **逐系统派发是一次 `[对象+0x48]`(slot[9]) 的虚调用**,位置在函数 **`0x3B0F80..0x3B1155`(469 B)** 内;
+`rdx` 就是那一轮的 scope(它的 `+0x10` 是 id,`+0x08` 是 mask,和 §80.2 一致)。
+
+**再上一层**(`scripts/fastcalls.py 0x3B0F80`):全库只有 **2** 个直接调用者 ——
+`0x3B2BE0..0x3B2E22`(函数里含字符串 `UpdateModifiers`)与
+**`0x17F4950..0x17F4C14`(含字符串 `effect_impl.cpp`)**;后者就是效果执行机器,
+`0x17F49B6 call 0x3B0F80` 是它的一次派发点。⇒ 「787 次/轮」的循环在 `0x17F4950` 这一层,
+`0x3B0F80` 是**单次派发**,`call [rax+0x48]` 是**子效果入口**。
+
+**这一发还是把游戏弄死了**(`host_alive=0`,`died_mid_poll=1`,`uninstall_rc=unknown`)——
+有界采样(8 条)也死,所以 §91.3「凶手在环写」这句话要收窄成:**凶手在「记录路径」这一层,
+且有界也躲不掉**;只计数 / 计数+读 / 完全无记录三种都活。下一步必须先拿到异常码(本地 dump 或
+调试器),再谈把这个仪器变成可常态使用的通道。
+
+**这一节不能说的(三条)。**
+1. `0x3B101F` 是**一次**(最后一次)采样的返回地址;`call [rax+0x48]` 是**唯一**的派发点这一点,
+   来自「同一次下发里 787 个 id 全来自它」的一致性,不是 787 次逐条记录。
+2. `last_id=786` 只证明「id 落在 `[1,787]` 且就是这一轮最后一个」;**不等于**它等于 `system_id`(§81.2 照旧)。
+3. `0x17F4950` 是「调用 `0x3B0F80` 的函数」,**没有**逐条确认它内部是 `for` 循环还是别种枚举;
+   「循环在哪里」这句话的强度只到「它在 `0x17F4950` 这一层」。

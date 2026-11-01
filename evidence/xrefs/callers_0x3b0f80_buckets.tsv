@@ -1,0 +1,3 @@
+# caller_count	func_start	func_end	src_files	sites	ref_strings
+1	0x3b2be0	0x3b2e22		0x3b2bfb	0x24ea8a0:UpdateModifiers | 0x24ea8a8:difiers
+1	0x17f4950	0x17f4c14	effect_impl.cpp	0x17f49b6	

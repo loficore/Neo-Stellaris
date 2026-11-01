@@ -140,21 +140,23 @@ pub fn snapshot() Snapshot {
     };
 }
 
-/// `false` = no ring at all; the only caller information is `stats.last_caller`.
-/// 2026-11-01: every build that appended to the ring killed the game within a burst, while
-/// count-only and count-plus-reads survived, so the shipped default for this probe is the
-/// ring-free reading (§91.3). The ring code stays for the next instrument that can afford it.
-pub const RING_ENABLED = false;
+/// Bounded capture (§91.6): the **first** `RING_CAP` calls are recorded, then the recorder
+/// closes itself.  An unbounded ring killed the game 3/3 (an unbounded append inside a
+/// 787-call burst), while count-only and count-plus-reads survived; bounding the work to a
+/// handful of writes keeps the information we actually need — the first few calls of a round
+/// all come from the same dispatcher — without the unbounded cost.
+pub const RING_ENABLED = true;
+pub const RING_CAP: usize = 8;
 
 /// One recorded call. Pure: the host tests drive it directly.
 pub fn recordSample(caller_rva: u32, id: u32, mask: u32, self_ptr: u64, scope: u64) void {
     @atomicStore(u32, &stats.last_id, id, .monotonic);
-    if (!RING_ENABLED) {
-        @atomicStore(u32, &stats.last_caller, caller_rva, .monotonic);
-        return;
-    }
+    @atomicStore(u32, &stats.last_caller, caller_rva, .monotonic);
+    if (!RING_ENABLED) return;
+    // Closed recorder: one atomic load and we are out. Nothing is written after the cap.
+    if (@atomicLoad(u64, &head, .monotonic) >= RING_CAP) return;
     const slot = @atomicRmw(u64, &head, .Add, 1, .monotonic);
-    if (slot < RING_LEN) {
+    if (slot < RING_CAP) {
         ring[@intCast(slot)] = .{
             .caller_rva = caller_rva,
             .id = id,
@@ -418,26 +420,33 @@ test "EXPECTED_CODE pins the 15-byte patch window" {
     );
 }
 
-test "ring-free mode keeps the caller in stats and writes no rows" {
+test "bounded capture records the first RING_CAP calls and then closes" {
     resetForTest();
-    recordSample(0x1D08520, 42, 0x80, 0xABC, 0x1000);
-    recordSample(0x1D08521, 43, 0x80, 0xABC, 0x1000);
+    var i: u32 = 0;
+    while (i < RING_CAP + 4) : (i += 1) recordSample(0x1D08520, 100 + i, 0x80, 0xABC, 0x1000);
     const s = snapshot();
-    try std.testing.expectEqual(@as(u32, 0), s.samples); // RING_ENABLED == false
-    try std.testing.expectEqual(@as(u32, 43), s.last_id);
-    try std.testing.expectEqual(@as(u32, 0x1D08521),
+    try std.testing.expectEqual(@as(u32, RING_CAP), s.samples);
+    // The closed recorder returns before touching any counter: `dropped` only counts a
+    // sample that raced past the cap on another thread, so a single-threaded run leaves 0.
+    try std.testing.expectEqual(@as(u64, 0), s.dropped);
+    try std.testing.expectEqual(@as(u32, 0x1D08520),
         @atomicLoad(u32, &stats.last_caller, .monotonic));
-    setDrainCap(@sizeOf(Entry));
-    var buf: [@sizeOf(Entry)]u8 align(8) = undefined;
-    try std.testing.expectEqual(@as(u32, 0), drainInto(&buf));
+
+    setDrainCap(RING_CAP * @sizeOf(Entry));
+    var buf: [RING_CAP * @sizeOf(Entry)]u8 align(8) = undefined;
+    try std.testing.expectEqual(@as(u32, RING_CAP), drainInto(&buf));
+    const first: *Entry = @ptrCast(@alignCast(&buf));
+    try std.testing.expectEqual(@as(u32, 0x1D08520), first.caller_rva);
+    try std.testing.expectEqual(@as(u32, 100), first.id);
 }
 
-test "the ring path is compiled out by default (it is what killed the game)" {
+test "the recorder stops touching the ring once it is closed" {
     resetForTest();
-    try std.testing.expect(!RING_ENABLED);
-    recordSample(0x1D08520, 7, 0x80, 0, 0x1000);
-    try std.testing.expectEqual(@as(u64, 0), snapshot().dropped);
-    try std.testing.expectEqual(@as(u32, 0), snapshot().samples);
+    var i: u32 = 0;
+    while (i < RING_CAP) : (i += 1) recordSample(0x1D08520, 1 + i, 0x80, 0, 0x1000);
+    const before = @atomicLoad(u64, &head, .monotonic);
+    recordSample(0xDEAD, 999, 0x80, 0, 0x1000);
+    try std.testing.expectEqual(before, @atomicLoad(u64, &head, .monotonic));
 }
 
 test "statsInto writes one k=v line with all seven keys" {
