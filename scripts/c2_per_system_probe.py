@@ -312,6 +312,16 @@ def preflight_paths(script_file, cmd_file):
         raise SystemExit(EXIT_REFUSED)
 
 
+def gate_label(allow_window):
+    """Which premise this shot was fired under — recorded in `#meta`.
+
+    `world_state` is the normal gate (`gate_install`). `operator_override` means the human
+    declared the premise and the driver skipped the gate; the artifact must say so, because
+    the reading then rests on that declaration, not on the state machine.
+    """
+    return "operator_override" if allow_window else "world_state"
+
+
 def refuse_if_resident(dll_name, base):
     """A same-name module already mapped means the loader reuses the old image."""
     if base:
@@ -428,7 +438,7 @@ def send_script(cmd_file, script, game_log, wait_s):
     return True, 0
 
 
-def gate_module(pid, dll_path, needed):
+def gate_module(pid, dll_path, needed, allow_window=False):
     """Check the export names in the FILE, gate the world state, then inject."""
     import c2_harness as harness
 
@@ -446,9 +456,12 @@ def gate_module(pid, dll_path, needed):
         resident = None
     refuse_if_resident(dll_name, resident)
 
-    from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+    if allow_window:
+        print("[persystem] gate skipped by operator override (--allow-window)")
+    else:
+        from world_probe import gate_install  # pyright: ignore[reportMissingImports]
 
-    gate_install("persystem")
+        gate_install("persystem")
     harness.inject_dll(pid, dll_path)
     harness.assert_game_alive(pid)
     base = harness.resolve_base_address(pid, dll_name)
@@ -465,7 +478,7 @@ def gate_module(pid, dll_path, needed):
 
 def run(dll_path, out_path, *, systems, save_name, script_file=None, game_log=None,
         cmd_file=DEFAULT_CMD_FILE, poll_s=120.0, settle_s=3.0, script_wait_s=180.0,
-        watch_only=False):
+        watch_only=False, allow_window=False):
     """One shot in one game process. Cleanup runs in a finally; never FreeLibrary."""
     import time
 
@@ -478,7 +491,7 @@ def run(dll_path, out_path, *, systems, save_name, script_file=None, game_log=No
 
     pid = harness.resolve_pid("stellaris.exe")
     needed = [name for name in harness.list_exports(dll_path) if name.startswith("C5PerSystem")]
-    base, exports = gate_module(pid, dll_path, needed)
+    base, exports = gate_module(pid, dll_path, needed, allow_window=allow_window)
     exe_base = harness.resolve_base_address(pid, "stellaris.exe")
 
     stats_buf = harness.remote_alloc(pid, STATS_SIZE)
@@ -503,6 +516,7 @@ def run(dll_path, out_path, *, systems, save_name, script_file=None, game_log=No
         "save_name": save_name,
         "install_rc": install_rc,
         "install_decision": decision,
+        "gate": gate_label(allow_window),
         "layout_target_rva": f"0x{layout['target_rva']:x}",
         "overall_verdict": "instrument_broken" if decision != "ok" else "",
         "host_alive": 1,
@@ -592,6 +606,8 @@ def main(argv=None):
     parser.add_argument("--save-name", required=True)
     parser.add_argument("--script-file", default=None,
                         help="console script; omit it with --watch-only")
+    parser.add_argument("--allow-window", action="store_true",
+                        help="operator-declared premise: skip gate_install (recorded in meta)")
     parser.add_argument("--watch-only", action="store_true",
                         help="send nothing: let the game's own scripts dispatch")
     parser.add_argument("--game-log", default=None)
@@ -607,7 +623,7 @@ def main(argv=None):
     meta = run(args.dll, args.out, systems=args.systems, save_name=args.save_name,
                script_file=args.script_file, game_log=args.game_log, cmd_file=args.cmd_file,
                poll_s=args.poll_s, settle_s=args.settle_s, script_wait_s=args.script_wait_s,
-               watch_only=args.watch_only)
+               watch_only=args.watch_only, allow_window=args.allow_window)
     return 0 if meta.get("overall_verdict") in EVIDENCE_VERDICTS else 1
 
 

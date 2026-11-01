@@ -27,6 +27,7 @@ from c2_per_system_probe import (
     decode_container,
     decode_entry,
     decode_layout,
+    gate_label,
     install_decision,
     parse_stats,
     preflight_paths,
@@ -313,3 +314,8 @@ def test_watch_no_calls_is_environment():
 def test_watch_instrument_broken_wins():
     stats = _stats(verify=-1)
     assert verdict_watch(stats, _rows(GALAXY), _container(GALAXY), expected=787) == "instrument_broken"
+
+
+def test_gate_label_records_an_operator_override():
+    assert gate_label(False) == "world_state"
+    assert gate_label(True) == "operator_override"
