@@ -9368,3 +9368,131 @@ fresh-context 评审对 §85–§88 提了 4 项 Important,全部判决词不受
 
 **影响范围**:只动了两枚 scratch 探针的判定函数与追加本节;§85/§86/§87/§88 的正文、判决词、
 artifact TSV(853+1 行,复跑逐字节同)均未改。`just check` 全绿。
+
+## §89 `+0x70` 不在执行路径:`every_system` 真的跑起来之后 `calls=0`(2026-11-01,实机一发 + 驱动层修正)
+
+**这一节回答什么。** §82.2 把「谁把子效果送进某个 scope」判成 `execute`(**有条件**)之后,悬着的那半句是
+「派发 `+0x70` 的一侧须是执行侧,那个派发方静态未定位」。§81.2 的「`PS_HIT` ×1」让这件事无法开打 ——
+**循环本身有没有真的逐系统跑**没被证明过。本节用一次实机 shot 把两件事一起钉住:先让驱动真的逐系统跑
+(磁盘上的测试 mod 在 4.4.4 里原本**不通过解析**),再在同一时间窗里读 `0x3B1330` 的调用数。
+判决词:**`+0x70`(base impl `0x3B1330`)不在 `every_system` 的执行路径上**。
+
+**授权级。** 实机只记录 detour 属「点名」:本次由操作者当场裁定「接着打 per_system 那一发读数」后执行,
+gate 走**真门** `world_state`(`#meta gate=world_state`,不是 `operator_override`)。
+
+### §89.1 测试 mod 在 4.4.4 里是语法非法的(文件层,零 shot)
+
+`mod/neo_ps_probe`(目录 `C:\Users\13229\Documents\Paradox Interactive\Stellaris\mod\neo_ps_probe`)原本只有
+两个文件:`descriptor.mod`(108 B)与 `common/on_actions/neo_ps_probe_on_actions.txt`(141 B,开头带 UTF-8 BOM
+`EF BB BF`)。那份 on_actions 用的是:
+
+```
+on_monthly_pulse = { on_actions = { neo_ps_monthly } }
+neo_ps_monthly   = { effect = { every_system = { log = "PS_HIT" } } }
+```
+
+2026-11-01 19:25 把 mod 放进播放集后,`logs/error.log` 出现两条(注意**不是**「没加载」,是**解析失败**):
+
+```
+[19:25:45][persistent.cpp:41]: Error: "Unexpected token: on_actions, near line: 2
+" in file: "common/on_actions/neo_ps_probe_on_actions.txt" near line: 4
+[19:25:45][persistent.cpp:41]: Error: "Unexpected token: effect, near line: 8
+" in file: "common/on_actions/neo_ps_probe_on_actions.txt" near line: 12
+```
+
+**4.4.4 的 on_action 块只收 `events` / `random_events`。** 判据是游戏自己 `common/on_actions/*.txt` 的内层键
+直方图:`events` 391、`random_events` 78、`effect` **0**、`on_actions` **0**;真实 workshop mod 同口径
+(`1121692237` 的 `000_giga_early_on_actions.txt` 一律 `events = { <event_id> }`)。无 scope 的 on_action 里
+被触发的事件形状也有现成例子:vanilla `on_monthly_pulse`(见 `00_on_actions.txt:86`,`# No scope, like
+on_game_start`)挂的是 `crisis.120`,而该事件的形状是 `event = { hide_window = yes is_triggered_only = yes
+trigger = { … } immediate = { … } }`。
+
+**改写后**(原文件备份在 `C:\temp\neo_ps_probe_on_actions.txt.orig`;新文件无 BOM):
+
+```
+common/on_actions/neo_ps_probe_on_actions.txt : on_monthly_pulse = { events = { neo_ps.1 } }
+events/neo_ps_probe_events.txt (新建)         : namespace = neo_ps / event = { id = neo_ps.1
+                                                hide_window = yes is_triggered_only = yes
+                                                immediate = { every_system = { log = "PS_HIT [This.GetName]" } } }
+```
+
+改完 `error.log` 中该 mod 的条目数 = **0**。
+
+**这一半解释了 §81.5 的 `PS_HIT=0` 吗?不完全 —— 是两个独立原因同时成立。** ① 10-31 那一发跑的时候
+`dlc_load.json` 是 `{"disabled_dlcs":[],"enabled_mods":[]}`(该文件 `LastWriteTime` 2026-10-30 23:21:14,正是
+经启动器那次 `just launch` 重写的结果)⇒ 零 mod;② 即便清单里有,这份 on_actions 在 4.4.4 里也解析失败。
+⇒ `PS_HIT=0` 对 `+0x70` 一字未说(与 §84.1 的结论方向一致,但这次是**在真机上复现的**)。
+
+### §89.2 驱动语义:`every_system` 从「无 scope 事件」里只跑一次(实机,零 shot 成分)
+
+同一份事件体,两种入口,同一份存档里连测:
+
+| 事件体 | 读数 |
+|---|---|
+| `immediate = { every_system = { log = "PS_HIT" } }`(无 scope) | `2281.2.1 … 2281.10.1` **每月恰好 1 条**,9 个月 9 条 |
+| `immediate = { random_system = { every_system = { log = "PS_HIT [This.GetName]" } } }` | `2282.2.1 … 2282.6.1` **每月 784 条**,每月**去重系统名 784 个**;连续 51 个月累计 39,984 条 = 51×784 |
+
+⇒ §81.2 那个「`PS_HIT` ×1」不是引擎只跑一次,是**驱动没进 system scope**。vanilla 同口径的入口在
+`common/scripted_effects/00_scripted_effects.txt:3265`(`isolate_system`:注释写 `this = solar system`,
+体内 `every_system = { limit = { has_hyperlane_to = prev } … }`);从无 scope 事件「先随机进一个 system」
+的样板是 `crisis.120` 的 `immediate`。两条附带口径:**`log` 不做去重**(784 条同文本也全写),`[This.GetName]`
+**会展开**(vanilla 里要打字面量方括号才写 `\[`)。
+
+### §89.3 实机一发:窗内 12,544 次逐系统下发,`0x3B1330` 被调用 0 次
+
+命令(`session_bridge` 进 session 1,gate 真门):
+
+```
+python C:/temp/session_bridge.py --timeout-s 400 C:/temp/c2_per_system_probe.py C:/temp/sqjs_c7.dll \
+  --systems 787 --save-name autosave_2282.01.01 --watch-only --poll-s 150 --out C:/temp/c5_per_system.tsv
+```
+
+`#meta`(**`C:\temp\c5_per_system.tsv`**,注入文件 `sqjs_c7.dll` sha256
+`b8a82f61300bc4794fd6306ca16aa3757ed52f2ec220e7786e297f6aae3db964`,与本仓库 `zig build` 产物同 sha):
+`exe_base=0x7ff6f4250000`、`module_base=0x7ff8ed1f0000`、`layout_target_rva=0x3b1330`、
+`gate=world_state`、`install_rc=0`、`install_decision=ok`、
+`stats_delta=calls=0 matched=0 distinct_ids=0 dedupe_full=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=0`、
+`container_raw_count=788`、`container_ids_sha256=400ca2e3f9d144b6eafe2fc773dd1eeac0c9569b9e511a8cc8ca014d431741d7`、
+`systems=787`(见下「一处口径欠账」)、`uninstall_rc=0`、`verify_rc=0`、`host_alive=1`、`overall_verdict=no_calls`。
+
+**窗内独立读数**(同一 `game.log`,工具之外的证人):19:52:50–19:55:40 共 **12,544** 条 `PS_HIT`,
+覆盖 16 个完整月度脉冲(`2284.7.1 … 2285.10.1`),`12,544 = 16 × 784`。
+
+⇒ 窗内逐系统下发确凿发生了 16 轮、每轮 784 次,而 `0x3B1330`(以及**任何** self,因为 `calls` 本身为 0)
+一次都没被调用。**判决:`+0x70` 的 base impl 不在执行路径上**;它在 §82.1/§82.2 那批证据里的身份只到
+「`[vptr+0x70]` 的 761 个槽 + 其中 231 个 `vptr+0x08==0x3AFD30`」,不包含「执行期逐系统派发」。
+
+**两处口径欠账(写出来,不许含糊)。**
+
+1. **`systems=787` 是上一场存档的分母。** 本次 `container_raw_count=788`(同一次读足,见 §81.1 ③ 的 blob 纪律),
+   而实际下发 784 ⇒ 差的 4 条按 §81.1 ④ 归到 `[obj+0x137C] == 0` 的引擎过滤位。**本次没有逐条核对那 4 个 id**,
+   `788-784=4` 的归因只是沿用静态读数。下一发 `--systems` 应写 788。
+2. **仪器缺口:`--watch-only` 的 `log_hits` 结构上恒为 0。** 文档「`matched==0` 靠日志分 `no_calls` 与
+   `filter_missed`」那条纪律在 watch-only 下**在 artifact 内部不可执行**(驱动不发脚本,`log_hits` 只数
+   自己脚本的 marker)。所以本次 `overall_verdict=no_calls` 按工具自己的分类仍属环境档;**把它读成证据的
+   是窗外那 12,544 行 `game.log`**。修法(下一轮):给驱动加 `--marker <text>`,watch-only 也从 `game.log`
+   数窗内行数,让两义在 artifact 内可分。
+
+### §89.4 通道层读数(同一轮,四条)
+
+| 事实 | 读数 | 处置 |
+|---|---|---|
+| `just launch` 不幂等 | 游戏被带外 kill 后 `steam://rungameid` 不再拉起启动器窗口,连续两次 `LAUNCHER_WAIT result=timeout timeout_s=30`、`BRIDGE result=inner_exit code=21`(=`EXIT_LAUNCHER_WINDOW_MISSING`) | 改走 `session_bridge.py` + 直起 `stellaris.exe`(`channel_direct`);`dlc_load.json` 因此原样保留(启动器没机会重写) |
+| SSH 里直接起 exe = 没有桌面 | `Start-Process …\stellaris.exe` 得到的进程 `SessionId=0` | 必须经 `session_bridge`(它建 `NSWorldOneShot` 任务并 `/run /I`) |
+| `just launch` 的桌面门前置会陈旧 | `DESKTOP_GATE verdict=keep_awake_stale`,`exit 25`;`ns_awake_status.json` age=155129 s(43 h) | `just awake start`(之后 `STATE=serving … age=0.4s pid=15924`) |
+| 主机脚本落后仓库 | `C:\temp\game_supervisor.py` sha 前 16 位 `F38C7C01…` ≠ 仓库 `a67fe9e8…`;`popup_geometry.py` `CE097BA8…` ≠ `e9ef671d…` ⇒ **#32 的修复此前不在主机上** | `just deploy`(之后两枚 sha 与仓库一致);本轮 shot 的 `gate=world_state` 放行,是 D1 修复第一次在真战役窗上跑,但**只证明「没误判」**,不是压测 |
+
+另一条要收窄的旧口径:文档「注入的鼠标到不了 Stellaris,键盘可以」**只对进游戏后的 HUD/事件窗成立**。
+主菜单里 `Click` 有效(本轮点开「载入游戏」、点「读取最新存档」均生效),`Shortcut "space"` 一直有效
+(解/暂停各三次)。
+
+### §89.5 这一发不能说的(三条)
+
+1. **`calls=0` 只覆盖这一个函数、这一个窗。** 它证明 `0x3B1330` 在上述 150 s 内没被调用,不证明
+   「client 侧永远不经 `+0x70`」——`+0x70` 的另外 760 个槽、以及 parse 期的类实例化路径都没被这一发覆盖。
+2. **`PS_HIT` 计的是「下发体被执行」**,不证明子效果在每个 system scope 里执行成功(本次 `log` 无 scope 依赖,
+   所以这条证人只到「循环进过每个系统」)。
+3. **4 条被筛掉的系统没有逐条取证**(见 §89.3 欠账 1);`--systems` 的口径在本次 artifact 里是错的(stale 787)。
+
+**没动仓库里任何判定代码。** 本轮改的只有:测试 mod 的两个文件(仓库外)、`C:\temp` 里的部署副本、
+以及本节 + `docs/roadmap.md` 的 C5 行就地改写。`just check` 全绿。
