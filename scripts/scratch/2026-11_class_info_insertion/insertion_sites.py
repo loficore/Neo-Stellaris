@@ -166,18 +166,27 @@ def rip_raw_sites():
     return {t: {site for site, _enc in h.get(t, [])} for t in REF_TARGETS}
 
 
+NOT_A_WRITE = {"cmp", "test", "push", "call", "jmp", "ret"}
+SUBREG = {"ecx": "rcx", "edx": "rdx", "r8d": "r8",
+          "cl": "rcx", "dl": "rdx", "r8b": "r8"}
+
+
 def argtrace(site, tag, fs, fe):
-    """插入点前 12 条指令里对 rcx/rdx/r8 的最后一次写入;rdx 的立即数即 token id."""
+    """插入点前 12 条指令里对 rcx/rdx/r8 的最后一次写入;rdx 的立即数即 token id.
+
+    本 capstone 构建对显式目的寄存器不填 regs_write(评审轮实测),
+    故按「第一操作数是寄存器 且 助记符不在非写黑名单」判定写入,子寄存器归一到父寄存器."""
     want = {"rcx", "rdx", "r8"}
     ins_list = [i for i in md.disasm(rd(fs, site - fs + 5), BASE + fs)
                 if i.address - BASE < site][-12:]
     last = {}
     for ins in ins_list:
-        if not ins.operands:
+        if not ins.operands or ins.mnemonic in NOT_A_WRITE:
             continue
         op0 = ins.operands[0]
-        if op0.type == 1 and op0.reg in ins.regs_write:
-            rn = ins.reg_name(op0.reg).lower()
+        if op0.type == 1:
+            rn = SUBREG.get(ins.reg_name(op0.reg).lower(),
+                            ins.reg_name(op0.reg).lower())
             if rn in want:
                 last[rn] = ins
     lines = []

@@ -9334,3 +9334,37 @@ fresh-context 评审对 §85–§88 提了 4 项 Important,全部判决词不受
    所以引用的 stdout 里第 9 列是距离的复读。修正为 `r[8]` 后重跑(task4_run3.log):parse_body 三行的
    `call_path` 现在真是 `1a7631c:lea rdx,[rsp+0x20] -> 1a76324:call 0x3b1330(rcx=self, r8=r15)`,
    e8_target 行为来源标签。站点集合七行、判决词、base_source 分类均未变。
+
+## §85–§88 勘误补记二(final review Minor 轮,2026-11-01,离线,零 shot)
+
+评审轮遗留五条 Minor,本轮逐条处置(先按对抗口径复核评审说法本身,再动探针)。判决词全部不变。
+
+1. **Minor 1(§86 的 self 字段枚举)—— 补消歧,原文不改。** §86 说 `0x3B1EF0` 对 `self` 只读
+   `+0x00`/`+0x10`/`+0x1c`;评审问函数体里出现的 `[r14+0x18]`(`0x3b2138 cmp qword ptr [r14+0x18], 0x10`)
+   算不算漏。核查:`r14` 的来源是 `0x3b2134 lea r14, [rbx + 0x10]` —— 指向**函数自己栈上的 SSO 串**,
+   `+0x18` 是它的容量字段,与 `self` 无关;该枚 +0x18 不构成对本节枚举的反例。委托体侧的
+   `lea rax,[sub+0x18]`(`0x18be4a2`)是返回成员串头的既有描述(§86 getter 段),同样不新增 self 读。
+2. **Minor 2(§86 的 `0x3260B90` 写法)—— 驳回评审说法,证据不落原文。** 评审称该存储目标应为
+   `0x3260B91`。复核:`python3 scripts/disrva.py 0x3b23c2 --len=0x24` 给出
+   `003b23d5 mov byte ptr [rip + 0x2eae7b5], bl ; -> 0x3260b90`,下一条指令在 `0x3b23db` ——
+   评审把「下一条指令地址 `0x3b23dc`」的 off-by-one 误当成了操作数目标。卷内文本正确,**未改动**;
+   本条只记驳回与依据。
+3. **Minor 3(§85 的 `argtrace` 自动实参回扫在首跑里是死的)—— 探针修复 + 复跑对账。**
+   本 capstone 构建对显式目的寄存器不填 `regs_write`(`mov rax, r8` 实测 `regs_write=[]`),
+   所以引用的 stdout 里 `## insert` 行尾的参数轨迹为空 —— §85 的两实参断言当时只有人工读支撑。
+   修复 `insertion_sites.py::argtrace`(第一操作数是寄存器 + 非写助记符黑名单 `{cmp,test,push,call,jmp,ret}` +
+   子寄存器归一)后复跑:
+   `## insert jmp@fbbe5(effect_insert) rcx<-mov rcx, rbx@fbbdd rdx<-mov edx, 0x2814@fbbd8 r8<-mov r8, rax@fbbd5`;
+   `## insert jmp@fbc55(effect_insert) rcx<-mov rcx, rbx@fbc4d rdx<-mov edx, 0x4860@fbc48 r8<-mov r8, rax@fbc45`。
+   `0x2814`=10260、`0x4860`=18528 —— 与 §85 人工读、与证据④的 token 逐字一致;机器轨迹自此与断言同源。
+4. **Minor 4(证据④「第 306/307 行」的口径)—— 澄清:那是 index 列值,不是物理行号。**
+   `awk` 对账:`keyword_behaviour_registration_4_4_4.tsv` 的 `index=306/307` 两行落在**物理第 295/296 行**
+   (表头占第 1 行)。列值与 thunk `0xfbb80`/`0xfbbf0`、token 10260/18528 的对账本身成立,原文措辞保留。
+5. **Minor 5(§87 探针 `writes_reg` 的两处口径盲区)—— 修复 + 复跑,站点集合与判决词不变。**
+   原实现把 `cmp`/`test` 的第一操作数误判为写,且不认子寄存器写(`mov edx,imm` 追不到 `rdx`)。
+   修复(排除 `cmp/test/push`;`SUBREG` 归一到父寄存器)后复跑:七行、`named=0`、`self_or_other=4`、
+   `stack=3`、`dash=0`、`verdict=no_scope_id_read_depth1`、`PASS` —— 与修复前逐字节同,盲区在这批
+   具体回扫路径上没有触发实例,但 depth-2 遍历会用到它们,故必须修。
+
+**影响范围**:只动了两枚 scratch 探针的判定函数与追加本节;§85/§86/§87/§88 的正文、判决词、
+artifact TSV(853+1 行,复跑逐字节同)均未改。`just check` 全绿。

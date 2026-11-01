@@ -53,10 +53,21 @@ def rn(ins, rid):
     return ins.reg_name(rid).lower()
 
 
+SUBREG = {"ecx": "rcx", "edx": "rdx", "r8d": "r8", "r9d": "r9", "r10d": "r10",
+          "r11d": "r11", "r12d": "r12", "r13d": "r13", "r14d": "r14",
+          "r15d": "r15", "esi": "rsi", "edi": "rdi", "ebx": "rbx", "ebp": "rbp",
+          "esp": "rsp", "ax": "rax", "cl": "rcx", "dl": "rdx"}
+
+
 def writes_reg(i, reg):
-    if i.mnemonic == "push":  # push 是读，不是写（pop 才是写，但本口径里 pop 落在 STOP 外不成问题）
+    # push 是读;cmp/test 只读操作数不写(pop 才是写,但本口径里 pop 落在 STOP 外不成问题)
+    if i.mnemonic in ("push", "cmp", "test"):
         return False
-    return i.operands and i.operands[0].type == X86_OP_REG and rn(i, i.operands[0].reg) == reg
+    if not i.operands or i.operands[0].type != X86_OP_REG:
+        return False
+    reg = SUBREG.get(reg, reg)
+    n = rn(i, i.operands[0].reg)
+    return SUBREG.get(n, n) == reg
 
 
 def trace(ins_list, idx, reg, stop_words=STOP):
