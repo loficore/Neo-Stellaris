@@ -97,9 +97,16 @@ def sha16(path: str) -> str:
 
 
 def pack_rule(rule: str) -> int:
-    """`"MOD:REM"` -> the u64 the DLL takes (`mod << 32 | rem`). `0:0` disables the rule."""
+    """`"MOD:REM"` -> the u64 the DLL takes (`mod << 32 | rem`). `0:0` disables the rule.
+
+    Raises `ValueError` on anything that is not two non-negative integers; the
+    caller turns that into a usage error, not a traceback (review M-7).
+    """
     mod_text, _, rem_text = rule.partition(":")
-    return (int(mod_text) << 32) | (int(rem_text or 0) & 0xFFFFFFFF)
+    mod, rem = int(mod_text), int(rem_text or 0)
+    if mod < 0 or rem < 0:
+        raise ValueError(f"rule must be MOD:REM with MOD,REM >= 0, got {rule!r}")
+    return (mod << 32) | (rem & 0xFFFFFFFF)
 
 
 def _signed32(value: int) -> int:
@@ -295,6 +302,10 @@ def main(argv=None) -> int:
     parser.add_argument("--log", default=None,
                         help="with --stats: also print this log's current byte offset")
     args = parser.parse_args(argv)
+    try:
+        pack_rule(args.rule)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.pred:
         return pred_stats(args.dll)
     if args.stats:

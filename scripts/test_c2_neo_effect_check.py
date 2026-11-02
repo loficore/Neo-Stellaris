@@ -34,7 +34,10 @@ def test_count_since_measures_nothing_when_the_offset_is_unknown(tmp_path):
 
 
 def test_cli_verdict_word_is_the_plan_vocabulary():
-    assert set(mod.VERDICTS) == {"neo_lines_ok", "neo_lines_short", "neo_lines_extra"}
+    # `neo_lines_unmeasured` is the 4th word added after the 2026-11-02 review
+    # (M-6): an unmeasured window is not "too few lines".
+    assert set(mod.VERDICTS) == {
+        "neo_lines_ok", "neo_lines_short", "neo_lines_extra", "neo_lines_unmeasured"}
 
 
 def test_histogram_counts_each_id_after_the_offset(tmp_path):
@@ -45,3 +48,9 @@ def test_histogram_counts_each_id_after_the_offset(tmp_path):
         fh.write("Neo: system 1\nNeo: system 2\nNeo: system 1\n")
     assert mod.histogram(str(log), off, "Neo: system") == {1: 2, 2: 1}
     assert mod.histogram(str(log), None, "Neo: system") is None
+
+
+def test_an_unmeasured_window_is_its_own_word(tmp_path):
+    """`None` is an environment failure, `short` is an evidence failure."""
+    assert mod.verdict(None, 3) == "neo_lines_unmeasured"
+    assert mod.verdict(0, 3) == "neo_lines_short"

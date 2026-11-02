@@ -39,6 +39,7 @@ var stat_calls: u64 = 0;
 var stat_matched: u64 = 0;
 var stat_log_calls: u64 = 0;
 var stat_null_scope: u64 = 0;
+var stat_non_system_scope: u64 = 0;
 var last_id: u32 = 0;
 
 var hit_count: u64 = 0;
@@ -64,6 +65,14 @@ fn scopeReadable(scope: usize) bool {
     return windows.isCommitted(scope);
 }
 
+/// §80.2/§91.7 — the `every_system` loop stamps `mask = 0x80` on the scope it
+/// hands to each child.  That cell is the only *type* signal we have; an id in
+/// `0..786` is an observation, `mask == 0x80` is the engine saying "system
+/// scope" (review M-1).
+pub fn isSystemScope(mask: u32) bool {
+    return mask == 0x80;
+}
+
 fn recordHit(id: u32) void {
     const nth = @atomicRmw(u64, &hit_count, .Add, 1, .monotonic);
     if (nth < RULE_HITS) hits[@intCast(nth)] = id;
@@ -77,6 +86,10 @@ pub fn runBody(scope: u64, a3: u64) u64 {
     _ = @atomicRmw(u64, &stat_calls, .Add, 1, .monotonic);
     if (!scopeReadable(@intCast(scope))) {
         _ = @atomicRmw(u64, &stat_null_scope, .Add, 1, .monotonic);
+        return 0;
+    }
+    if (!isSystemScope(readU32(@intCast(scope), SCOPE_MASK_OFF))) {
+        _ = @atomicRmw(u64, &stat_non_system_scope, .Add, 1, .monotonic);
         return 0;
     }
     const id = readU32(@intCast(scope), SCOPE_ID_OFF);
@@ -111,14 +124,6 @@ pub fn resolveFromGame(game_base: usize) !void {
     log_effect_addr = addr;
 }
 
-pub fn logEffect() usize {
-    return log_effect_addr;
-}
-
-pub fn isResolved() bool {
-    return log_effect_addr != 0;
-}
-
 // ---------------------------------------------------------------------------
 // Readouts (the stats line lives in neo_dispatch.zig, which owns the hook state)
 // ---------------------------------------------------------------------------
@@ -147,12 +152,17 @@ pub fn nullScope() u64 {
     return @atomicLoad(u64, &stat_null_scope, .monotonic);
 }
 
+pub fn nonSystemScopes() u64 {
+    return @atomicLoad(u64, &stat_non_system_scope, .monotonic);
+}
+
 pub fn resetForTest() void {
     log_effect_addr = 0;
     stat_calls = 0;
     stat_matched = 0;
     stat_log_calls = 0;
     stat_null_scope = 0;
+    stat_non_system_scope = 0;
     last_id = 0;
     hit_count = 0;
     @memset(std.mem.asBytes(&hits), 0);
@@ -182,11 +192,17 @@ test "resetForTest zeroes the counters but keeps nothing else" {
     try std.testing.expectEqual(@as(u64, 0), matched());
     try std.testing.expectEqual(@as(u64, 0), logCalls());
     try std.testing.expectEqual(@as(u32, 0), ruleHitsRecorded());
-    try std.testing.expect(!isResolved());
+    try std.testing.expectEqual(@as(usize, 0), log_effect_addr);
 }
 
 test "the scope offsets are the ones the dispatch site documents" {
     try std.testing.expectEqual(@as(usize, 0x10), SCOPE_ID_OFF);
     try std.testing.expectEqual(@as(usize, 0x08), SCOPE_MASK_OFF);
     try std.testing.expectEqual(@as(usize, 0x185BF60), RVA_LOG_EFFECT_EXEC);
+}
+
+test "the system-scope marker is 0x80" {
+    try std.testing.expect(isSystemScope(0x80));
+    try std.testing.expect(!isSystemScope(0));
+    try std.testing.expect(!isSystemScope(0x81));
 }

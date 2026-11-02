@@ -16,7 +16,12 @@ const std = @import("std");
 /// Returns the written slice; an undersized buffer yields an empty slice rather
 /// than a truncated line, so a bad caller shows up as "no line", not garbage.
 pub fn formatText(dst: []u8, id: u32) []const u8 {
-    return std.fmt.bufPrint(dst, "Neo: system {d}", .{id}) catch dst[0..0];
+    const line = std.fmt.bufPrint(dst, "Neo: system {d}", .{id}) catch return dst[0..0];
+    // 15 is the SSO cell.  A longer line would be silently truncated by
+    // `writeSso`, and the log would then carry a *wrong* id while the line
+    // count still matched — an absence is a reading, a wrong number is not.
+    if (line.len > 15) return dst[0..0];
+    return line;
 }
 
 /// MSVC `std::string` layout in the engine: `{ buf[16] @ +0x00, size @ +0x10,
@@ -32,17 +37,20 @@ pub fn writeSso(dst: *[0x20]u8, text: []const u8) void {
 
 /// §92's rule, same shape as `exec_caller_probe.ruleMatches`: act only on
 /// systems whose id satisfies `id % mod == rem`. `mod == 0` disables the rule.
-var rule_mod: u32 = 0;
-var rule_rem: u32 = 0;
+/// `mod << 32 | rem`, one 64-bit cell so the dispatch thread can never read a
+/// half-updated pair (review M-4). `mod == 0` disables the rule.
+var rule_bits: u64 = 0;
 
 pub fn setRule(mod: u32, rem: u32) void {
-    rule_mod = mod;
-    rule_rem = if (mod == 0) 0 else rem % mod;
+    const normalised = if (mod == 0) 0 else rem % mod;
+    @atomicStore(u64, &rule_bits, (@as(u64, mod) << 32) | normalised, .monotonic);
 }
 
 pub fn matches(id: u32) bool {
-    if (rule_mod == 0) return false;
-    return id % rule_mod == rule_rem;
+    const bits = @atomicLoad(u64, &rule_bits, .monotonic);
+    const mod: u32 = @intCast(bits >> 32);
+    if (mod == 0) return false;
+    return id % mod == @as(u32, @intCast(bits & 0xFFFF_FFFF));
 }
 
 // ---------------------------------------------------------------------------
@@ -68,4 +76,21 @@ test "the rule is id % mod == rem, disabled at mod = 0" {
     try std.testing.expect(!matches(201));
     setRule(0, 0);
     try std.testing.expect(!matches(0));
+}
+
+test "formatText refuses a line that would be truncated" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("Neo: system 999", formatText(&buf, 999));
+    // 16 chars: the SSO cell holds 15.  Silent truncation would log a *wrong*
+    // id while the line count still matches (review M-3), so emit nothing.
+    try std.testing.expectEqualStrings("", formatText(&buf, 1000));
+}
+
+test "setRule normalises rem and disables at mod = 0" {
+    setRule(100, 250);
+    try std.testing.expect(matches(50));
+    try std.testing.expect(matches(150));
+    try std.testing.expect(!matches(51));
+    setRule(0, 7);
+    try std.testing.expect(!matches(7));
 }

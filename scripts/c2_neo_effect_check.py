@@ -11,7 +11,8 @@
     python C:/temp/c2_neo_effect_check.py --log "<...>/logs/game.log" --offset 123456 \\
         --marker "Neo: system" --expect 787
 
-判决词:`neo_lines_ok`(精确等于)/ `neo_lines_short`(少)/ `neo_lines_extra`(多)。
+判决词:`neo_lines_ok`(精确等于)/ `neo_lines_short`(少)/ `neo_lines_extra`(多)/
+`neo_lines_unmeasured`(没量到:`--offset` 缺省或日志读不了)。
 多一行也是异常:重复注册、同一星系跑两次、或别的来源也在写这行。
 """
 from __future__ import annotations
@@ -20,7 +21,7 @@ import argparse
 import re
 import sys
 
-VERDICTS = ("neo_lines_ok", "neo_lines_short", "neo_lines_extra")
+VERDICTS = ("neo_lines_ok", "neo_lines_short", "neo_lines_extra", "neo_lines_unmeasured")
 
 
 def count_since(path, offset, marker: str):
@@ -73,7 +74,9 @@ def histogram(path, offset, marker: str):
 
 def verdict(seen, expected: int) -> str:
     if seen is None:
-        return "neo_lines_short"
+        # An unmeasured window is an *environment* failure, not evidence that
+        # too few lines were written (review M-6).  Still never `ok`.
+        return "neo_lines_unmeasured"
     if seen == expected:
         return "neo_lines_ok"
     return "neo_lines_short" if seen < expected else "neo_lines_extra"

@@ -30,7 +30,8 @@ def test_the_four_exports_exist_in_the_zig_source():
 
 def test_the_stats_line_keeps_the_drivers_key_order():
     src = NEO_DISPATCH.read_text(encoding="utf-8")
-    marker = "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d} dispatched={d}"
+    body = src.split("fn statsInto", 1)[1]
     # The driver splits on '=' and ' '; a reordered line would silently relabel
     # every column of §93, so the order is pinned, not just the key set.
-    assert marker in src.split("fn statsInto", 1)[1]
+    positions = [body.index(f"{key}={{d}}") for key in STATS_KEYS + ("dispatched", "null_scope", "mask_odd")]
+    assert positions == sorted(positions)

@@ -9967,3 +9967,31 @@ mod 的事件文件在 shot 前备份到 `C:\temp\neo_ps_probe_events.txt.bak-20
    不是整场会话去重 —— 否则 12 个月该只留 1 行。`Neo: system <id>` 每个 id 文本不同,所以不被折叠。
 6. **驱动侧的规则旗标**:失败分诊里写的「`--rule 0:0`(全放行)」是反的 —— `setRule` 把 `mod == 0` 当**关闭**;
    全放行是 **`1:0`**(`id % 1 == 0`)。驱动自身默认就是 `1:0`。
+
+### §93.9 复审之后的第三发:最终产物的复验(2026-11-02,实机一发,预算用尽)
+
+复审的 minor 里有四条**改了行为**(`scope+0x08` 的 system-scope 类型门、文案超 15 B 时不出行、规则位
+打包成一个原子 u64、卸载时保留 `orig`),于是 §93.4 的读数属于**上一版字节**。这一发把最终产物重打一次,
+让取证的字节与仓库里的字节是同一份。
+
+**产物**:`sqjs_c25.dll`,sha16 `536a25ca01b793a4`;pid **8580**;mod 事件体与 §93.4 相同
+(`random_system = { every_system = { log = "PS_HIT"  neo_action = { log = "NEO_BODY" } } }`)。
+
+**读数**:
+
+```
+(暂停基线) calls=0 matched=0 log_calls=0 ... installed=1 verify=0 dispatched=0 null_scope=0 mask_odd=0
+(7 个月后) calls=5509 matched=5509 log_calls=5509 last_id=786 rule_hits=64 installed=1 verify=0 \
+           dispatched=16436 null_scope=0 mask_odd=0
+```
+
+- `game.log` 自 offset **177** 起的增量:`seen=5509 expect=5509` ⇒ **`neo_lines_ok`**;
+  `--histogram` 读出 **`ids=787 occurrences_min_max=7-7`**(5509 = 7 × 787);
+- `PS_HIT = 7`(控制组:事件跑了 7 轮,同一文本每月被 sink 折成 1 条);`NEO_BODY = 0`;
+- **`mask_odd = 0`**:5,509 次派发的 scope `+0x08` 全是 `0x80` ⇒ §93.8 第 3 条说的那道门现在不是
+  「观测到的 id 恰好落在 0..786」,而是**引擎自己的类型标记放行的**(仍然只在这一版字节上成立);
+- `UNINSTALL rc=0 verify=0 alive=1`;`error.log` 35 行、`Unexpected token` = 0;mod 文件已还原;
+  游戏以 `WM_CLOSE` 关闭。
+
+**判词**:`neo_lines_ok`。§93.4 的数字(9,444 / 12 个月)是**上一版字节**的读数,两条并存;
+以仓库里这一版为准的是本节。

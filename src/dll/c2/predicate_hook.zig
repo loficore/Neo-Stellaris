@@ -225,16 +225,6 @@ pub fn fingerprintMatches() bool {
     return true;
 }
 
-/// 0 = consistent. Installed: the hook must still be in the detour table. Not
-/// installed: we resolved the target this session and the engine bytes are intact.
-/// -1 hook lost | -2 bytes differ | -3 the target was never resolved this session.
-pub fn verify() i32 {
-    if (target_addr == 0) return -3;
-    const target: *anyopaque = @ptrFromInt(target_addr);
-    if (installed) return if (detour_mod.isHooked(target)) 0 else -1;
-    return if (fingerprintMatches()) 0 else -2;
-}
-
 pub fn resetForTest() void {
     @atomicStore(u32, &armed_token, 0, .monotonic);
     installed = false;

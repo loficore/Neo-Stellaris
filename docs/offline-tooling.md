@@ -1675,20 +1675,24 @@ BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 
 **`--stats` 的一行**(键序固定):`calls`(我们的 token 被派发的次数)/ `matched`(过规则)/
 `log_calls`(真调了 `0x185BF60`)/ `last_id` / `rule_hits` / `installed` / `verify` /
-`dispatched`(detour 看到的总入口)。**`dispatched` 是判读的分水岭**:`calls=0` 且 `dispatched=0` =
-hook 不在路径上;`dispatched>0` 且 `calls=0` = 在路径上但 token 不符(§93.2 第一发就卡在这一格)。
+`dispatched`(detour 看到的总入口)/ `null_scope`(第二实参读不了)/ `mask_odd`(scope 的 `+0x08`
+不是 `0x80` ⇒ 不是 system scope,body 不做)。**`dispatched` 是判读的分水岭**:`calls=0` 且
+`dispatched=0` = hook 不在路径上;`dispatched>0` 且 `calls=0` = 在路径上但 token 不符(§93.2 第一发
+就卡在这一格);`calls>0` 但 `matched=0` 且 `mask_odd>0` = 类型门在挡,不是规则。
 
 ### `scripts/c2_neo_effect_check.py --log PATH --offset N --marker "Neo: system" --expect K`
 
 Spec §1 的判据只在这里:**`game.log` 自 `--offset` 起含有 `--marker` 的行数**,对 `--expect` 精确判。
-判决词三档 `neo_lines_ok` / `neo_lines_short` / `neo_lines_extra`;退出码 `0` 只在 `ok`。
+判决词四档 `neo_lines_ok` / `neo_lines_short` / `neo_lines_extra` / `neo_lines_unmeasured`
+(`--offset` 缺省或日志读不了;它**不是** `short`);退出码 `0` 只在 `ok`。
 
 **判读陷阱(三条):**
 
 1. **只认增量。** 787 个星系 × 游戏时长会把整份日志撑到十几 MB(2026-11-02 的 `game.log` 已 14 MB),
    拿总行数当判据隔天就假绿。`--offset` 要在窗口开始时取(`stat().st_size`)。
 2. **多一行也是异常。** `extra` 不是「跑得更好」:重复注册、同一星系跑两次、或别的来源也在写这行。
-3. **`offset` 读不到就是 `short`,不是 `ok`。** 驱动层把「没量到」和「量到 0」分开(`None` ≠ `0`)。
+3. **`offset` 读不到就是 `unmeasured`,不是 `short` 也不是 `ok`。** 驱动层把「没量到」和「量到 0」
+   分开(`None` ≠ `0`);把两者混成一个词会把环境故障读成证据。
 
 ## 实机调试:桌面通道(`win-desktop` MCP)
 

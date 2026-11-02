@@ -63,3 +63,20 @@ def test_needed_covers_every_export_the_driver_calls():
     called = set(re.findall(r'exports\["(\w+)"\]', src))
     assert called, "no export call sites found — the fence would pass vacuously"
     assert called <= set(mod.NEEDED), sorted(called - set(mod.NEEDED))
+
+
+def test_pack_rule_rejects_malformed_input():
+    import pytest
+
+    with pytest.raises(ValueError):
+        mod.pack_rule("x:y")
+    with pytest.raises(ValueError):
+        mod.pack_rule("-1:0")
+
+
+def test_a_bad_rule_is_a_usage_error_not_a_traceback():
+    import pytest
+
+    with pytest.raises(SystemExit) as exc:
+        mod.main(["--rule", "x:y", "--stats"])
+    assert exc.value.code == 2

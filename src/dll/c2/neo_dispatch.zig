@@ -176,7 +176,10 @@ pub fn uninstall() !void {
     hook = null;
     installed = false;
     try restoreTarget(h.patch_size);
-    orig = null;
+    // `orig` is deliberately NOT cleared (review M-5): a thread already inside
+    // `dispatchDetour` past the token check would otherwise take the
+    // `orig orelse return 0` branch and silently drop one effect execution.
+    // The trampoline is retired, never freed, so the pointer stays valid.
     if (!fingerprintMatches()) return error.RestoreIncomplete;
     std.log.info("c2.neo_dispatch: uninstalled detour", .{});
 }
@@ -219,7 +222,8 @@ pub fn lastToken() u32 {
 pub fn statsInto(out: []u8) usize {
     const written = std.fmt.bufPrint(
         out,
-        "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d} dispatched={d}\n",
+        "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d} " ++
+            "dispatched={d} null_scope={d} mask_odd={d}\n",
         .{
             ours(),
             neo_vtable.matched(),
@@ -229,6 +233,8 @@ pub fn statsInto(out: []u8) usize {
             @intFromBool(installed),
             verify(),
             dispatched(),
+            neo_vtable.nullScope(),
+            neo_vtable.nonSystemScopes(),
         },
     ) catch return 0;
     return written.len;
@@ -284,6 +290,6 @@ test "statsInto keeps the driver's key order and appends dispatched" {
     var buf: [STATS_SIZE]u8 = undefined;
     const n = statsInto(&buf);
     const expected = "calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 " ++
-        "installed=0 verify=-3 dispatched=0\n";
+        "installed=0 verify=-3 dispatched=0 null_scope=0 mask_odd=0\n";
     try std.testing.expectEqualStrings(expected, buf[0..n]);
 }
