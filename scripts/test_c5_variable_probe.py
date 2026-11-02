@@ -95,11 +95,27 @@ def test_a_missing_flag_is_an_empty_list():
     assert mod.find_flags("galactic_object={ 1={ } }", "neo_tier2") == []
 
 
+def test_find_flags_dedupes_a_system_listed_twice():
+    """`systems=N` is a pass/fail criterion, so a repeated container must not inflate it."""
+    text = ("galactic_object={ 3={ flags={ neo_tier2=1 } } } "
+            "galactic_object={ 3={ flags={ neo_tier2=1 } } }")
+    assert mod.find_flags(text, "neo_tier2") == [3]
+
+
+def test_flag_scan_counts_the_systems_that_have_a_flags_block():
+    """`systems=0` alone cannot tell "no flag" from "we looked in the wrong place"."""
+    text = "galactic_object={ 3={ flags={ other=1 } } 5={ flags={ neo_tier2=1 } } 7={ } }"
+    assert mod.flag_scan(text, "neo_tier2") == ([5], 2)
+
+
+def test_the_flag_report_carries_the_block_count():
+    assert mod.format_flag_report("neo_tier2", [], 787) == "neo_tier2: systems=0 flags_blocks=787"
+
+
 def test_cli_prints_the_flag_count(tmp_path, capsys):
     sav = tmp_path / "x.sav"
     with zipfile.ZipFile(sav, "w") as archive:
         archive.writestr("gamestate", "galactic_object={ 3={ flags={ neo_tier2=1 } } }")
     assert mod.main(["--sav", str(sav), "--flag", "neo_tier2"]) == 0
     out = capsys.readouterr().out
-    assert "systems=1" in out
-    assert "sample=3" in out
+    assert out.strip() == "neo_tier2: systems=1 flags_blocks=1 sample=3"

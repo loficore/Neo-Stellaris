@@ -335,3 +335,78 @@ test "the score counters start at zero after reset" {
     try std.testing.expectEqual(@as(u64, 0), scoreWrites());
     try std.testing.expectEqual(@as(u64, 0), scoreSkipped());
 }
+
+// --- writeScore's payload ---------------------------------------------------
+// The score tests above only prove the table lookup; these pin what actually
+// reaches the engine, because a wrong name or value is invisible until a live
+// shot spends its budget (§94.6's "不能说" is about the live readout, not this).
+
+var seen_calls: usize = 0;
+var seen_names: [4][16]u8 = undefined;
+var seen_values: [4]u64 = undefined;
+var seen_vtables: [4]u64 = undefined;
+
+fn stubSetVariable(self_ptr: u64, scope: u64) callconv(.c) void {
+    _ = scope;
+    if (seen_calls < seen_values.len) {
+        const base: [*]const u8 = @ptrFromInt(self_ptr);
+        @memcpy(&seen_names[seen_calls], base[neo_state.NAME_STRING_OFF..][0..16]);
+        seen_values[seen_calls] = std.mem.readInt(u64, base[neo_state.VALUE_CELL_OFF..][0..8], .little);
+        seen_vtables[seen_calls] = std.mem.readInt(u64, base[0..8], .little);
+    }
+    seen_calls += 1;
+}
+
+fn stubLog(self_ptr: u64, scope: u64, a3: u64) callconv(.c) u64 {
+    _ = self_ptr;
+    _ = scope;
+    _ = a3;
+    return 0;
+}
+
+fn armStubs() void {
+    resetForTest();
+    seen_calls = 0;
+    state_body_addr = @intFromPtr(&stubSetVariable);
+    state_vtable_addr = RVA_STATE_VTABLE;
+}
+
+test "writeScore writes neo_score with the table score in 1e-5 fixed point" {
+    armStubs();
+    try std.testing.expect(writeScore(0, 0));
+    try std.testing.expectEqual(@as(usize, 1), seen_calls);
+    try std.testing.expectEqualStrings(neo_state.SCORE_NAME, seen_names[0][0..neo_state.SCORE_NAME.len]);
+    try std.testing.expectEqual(neo_state.encodeNumber(chokepoint_table.scores[0]), seen_values[0]);
+    try std.testing.expectEqual(@as(u64, RVA_STATE_VTABLE), seen_vtables[0]);
+}
+
+test "writeScore refuses an out-of-range id and an unresolved body" {
+    armStubs();
+    try std.testing.expect(!writeScore(@intCast(chokepoint_table.SCORE_COUNT), 0));
+    try std.testing.expectEqual(@as(usize, 0), seen_calls);
+    state_body_addr = 0;
+    try std.testing.expect(!writeScore(0, 0));
+    try std.testing.expectEqual(@as(usize, 0), seen_calls);
+}
+
+test "runBody counts one score write beside the state write" {
+    armStubs();
+    log_effect_addr = @intFromPtr(&stubLog);
+    setAct(1);
+    neo_effect.setRule(1, 0);
+    defer neo_effect.setRule(0, 0);
+
+    var scope: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, scope[SCOPE_MASK_OFF..][0..4], 0x80, .little);
+    std.mem.writeInt(u32, scope[SCOPE_ID_OFF..][0..4], 7, .little);
+    _ = runBody(@intFromPtr(&scope), 0);
+
+    try std.testing.expectEqual(@as(u64, 1), calls());
+    try std.testing.expectEqual(@as(u64, 1), matched());
+    try std.testing.expectEqual(@as(u64, 1), writes());
+    try std.testing.expectEqual(@as(u64, 1), scoreWrites());
+    try std.testing.expectEqual(@as(u64, 0), scoreSkipped());
+    // Two calls: `neo_mark` first (C5-WRITE), then `neo_score` (C5-SCORE).
+    try std.testing.expectEqual(@as(usize, 2), seen_calls);
+    try std.testing.expectEqualStrings(neo_state.SCORE_NAME, seen_names[1][0..neo_state.SCORE_NAME.len]);
+}

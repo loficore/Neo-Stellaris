@@ -100,14 +100,20 @@ def find_variables(gamestate: str, name: str) -> dict[int, int | float | str]:
     return found
 
 
-def find_flags(gamestate: str, flag: str) -> list[int]:
-    """Ascending system ids whose `flags={}` block holds `flag` (key only).
+def flag_scan(gamestate: str, flag: str) -> tuple[list[int], int]:
+    """`(ascending system ids holding flag, systems that carry a flags block)`.
+
+    The second number is the judge's control: `systems=0 flags_blocks=787` means the
+    flag really is absent, while `flags_blocks=0` means the block is not where we look
+    (parser shape, not game behaviour). A bare `systems=0` cannot tell those apart, and
+    the live shot has a two-shot budget (spec §2).
 
     `set_star_flag` lands as a key in the system's flat `flags={}` map (spec §3);
     the value is engine bookkeeping, so only the key is judged.
     """
     root = parse_clausewitz(gamestate)
-    found: list[int] = []
+    flagged: set[int] = set()
+    with_flags: set[int] = set()
     for container_name in SYSTEM_CONTAINERS:
         for container in _blocks(root, container_name):
             for entry_key, value in container.entries:
@@ -117,10 +123,19 @@ def find_flags(gamestate: str, flag: str) -> list[int]:
                     system_id = int(entry_key)
                 except ValueError:
                     continue
-                if any(flag == name for flags in _blocks(value, "flags")
-                       for name, _ in flags.entries if name is not None):
-                    found.append(system_id)
-    return sorted(found)
+                blocks = _blocks(value, "flags")
+                if not blocks:
+                    continue
+                with_flags.add(system_id)
+                if any(flag == name for block in blocks for name, _ in block.entries
+                       if name is not None):
+                    flagged.add(system_id)
+    return sorted(flagged), len(with_flags)
+
+
+def find_flags(gamestate: str, flag: str) -> list[int]:
+    """Ascending system ids whose `flags={}` holds `flag` (key only)."""
+    return flag_scan(gamestate, flag)[0]
 
 
 def _rule_key(rule: str) -> tuple[int, int]:
@@ -158,11 +173,12 @@ def format_report(name: str, found: dict[int, int | float | str]) -> str:
     return " ".join(parts)
 
 
-def format_flag_report(flag: str, found: list[int]) -> str:
-    if not found:
-        return f"{flag}: systems=0"
-    sample = ",".join(str(system_id) for system_id in found[:SAMPLE_SIZE])
-    return f"{flag}: systems={len(found)} sample={sample}"
+def format_flag_report(flag: str, found: list[int], flags_blocks: int) -> str:
+    parts = [f"{flag}: systems={len(found)}", f"flags_blocks={flags_blocks}"]
+    if found:
+        sample = ",".join(str(system_id) for system_id in found[:SAMPLE_SIZE])
+        parts.append(f"sample={sample}")
+    return " ".join(parts)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,7 +195,8 @@ def main(argv: list[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 2
     if args.flag is not None:
-        print(format_flag_report(args.flag, find_flags(text, args.flag)))
+        ids, blocks = flag_scan(text, args.flag)
+        print(format_flag_report(args.flag, ids, blocks))
     else:
         print(format_report(args.name, find_variables(text, args.name)))
     return 0
