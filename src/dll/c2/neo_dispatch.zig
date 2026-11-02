@@ -219,8 +219,9 @@ pub fn lastToken() u32 {
 
 /// One line, fixed key order: the plan's seven keys followed by `dispatched` —
 /// the entry count the detour saw, which is what makes `calls=0` readable.
-/// C5-WRITE appends `writes`/`skipped` at the end so every older key keeps its
-/// position (existing window notes quote this line by field name).
+/// C5-WRITE appends `writes`/`skipped`, C5-SCORE appends `score_writes`/
+/// `score_skipped`, so every older key keeps its position (existing window notes
+/// quote this line by field name).
 pub fn statsInto(out: []u8) usize {
     const written = std.fmt.bufPrint(
         out,

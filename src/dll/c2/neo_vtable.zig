@@ -48,7 +48,8 @@ var log_effect_addr: usize = 0;
 var state_body_addr: usize = 0;
 var state_vtable_addr: usize = 0;
 
-/// 0 = 只写日志(C5-ADD 的原行为),1 = 日志 + 写系统变量(C5-WRITE)。
+/// 0 = 只写日志(C5-ADD 的原行为),1 = 日志 + 写两个系统变量
+/// (`neo_mark = id` / `neo_score = 图分数`)。
 /// 与 `rule_bits` 一样是单个原子 u32:dispatch 线程永远读不到半更新值。
 var act_mode: u32 = 0;
 

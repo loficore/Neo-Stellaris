@@ -112,6 +112,17 @@ def test_the_flag_report_carries_the_block_count():
     assert mod.format_flag_report("neo_tier2", [], 787) == "neo_tier2: systems=0 flags_blocks=787"
 
 
+def test_cli_all_prints_every_matching_id(tmp_path, capsys):
+    """Flags persist across windows, so the id set must be checkable against the tier log."""
+    sav = tmp_path / "x.sav"
+    body = " ".join(f"{i}={{ flags={{ neo_tier2=1 }} }}" for i in range(1, 8))
+    with zipfile.ZipFile(sav, "w") as archive:
+        archive.writestr("gamestate", f"galactic_object={{ {body} }}")
+    assert mod.main(["--sav", str(sav), "--flag", "neo_tier2", "--all"]) == 0
+    out = capsys.readouterr().out
+    assert out.strip() == "neo_tier2: systems=7 flags_blocks=7 ids=1,2,3,4,5,6,7"
+
+
 def test_cli_prints_the_flag_count(tmp_path, capsys):
     sav = tmp_path / "x.sav"
     with zipfile.ZipFile(sav, "w") as archive:

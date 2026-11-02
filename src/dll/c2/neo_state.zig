@@ -1,6 +1,7 @@
-// neo_state.zig — C5-WRITE:让 `neo_action` 在系统 scope 上写一个真实的游戏状态。
+// neo_state.zig — 一个「解析好的 `set_variable`」对象的布局,供 C5-WRITE/C5-SCORE 共用。
 //
-// Spec: docs/superpowers/specs/2026-11-02-c5-write-state-design.md
+// Spec: docs/superpowers/specs/2026-11-02-c5-write-state-design.md(C5-WRITE)
+//       docs/superpowers/specs/2026-11-02-c5-score-state-design.md(C5-SCORE)
 // 布局来源:evidence/disasm/set_variable_188e1d0.c(spec §3.1 的判决表)
 //
 // 本文件只放**纯函数**:对象布局与值编码。真正调官方 body 的地方在
@@ -44,6 +45,9 @@ pub fn encodeNumber(number: u32) u64 {
 
 /// 把一个零初始化对象摆成「解析出了 `which = <name>`、`value = <number>` 的
 /// `set_variable`」。**不摆 vtable**(调用方摆)、不动 `+0x300`(保持 0,这是短路的前提)。
+///
+/// `name` 必须 **≤ 15 字节**:`writeSso` 走 MSVC 内联串,超长会被**静默截断**成一个
+/// 不同的变量名(每个 tick 都写)。`neo_mark`/`neo_score` 是 8/9 字节,当前调用方安全。
 pub fn layoutNumber(obj: *[OBJECT_SIZE]u8, name: []const u8, number: u32) void {
     @memset(obj, 0);
     neo_effect.writeSso(@ptrCast(&obj[NAME_STRING_OFF]), name);

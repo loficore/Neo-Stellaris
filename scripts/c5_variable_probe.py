@@ -2,7 +2,7 @@
 """Read one variable's per-system values out of a Stellaris 4.4.4 text save.
 
 usage: c5_variable_probe.py --sav PATH --name neo_mark
-       c5_variable_probe.py --sav PATH --flag neo_tier2
+       c5_variable_probe.py --sav PATH --flag neo_tier2 [--all]
 
 C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从存档里逐项对值。
 C5-SCORE 的判据 3:官方 `set_star_flag` 落下的 flag,同样从存档里数系统。
@@ -77,14 +77,9 @@ def _variable_values(system: Block, name: str) -> list[int | str]:
     return found
 
 
-def find_variables(gamestate: str, name: str) -> dict[int, int | float | str]:
-    """`{system id: value}` for every system whose `variables={}` holds `name`.
-
-    Narrow on purpose: only the two system containers are searched, and a system
-    with several copies keeps the last one (the save writes one).
-    """
-    root = parse_clausewitz(gamestate)
-    found: dict[int, int | str] = {}
+def _system_entries(root: Block) -> list[tuple[int, Block]]:
+    """`(system id, block)` for every numeric entry under the system containers."""
+    entries: list[tuple[int, Block]] = []
     for container_name in SYSTEM_CONTAINERS:
         for container in _blocks(root, container_name):
             for entry_key, value in container.entries:
@@ -94,9 +89,21 @@ def find_variables(gamestate: str, name: str) -> dict[int, int | float | str]:
                     system_id = int(entry_key)
                 except ValueError:
                     continue
-                values = _variable_values(value, name)
-                if values:
-                    found[system_id] = values[-1]
+                entries.append((system_id, value))
+    return entries
+
+
+def find_variables(gamestate: str, name: str) -> dict[int, int | float | str]:
+    """`{system id: value}` for every system whose `variables={}` holds `name`.
+
+    Narrow on purpose: only the two system containers are searched, and a system
+    with several copies keeps the last one (the save writes one).
+    """
+    found: dict[int, int | str] = {}
+    for system_id, system in _system_entries(parse_clausewitz(gamestate)):
+        values = _variable_values(system, name)
+        if values:
+            found[system_id] = values[-1]
     return found
 
 
@@ -114,22 +121,14 @@ def flag_scan(gamestate: str, flag: str) -> tuple[list[int], int]:
     root = parse_clausewitz(gamestate)
     flagged: set[int] = set()
     with_flags: set[int] = set()
-    for container_name in SYSTEM_CONTAINERS:
-        for container in _blocks(root, container_name):
-            for entry_key, value in container.entries:
-                if entry_key is None or not isinstance(value, Block):
-                    continue
-                try:
-                    system_id = int(entry_key)
-                except ValueError:
-                    continue
-                blocks = _blocks(value, "flags")
-                if not blocks:
-                    continue
-                with_flags.add(system_id)
-                if any(flag == name for block in blocks for name, _ in block.entries
-                       if name is not None):
-                    flagged.add(system_id)
+    for system_id, system in _system_entries(root):
+        blocks = _blocks(system, "flags")
+        if not blocks:
+            continue
+        with_flags.add(system_id)
+        if any(flag == name for block in blocks for name, _ in block.entries
+               if name is not None):
+            flagged.add(system_id)
     return sorted(flagged), len(with_flags)
 
 
@@ -173,11 +172,15 @@ def format_report(name: str, found: dict[int, int | float | str]) -> str:
     return " ".join(parts)
 
 
-def format_flag_report(flag: str, found: list[int], flags_blocks: int) -> str:
+def format_flag_report(flag: str, found: list[int], flags_blocks: int,
+                       *, show_all: bool = False) -> str:
     parts = [f"{flag}: systems={len(found)}", f"flags_blocks={flags_blocks}"]
     if found:
-        sample = ",".join(str(system_id) for system_id in found[:SAMPLE_SIZE])
-        parts.append(f"sample={sample}")
+        # `sample` is the short form the plan's Task 3 names; `ids` is the full set,
+        # which is what a persistent flag needs for a cross-check against the log.
+        shown = found if show_all else found[:SAMPLE_SIZE]
+        key = "ids" if show_all else "sample"
+        parts.append(f"{key}=" + ",".join(str(system_id) for system_id in shown))
     return " ".join(parts)
 
 
@@ -187,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--name", help="variable name, e.g. neo_mark")
     selection.add_argument("--flag", help="system flag name, e.g. neo_tier2")
+    parser.add_argument("--all", action="store_true",
+                        help="with --flag: print every matching system id (ids=…), not a 5-id sample")
     args = parser.parse_args(argv)
 
     try:
@@ -196,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.flag is not None:
         ids, blocks = flag_scan(text, args.flag)
-        print(format_flag_report(args.flag, ids, blocks))
+        print(format_flag_report(args.flag, ids, blocks, show_all=args.all))
     else:
         print(format_report(args.name, find_variables(text, args.name)))
     return 0
