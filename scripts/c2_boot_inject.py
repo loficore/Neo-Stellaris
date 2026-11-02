@@ -18,9 +18,10 @@
     python C:/temp/c2_boot_inject.py --allow-window     # operator-declared premise
     python C:/temp/c2_boot_inject.py --stats --log "<...>/logs/game.log"   # read back
 
-`--rule MOD:REM`(默认 `1:0` = 所有 id)在安装成功后立刻装进 DLL;`--stats` 不注入,
-只把 `C2NeoStatsInto` 的一行(和日志当前字节偏移)打出来;`--uninstall` 拆 detour 并返回
-`UNINSTALL rc= verify= alive=`,窗口结束前必须跑一次。
+`--rule MOD:REM`(默认 `1:0` = 所有 id)在安装成功后立刻装进 DLL;`--act log|write`
+(默认 `log`)决定命中时只写日志,还是日志 + 在系统 scope 上写 `neo_mark`(C5-WRITE);
+`--stats` 不注入,只把 `C2NeoStatsInto` 的一行(和日志当前字节偏移)打出来;
+`--uninstall` 拆 detour 并返回 `UNINSTALL rc= verify= alive=`,窗口结束前必须跑一次。
 
 退出码:`0` = 回执里有 `install_rc=0` 且 `alive=1`;`2` = 任一步失败(打印
 `BOOT FAIL <step>`);`gate_install` 拒绝时也是 2(它自己 `raise SystemExit(2)`)。
@@ -51,6 +52,7 @@ NEEDED = (
     "C1EffectId",
     "C2NeoInstall",
     "C2NeoSetRule",
+    "C2NeoSetAct",
     "C2NeoUninstall",
     "C2NeoVerify",
     "C2NeoStatsInto",
@@ -113,6 +115,19 @@ def _signed32(value: int) -> int:
     return value - (1 << 32) if value & 0x80000000 else value
 
 
+#: `C2NeoSetAct` 的码表。`write` 依赖 body/vtable 地址解析成功;解析不到时
+#: DLL 只记 `skipped`(stats 行尾两格),不会静默改世界。
+ACT_CODES = {"log": 0, "write": 1}
+
+
+def pack_act(act: str) -> int:
+    """`"log"` -> 0, `"write"` -> 1. Raises `ValueError` on anything else."""
+    try:
+        return ACT_CODES[act]
+    except KeyError:
+        raise ValueError(f"act must be one of {sorted(ACT_CODES)}, got {act!r}") from None
+
+
 def _fail(step: str) -> int:
     print(fail_line(step), file=sys.stderr)
     return EXIT_FAILED
@@ -152,7 +167,7 @@ def launch(exe_path: str, extra_args: str = "") -> int:
 
 
 def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
-         rule: str = "1:0", launch_exe: str | None = None,
+         rule: str = "1:0", act: str = "log", launch_exe: str | None = None,
          launch_args: str = "", settle_s: float = 0.0) -> int:
     import c2_harness as harness
 
@@ -204,6 +219,8 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
     harness.assert_game_alive(pid)
     if install_rc == 0:
         harness.call_remote_with_arg(pid, base, exports["C2NeoSetRule"], pack_rule(rule))
+        # C5-WRITE:`write` = 日志 + 系统变量;默认 `log` 保持 C5-ADD 的行为不变。
+        harness.call_remote_with_arg(pid, base, exports["C2NeoSetAct"], pack_act(act))
 
     print(receipt(dll=dll_name, sha16=digest, effect_id=effect_id,
                   install_rc=install_rc, alive=True))
@@ -287,6 +304,8 @@ def main(argv=None) -> int:
                         help="operator-declared premise: skip gate_install")
     parser.add_argument("--rule", default="1:0",
                         help="MOD:REM armed after install; 1:0 = every id, 0:0 = off")
+    parser.add_argument("--act", default="log", choices=("log", "write"),
+                        help="log = 只写日志(C5-ADD);write = 日志 + 系统变量 neo_mark")
     parser.add_argument("--stats", action="store_true",
                         help="do not inject: print C2NeoStatsInto from the running pid")
     parser.add_argument("--pred", action="store_true",
@@ -304,6 +323,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         pack_rule(args.rule)
+        pack_act(args.act)
     except ValueError as exc:
         parser.error(str(exc))
     if args.pred:
@@ -313,8 +333,8 @@ def main(argv=None) -> int:
     if args.uninstall:
         return uninstall(args.dll)
     return boot(args.dll, timeout_s=args.timeout_s, allow_window=args.allow_window,
-                rule=args.rule, launch_exe=args.launch, launch_args=args.launch_args,
-                settle_s=args.settle_s)
+                rule=args.rule, act=args.act, launch_exe=args.launch,
+                launch_args=args.launch_args, settle_s=args.settle_s)
 
 
 if __name__ == "__main__":

@@ -219,11 +219,13 @@ pub fn lastToken() u32 {
 
 /// One line, fixed key order: the plan's seven keys followed by `dispatched` —
 /// the entry count the detour saw, which is what makes `calls=0` readable.
+/// C5-WRITE appends `writes`/`skipped` at the end so every older key keeps its
+/// position (existing window notes quote this line by field name).
 pub fn statsInto(out: []u8) usize {
     const written = std.fmt.bufPrint(
         out,
         "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d} " ++
-            "dispatched={d} null_scope={d} mask_odd={d}\n",
+            "dispatched={d} null_scope={d} mask_odd={d} writes={d} skipped={d}\n",
         .{
             ours(),
             neo_vtable.matched(),
@@ -235,6 +237,8 @@ pub fn statsInto(out: []u8) usize {
             dispatched(),
             neo_vtable.nullScope(),
             neo_vtable.nonSystemScopes(),
+            neo_vtable.writes(),
+            neo_vtable.skipped(),
         },
     ) catch return 0;
     return written.len;
@@ -290,6 +294,6 @@ test "statsInto keeps the driver's key order and appends dispatched" {
     var buf: [STATS_SIZE]u8 = undefined;
     const n = statsInto(&buf);
     const expected = "calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 " ++
-        "installed=0 verify=-3 dispatched=0 null_scope=0 mask_odd=0\n";
+        "installed=0 verify=-3 dispatched=0 null_scope=0 mask_odd=0 writes=0 skipped=0\n";
     try std.testing.expectEqualStrings(expected, buf[0..n]);
 }

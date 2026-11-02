@@ -74,6 +74,18 @@ def test_pack_rule_rejects_malformed_input():
         mod.pack_rule("-1:0")
 
 
+def test_pack_act_maps_the_two_action_modes():
+    assert mod.pack_act("log") == 0
+    assert mod.pack_act("write") == 1
+
+
+def test_pack_act_rejects_an_unknown_mode():
+    import pytest
+
+    with pytest.raises(ValueError):
+        mod.pack_act("modify")
+
+
 def test_a_bad_rule_is_a_usage_error_not_a_traceback():
     import pytest
 

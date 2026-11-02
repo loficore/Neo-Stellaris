@@ -17,6 +17,7 @@ const builtin = @import("builtin");
 const offsets = @import("../shared/offsets.zig");
 const windows = @import("../hooking/windows.zig");
 const neo_effect = @import("neo_effect.zig");
+const neo_state = @import("neo_state.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -27,6 +28,11 @@ pub const SCOPE_ID_OFF: usize = 0x10;
 /// §90.4 — 我们自己要调的那个官方 `log` 实现。
 pub const RVA_LOG_EFFECT_EXEC: usize = offsets.keyword_reg.RVA_LOG_EFFECT_EXEC;
 
+/// C5-WRITE — `set_variable` 的 per-scope body(`0x25EA560` 的 slot[9]/`+0x48`)。
+pub const RVA_STATE_BODY: usize = 0x188E1D0;
+/// 同一个类的 vtable;官方 `create` 把它写进 `[obj+0]`。
+pub const RVA_STATE_VTABLE: usize = 0x25EA560;
+
 pub const RULE_HITS: usize = 64;
 
 // ---------------------------------------------------------------------------
@@ -34,10 +40,18 @@ pub const RULE_HITS: usize = 64;
 // ---------------------------------------------------------------------------
 
 var log_effect_addr: usize = 0;
+var state_body_addr: usize = 0;
+var state_vtable_addr: usize = 0;
+
+/// 0 = 只写日志(C5-ADD 的原行为),1 = 日志 + 写系统变量(C5-WRITE)。
+/// 与 `rule_bits` 一样是单个原子 u32:dispatch 线程永远读不到半更新值。
+var act_mode: u32 = 0;
 
 var stat_calls: u64 = 0;
 var stat_matched: u64 = 0;
 var stat_log_calls: u64 = 0;
+var stat_writes: u64 = 0;
+var stat_skipped: u64 = 0;
 var stat_null_scope: u64 = 0;
 var stat_non_system_scope: u64 = 0;
 var last_id: u32 = 0;
@@ -78,6 +92,19 @@ fn recordHit(id: u32) void {
     if (nth < RULE_HITS) hits[@intCast(nth)] = id;
 }
 
+/// C5-WRITE 的动作分支:`set_variable` 的官方 body 收 `(self, scope)`。
+/// 合成对象在栈上、vtable 由我们摆;写进引擎的是**官方 body 自己**做的。
+/// 返回是否真的调了 body —— 地址没解析到时是 `false`(计 `skipped`)。
+fn writeState(id: u32, scope: u64) bool {
+    if (state_body_addr == 0 or state_vtable_addr == 0) return false;
+    var obj: [neo_state.OBJECT_SIZE]u8 align(8) = undefined;
+    neo_state.layoutInto(&obj, id);
+    std.mem.writeInt(u64, obj[0..8], state_vtable_addr, .little);
+    const body: *const fn (u64, u64) callconv(.c) void = @ptrFromInt(state_body_addr);
+    body(@intFromPtr(&obj), scope);
+    return true;
+}
+
 /// The per-system body. Order is load-bearing (plan Task 2 Step 3): count →
 /// scope gate → read id → rule → compose → count → call. Nothing here writes
 /// engine memory; the only engine call is the official `log` implementation
@@ -98,6 +125,15 @@ pub fn runBody(scope: u64, a3: u64) u64 {
     if (log_effect_addr == 0) return 0;
     _ = @atomicRmw(u64, &stat_matched, .Add, 1, .monotonic);
     recordHit(id);
+
+    // C5-WRITE:先写状态,再写日志 —— 两个读数在同一次命中里成对出现。
+    if (@atomicLoad(u32, &act_mode, .monotonic) == 1) {
+        if (writeState(id, scope)) {
+            _ = @atomicRmw(u64, &stat_writes, .Add, 1, .monotonic);
+        } else {
+            _ = @atomicRmw(u64, &stat_skipped, .Add, 1, .monotonic);
+        }
+    }
 
     // MSVC std::string at +0x38 of a zeroed 0xF0 block — `0x185BF60` reads
     // three cells there (+0x38 text, +0xd0 empty string, +0xe0 previous length)
@@ -122,6 +158,18 @@ pub fn resolveFromGame(game_base: usize) !void {
     const addr = game_base + RVA_LOG_EFFECT_EXEC;
     if (!plausible(addr)) return error.BadLogEffectPointer;
     log_effect_addr = addr;
+
+    // C5-WRITE 的两个地址独立解析:拿不到就只记 `skipped`,不连累 C5-ADD 的日志路径。
+    const body = game_base + RVA_STATE_BODY;
+    const vtable = game_base + RVA_STATE_VTABLE;
+    state_body_addr = if (plausible(body)) body else 0;
+    state_vtable_addr = if (plausible(vtable)) vtable else 0;
+}
+
+/// `0` = 只写日志 | `1` = 日志 + 写系统变量。其它值按「开」处理吗?
+/// 不 —— 只有精确的 1 开写,其余一律关,免得上层传错常量时悄悄改世界。
+pub fn setAct(mode: u32) void {
+    @atomicStore(u32, &act_mode, mode, .monotonic);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +186,16 @@ pub fn matched() u64 {
 
 pub fn logCalls() u64 {
     return @atomicLoad(u64, &stat_log_calls, .monotonic);
+}
+
+/// 我们真的调了官方 `set_variable` body 的次数(= `matched` 中开写的那部分)。
+pub fn writes() u64 {
+    return @atomicLoad(u64, &stat_writes, .monotonic);
+}
+
+/// 该写但 body/vtable 地址没解析到的次数 ⇒ `writes=0 skipped>0` 时查 `resolveFromGame`。
+pub fn skipped() u64 {
+    return @atomicLoad(u64, &stat_skipped, .monotonic);
 }
 
 pub fn lastId() u32 {
@@ -158,9 +216,14 @@ pub fn nonSystemScopes() u64 {
 
 pub fn resetForTest() void {
     log_effect_addr = 0;
+    state_body_addr = 0;
+    state_vtable_addr = 0;
+    act_mode = 0;
     stat_calls = 0;
     stat_matched = 0;
     stat_log_calls = 0;
+    stat_writes = 0;
+    stat_skipped = 0;
     stat_null_scope = 0;
     stat_non_system_scope = 0;
     last_id = 0;
@@ -199,6 +262,14 @@ test "the scope offsets are the ones the dispatch site documents" {
     try std.testing.expectEqual(@as(usize, 0x10), SCOPE_ID_OFF);
     try std.testing.expectEqual(@as(usize, 0x08), SCOPE_MASK_OFF);
     try std.testing.expectEqual(@as(usize, 0x185BF60), RVA_LOG_EFFECT_EXEC);
+}
+
+test "the C5-WRITE body and vtable are the load-bearing RVAs" {
+    try std.testing.expectEqual(@as(usize, 0x188E1D0), RVA_STATE_BODY);
+    try std.testing.expectEqual(@as(usize, 0x25EA560), RVA_STATE_VTABLE);
+    resetForTest();
+    try std.testing.expectEqual(@as(u64, 0), writes());
+    try std.testing.expectEqual(@as(u64, 0), skipped());
 }
 
 test "the system-scope marker is 0x80" {

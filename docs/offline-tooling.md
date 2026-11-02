@@ -406,6 +406,35 @@ name builder concatenates at runtime (§25.4).
 10. **id 是存档局部的。** 这里的 `system_id` 只对这份存档(与它的 sha256)有意义;换一局、换一版,
     同一个数字指向另一个星系。表不能当跨战役常量用。
 
+### `scripts/c5_variable_probe.py --sav PATH --name neo_mark`
+
+C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从存档里逐项对值。工具解 `.sav` 的 ZIP、
+读文本 `gamestate`,复用 `save_hypergraph.py` 的 tokenizer,只做**窄**筛选:
+
+```
+<container>={ <system id>={ … variables={ <name>=<value> … } … } … }
+```
+
+`<container>` 接受 `galactic_object`(4.4.4 真存档)与 `systems`(测试/旧形状);变量接受
+`name=value` 与 `{ name=… value=… }` 两种编码。输出一行 `name: systems=N min=… max=… sample=…`
+(抽前 5 个 system id 的值);没有该变量是 `systems=0`,退出 0。
+
+**判读陷阱:**
+1. **`.sav` 是 ZIP,`gamestate` 是文本。** 不是 ZIP / 没有 `gamestate` / 前 4096 字符有 NUL ⇒
+   stderr 一行、退出 2,不把「读不到」伪装成「变量不存在」。
+2. **变量在系统块的 `variables={}` 里,容器叫 `galactic_object`。** 计划/旧测试里写的 `systems=`
+   不是 4.4.4 存档的名字;工具两个都收,但真存档只会命中前者。
+3. **数值是 1e-5 定点。** 2026-11-02 第一发把裸 id 写进 `set_variable` 的值格,存档里得到
+   `0.00786`(= 786 × 1e-5);官方变量在存档里是整数(`years_passed=52`)。写整数 id 必须
+   `id × 100000`;读侧把 `3.00000` 归一成 3,非整数保留浮点。
+4. **两段必须用同一条规则。** `assert_same_rule(write_rule, read_rule)` 按 `pack_rule` 的口径归一
+   (`8` 与 `8:0` 相等)后比较,不等即 `ValueError` —— 写入段与读回段覆盖不同星系是假阴性/假阳性的来源。
+   **注意读回段本身不受 `--rule` 过滤**:mod 的 `if = { limit = { is_variable_set = neo_mark } }` 对
+   `every_system` 的每个系统都求值;若复用的存档里**上一窗已经写过** `neo_mark`,用部分规则
+   (例如 `--rule 100:0`)重打时,读回行数会包含旧的系统,大于 `matched`。本轮两发都用 `1:0`(全量),
+   所以计数相等;下一次用部分规则必须换干净存档,或先接受「读回 > matched」是残留而不是异常。
+5. **id 是存档局部的。** 这里的 system id 只对这份存档(与它的 sha256)有意义,不能当跨战役常量。
+
 ### `scripts/chokepoint_scores.py <edges.tsv> --out <scores.tsv> [--top N]`
 
 只读边表(无表头;第一行全是数字就当数据),算 `degree`、无向无权 Brandes `betweenness`、Tarjan
@@ -1656,7 +1685,9 @@ BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 ```
 
 只注册、只在逐系统派发点 `0x3B0F80` 上装 token detour(§91.6/§93),**不发脚本、不动窗口、不读日志** —— 观测是
-`c2_neo_effect_check.py` 的活。退出码 `0` = 回执 `install_rc=0` 且 host 活着;`2` = 任一步失败并打
+`c2_neo_effect_check.py` 的活。`--act log|write`(默认 `log`)在安装成功后调 `C2NeoSetAct`:
+`log` = C5-ADD 的原行为(每系统一行 `Neo: system <id>`);`write` = 日志 + 在系统 scope 上写系统变量
+`neo_mark`(C5-WRITE,§94)。退出码 `0` = 回执 `install_rc=0` 且 host 活着;`2` = 任一步失败并打
 `BOOT FAIL <step>`。
 
 **判读陷阱(四条):**
@@ -1676,9 +1707,11 @@ BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 **`--stats` 的一行**(键序固定):`calls`(我们的 token 被派发的次数)/ `matched`(过规则)/
 `log_calls`(真调了 `0x185BF60`)/ `last_id` / `rule_hits` / `installed` / `verify` /
 `dispatched`(detour 看到的总入口)/ `null_scope`(第二实参读不了)/ `mask_odd`(scope 的 `+0x08`
-不是 `0x80` ⇒ 不是 system scope,body 不做)。**`dispatched` 是判读的分水岭**:`calls=0` 且
+不是 `0x80` ⇒ 不是 system scope,body 不做)。C5-WRITE 在行尾追加 `writes`(真调了官方 `set_variable`
+body 的次数)/ `skipped`(该写但 body/vtable 地址没解析到)。**`dispatched` 是判读的分水岭**:`calls=0` 且
 `dispatched=0` = hook 不在路径上;`dispatched>0` 且 `calls=0` = 在路径上但 token 不符(§93.2 第一发
-就卡在这一格);`calls>0` 但 `matched=0` 且 `mask_odd>0` = 类型门在挡,不是规则。
+就卡在这一格);`calls>0` 但 `matched=0` 且 `mask_odd>0` = 类型门在挡,不是规则。`writes=0` 且
+`skipped>0` = body 地址没解析到(`resolveFromGame`),不是变量容器返回 0。
 
 ### `scripts/c2_neo_effect_check.py --log PATH --offset N --marker "Neo: system" --expect K`
 

@@ -1079,7 +1079,8 @@ export fn C2NeoVerify() callconv(.c) i32 {
     return c2_neo_dispatch.verify();
 }
 
-/// 一行,键序固定为 `calls matched log_calls last_id rule_hits installed verify dispatched`。
+/// 一行,键序固定为 `calls matched log_calls last_id rule_hits installed verify dispatched`,
+/// C5-WRITE 在行尾追加 `writes skipped`(老键位不动)。
 export fn C2NeoStatsInto(out: [*]u8) callconv(.c) i32 {
     return @intCast(c2_neo_dispatch.statsInto(out[0..c2_neo_dispatch.STATS_SIZE]));
 }
@@ -1087,6 +1088,13 @@ export fn C2NeoStatsInto(out: [*]u8) callconv(.c) i32 {
 /// `mod << 32 | rem`(`c2_exec_caller_probe.encode_rule` 同形)。`0:0` = 全关。
 export fn C2NeoSetRule(bits: u64) callconv(.c) i32 {
     c2_neo_effect.setRule(@intCast(bits >> 32), @intCast(bits & 0xFFFF_FFFF));
+    return 0;
+}
+
+/// C5-WRITE:`0` = 只写日志(C5-ADD 原行为)| `1` = 日志 + 在系统 scope 上写 `neo_mark`。
+/// 其它值不开写。返回 0(设置本身不会失败)。
+export fn C2NeoSetAct(mode: u32) callconv(.c) i32 {
+    c2_neo_vtable.setAct(mode);
     return 0;
 }
 
