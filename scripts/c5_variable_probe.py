@@ -41,13 +41,23 @@ def _blocks(block: Block, key: str) -> list[Block]:
             if entry_key == key and isinstance(value, Block)]
 
 
-def _as_value(text: object) -> int | str:
-    """Variables are integers in our case; keep anything else verbatim (loudly)."""
+def _as_value(text: object) -> int | float | str:
+    """Variables are numbers; normalize integral values (incl. `3.00000`) to int.
+
+    Shot 1 stored raw ids and the save printed them as `0.00786` — the engine's
+    fixed-point format keeps five decimals, so an integer value can arrive as
+    `3.00000` too. Anything non-numeric stays verbatim (loudly).
+    """
     if isinstance(text, str):
         try:
             return int(text)
         except ValueError:
+            pass
+        try:
+            number = float(text)
+        except ValueError:
             return text
+        return int(number) if number.is_integer() else number
     return str(text)
 
 
@@ -65,7 +75,7 @@ def _variable_values(system: Block, name: str) -> list[int | str]:
     return found
 
 
-def find_variables(gamestate: str, name: str) -> dict[int, int | str]:
+def find_variables(gamestate: str, name: str) -> dict[int, int | float | str]:
     """`{system id: value}` for every system whose `variables={}` holds `name`.
 
     Narrow on purpose: only the two system containers are searched, and a system
@@ -111,7 +121,7 @@ def assert_same_rule(write_rule: str, read_rule: str) -> None:
             "the two every_system segments must select the same systems")
 
 
-def format_report(name: str, found: dict[int, int | str]) -> str:
+def format_report(name: str, found: dict[int, int | float | str]) -> str:
     if not found:
         return f"{name}: systems=0"
     values = [v for v in found.values() if isinstance(v, int)]

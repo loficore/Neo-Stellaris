@@ -33,11 +33,11 @@ pub const NAME_STRING_OFF: usize = 0xD0;
 pub const VALUE_OFF: usize = 0xF0;
 pub const VALUE_CELL_OFF: usize = 0x310;
 
-/// 窗口内先恒等:官方 ctor 把 `[+0x310]` 置 0,解析器写脚本里的字面量。
-/// 我们写的就是「一个字面量 id」,所以值与 id 同形。`0x3515A0` 取回的是
-/// qword(`mov rbx,[rsp+0x30]`),因此这里按 u64 给出。
+/// 值格是脚本的数字类型:`0x3515A0` 取回的 qword 按 **1e-5 定点**解释。
+/// 2026-11-02 第一发把裸 id 写进去,存档里得到 `0.00786`(而官方变量是
+/// `years_passed=52` 这样的整数)⇒ 要写整数 id,必须 `id × 100000`。
 pub fn encodeValue(id: u32) u64 {
-    return id;
+    return @as(u64, id) * 100_000;
 }
 
 /// 把一个零初始化对象摆成「解析出了 `value = <id>` 的 `set_variable`」。
@@ -69,6 +69,14 @@ test "layoutInto writes the encoded value at +0x310 as a qword" {
     layoutInto(&obj, 4242);
     try std.testing.expectEqual(encodeValue(4242),
         std.mem.readInt(u64, obj[VALUE_CELL_OFF..][0..8], .little));
+}
+
+test "encodeValue scales the id to the engine's 1e-5 fixed point" {
+    // 2026-11-02 shot 1: raw `786` landed in the save as `0.00786`, while
+    // vanilla variables are plain integers (`years_passed=52`).  The value
+    // cell is the script number type: internal = value × 100000.
+    try std.testing.expectEqual(@as(u64, 100_000), encodeValue(1));
+    try std.testing.expectEqual(@as(u64, 78_600_000), encodeValue(786));
 }
 
 test "layoutInto leaves the value-source presence flag at +0x300 zero" {

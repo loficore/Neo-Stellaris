@@ -50,6 +50,17 @@ def test_a_missing_system_container_is_an_empty_map():
     assert mod.find_variables("date=2200.01.01", "neo_mark") == {}
 
 
+def test_a_fixed_point_encoded_integer_reads_back_as_an_integer():
+    """Shot 1 wrote raw ids; the save showed them as `0.00786` (value × 1e-5)."""
+    text = "galactic_object={ 3={ variables={ neo_mark=3.00000 } } }"
+    assert mod.find_variables(text, "neo_mark") == {3: 3}
+
+
+def test_a_non_integral_value_stays_a_float():
+    text = "galactic_object={ 3={ variables={ neo_mark=3.50000 } } }"
+    assert mod.find_variables(text, "neo_mark") == {3: 3.5}
+
+
 def test_read_gamestate_unzips_the_sav(tmp_path):
     sav = tmp_path / "x.sav"
     with zipfile.ZipFile(sav, "w") as archive:
