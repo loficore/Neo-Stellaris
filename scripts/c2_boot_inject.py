@@ -16,6 +16,10 @@
 
     python C:/temp/c2_boot_inject.py C:/temp/sqjs_c20.dll --timeout-s 30
     python C:/temp/c2_boot_inject.py --allow-window     # operator-declared premise
+    python C:/temp/c2_boot_inject.py --stats --log "<...>/logs/game.log"   # read back
+
+`--rule MOD:REM`(默认 `1:0` = 所有 id)在安装成功后立刻装进 DLL;`--stats` 不注入,
+只把 `C2NeoStatsInto` 的一行(和日志当前字节偏移)打出来。
 
 退出码:`0` = 回执里有 `install_rc=0` 且 `alive=1`;`2` = 任一步失败(打印
 `BOOT FAIL <step>`);`gate_install` 拒绝时也是 2(它自己 `raise SystemExit(2)`)。
@@ -64,6 +68,12 @@ def sha16(path: str) -> str:
     return digest.hexdigest()[:16]
 
 
+def pack_rule(rule: str) -> int:
+    """`"MOD:REM"` -> the u64 the DLL takes (`mod << 32 | rem`). `0:0` disables the rule."""
+    mod_text, _, rem_text = rule.partition(":")
+    return (int(mod_text) << 32) | (int(rem_text or 0) & 0xFFFFFFFF)
+
+
 def _signed32(value: int) -> int:
     return value - (1 << 32) if value & 0x80000000 else value
 
@@ -91,7 +101,8 @@ def wait_for_process(timeout_s: float, *, interval_s: float = 0.05):
     return None
 
 
-def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False) -> int:
+def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
+         rule: str = "1:0") -> int:
     import c2_harness as harness
 
     dll_name = os.path.basename(dll_path.replace("\\", "/"))
@@ -138,10 +149,32 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False) 
     install_rc = _signed32(
         harness.call_remote_with_arg(pid, base, exports["C2NeoInstall"], effect_id))
     harness.assert_game_alive(pid)
+    if install_rc == 0:
+        harness.call_remote_with_arg(pid, base, exports["C2NeoSetRule"], pack_rule(rule))
 
     print(receipt(dll=dll_name, sha16=digest, effect_id=effect_id,
                   install_rc=install_rc, alive=True))
     return 0 if install_rc == 0 else EXIT_FAILED
+
+
+def stats(*, game_log: str | None = None) -> int:
+    """Read the `C2NeoStatsInto` line (and optionally the log's byte offset) from a live pid."""
+    import c2_harness as harness
+
+    pid = harness.resolve_pid("stellaris.exe")
+    dll_name = os.path.basename(DEFAULT_DLL.replace("\\", "/"))
+    base = harness.resolve_base_address(pid, dll_name)
+    exports = harness.list_exports(DEFAULT_DLL)
+    buf = harness.remote_alloc(pid, 512)
+    harness.call_remote_with_arg(pid, base, exports["C2NeoStatsInto"], buf)
+    text = harness.read_memory(pid, buf, 512).split(b"\0", 1)[0].decode("ascii", "replace")
+    print(text.rstrip("\r\n"))
+    if game_log:
+        try:
+            print(f"log_bytes={os.path.getsize(os.path.expanduser(game_log))}")
+        except OSError:
+            print("log_bytes=None")
+    return 0
 
 
 def main(argv=None) -> int:
@@ -151,8 +184,17 @@ def main(argv=None) -> int:
                         help="how long to wait for stellaris.exe to appear (default 30)")
     parser.add_argument("--allow-window", action="store_true",
                         help="operator-declared premise: skip gate_install")
+    parser.add_argument("--rule", default="1:0",
+                        help="MOD:REM armed after install; 1:0 = every id, 0:0 = off")
+    parser.add_argument("--stats", action="store_true",
+                        help="do not inject: print C2NeoStatsInto from the running pid")
+    parser.add_argument("--log", default=None,
+                        help="with --stats: also print this log's current byte offset")
     args = parser.parse_args(argv)
-    return boot(args.dll, timeout_s=args.timeout_s, allow_window=args.allow_window)
+    if args.stats:
+        return stats(game_log=args.log)
+    return boot(args.dll, timeout_s=args.timeout_s, allow_window=args.allow_window,
+                rule=args.rule)
 
 
 if __name__ == "__main__":

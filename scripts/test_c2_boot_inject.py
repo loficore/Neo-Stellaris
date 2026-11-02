@@ -33,3 +33,11 @@ def test_sha16_is_the_first_16_hex_digits_of_the_file(tmp_path):
 def test_fail_line_names_the_step():
     assert mod.fail_line("inject") == "BOOT FAIL inject"
     assert "\n" not in mod.fail_line("c1")
+
+
+def test_pack_rule_is_mod_high_rem_low():
+    assert mod.pack_rule("100:0") == (100 << 32)
+    assert mod.pack_rule("1:0") == (1 << 32)
+    assert mod.pack_rule("0:0") == 0
+    assert mod.pack_rule("8:3") == (8 << 32) | 3
+    assert mod.pack_rule("8") == (8 << 32)
