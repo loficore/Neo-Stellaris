@@ -10,6 +10,10 @@
 // `0x185BF60`。`0x185BF60` 只读 `+0x38`/`+0xd0`/`+0xe0`,**不读 `[self]`**,
 // 所以不需要虚表;那三格之外的内容它看不到。
 //
+// C5-WRITE/C5-SCORE 在规则筛之后多走一步 `--act write`:用同一个官方
+// `set_variable` body 写 `neo_mark = id` 与 `neo_score = scores[id]`(两个栈上
+// 合成对象),值都按 1e-5 定点编码。
+//
 // 不写引擎内存、不改对象 `[self]`、不 FreeLibrary。
 
 const std = @import("std");
@@ -18,6 +22,7 @@ const offsets = @import("../shared/offsets.zig");
 const windows = @import("../hooking/windows.zig");
 const neo_effect = @import("neo_effect.zig");
 const neo_state = @import("neo_state.zig");
+const chokepoint_table = @import("chokepoint_table.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -52,6 +57,8 @@ var stat_matched: u64 = 0;
 var stat_log_calls: u64 = 0;
 var stat_writes: u64 = 0;
 var stat_skipped: u64 = 0;
+var stat_score_writes: u64 = 0;
+var stat_score_skipped: u64 = 0;
 var stat_null_scope: u64 = 0;
 var stat_non_system_scope: u64 = 0;
 var last_id: u32 = 0;
@@ -105,6 +112,26 @@ fn writeState(id: u32, scope: u64) bool {
     return true;
 }
 
+/// C5-SCORE 的表查找:运行时 id 越界(别的战役、新系统)返回 null,绝不越界读表。
+pub fn scoreFor(id: u32) ?u16 {
+    if (id >= chokepoint_table.SCORE_COUNT) return null;
+    return chokepoint_table.scores[id];
+}
+
+/// C5-SCORE:`set_variable neo_score = scores[id]`。与 `writeState` 同形 ——
+/// 同一个官方 body、同一个栈上合成对象,只有名字与值不同。
+/// 返回是否真的写了;越界 id 与未解析地址都算 `false`(计 `score_skipped`)。
+fn writeScore(id: u32, scope: u64) bool {
+    const score = scoreFor(id) orelse return false;
+    if (state_body_addr == 0 or state_vtable_addr == 0) return false;
+    var obj: [neo_state.OBJECT_SIZE]u8 align(8) = undefined;
+    neo_state.layoutNumber(&obj, neo_state.SCORE_NAME, score);
+    std.mem.writeInt(u64, obj[0..8], state_vtable_addr, .little);
+    const body: *const fn (u64, u64) callconv(.c) void = @ptrFromInt(state_body_addr);
+    body(@intFromPtr(&obj), scope);
+    return true;
+}
+
 /// The per-system body. Order is load-bearing (plan Task 2 Step 3): count →
 /// scope gate → read id → rule → compose → count → call. Nothing here writes
 /// engine memory; the only engine call is the official `log` implementation
@@ -127,11 +154,17 @@ pub fn runBody(scope: u64, a3: u64) u64 {
     recordHit(id);
 
     // C5-WRITE:先写状态,再写日志 —— 两个读数在同一次命中里成对出现。
+    // C5-SCORE:同一个门里再写一个 `neo_score`,它是图分数而不是 id。
     if (@atomicLoad(u32, &act_mode, .monotonic) == 1) {
         if (writeState(id, scope)) {
             _ = @atomicRmw(u64, &stat_writes, .Add, 1, .monotonic);
         } else {
             _ = @atomicRmw(u64, &stat_skipped, .Add, 1, .monotonic);
+        }
+        if (writeScore(id, scope)) {
+            _ = @atomicRmw(u64, &stat_score_writes, .Add, 1, .monotonic);
+        } else {
+            _ = @atomicRmw(u64, &stat_score_skipped, .Add, 1, .monotonic);
         }
     }
 
@@ -198,6 +231,17 @@ pub fn skipped() u64 {
     return @atomicLoad(u64, &stat_skipped, .monotonic);
 }
 
+/// C5-SCORE:图分数真的写进 `neo_score` 的次数。
+/// 判据是 `score_writes == matched`;小于它时查越界 id 或未解析地址。
+pub fn scoreWrites() u64 {
+    return @atomicLoad(u64, &stat_score_writes, .monotonic);
+}
+
+/// 该写分数但没写的次数(越界 id,或 body/vtable 地址没解析到)。
+pub fn scoreSkipped() u64 {
+    return @atomicLoad(u64, &stat_score_skipped, .monotonic);
+}
+
 pub fn lastId() u32 {
     return @atomicLoad(u32, &last_id, .monotonic);
 }
@@ -224,6 +268,8 @@ pub fn resetForTest() void {
     stat_log_calls = 0;
     stat_writes = 0;
     stat_skipped = 0;
+    stat_score_writes = 0;
+    stat_score_skipped = 0;
     stat_null_scope = 0;
     stat_non_system_scope = 0;
     last_id = 0;
@@ -276,4 +322,16 @@ test "the system-scope marker is 0x80" {
     try std.testing.expect(isSystemScope(0x80));
     try std.testing.expect(!isSystemScope(0));
     try std.testing.expect(!isSystemScope(0x81));
+}
+
+test "scoreFor indexes the baked table and refuses out-of-range ids" {
+    try std.testing.expectEqual(@as(?u16, chokepoint_table.scores[0]), scoreFor(0));
+    try std.testing.expectEqual(@as(?u16, chokepoint_table.scores[786]), scoreFor(786));
+    try std.testing.expectEqual(@as(?u16, null), scoreFor(787));
+}
+
+test "the score counters start at zero after reset" {
+    resetForTest();
+    try std.testing.expectEqual(@as(u64, 0), scoreWrites());
+    try std.testing.expectEqual(@as(u64, 0), scoreSkipped());
 }

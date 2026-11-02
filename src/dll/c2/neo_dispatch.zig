@@ -225,7 +225,8 @@ pub fn statsInto(out: []u8) usize {
     const written = std.fmt.bufPrint(
         out,
         "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d} " ++
-            "dispatched={d} null_scope={d} mask_odd={d} writes={d} skipped={d}\n",
+            "dispatched={d} null_scope={d} mask_odd={d} writes={d} skipped={d} " ++
+            "score_writes={d} score_skipped={d}\n",
         .{
             ours(),
             neo_vtable.matched(),
@@ -239,6 +240,8 @@ pub fn statsInto(out: []u8) usize {
             neo_vtable.nonSystemScopes(),
             neo_vtable.writes(),
             neo_vtable.skipped(),
+            neo_vtable.scoreWrites(),
+            neo_vtable.scoreSkipped(),
         },
     ) catch return 0;
     return written.len;
@@ -294,6 +297,7 @@ test "statsInto keeps the driver's key order and appends dispatched" {
     var buf: [STATS_SIZE]u8 = undefined;
     const n = statsInto(&buf);
     const expected = "calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 " ++
-        "installed=0 verify=-3 dispatched=0 null_scope=0 mask_odd=0 writes=0 skipped=0\n";
+        "installed=0 verify=-3 dispatched=0 null_scope=0 mask_odd=0 " ++
+        "writes=0 skipped=0 score_writes=0 score_skipped=0\n";
     try std.testing.expectEqualStrings(expected, buf[0..n]);
 }
