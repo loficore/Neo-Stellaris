@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -198,6 +199,29 @@ def uninstall(dll_path: str) -> int:
     return 0 if rc == 0 and verify == 0 else EXIT_FAILED
 
 
+def pred_stats(dll_path: str) -> int:
+    """Read C4's predicate-hook counters (24 B: calls, patched, last_token, installed).
+
+    This is what separates "the engine never instantiated our keyword" from
+    "it did, but with another token": `pred_last_token` is the last `[obj+0x20]`
+    the predicate detour saw.
+    """
+    import c2_harness as harness
+
+    pid = harness.resolve_pid("stellaris.exe")
+    dll_name = os.path.basename(dll_path.replace("\\", "/"))
+    base = harness.resolve_base_address(pid, dll_name)
+    exports = harness.list_exports(dll_path)
+    buf = harness.remote_alloc(pid, 24)
+    rc = _signed32(harness.call_remote_with_arg(pid, base, exports["C4PredStatsInto"], buf))
+    blob = harness.read_memory(pid, buf, 24)
+    calls, patched = struct.unpack_from("<QQ", blob, 0)
+    last_token, installed = struct.unpack_from("<II", blob, 16)
+    print(f"pred_rc={rc} pred_calls={calls} pred_patched={patched} "
+          f"pred_last_token={last_token} pred_installed={installed}")
+    return 0
+
+
 def stats(dll_path: str, *, game_log: str | None = None) -> int:
     """Read the `C2NeoStatsInto` line (and optionally the log's byte offset) from a live pid."""
     import c2_harness as harness
@@ -229,6 +253,8 @@ def main(argv=None) -> int:
                         help="MOD:REM armed after install; 1:0 = every id, 0:0 = off")
     parser.add_argument("--stats", action="store_true",
                         help="do not inject: print C2NeoStatsInto from the running pid")
+    parser.add_argument("--pred", action="store_true",
+                        help="do not inject: print C4's predicate-hook counters")
     parser.add_argument("--uninstall", action="store_true",
                         help="do not inject: C2NeoUninstall + C2NeoVerify, then print both")
     parser.add_argument("--launch", default=None,
@@ -240,6 +266,8 @@ def main(argv=None) -> int:
     parser.add_argument("--log", default=None,
                         help="with --stats: also print this log's current byte offset")
     args = parser.parse_args(argv)
+    if args.pred:
+        return pred_stats(args.dll)
     if args.stats:
         return stats(args.dll, game_log=args.log)
     if args.uninstall:
