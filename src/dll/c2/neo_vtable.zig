@@ -19,7 +19,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const offsets = @import("../shared/offsets.zig");
 const windows = @import("../hooking/windows.zig");
-const predicate_hook = @import("predicate_hook.zig");
 const neo_effect = @import("neo_effect.zig");
 
 const is_windows = builtin.os.tag == .windows;
@@ -34,7 +33,6 @@ pub const SCOPE_ID_OFF: usize = 0x10;
 pub const RVA_LOG_EFFECT_EXEC: usize = offsets.keyword_reg.RVA_LOG_EFFECT_EXEC;
 
 pub const RULE_HITS: usize = 64;
-pub const STATS_SIZE: usize = 512;
 
 // ---------------------------------------------------------------------------
 // State
@@ -43,8 +41,6 @@ pub const STATS_SIZE: usize = 512;
 var slots: [SlotCount]u64 align(16) = [_]u64{0} ** SlotCount;
 var built = false;
 var log_effect_addr: usize = 0;
-
-var install_attempted = false;
 
 var stat_calls: u64 = 0;
 var stat_matched: u64 = 0;
@@ -80,13 +76,21 @@ fn recordHit(id: u32) void {
     if (nth < RULE_HITS) hits[@intCast(nth)] = id;
 }
 
-/// slot[9] of our copy. Called by `0x3B0F80` once per dispatched system.
-///
-/// Order is load-bearing (plan Task 2 Step 3): count → scope gate → read id →
-/// rule → compose → count → call. Nothing here writes engine memory; the only
-/// engine call is the official `log` implementation with a stack object.
+/// slot[9] of our copy. Only reached if something had patched an object's
+/// `[self]` to this table — `neo_dispatch.zig`'s detour is the live path, and it
+/// calls `runBody` directly (2026-11-02: parsed effect trees never go through
+/// the instantiate predicate, so no object gets this table; keep it as a
+/// fallback, not as the mechanism).
 fn neoActionExecute(self: u64, scope: u64, a3: u64) callconv(.c) u64 {
     _ = self; // the synthesized object is ours; the engine's instance is untouched
+    return runBody(scope, a3);
+}
+
+/// The per-system body. Order is load-bearing (plan Task 2 Step 3): count →
+/// scope gate → read id → rule → compose → count → call. Nothing here writes
+/// engine memory; the only engine call is the official `log` implementation
+/// with a stack object.
+pub fn runBody(scope: u64, a3: u64) u64 {
     _ = @atomicRmw(u64, &stat_calls, .Add, 1, .monotonic);
     if (!scopeReadable(@intCast(scope))) {
         _ = @atomicRmw(u64, &stat_null_scope, .Add, 1, .monotonic);
@@ -149,22 +153,24 @@ pub fn logEffect() usize {
 // Readouts
 // ---------------------------------------------------------------------------
 
-pub fn statsInto(out: []u8) usize {
-    const hit_n: u32 = @intCast(@min(@atomicLoad(u64, &hit_count, .monotonic), RULE_HITS));
-    const written = std.fmt.bufPrint(
-        out,
-        "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d}\n",
-        .{
-            @atomicLoad(u64, &stat_calls, .monotonic),
-            @atomicLoad(u64, &stat_matched, .monotonic),
-            @atomicLoad(u64, &stat_log_calls, .monotonic),
-            @atomicLoad(u32, &last_id, .monotonic),
-            hit_n,
-            @intFromBool(predicate_hook.isInstalled()),
-            verify(),
-        },
-    ) catch return 0;
-    return written.len;
+pub fn calls() u64 {
+    return @atomicLoad(u64, &stat_calls, .monotonic);
+}
+
+pub fn matched() u64 {
+    return @atomicLoad(u64, &stat_matched, .monotonic);
+}
+
+pub fn logCalls() u64 {
+    return @atomicLoad(u64, &stat_log_calls, .monotonic);
+}
+
+pub fn lastId() u32 {
+    return @atomicLoad(u32, &last_id, .monotonic);
+}
+
+pub fn ruleHitsRecorded() u32 {
+    return @intCast(@min(@atomicLoad(u64, &hit_count, .monotonic), RULE_HITS));
 }
 
 /// `[count: u32][ids: u32 × RULE_HITS]` — same shape as §92's decision record.
@@ -177,25 +183,18 @@ pub fn ruleHitsInto(out: [*]u8) u32 {
     return count;
 }
 
-/// 0 = consistent | -1 hook lost | -2 engine bytes differ | -3 never installed.
-pub fn verify() i32 {
-    if (!install_attempted) return -3;
-    return predicate_hook.verify();
-}
-
 pub fn nullScope() u64 {
     return @atomicLoad(u64, &stat_null_scope, .monotonic);
 }
 
-pub fn markInstallAttempted() void {
-    install_attempted = true;
+pub fn logCallsAtomic() u64 {
+    return @atomicLoad(u64, &stat_log_calls, .monotonic);
 }
 
 pub fn resetForTest() void {
     slots = [_]u64{0} ** SlotCount;
     built = false;
     log_effect_addr = 0;
-    install_attempted = false;
     stat_calls = 0;
     stat_matched = 0;
     stat_log_calls = 0;
@@ -231,19 +230,6 @@ test "buildFromSlots rejects a short donor" {
     const donor = [_]u64{1} ** (SlotCount - 1);
     try std.testing.expectError(error.ShortDonor, buildFromSlots(&donor));
     try std.testing.expect(!isBuilt());
-}
-
-test "verify is -3 before the first install attempt" {
-    resetForTest();
-    try std.testing.expectEqual(@as(i32, -3), verify());
-}
-
-test "statsInto writes the seven keys in the driver's order" {
-    resetForTest();
-    var buf: [STATS_SIZE]u8 = undefined;
-    const n = statsInto(&buf);
-    const expected = "calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 installed=0 verify=-3\n";
-    try std.testing.expectEqualStrings(expected, buf[0..n]);
 }
 
 test "rule hits are recorded in call order and capped" {

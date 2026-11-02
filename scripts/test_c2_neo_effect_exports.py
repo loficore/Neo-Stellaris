@@ -9,7 +9,7 @@ import pathlib
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 EXPORTS = REPO / "src/dll/exports.zig"
-NEO_VTABLE = REPO / "src/dll/c2/neo_vtable.zig"
+NEO_DISPATCH = REPO / "src/dll/c2/neo_dispatch.zig"
 
 STATS_KEYS = (
     "calls",
@@ -29,8 +29,8 @@ def test_the_four_exports_exist_in_the_zig_source():
 
 
 def test_the_stats_line_keeps_the_drivers_key_order():
-    src = NEO_VTABLE.read_text(encoding="utf-8")
-    marker = "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d}"
+    src = NEO_DISPATCH.read_text(encoding="utf-8")
+    marker = "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d} dispatched={d}"
     # The driver splits on '=' and ' '; a reordered line would silently relabel
     # every column of §93, so the order is pinned, not just the key set.
     assert marker in src.split("fn statsInto", 1)[1]
