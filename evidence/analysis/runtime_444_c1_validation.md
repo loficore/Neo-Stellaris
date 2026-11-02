@@ -9995,3 +9995,91 @@ mod 的事件文件在 shot 前备份到 `C:\temp\neo_ps_probe_events.txt.bak-20
 
 **判词**:`neo_lines_ok`。§93.4 的数字(9,444 / 12 个月)是**上一版字节**的读数,两条并存;
 以仓库里这一版为准的是本节。
+
+## §94 我们的 keyword 改得动游戏状态 —— `neo_action` 在系统 scope 上写 `neo_mark`(2026-11-02,实机两发,授权 = spec `2026-11-02-c5-write-state-design.md`)
+
+**这一节回答的是「改」**:C5-ADD(§93)让引擎按星系调用我们的 keyword,但动作只是写日志;这一发让
+同一次调用在系统 scope 上写下一个**引擎认账**的状态,再由 mod 的第二段用官方 trigger 读回。
+
+### §94.1 判据(spec §5)
+
+1. 引擎作证:第二段 `every_system` 的读回命中行数 = 第一段命中数(= `matched`),每行带 `NEO_VAR_OK`;
+2. 值也对(离线、零 shot):存档里每个系统的 `neo_mark` 逐项 = 该星系的运行时 id;
+3. 官方没被碰坏:`error.log` 无 `Unexpected token`、无 `Missing variable ('which')`;装拆 `rc=0`/`verify=0`;host 存活;
+4. 官方路径零改动:只 ALIAS 官方 `class_info`,不 patch 静态表、不伪造对象。
+
+### §94.2 静态读数与 go/no-go(Task 1,零 shot)
+
+原件 `evidence/disasm/set_variable_188e1d0.c`;判决 `layout_ok`(spec §3.1)。
+
+- `0x188E1D0(self=rcx, scope=rdx)`:`add rcx,0xf0` → `0x3515A0(src=self+0xF0, out=&rsp+0x30, r8=scope)`;
+  `rbx = qword [out]`(**qword,不是 dword**);`0xA56CC0(scope, &self+0xC0)` → 变量容器(0 则整条跳过);
+  `0x7EEBF0(container, &self+0xC0, rbx)` 真正写。
+- 名字不是 `+0xC0` 起:名字包装在 `+0xC0`,其 `+0x10` 才是 `std::string`(`0x7EEBF0` 入口 `add rdx,0x10`)
+  ⇒ 字符 `+0xD0`、size `+0xE0`、capacity `+0xE8`(必须 `< 0x10` 才走内联)。
+- `0x3515A0` 的 `[src+0x210]` 为 0 时**短路**:`*out = [src+0x220]` 并返回。绝对偏移 = `+0x300` / `+0x310`。
+  官方 ctor(`0x18A71A0` → `0x34ECD0`)本来就把这两格置 0 ⇒ **短路就是刚构造的 `set_variable` 对象**,
+  不需要伪造任何 token 流/解析状态。⇒ 载体 A(系统变量)成立,不走回退 B(`add_modifier`)。
+- 对象尺寸 `0x318`(`0x18A6970` 的 `new(0x318)`);`[obj] = 0x25EA560` 由调用方摆,`+0x08` 本路径不读。
+
+### §94.3 第一发:写进去了,但值差 1e5(`sqjs_c43`,pid 4852)
+
+- DLL sha16 `c039ebb1a1327624`;mod 读回段用 `is_variable_set = neo_mark`,日志常量 `NEO_VAR_OK`;
+- 读数(暂停后):`calls=7083 matched=7083 log_calls=7083 writes=7083 skipped=0 last_id=786 rule_hits=64
+  installed=1 verify=0 dispatched=35798 null_scope=0 mask_odd=0`;
+- `game.log` 自偏移 **177** 起:`Neo: system` 7,083 行(787 个 id 各 9 次);`NEO_VAR_OK` **9 行**、
+  `PS_HIT` 9 行 —— 常量文本被日志 sink 按连续相同行折叠(§93.8 第 5 条),不是少跑了;
+- 存档 `autosave_2252.01.01.sav`(sha256 `10dabd8e317e788cf97dac31275e163f5f2fd2206ba3ccbceb7c1628dd5965db`):
+  **787 个系统都有 `neo_mark`**,但值是 `0.00001`…`0.00786`(id × 1e-5);官方数值变量在存档里是
+  整数(`years_passed=52`、`outer_system_mining_stations=42`)⇒ 值格是**脚本的 1e-5 定点**,不是整数;
+- `UNINSTALL rc=0 verify=0 alive=1`。
+
+**判**:写入路径通、引擎读回通、值编码错。这一发不能算判据 2 通过。
+
+### §94.4 第二发:最终字节(`sqjs_c44`,pid 15792)
+
+修三处:`encodeValue = id × 100000`;存档读值把 `3.00000` 归一成整数;读回日志改成
+`NEO_VAR_OK [This.neo_mark]`(官方 loc 的变量取值写法,`events/000_how_to_use_variables_in_script.txt:78`,
+这样每行带不同的值,不再被 sink 折叠)。
+
+- DLL sha16 `b8cf0b5ed45b48da`;最终读数(暂停、25 s 内两次相同):
+  `calls=14166 matched=14166 log_calls=14166 writes=14166 skipped=0 last_id=786 rule_hits=64
+  installed=1 verify=0 dispatched=72620 null_scope=0 mask_odd=0`;
+- `game.log` 自偏移 **177** 起:`Neo: system` **14,166** 行、`NEO_VAR_OK` **14,166** 行
+  (= **18 × 787**);两边都是 787 个不同值 `0..786`、每个 18 次;`PS_HIT` 18 行(控制组:事件跑了
+  18 轮,同文本每月折叠);
+- 行形态:`[17:12:25][effect_impl.cpp:21978]: [2256.2.1] Log effect, file: events/neo_ps_probe_events.txt
+  line: 26. NEO_VAR_OK 0`;写状态那侧仍是 `Neo: system <id>`;
+- `error.log` 35 行,`Unexpected token` = 0、`Missing variable` = 0;
+- 存档 `autosave_2257.07.01.sav`(sha256 `fa6f3bfdd8fd3d3ff0f46d8f343befc707231d51e98637882b7032f37dff2e2e`):
+  **787 个系统、`neo_mark` 的值逐项 = 该系统 id,0 处不等**;`min=0`、`max=786`,抽样 `0..4` 与 `782..786`;
+- 装拆:`C2NeoInstall rc=0`;`UNINSTALL rc=0 verify=0 alive=1`;mod 事件文件按备份还原,
+  sha256 `980A3DF14371D25ACE9181AB1E90C7B1A3B4FD15CC42F6255A5F760959797F0F` 与备份逐字节相同;
+  收尾后 host 上 `stellaris.exe` 进程数 = 0。
+
+### §94.5 判词
+
+**`neo_state_written`。** spec §5 四条:读回行数 = 命中数(14,166 = 14,166)、值逐项相等(787/787)、
+`error.log` 干净且装拆校验全 0、官方 class_info 只 ALIAS。⇒ **我们的 keyword 不只是「被引擎调用」,
+它写下的状态被引擎自己读回来了,且值也对。**
+
+### §94.6 这一节不能说的(三条)
+
+1. **值编码只在 `0..786` 的整数范围被验证。** 结论是「整数 id × 100000 会存成该整数」;
+   负数、分数、超过该范围的值**没有**读数,不能外推。
+2. **`is_variable_set` 只证存在性。** 值相等是**存档侧**读出来的,不是 trigger 比的;
+   要让 trigger 比值,得用 `check_variable = { which = … value = … }` 并给出逐系统的字面量(本轮没做)。
+3. **存档 join 是存档局部的 id。** `neo_mark` 的值来自 `scope+0x10`,与容器里的 4 B 值逐项相等(§93.6 第 1 条),
+   但这仍**不证明**它就是跨战役稳定的 `system_id`;换存档/换版本数字会指向别的星系。
+
+### §94.7 现场与回滚
+
+- 预算:spec 的 ≤3 发,本轮用 **2** 发(第一发的值是错的,修复后重打;第二发是最终字节)。
+- 两发都经 `session_bridge.py` 进 session 1,驱动 `c2_boot_inject.py --act write --rule 1:0`,
+  注入早于脚本解析(`BOOT … install_rc=0 alive=1`);DLL **从未 `FreeLibrary`**(AGENTS 约束 5),
+  卸载只把 `0x3B0F80` 的 `patch_size` 字节写回。
+- mod 事件文件两发前都备份到 `C:\temp\neo_ps_probe_events.txt.bak-2026-11-02-c5write`,收尾后原样还原。
+- 与 §93.8 第 1 条同一条口径:token 命中时我们直接 `return`,引擎在 `0x3B0F80` 里自己的 scope 门/
+  临时对象释放**没有**对我们的 token 运行;本节只声明「派发入口把这一轮送到我们手里」。
+- 两个已知陷阱(供下次复采):(a) 常量日志文本会被 sink 折叠,读回行数不等于命中数;
+  (b) 暂停键可能被吞一次,读数与日志要取**同一时刻**的 `--stats` 与日志增量,否则会差一个月的 787。

@@ -57,6 +57,7 @@
 | `save_hypergraph.py` | 解 `.sav` 的 ZIP、读文本 `gamestate`,抽 `galactic_object` 的 `hyperlane` 邻接,输出无向边表(`a\tb\tlength`)并核对对称/自环/重复不变量;`--stats` 打计数 | 换存档或换版本要重算星系连通度时;存档不上传、不进 git |
 | `chokepoint_scores.py` | 只读边表,算 degree / Brandes betweenness / 割点 / 桥,输出按 `system_id` 升序的七列分数表;`--top N` 打前 N 行 | 已有边表、要给 C4 试点排交通要道时;`system_id` 是存档局部 id |
 | `chokepoints_emit.py` | 把七列分数表编译成 `src/dll/c2/chokepoint_table.zig` 的 787 项 `u16` 与 save sha;`--check` 是漂移围栏 | 分数表变了、或换存档后重新生成时;改了 TSV 不重生会让围栏红 |
+| `c5_variable_probe.py` | 解 `.sav`、读 `gamestate`,从 `galactic_object` 每个系统块的 `variables={}` 里取一个变量的值;`--name neo_mark` 打 `systems/min/max/sample` | C5-WRITE 判据 2:窗口后对存档逐项验值;数值是 1e-5 定点,id 是存档局部 id |
 
 ## 实机注入通道：C1（已完成）
 
@@ -106,7 +107,9 @@
 | `c2_exec_caller_probe.py` | C5 缺的那一格(§90.4):靶 `log` 效果入口 **`0x185BF60`**(`effect_impl.cpp:21978` 的 `0x55DA` 在 `.text` 唯一);每次调用记**返回地址**(谁在派发)+第二实参的 `+0x08`/`+0x10`(按 §80.2 的 scope 形状),再外部读银河容器对账。本仪器**没有 vtable 过滤器**(layout 第 6 词必须为 0)。十三档 verdict(4 证据 + 9 环境/仪器),`scope_constant` 只排除「第二实参是逐系统 scope」这一读法。`--systems` 写容器原始条数(§89.3 那次是 788)。**跑它要本次会话点名** |
 | `test_c2_exec_caller_probe.py` | 上述的离线围栏:契约层(Entry 32 B 字段序、Stats 48 B、stats 八键、layout 六词、八个导出)、判读层(十一档 verdict、容器一次读足、artifact 六列)、门序层(安装码表、sha 门、同名模块拒绝),共 **25 passed**,无游戏、无 Windows API |
 | `c2_boot_inject.py` | C5-ADD(§93)的 **T1 通道**:`wait_for_process`(50 ms)→ `inject_dll` → `C1Run` → `C1EffectId` → `C2NeoInstall(effect_id)`,回执一行 `BOOT dll= sha= effect_id= install_rc= alive=`;`--stats` 打十键(含 `dispatched`/`null_scope`/`mask_odd`)、`--uninstall` 拆 hook。只注册 + 在逐系统派发点 `0x3B0F80` 装 token detour(§93),不发脚本、不动窗口;`gate_install` 在注入前,`--allow-window` 只在人当场声明时用;**跑它要本次会话点名** |
-| `test_c2_boot_inject.py` | 上述的纯函数围栏:回执字段/一行、`sha16`、`BOOT FAIL <step>`,共 **4 passed**,无游戏、无 Windows API |
+| `test_c2_boot_inject.py` | 上述的纯函数围栏:回执字段/一行、`sha16`、`BOOT FAIL <step>`、`pack_rule`/`pack_act` 码表,共 **11 passed**,无游戏、无 Windows API |
+| `test_c2_neo_state_exports.py` | C5-WRITE 的导出/键序围栏:`C2NeoSetAct` 导出、驱动 `NEEDED`、stats 行尾 `writes`/`skipped` 顺序、`--act log|write`,共 **5 passed** |
+| `test_c5_variable_probe.py` | 上述存档读值的围栏:两种容器、两种变量编码、1e-5 定点归一到整数、两段规则必须一致、ZIP 读取,共 **11 passed** |
 | `c2_neo_effect_check.py` | §93 的判据:`game.log` 自 `--offset` 起 `Neo: system` 的**增量**行数 → `neo_lines_ok` / `neo_lines_short` / `neo_lines_extra` / `neo_lines_unmeasured`(多一行也是异常;`--offset` 缺省=没量到;`--histogram` 出每个 id 的次数) |
 | `test_c2_neo_effect_check.py` | 上述的判读围栏:增量口径、`None`≠`0`、三档词表,共 **4 passed** |
 | `test_c2_trigger_eval_probe.py` | 上述的离线围栏:verdict 九档(3 证据 + 6 环境)与 2% 容差边界、`Entry` 48 B 字段序(读 Zig 源码钉字面量)、`STATS_KEYS` 与 DLL 文本行一致、layout 词序、`install_decision` 拒陈旧靶、artifact 八列、`sha_gate` / `refuse_if_resident` / `preflight_paths` 三道门，共 **21 passed**，无游戏、无 Windows API |
