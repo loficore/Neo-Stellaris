@@ -79,3 +79,27 @@ def test_cli_prints_count_min_max_and_a_sample(tmp_path, capsys):
     assert "systems=2" in out
     assert "min=1" in out
     assert "max=9" in out
+
+
+def test_find_flags_reads_system_flags():
+    text = "galactic_object={ 3={ flags={ neo_tier2=1 } } 5={ flags={ neo_tier1=1 } } }"
+    assert mod.find_flags(text, "neo_tier2") == [3]
+
+
+def test_find_flags_ignores_other_flags():
+    text = "galactic_object={ 3={ flags={ empire_home_system=1 neo_tier2=1 } } }"
+    assert mod.find_flags(text, "neo_tier2") == [3]
+
+
+def test_a_missing_flag_is_an_empty_list():
+    assert mod.find_flags("galactic_object={ 1={ } }", "neo_tier2") == []
+
+
+def test_cli_prints_the_flag_count(tmp_path, capsys):
+    sav = tmp_path / "x.sav"
+    with zipfile.ZipFile(sav, "w") as archive:
+        archive.writestr("gamestate", "galactic_object={ 3={ flags={ neo_tier2=1 } } }")
+    assert mod.main(["--sav", str(sav), "--flag", "neo_tier2"]) == 0
+    out = capsys.readouterr().out
+    assert "systems=1" in out
+    assert "sample=3" in out

@@ -2,8 +2,10 @@
 """Read one variable's per-system values out of a Stellaris 4.4.4 text save.
 
 usage: c5_variable_probe.py --sav PATH --name neo_mark
+       c5_variable_probe.py --sav PATH --flag neo_tier2
 
 C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从存档里逐项对值。
+C5-SCORE 的判据 3:官方 `set_star_flag` 落下的 flag,同样从存档里数系统。
 `.sav` 是 ZIP,`gamestate` 是文本 Clausewitz;解析复用 `save_hypergraph.py` 的
 tokenizer(保留重复键与匿名块),本文件只做**窄**筛选:
 
@@ -98,6 +100,29 @@ def find_variables(gamestate: str, name: str) -> dict[int, int | float | str]:
     return found
 
 
+def find_flags(gamestate: str, flag: str) -> list[int]:
+    """Ascending system ids whose `flags={}` block holds `flag` (key only).
+
+    `set_star_flag` lands as a key in the system's flat `flags={}` map (spec §3);
+    the value is engine bookkeeping, so only the key is judged.
+    """
+    root = parse_clausewitz(gamestate)
+    found: list[int] = []
+    for container_name in SYSTEM_CONTAINERS:
+        for container in _blocks(root, container_name):
+            for entry_key, value in container.entries:
+                if entry_key is None or not isinstance(value, Block):
+                    continue
+                try:
+                    system_id = int(entry_key)
+                except ValueError:
+                    continue
+                if any(flag == name for flags in _blocks(value, "flags")
+                       for name, _ in flags.entries if name is not None):
+                    found.append(system_id)
+    return sorted(found)
+
+
 def _rule_key(rule: str) -> tuple[int, int]:
     mod_text, _, rem_text = rule.partition(":")
     try:
@@ -133,10 +158,19 @@ def format_report(name: str, found: dict[int, int | float | str]) -> str:
     return " ".join(parts)
 
 
+def format_flag_report(flag: str, found: list[int]) -> str:
+    if not found:
+        return f"{flag}: systems=0"
+    sample = ",".join(str(system_id) for system_id in found[:SAMPLE_SIZE])
+    return f"{flag}: systems={len(found)} sample={sample}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sav", required=True, help="path to the .sav (zip)")
-    parser.add_argument("--name", required=True, help="variable name, e.g. neo_mark")
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--name", help="variable name, e.g. neo_mark")
+    selection.add_argument("--flag", help="system flag name, e.g. neo_tier2")
     args = parser.parse_args(argv)
 
     try:
@@ -144,7 +178,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
-    print(format_report(args.name, find_variables(text, args.name)))
+    if args.flag is not None:
+        print(format_flag_report(args.flag, find_flags(text, args.flag)))
+    else:
+        print(format_report(args.name, find_variables(text, args.name)))
     return 0
 
 
