@@ -211,6 +211,9 @@ const c2_trigger_eval = @import("c2/trigger_eval_probe.zig");
 /// C5 数据面第三发(§81):逐系统下发点 `0x3B1330` 的只读 guard。
 const c2_per_system = @import("c2/per_system_probe.zig");
 const c2_exec_caller = @import("c2/exec_caller_probe.zig");
+/// C5-ADD(§93):`neo_action` 的逐系统派发槽与四个导出。
+const c2_neo_vtable = @import("c2/neo_vtable.zig");
+const c2_neo_effect = @import("c2/neo_effect.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
@@ -1034,6 +1037,49 @@ export fn C5PerSystemDrainInto(out: [*]u8) callconv(.c) u32 {
 /// 清计数 + 环 + 去重表 + drain 容量;不卸载 hook,也不清镜像窗口(必须在 Install 之前调)。
 export fn C5PerSystemReset() callconv(.c) void {
     c2_per_system.reset();
+}
+
+// ---------------------------------------------------------------------------
+// C5-ADD(§93):让引擎按星系调用我们注册的 `neo_action`。
+//
+// 与 C4 四条通道的区别:前四条是「引擎跑、我们看/拦」;这一条把逐系统派发槽
+// (`+0x48`,§91.6)换成本 DLL 的实现,实现里再调官方 `log`(`0x185BF60`)。
+// 只读 scope、只在栈上合成对象、不写引擎内存;永不 FreeLibrary(AGENTS 约束 5)。
+// ---------------------------------------------------------------------------
+
+/// 码表:`0` ok | `-1` 坏 token / 没有 game base | `-2` vtable 构建失败 |
+/// `-3` predicate setToken 被拒 | `-4` predicate install 失败(C4 同义)。
+export fn C2NeoInstall(token: u32) callconv(.c) i32 {
+    const game_base = gameModuleBase();
+    if (token == 0 or game_base == 0) return -1;
+    c2_neo_vtable.buildFromGame(game_base) catch return -2;
+    c2_predicate_hook.setToken(token) catch return -3;
+    c2_predicate_hook.install() catch return -4;
+    c2_neo_vtable.markInstallAttempted();
+    return 0;
+}
+
+/// 只拆我们自己的 predicate detour;已 patch 的对象**不回滚**(与 C4 同一策略)。
+export fn C2NeoUninstall() callconv(.c) i32 {
+    c2_predicate_hook.clearToken();
+    c2_predicate_hook.uninstall() catch return -6;
+    return 0;
+}
+
+/// `0` 一致 | `-1` hook 丢了 | `-2` 引擎字节不符 | `-3` 从未安装。
+export fn C2NeoVerify() callconv(.c) i32 {
+    return c2_neo_vtable.verify();
+}
+
+/// 一行,键序固定为 `calls matched log_calls last_id rule_hits installed verify`。
+export fn C2NeoStatsInto(out: [*]u8) callconv(.c) i32 {
+    return @intCast(c2_neo_vtable.statsInto(out[0..c2_neo_vtable.STATS_SIZE]));
+}
+
+/// `mod << 32 | rem`(`c2_exec_caller_probe.encode_rule` 同形)。`0:0` = 全关。
+export fn C2NeoSetRule(bits: u64) callconv(.c) i32 {
+    c2_neo_effect.setRule(@intCast(bits >> 32), @intCast(bits & 0xFFFF_FFFF));
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
