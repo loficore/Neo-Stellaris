@@ -9792,3 +9792,40 @@ count 787   first10 [0..9]   last10 [777..786]   min 0  max 786  distinct 787
 1. id `0..786` 是**容器里的 4 B 值**,`⊆ 容器` 只证明「同一个集合」,**不证明**它就是 `system_id`(§81.2 照旧)。
 2. 787 行是「4 轮里被去重后的那 787 个 id」,`occurrences` 3–4;不是「每轮各 787 行」的堆叠。
 3. `caller_rva` 是**一层**调用者;`0x17F4950` 之上是否还有队列/条件分派,本节没碰(§63/§66 的口径照旧)。
+
+## §92 最小 PoC:在派发点按星系 id 做决定(2026-11-02,实机一发)
+
+**目标。** §91.7 之后我们已经能**看见**「哪一个星系正在被派发」。PoC 要证明的是下一步:
+**在引擎的派发线程里,按这个 id 做选择**——不是事后在 Linux 侧筛,而是 DLL 自己决断。
+
+**做法(第八把 guard 上扩两个导出,`src/dll/c2/exec_caller_probe.zig` + `src/dll/exports.zig`)。**
+
+- `C6ExecCallerSetRule(bits: u64)`:`bits = mod << 32 | rem`,规则 = `id % mod == rem`;`0:0` 关闭。
+  打包成一个 u64 是因为 `call_remote_with_arg` 只传一个寄存器。
+- `C6ExecCallerRuleHitsInto(out)`:`[count: u32][ids: u32 × 64]`,记录**前 64 个**命中的 id。
+- 命中判定在 `recordCall` 里、读完 `[scope+0x10]` 之后立刻做 —— 也就是**同一次派发、同一个线程**。
+
+**实机一发**(`C:\temp\c5_poc.tsv`,存档 `autosave_2225.01.01`,45 s 窗,`--rule 100:0`):
+
+```
+#meta overall_verdict=poc_rule_hits   #meta rule=100:0   #meta rule_hits=40
+#meta rule_ids=0,100,200,300,400,500,600,700,(×5)
+#meta entries=787  #meta distinct_ids=787  #meta container_raw_count=787
+#meta stats_delta=calls=3148 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0
+#meta uninstall_rc=0  #meta verify_rc=0   #meta host_alive=1
+行(前五条): 0x3b101f  0/1/2/3/4  0x80  3  0x18ffbeae0  0x7f7a80
+```
+
+- 命中集合**恰好**是 `{0,100,…,700}` —— 与「`id % 100 == 0`」逐项相等;
+- 40 = **5 轮 × 8 个**;**游戏活下来了**(`host_alive=1`,`uninstall`/`verify` 都是 0);
+- 同一发的 787 行仍然全部 `caller_rva = 0x3B101F`(派发点与 §91.7 一致)。
+
+**意义。** 这是这条线第一次「**看 → 选**」闭环:同一个钩子里既拿到星系身份,又按它的值做了决定,
+而且不破坏引擎(装/拆/校验都干净)。**「做」的那一半还没做**:PoC 的"动作"是**记录**命中的 id,
+不是改游戏状态(没写引擎内存、没调引擎的效果接口)。
+
+**这一节不能说的(三条)。**
+1. **选区 ≠ 生效**:命中的 id 只是被 DLL 自己记下来;游戏里发生的事和没装 DLL 时一样。
+2. `rule_hits=40` 是**整个安装窗口**的累计(5 轮),而 `calls=3148` 是 `before` 之后的增量(4 轮)——
+   两个数不是同一段时间,不能相除。
+3. 规则是 `id % mod == rem` 这种玩具判据;真正的「要道判定」要拿图度量(spec §4),本节不涉及。

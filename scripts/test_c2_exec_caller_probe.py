@@ -42,11 +42,12 @@ def test_entry_size_matches_the_zig_module():
     assert "@sizeOf(Entry) != 32" in src
 
 
-def test_the_eight_exports_exist_in_the_zig_source():
+def test_the_ten_exports_exist_in_the_zig_source():
     src = EXPORTS_ZIG.read_text()
     for name in ("C6ExecCallerInstall", "C6ExecCallerUninstall", "C6ExecCallerVerify",
                  "C6ExecCallerLayout", "C6ExecCallerStatsInto", "C6ExecCallerSetDrainCap",
-                 "C6ExecCallerDrainInto", "C6ExecCallerReset"):
+                 "C6ExecCallerDrainInto", "C6ExecCallerReset", "C6ExecCallerSetRule",
+                 "C6ExecCallerRuleHitsInto"):
         assert f"export fn {name}" in src, f"missing export fn {name}"
 
 
@@ -266,3 +267,20 @@ def test_drain_passes_the_buffer_to_the_export():
     src = pathlib.Path(mod.__file__).read_text()
     assert 'call_remote_with_arg(pid, base, exports["C6ExecCallerDrainInto"], buf)' in src
     assert 'call_remote(pid, base, exports["C6ExecCallerDrainInto"])' not in src
+
+
+def test_encode_rule_packs_into_one_register():
+    """§92: `call_remote_with_arg` passes one u64, so the rule travels as `mod << 32 | rem`."""
+    assert mod.encode_rule("100:0") == (100 << 32)
+    assert mod.encode_rule("7:3") == (7 << 32) | 3
+    assert mod.encode_rule("0:0") == 0
+
+
+def test_decode_hits_reads_the_count_then_the_ids():
+    blob = (3, 100, 200, 300) + (0,) * 63
+    assert mod.decode_hits(blob) == [100, 200, 300]
+    assert mod.decode_hits((0,) + (0,) * 64) == []
+
+
+def test_rule_hits_is_evidence():
+    assert "poc_rule_hits" in EVIDENCE_VERDICTS

@@ -1094,6 +1094,18 @@ export fn C6ExecCallerDrainInto(out: [*]u8) callconv(.c) u32 {
     return c2_exec_caller.drainInto(out);
 }
 
+/// PoC(§92):`id % mod == rem` 的星系在**派发线程里**被选出来,计数 + 前 64 个 id 落表。
+/// 打包成一个 u64(`mod << 32 | rem`),因为 `call_remote_with_arg` 只传一个寄存器。
+export fn C6ExecCallerSetRule(bits: u64) callconv(.c) i32 {
+    c2_exec_caller.setRule(@truncate(bits >> 32), @truncate(bits));
+    return 0;
+}
+
+/// `[count: u32][ids: u32 × 64]`,返回 count。
+export fn C6ExecCallerRuleHitsInto(out: [*]u8) callconv(.c) u32 {
+    return c2_exec_caller.ruleHitsInto(out);
+}
+
 /// 清计数 + 环 + 去重表 + drain 容量;不卸载 hook(必须在 Install 之前调)。
 export fn C6ExecCallerReset() callconv(.c) void {
     c2_exec_caller.reset();

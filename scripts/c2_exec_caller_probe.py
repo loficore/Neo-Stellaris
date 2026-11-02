@@ -67,6 +67,8 @@ VERDICTS = (
     "no_rows",
     "ring_truncated",
     "caller_sampled",
+    "poc_rule_hits",
+    "poc_no_hits",
     "container_unreadable",
     "dispatch_denominator_mismatch",
     "caller_unnamed",
@@ -76,7 +78,8 @@ VERDICTS = (
     "ids_not_in_container",
     "dispatch_named",
 )
-EVIDENCE_VERDICTS = ("ids_out_of_range", "ids_not_in_container", "dispatch_named")
+EVIDENCE_VERDICTS = ("ids_out_of_range", "ids_not_in_container", "dispatch_named",
+                    "poc_rule_hits")
 
 EXIT_REFUSED = 2
 
@@ -356,8 +359,23 @@ def artifact_rows(rows):
     ]
 
 
+RULE_HITS = 64
+
+
+def encode_rule(rule):
+    """`"MOD:REM"` -> the u64 the DLL takes (`mod << 32 | rem`). `0:0` disables it."""
+    mod_text, _, rem_text = rule.partition(":")
+    return (int(mod_text) << 32) | (int(rem_text or 0) & 0xFFFFFFFF)
+
+
+def decode_hits(words):
+    """`[count][ids…]` -> the first `count` ids, as a list."""
+    count, ids = words[0], words[1:]
+    return list(ids[:count])
+
+
 def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
-        allow_window=False):
+        allow_window=False, rule="100:0"):
     """One shot in one game process. Cleanup runs in a finally; never FreeLibrary."""
     import time
 
@@ -379,9 +397,13 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
     harness.call_remote_with_arg(pid, base, exports["C6ExecCallerLayout"], layout_buf)
     layout = decode_layout(struct.unpack("<6I", harness.read_memory(pid, layout_buf, LAYOUT_WORDS * 4)))
 
+    rule_bits = encode_rule(rule)
+    hits_buf = harness.remote_alloc(pid, 4 + RULE_HITS * 4)
+
     harness.call_remote(pid, base, exports["C6ExecCallerReset"])
     install_rc = _signed32(harness.call_remote(pid, base, exports["C6ExecCallerInstall"]))
     decision = install_decision(install_rc, layout)
+    harness.call_remote_with_arg(pid, base, exports["C6ExecCallerSetRule"], rule_bits)
     harness.assert_game_alive(pid)
 
     meta = {
@@ -454,8 +476,17 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
         distinct = len({row["id"] for row in rows})
         meta["distinct_ids"] = distinct
         meta["last_caller"] = f"0x{delta['last_caller']:x}"
-        meta["overall_verdict"] = verdict(delta, rows, container, expected=systems,
-                                          distinct=distinct)
+        _safe(lambda: harness.call_remote_with_arg(
+            pid, base, exports["C6ExecCallerRuleHitsInto"], hits_buf))
+        hit_blob = _safe(lambda: harness.read_memory(pid, hits_buf, 4 + RULE_HITS * 4), b"")
+        hit_ids = decode_hits(struct.unpack(f"<{1 + RULE_HITS}I", hit_blob)) if hit_blob else []
+        meta["rule"] = rule
+        meta["rule_hits"] = len(hit_ids)
+        meta["rule_ids"] = ",".join(str(i) for i in hit_ids)
+        base_verdict = verdict(delta, rows, container, expected=systems, distinct=distinct)
+        meta["overall_verdict"] = ("poc_rule_hits" if meta.get("rule_hits")
+                                   else "poc_no_hits") if base_verdict == "dispatch_named" \
+            else base_verdict
     finally:
         uninstall_rc = _safe(lambda: _signed32(harness.call_remote(
             pid, base, exports["C6ExecCallerUninstall"])))
@@ -489,10 +520,14 @@ def main(argv=None):
     parser.add_argument("--poll-s", type=float, default=120.0)
     parser.add_argument("--settle-s", type=float, default=3.0)
     parser.add_argument("--out", default="C:/temp/c5_exec_caller.tsv")
+    parser.add_argument("--rule", default="100:0",
+                        help="PoC rule MOD:REM — ids with id%%MOD==REM are selected inside the "
+                             "dispatch; 0:0 disables (default 100:0)")
     args = parser.parse_args(argv)
 
     meta = run(args.dll, args.out, systems=args.systems, save_name=args.save_name,
-               poll_s=args.poll_s, settle_s=args.settle_s, allow_window=args.allow_window)
+               poll_s=args.poll_s, settle_s=args.settle_s, allow_window=args.allow_window,
+               rule=args.rule)
     return 0 if meta.get("overall_verdict") in EVIDENCE_VERDICTS else 1
 
 

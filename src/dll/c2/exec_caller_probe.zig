@@ -109,6 +109,33 @@ var ring: [RING_LEN]Entry = undefined;
 /// counts those samples so the artifact can say "this reading is truncated".
 var head: u64 = 0;
 
+/// PoC rule (§92): "act on systems whose id satisfies `id % mod == rem`". `mod == 0` disables
+/// it. The decision happens **on the engine thread, inside the dispatch**, which is the whole
+/// point of the PoC: the DLL is not just looking, it is choosing.
+pub const RULE_HITS: usize = 64;
+var rule_mod: u32 = 0;
+var rule_rem: u32 = 0;
+var hit_count: u64 = 0;
+var hits: [RULE_HITS]u32 = undefined;
+
+pub fn setRule(mod: u32, rem: u32) void {
+    rule_mod = mod;
+    rule_rem = if (mod == 0) 0 else rem % mod;
+    @atomicStore(u64, &hit_count, 0, .monotonic);
+    @memset(std.mem.asBytes(&hits), 0);
+}
+
+/// Pure: the host tests drive it.
+pub fn ruleMatches(id: u32) bool {
+    if (rule_mod == 0) return false;
+    return id % rule_mod == rule_rem;
+}
+
+fn recordRuleHit(id: u32) void {
+    const nth = @atomicRmw(u64, &hit_count, .Add, 1, .monotonic);
+    if (nth < RULE_HITS) hits[@intCast(nth)] = id;
+}
+
 pub const Stats = extern struct {
     calls: u64 = 0,
     dropped: u64 = 0, // samples that arrived after the ring filled (truncation marker)
@@ -180,7 +207,9 @@ pub fn recordCall(caller: usize, self: usize, scope: usize) void {
         recordSample(caller_rva, 0, 0, @intCast(self), @intCast(scope));
         return;
     }
-    recordSample(caller_rva, readU32(scope, SCOPE_ID_OFF), readU32(scope, SCOPE_MASK_OFF),
+    const id = readU32(scope, SCOPE_ID_OFF);
+    if (ruleMatches(id)) recordRuleHit(id);
+    recordSample(caller_rva, id, readU32(scope, SCOPE_MASK_OFF),
                  @intCast(self), @intCast(scope));
 }
 
@@ -250,9 +279,20 @@ pub fn reset() void {
     @atomicStore(u64, &stats.patch_size, 0, .monotonic);
     @atomicStore(u32, &stats.last_id, 0, .monotonic);
     @atomicStore(u32, &stats.last_caller, 0, .monotonic);
+    @atomicStore(u64, &hit_count, 0, .monotonic);
     @atomicStore(u64, &head, 0, .monotonic);
     @memset(std.mem.asBytes(&ring), 0);
     drain_cap = 0;
+}
+
+/// `[count: u32][ids: u32 × RULE_HITS]` — the PoC's decision record.
+pub fn ruleHitsInto(out: [*]u8) u32 {
+    const count: u32 = @intCast(@min(@atomicLoad(u64, &hit_count, .monotonic), RULE_HITS));
+    const dst: [*]u32 = @ptrCast(@alignCast(out));
+    dst[0] = count;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) dst[1 + i] = hits[i];
+    return count;
 }
 
 pub fn resetForTest() void {
