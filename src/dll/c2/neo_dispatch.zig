@@ -11,9 +11,15 @@
 // 它收 `(child_object, scope)`,先按 §91.6 读 `[child+0x20]` 的 token id,再
 // `call [child_vptr+0xa8]`(scope 门)与 `call [child_vptr+0x48]`(body)。
 // 我们的 detour 只做一件事:**token 是我们的**就不转发,直接跑 `neo_vtable.runBody`,
-// 其余 token 原样 `jmp` 回原函数(`.always_tail`,因为 trampoline 是把目标的前 18 字节
-//   逐字节抄过去再跳回;普通 `call` 会把 `rsp` 压低 8 字节,抄过去的 `[rsp+0x18]`
-//   写点就错位 —— §91.1 那次三发全死的教训)。
+// 其余 token 原样 `jmp` 回原函数(`.always_tail`,因为 trampoline 是把目标被覆盖的那几条
+//   指令逐字节抄过去再跳回 —— 本靶 `patch_size = 16`,剩下的 `mov rbp,rdx` 原地执行;
+//   普通 `call` 会把 `rsp` 压低 8 字节,抄过去的 `[rsp+0x18]` 写点就错位 —— §91.1 那次
+//   三发全死的教训)。
+//
+// **代价(如实记下,§93.8)**:我们 return 之后,引擎自己在 `0x3B0F80` 里那些步骤
+// (scope 门 `call [child+0xa8]`、临时对象 `new(0x48)` 的释放、计时块)对我们的 token
+// 不再运行。判据要的只是「引擎把这一轮送到派发入口、我们的实现跑了一次」,但那句
+// 更强的话(引擎自己的门会放行)本轮**没有**被观测。
 //
 // 只读 `[child+0x20]` 与 scope 的两个格子;不写引擎内存、不改对象 `[self]`。
 
@@ -31,10 +37,11 @@ pub const RVA_DISPATCH: usize = 0x3B0F80;
 
 pub const STATS_SIZE: usize = 512;
 
-/// 19 B = 目标的前八条指令(`mov [rsp+0x18],rbx` / `push rbp` / `push rsi` /
+/// 指纹 = 目标的前 19 B(`mov [rsp+0x18],rbx` / `push rbp` / `push rsi` /
 /// `push rdi` / `push r14` / `push r15` / `sub rsp,0x20` / `mov rbp,rdx`)。
-/// 全部是栈操作与寄存器搬移 ⇒ 抄进 trampoline 不需要重定位。detour.zig 的 14 B
-/// JMP 会按整条指令向后补齐到 18 B。
+/// 前 16 B 是 detour.zig 实际覆盖的 `patch_size`(14 B JMP 按整条指令边界补齐);
+/// 多出来的 3 B(`mov rbp,rdx`)不在补丁里,留着只为了让指纹识别这一版构建。
+/// 全部是栈操作与寄存器搬移 ⇒ 抄进 trampoline 不需要重定位。
 pub const EXPECTED_CODE = [19]u8{
     0x48, 0x89, 0x5C, 0x24, 0x18, // mov [rsp+0x18], rbx
     0x55, // push rbp
@@ -140,7 +147,15 @@ pub fn install() !void {
     @memcpy(&saved_code, tb[0..saved_code.len]);
 
     const h = try detour_mod.installHookArmed(target, @ptrCast(@constCast(&dispatchDetour)), &orig);
-    if (h.patch_size > saved_code.len) return error.PatchTooWide;
+    if (h.patch_size > saved_code.len) {
+        // Unreachable today (32 > any patch size), but if it ever fired the hook
+        // would stay live while `installed` said otherwise — the sibling
+        // exec_caller_probe does this same rollback for the same reason.
+        detour_mod.removeHook(&h) catch {};
+        restoreTarget(h.patch_size) catch {};
+        orig = null;
+        return error.PatchTooWide;
+    }
     hook = h;
     installed = true;
     std.log.info("c2.neo_dispatch: installed detour at 0x{x}", .{RVA_DISPATCH});

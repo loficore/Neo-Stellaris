@@ -35,3 +35,13 @@ def test_count_since_measures_nothing_when_the_offset_is_unknown(tmp_path):
 
 def test_cli_verdict_word_is_the_plan_vocabulary():
     assert set(mod.VERDICTS) == {"neo_lines_ok", "neo_lines_short", "neo_lines_extra"}
+
+
+def test_histogram_counts_each_id_after_the_offset(tmp_path):
+    log = tmp_path / "game.log"
+    log.write_text("Neo: system 9\n", encoding="utf-8")
+    off = log.stat().st_size
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write("Neo: system 1\nNeo: system 2\nNeo: system 1\n")
+    assert mod.histogram(str(log), off, "Neo: system") == {1: 2, 2: 1}
+    assert mod.histogram(str(log), None, "Neo: system") is None

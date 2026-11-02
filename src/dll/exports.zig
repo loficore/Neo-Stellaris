@@ -1048,21 +1048,25 @@ export fn C5PerSystemReset() callconv(.c) void {
 // 只读 scope、只在栈上合成对象、不写引擎内存;永不 FreeLibrary(AGENTS 约束 5)。
 // ---------------------------------------------------------------------------
 
-/// 码表:`0` ok | `-1` 坏 token / 没有 game base | `-2` body 基址解析失败 |
-/// `-3` dispatch setToken 被拒 | `-4` dispatch install 失败。
+/// 码表:`0` ok | `-1` 坏 token / 没有 game base | `-2` `log` 入口解析失败 |
+/// `-3` dispatch setToken 被拒 | `-4` dispatch install 失败(指纹不符 / 已挂 / 14 B
+/// 补丁放不下)。`-5` 本通道不产生;`-6` 归 `C2NeoUninstall`。
 ///
-/// 只装**一个** hook:`0x3B0F80`(逐系统派发)。第一发证明解析期建的对象不经
-/// predicate,所以对象 vtable 那条路不再是机制(详见 `neo_dispatch.zig` 的头)。
+/// 只装**一个** hook:`0x3B0F80`(`donor` 表 `0x2606FE0` 的 slot[8]/`+0x40`,不是
+/// `+0x48` —— `+0x48` 是它**内部**转发的那个 body 槽)。§93.2 的第一发证明解析期
+/// 建的对象不经 predicate,所以对象 vtable 那条路不再是机制;详见 `neo_dispatch.zig`。
 export fn C2NeoInstall(token: u32) callconv(.c) i32 {
     const game_base = gameModuleBase();
     if (token == 0 or game_base == 0) return -1;
-    c2_neo_vtable.buildFromGame(game_base) catch return -2;
+    c2_neo_vtable.resolveFromGame(game_base) catch return -2;
     c2_neo_dispatch.setToken(token) catch return -3;
     c2_neo_dispatch.install() catch return -4;
     return 0;
 }
 
-/// 只拆我们自己的 dispatch detour;引擎字节按保存的 18 B 原样写回。
+/// 只拆我们自己的 dispatch detour;引擎字节按保存的 `patch_size`(= 16 B,整条指令
+/// 边界;19 B 是指纹长度,多出来的 3 B 从未被改写)原样写回。
+/// 码表:`0` ok | `-6` 还原后指纹不符(`RESTORE_INCOMPLETE`,**不要 FreeLibrary**)。
 export fn C2NeoUninstall() callconv(.c) i32 {
     c2_neo_dispatch.clearToken();
     c2_neo_dispatch.uninstall() catch return -6;

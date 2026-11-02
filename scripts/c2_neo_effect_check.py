@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 VERDICTS = ("neo_lines_ok", "neo_lines_short", "neo_lines_extra")
@@ -40,6 +41,36 @@ def count_since(path, offset, marker: str):
     return sum(1 for line in text.splitlines() if marker in line)
 
 
+_ID_RE = {
+    marker: re.compile(re.escape(marker) + r"\s+(\d+)") for marker in ("Neo: system",)
+}
+
+
+def histogram(path, offset, marker: str):
+    """`{id: occurrences}` for marker lines after `offset`; `None` when unmeasurable.
+
+    This is the reading behind §93.4's strongest sentence ("787 ids, each
+    exactly 12 times") — line counts alone cannot tell one-line-per-system from
+    twelve lines for one system.
+    """
+    if offset is None:
+        return None
+    pattern = _ID_RE.get(marker) or re.compile(re.escape(marker) + r"\s+(\d+)")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(offset)
+            text = handle.read()
+    except OSError:
+        return None
+    counts: dict = {}
+    for line in text.splitlines():
+        match = pattern.search(line)
+        if match:
+            value = int(match.group(1))
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
 def verdict(seen, expected: int) -> str:
     if seen is None:
         return "neo_lines_short"
@@ -55,11 +86,20 @@ def main(argv=None) -> int:
                         help="byte offset where the window started (omit = unmeasured)")
     parser.add_argument("--marker", default="Neo: system")
     parser.add_argument("--expect", type=int, required=True)
+    parser.add_argument("--histogram", action="store_true",
+                        help="also print ids=<n> occurrences_min_max=<a>-<b>")
     args = parser.parse_args(argv)
 
     seen = count_since(args.log, args.offset, args.marker)
     word = verdict(seen, args.expect)
     print(f"seen={seen} expect={args.expect} marker={args.marker!r} verdict={word}")
+    if args.histogram:
+        counts = histogram(args.log, args.offset, args.marker)
+        if counts:
+            values = list(counts.values())
+            print(f"ids={len(counts)} occurrences_min_max={min(values)}-{max(values)}")
+        else:
+            print("ids=0 occurrences_min_max=0-0")
     return 0 if word == "neo_lines_ok" else 1
 
 

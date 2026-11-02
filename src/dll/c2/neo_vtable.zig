@@ -1,19 +1,16 @@
-// neo_vtable.zig — C5-ADD:让引擎按星系调用我们注册的 `neo_action`。
+// neo_vtable.zig — C5-ADD 的 body:一个星系一行 `Neo: system <id>`。
 //
-// 与 C4 的 `vtable.zig` 的区别(2026-11-02 静态复核):
-//   * `vtable.zig` 换的是 slot[1](`+0x08`,Execute)与 slot[2](`+0x10`,instantiate),
-//     那条链是「捕获/放行一个已经被引擎解释的效果」;
-//   * 这里换的是 **slot[9](`+0x48`)**,即 §91.6/§91.7 实机钉死的**逐系统派发入口**:
-//     `0x3B0F80` 先 `call [rax+0xa8]`(scope 门),再 `call [rax+0x48]`(子效果执行体)。
-//     `log` 效果的 vtable `0x25FC340` 的 `+0x48` 正是 `0x185BF60`(§90.4 的锚),
-//     `caller_rva=0x3B101F` 的 787 条读数就是从这个槽进来的。
+// **这个模块不装任何东西。** 2026-11-02 第一发否定了「换对象 vtable」那条路
+// (§93.2:解析出来的 effect 树不经谓词,`pred_patched=0`),现在的挂载点是
+// `neo_dispatch.zig` 在逐系统派发入口 `0x3B0F80` 上的 token detour,它在 token
+// 命中时直接调本模块的 `runBody`。
 //
-// 所以:donor `0x2606FE0` 的 25 个槽原样复制,只把 +0x48 换成我们的实现;
-// 其余槽(含 +0xA8 的 scope 门、+0x98 的谓词)保持引擎自己的 —— 我们的对象仍然
-// 是一个**良构的官方类实例**,只是逐系统那一步的动作换成了我们写的。
+// body 只做四件事:读 scope 的 `+0x10`(星系 id)→ 规则筛 → 在栈上合成一个
+// `0xF0` 零块、把文案写成 `+0x38` 的 MSVC 短串 → 调官方 `log` 的实现
+// `0x185BF60`。`0x185BF60` 只读 `+0x38`/`+0xd0`/`+0xe0`,**不读 `[self]`**,
+// 所以不需要虚表;那三格之外的内容它看不到。
 //
-// 只读 scope、不写引擎内存、不重指向任何引擎对象的 `[self]` 之外的东西:
-// `[self]` 由 C4 的 predicate hook 在实例化时换成本表的地址。永不 FreeLibrary。
+// 不写引擎内存、不改对象 `[self]`、不 FreeLibrary。
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -22,8 +19,6 @@ const windows = @import("../hooking/windows.zig");
 const neo_effect = @import("neo_effect.zig");
 
 const is_windows = builtin.os.tag == .windows;
-
-pub const SlotCount: usize = offsets.keyword_reg.EFFECT_VTBL_COPY_SLOTS;
 
 /// §80.2 的 scope 形状(`0x7f7f20` 那一类指针):`+0x08` mask、`+0x10` id。
 pub const SCOPE_MASK_OFF: usize = 0x08;
@@ -38,8 +33,6 @@ pub const RULE_HITS: usize = 64;
 // State
 // ---------------------------------------------------------------------------
 
-var slots: [SlotCount]u64 align(16) = [_]u64{0} ** SlotCount;
-var built = false;
 var log_effect_addr: usize = 0;
 
 var stat_calls: u64 = 0;
@@ -76,16 +69,6 @@ fn recordHit(id: u32) void {
     if (nth < RULE_HITS) hits[@intCast(nth)] = id;
 }
 
-/// slot[9] of our copy. Only reached if something had patched an object's
-/// `[self]` to this table — `neo_dispatch.zig`'s detour is the live path, and it
-/// calls `runBody` directly (2026-11-02: parsed effect trees never go through
-/// the instantiate predicate, so no object gets this table; keep it as a
-/// fallback, not as the mechanism).
-fn neoActionExecute(self: u64, scope: u64, a3: u64) callconv(.c) u64 {
-    _ = self; // the synthesized object is ours; the engine's instance is untouched
-    return runBody(scope, a3);
-}
-
 /// The per-system body. Order is load-bearing (plan Task 2 Step 3): count →
 /// scope gate → read id → rule → compose → count → call. Nothing here writes
 /// engine memory; the only engine call is the official `log` implementation
@@ -117,40 +100,27 @@ pub fn runBody(scope: u64, a3: u64) u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Construction
+// Resolution
 // ---------------------------------------------------------------------------
 
-pub fn buildFromSlots(donor: []const u64) !void {
-    if (donor.len < SlotCount) return error.ShortDonor;
-    @memcpy(&slots, donor[0..SlotCount]);
-    slots[offsets.keyword_reg.EFFECT_VTBL_DISPATCH_IN_SCOPE / 8] = @intFromPtr(&neoActionExecute);
-    built = true;
-}
-
-/// Copy the donor table straight out of the loaded image and remember the
-/// resolved `log` entry in the same shot.
-pub fn buildFromGame(game_base: usize) !void {
-    const addr = game_base + offsets.keyword_reg.DONOR_EFFECT_VTABLE;
-    if (!plausible(addr)) return error.BadDonorPointer;
-    const donor: [*]const u64 = @ptrFromInt(addr);
-    try buildFromSlots(donor[0..SlotCount]);
-    log_effect_addr = game_base + RVA_LOG_EFFECT_EXEC;
-}
-
-pub fn getVtable() ?*const [SlotCount]u64 {
-    return if (built) &slots else null;
-}
-
-pub fn isBuilt() bool {
-    return built;
+/// Resolve the engine base into the one address the body needs. The donor-vtable
+/// copy this module used to build is gone: nothing ever installed it (§93.2).
+pub fn resolveFromGame(game_base: usize) !void {
+    const addr = game_base + RVA_LOG_EFFECT_EXEC;
+    if (!plausible(addr)) return error.BadLogEffectPointer;
+    log_effect_addr = addr;
 }
 
 pub fn logEffect() usize {
     return log_effect_addr;
 }
 
+pub fn isResolved() bool {
+    return log_effect_addr != 0;
+}
+
 // ---------------------------------------------------------------------------
-// Readouts
+// Readouts (the stats line lives in neo_dispatch.zig, which owns the hook state)
 // ---------------------------------------------------------------------------
 
 pub fn calls() u64 {
@@ -173,27 +143,11 @@ pub fn ruleHitsRecorded() u32 {
     return @intCast(@min(@atomicLoad(u64, &hit_count, .monotonic), RULE_HITS));
 }
 
-/// `[count: u32][ids: u32 × RULE_HITS]` — same shape as §92's decision record.
-pub fn ruleHitsInto(out: [*]u8) u32 {
-    const count: u32 = @intCast(@min(@atomicLoad(u64, &hit_count, .monotonic), RULE_HITS));
-    const dst: [*]u32 = @ptrCast(@alignCast(out));
-    dst[0] = count;
-    var i: u32 = 0;
-    while (i < count) : (i += 1) dst[1 + i] = hits[i];
-    return count;
-}
-
 pub fn nullScope() u64 {
     return @atomicLoad(u64, &stat_null_scope, .monotonic);
 }
 
-pub fn logCallsAtomic() u64 {
-    return @atomicLoad(u64, &stat_log_calls, .monotonic);
-}
-
 pub fn resetForTest() void {
-    slots = [_]u64{0} ** SlotCount;
-    built = false;
     log_effect_addr = 0;
     stat_calls = 0;
     stat_matched = 0;
@@ -208,39 +162,27 @@ pub fn resetForTest() void {
 // Tests
 // ---------------------------------------------------------------------------
 
-test "buildFromSlots replaces only the per-system dispatch slot" {
-    resetForTest();
-    var donor = [_]u64{0} ** SlotCount;
-    for (&donor, 0..) |*slot, i| slot.* = 0x140001000 + i * 0x100;
-    try buildFromSlots(&donor);
-    try std.testing.expect(isBuilt());
-    const vt = getVtable().?;
-    const dispatch = offsets.keyword_reg.EFFECT_VTBL_DISPATCH_IN_SCOPE / 8;
-    try std.testing.expectEqual(@as(u64, 9), dispatch);
-    try std.testing.expect(vt[dispatch] != donor[dispatch]);
-    // Execute (slot[1]), instantiate (slot[2]) and the scope gate (slot[21])
-    // stay engine-native: our object must remain a well-formed donor instance.
-    try std.testing.expectEqual(donor[1], vt[1]);
-    try std.testing.expectEqual(donor[2], vt[2]);
-    try std.testing.expectEqual(donor[21], vt[21]);
-}
-
-test "buildFromSlots rejects a short donor" {
-    resetForTest();
-    const donor = [_]u64{1} ** (SlotCount - 1);
-    try std.testing.expectError(error.ShortDonor, buildFromSlots(&donor));
-    try std.testing.expect(!isBuilt());
-}
-
 test "rule hits are recorded in call order and capped" {
     resetForTest();
     var i: u32 = 0;
     while (i < RULE_HITS + 5) : (i += 1) recordHit(100 + i);
-    var buf: [4 + RULE_HITS * 4]u8 align(8) = undefined;
-    try std.testing.expectEqual(@as(u32, RULE_HITS), ruleHitsInto(&buf));
-    const words: [*]const u32 = @ptrCast(@alignCast(&buf));
-    try std.testing.expectEqual(@as(u32, 100), words[1]);
-    try std.testing.expectEqual(@as(u32, 100 + RULE_HITS - 1), words[RULE_HITS]);
+    try std.testing.expectEqual(@as(u32, RULE_HITS), ruleHitsRecorded());
+    try std.testing.expectEqual(@as(u32, 100), hits[0]);
+    try std.testing.expectEqual(@as(u32, 100 + RULE_HITS - 1), hits[RULE_HITS - 1]);
+}
+
+test "resetForTest zeroes the counters but keeps nothing else" {
+    resetForTest();
+    stat_calls = 3;
+    stat_matched = 2;
+    stat_log_calls = 1;
+    recordHit(7);
+    resetForTest();
+    try std.testing.expectEqual(@as(u64, 0), calls());
+    try std.testing.expectEqual(@as(u64, 0), matched());
+    try std.testing.expectEqual(@as(u64, 0), logCalls());
+    try std.testing.expectEqual(@as(u32, 0), ruleHitsRecorded());
+    try std.testing.expect(!isResolved());
 }
 
 test "the scope offsets are the ones the dispatch site documents" {

@@ -41,3 +41,25 @@ def test_pack_rule_is_mod_high_rem_low():
     assert mod.pack_rule("0:0") == 0
     assert mod.pack_rule("8:3") == (8 << 32) | 3
     assert mod.pack_rule("8") == (8 << 32)
+
+
+def test_missing_exports_names_exactly_what_a_stale_dll_lacks():
+    assert mod.missing_exports(("A", "B", "C"), ["A", "C"]) == ["B"]
+    assert mod.missing_exports(("A",), ["A"]) == []
+
+
+def test_needed_covers_every_export_the_driver_calls():
+    """Every `exports["X"]` the driver indexes must be in `NEEDED`.
+
+    2026-11-02 review I-2: `C2NeoSetRule`/`C2NeoUninstall` were called but not
+    listed, so a stale DLL produced a traceback (`KeyError`) instead of the
+    designed `BOOT FAIL exports` — and in the uninstall case that leaves the
+    detour live in the game.
+    """
+    import pathlib
+    import re
+
+    src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+    called = set(re.findall(r'exports\["(\w+)"\]', src))
+    assert called, "no export call sites found — the fence would pass vacuously"
+    assert called <= set(mod.NEEDED), sorted(called - set(mod.NEEDED))

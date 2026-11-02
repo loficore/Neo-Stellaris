@@ -41,15 +41,40 @@ EXIT_FAILED = 2
 
 DEFAULT_DLL = r"C:\temp\sqjs_c20.dll"
 
-#: 少任何一个都说明 scp 的不是这一发构建的字节。
+#: Every export this driver indexes.  Missing any of them means the bytes on the
+#: box are not this build's — refuse **before** injecting (2026-11-02 review I-2:
+#: `C2NeoSetRule`/`C2NeoUninstall` were called but unlisted, so a stale DLL gave a
+#: `KeyError` traceback instead of the designed refusal).
 NEEDED = (
     "C2Sanity",
     "C1Run",
     "C1EffectId",
     "C2NeoInstall",
+    "C2NeoSetRule",
+    "C2NeoUninstall",
     "C2NeoVerify",
     "C2NeoStatsInto",
+    "C4PredStatsInto",  # --pred; same DLL, C4-era
 )
+
+
+def missing_exports(needed, available) -> list:
+    """The names `needed` lists that `available` does not have, in `needed` order."""
+    have = set(available)
+    return [name for name in needed if name not in have]
+
+
+def _require_exports(dll_path: str) -> dict | None:
+    """`list_exports` result, or None after printing `BOOT FAIL exports`."""
+    import c2_harness as harness
+
+    exports = harness.list_exports(dll_path)
+    missing = missing_exports(NEEDED, exports)
+    if missing:
+        print(f"[boot] {dll_path} is missing {missing} — refusing to touch the process",
+              file=sys.stderr)
+        return None
+    return exports
 
 
 def receipt(*, dll: str, sha16: str, effect_id: int, install_rc: int, alive: bool) -> str:
@@ -128,10 +153,8 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
     digest = sha16(dll_path)
     print(f"[boot] dll={dll_path} sha16={digest}")
 
-    exports = harness.list_exports(dll_path)
-    missing = [name for name in NEEDED if name not in exports]
-    if missing:
-        print(f"[boot] {dll_path} is missing {missing} — refusing to inject", file=sys.stderr)
+    exports = _require_exports(dll_path)
+    if exports is None:
         return _fail("exports")
 
     if launch_exe:
@@ -191,7 +214,9 @@ def uninstall(dll_path: str) -> int:
     pid = harness.resolve_pid("stellaris.exe")
     dll_name = os.path.basename(dll_path.replace("\\", "/"))
     base = harness.resolve_base_address(pid, dll_name)
-    exports = harness.list_exports(dll_path)
+    exports = _require_exports(dll_path)
+    if exports is None:
+        return _fail("exports")
     rc = _signed32(harness.call_remote(pid, base, exports["C2NeoUninstall"]))
     verify = _signed32(harness.call_remote(pid, base, exports["C2NeoVerify"]))
     harness.assert_game_alive(pid)
@@ -211,7 +236,9 @@ def pred_stats(dll_path: str) -> int:
     pid = harness.resolve_pid("stellaris.exe")
     dll_name = os.path.basename(dll_path.replace("\\", "/"))
     base = harness.resolve_base_address(pid, dll_name)
-    exports = harness.list_exports(dll_path)
+    exports = _require_exports(dll_path)
+    if exports is None:
+        return _fail("exports")
     buf = harness.remote_alloc(pid, 24)
     rc = _signed32(harness.call_remote_with_arg(pid, base, exports["C4PredStatsInto"], buf))
     blob = harness.read_memory(pid, buf, 24)
@@ -229,7 +256,9 @@ def stats(dll_path: str, *, game_log: str | None = None) -> int:
     pid = harness.resolve_pid("stellaris.exe")
     dll_name = os.path.basename(dll_path.replace("\\", "/"))
     base = harness.resolve_base_address(pid, dll_name)
-    exports = harness.list_exports(dll_path)
+    exports = _require_exports(dll_path)
+    if exports is None:
+        return _fail("exports")
     buf = harness.remote_alloc(pid, 512)
     harness.call_remote_with_arg(pid, base, exports["C2NeoStatsInto"], buf)
     text = harness.read_memory(pid, buf, 512).split(b"\0", 1)[0].decode("ascii", "replace")
