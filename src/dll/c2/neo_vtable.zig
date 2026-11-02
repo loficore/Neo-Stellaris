@@ -98,7 +98,7 @@ fn recordHit(id: u32) void {
 fn writeState(id: u32, scope: u64) bool {
     if (state_body_addr == 0 or state_vtable_addr == 0) return false;
     var obj: [neo_state.OBJECT_SIZE]u8 align(8) = undefined;
-    neo_state.layoutInto(&obj, id);
+    neo_state.layoutNumber(&obj, neo_state.VAR_NAME, id);
     std.mem.writeInt(u64, obj[0..8], state_vtable_addr, .little);
     const body: *const fn (u64, u64) callconv(.c) void = @ptrFromInt(state_body_addr);
     body(@intFromPtr(&obj), scope);

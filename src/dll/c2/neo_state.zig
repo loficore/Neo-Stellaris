@@ -21,7 +21,9 @@ const std = @import("std");
 const neo_effect = @import("neo_effect.zig");
 
 /// 写进系统变量容器的名字。不是 keyword —— 不过 `c1_preflight` 那道门。
+/// C5-WRITE:星系 id(回归项);C5-SCORE:图分数。
 pub const VAR_NAME: []const u8 = "neo_mark";
+pub const SCORE_NAME: []const u8 = "neo_score";
 
 /// `0x18A6970` 的 `new(0x318)`。
 pub const OBJECT_SIZE: usize = 0x318;
@@ -35,62 +37,57 @@ pub const VALUE_CELL_OFF: usize = 0x310;
 
 /// 值格是脚本的数字类型:`0x3515A0` 取回的 qword 按 **1e-5 定点**解释。
 /// 2026-11-02 第一发把裸 id 写进去,存档里得到 `0.00786`(而官方变量是
-/// `years_passed=52` 这样的整数)⇒ 要写整数 id,必须 `id × 100000`。
-pub fn encodeValue(id: u32) u64 {
-    return @as(u64, id) * 100_000;
+/// `years_passed=52` 这样的整数)⇒ 要写整数,必须 `number × 100000`。
+pub fn encodeNumber(number: u32) u64 {
+    return @as(u64, number) * 100_000;
 }
 
-/// 把一个零初始化对象摆成「解析出了 `value = <id>` 的 `set_variable`」。
-/// **不摆 vtable**(调用方摆)、不动 `+0x300`(保持 0,这是短路的前提)。
-pub fn layoutInto(obj: *[OBJECT_SIZE]u8, id: u32) void {
+/// 把一个零初始化对象摆成「解析出了 `which = <name>`、`value = <number>` 的
+/// `set_variable`」。**不摆 vtable**(调用方摆)、不动 `+0x300`(保持 0,这是短路的前提)。
+pub fn layoutNumber(obj: *[OBJECT_SIZE]u8, name: []const u8, number: u32) void {
     @memset(obj, 0);
-    neo_effect.writeSso(@ptrCast(&obj[NAME_STRING_OFF]), VAR_NAME);
-    std.mem.writeInt(u64, obj[VALUE_CELL_OFF..][0..8], encodeValue(id), .little);
+    neo_effect.writeSso(@ptrCast(&obj[NAME_STRING_OFF]), name);
+    std.mem.writeInt(u64, obj[VALUE_CELL_OFF..][0..8], encodeNumber(number), .little);
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-test "layoutInto writes the name as an MSVC short string at +0xD0" {
+test "layoutNumber writes any name as an MSVC short string at +0xD0" {
     var obj: [OBJECT_SIZE]u8 = [_]u8{0} ** OBJECT_SIZE;
-    layoutInto(&obj, 4242);
-    try std.testing.expectEqualStrings(VAR_NAME, obj[NAME_STRING_OFF .. NAME_STRING_OFF + VAR_NAME.len]);
+    layoutNumber(&obj, SCORE_NAME, 286);
+    try std.testing.expectEqualStrings(SCORE_NAME, obj[NAME_STRING_OFF .. NAME_STRING_OFF + SCORE_NAME.len]);
     // size 在 string 的 +0x10 = 绝对 +0xE0
-    try std.testing.expectEqual(@as(u64, VAR_NAME.len),
+    try std.testing.expectEqual(@as(u64, SCORE_NAME.len),
         std.mem.readInt(u64, obj[NAME_STRING_OFF + 0x10 ..][0..8], .little));
     // capacity 在 string 的 +0x18 = 绝对 +0xE8;`0x7EEBF0` 要求它 < 0x10 才走内联
     try std.testing.expectEqual(@as(u64, 15),
         std.mem.readInt(u64, obj[NAME_STRING_OFF + 0x18 ..][0..8], .little));
 }
 
-test "layoutInto writes the encoded value at +0x310 as a qword" {
-    var obj: [OBJECT_SIZE]u8 = [_]u8{0} ** OBJECT_SIZE;
-    layoutInto(&obj, 4242);
-    try std.testing.expectEqual(encodeValue(4242),
-        std.mem.readInt(u64, obj[VALUE_CELL_OFF..][0..8], .little));
-}
-
-test "encodeValue scales the id to the engine's 1e-5 fixed point" {
+test "encodeNumber scales any script number to the 1e-5 fixed point" {
     // 2026-11-02 shot 1: raw `786` landed in the save as `0.00786`, while
     // vanilla variables are plain integers (`years_passed=52`).  The value
     // cell is the script number type: internal = value × 100000.
-    try std.testing.expectEqual(@as(u64, 100_000), encodeValue(1));
-    try std.testing.expectEqual(@as(u64, 78_600_000), encodeValue(786));
+    try std.testing.expectEqual(@as(u64, 100_000), encodeNumber(1));
+    try std.testing.expectEqual(@as(u64, 28_600_000), encodeNumber(286));
 }
 
-test "layoutInto leaves the value-source presence flag at +0x300 zero" {
+test "layoutNumber writes the encoded number at +0x310" {
+    var obj: [OBJECT_SIZE]u8 = [_]u8{0} ** OBJECT_SIZE;
+    layoutNumber(&obj, VAR_NAME, 4242);
+    try std.testing.expectEqual(encodeNumber(4242),
+        std.mem.readInt(u64, obj[VALUE_CELL_OFF..][0..8], .little));
+}
+
+test "layoutNumber leaves +0x300 and the vtable zero" {
     // `0x3515A0` 只在 `[src+0x210] == 0`(绝对 +0x300)时走短路直取 +0x310;
     // 非零就把我们带进「需要 token 流」的解析路径(Risk #1)。
     var obj: [OBJECT_SIZE]u8 = [_]u8{0} ** OBJECT_SIZE;
-    layoutInto(&obj, 7);
+    layoutNumber(&obj, SCORE_NAME, 7);
     try std.testing.expectEqual(@as(u64, 0),
         std.mem.readInt(u64, obj[VALUE_OFF + 0x210 ..][0..8], .little));
-}
-
-test "the vtable pointer stays zero — the caller installs it" {
-    var obj: [OBJECT_SIZE]u8 = [_]u8{0} ** OBJECT_SIZE;
-    layoutInto(&obj, 1);
     try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, obj[0..8], .little));
 }
 
