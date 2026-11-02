@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import subprocess
 import sys
 import time
 
@@ -102,8 +103,24 @@ def wait_for_process(timeout_s: float, *, interval_s: float = 0.05):
     return None
 
 
+def launch(exe_path: str, extra_args: str = "") -> int:
+    """Start the game ourselves, so the injection poll is already running.
+
+    `--continuelastsave` is the launcher's own argument (spec §69.1): direct
+    `stellaris.exe --continuelastsave` inside session 1 is the shape that has
+    reproduced the campaign window before.  Returns the spawned pid.
+    """
+    argv = [exe_path]
+    if extra_args:
+        argv += extra_args.split()
+    child = subprocess.Popen(argv, cwd=os.path.dirname(exe_path) or None)
+    print(f"[boot] launched pid={child.pid} argv={argv}")
+    return child.pid
+
+
 def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
-         rule: str = "1:0") -> int:
+         rule: str = "1:0", launch_exe: str | None = None,
+         launch_args: str = "", settle_s: float = 0.0) -> int:
     import c2_harness as harness
 
     dll_name = os.path.basename(dll_path.replace("\\", "/"))
@@ -116,11 +133,15 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
         print(f"[boot] {dll_path} is missing {missing} — refusing to inject", file=sys.stderr)
         return _fail("exports")
 
+    if launch_exe:
+        launch(launch_exe, launch_args)
     pid = wait_for_process(timeout_s)
     if pid is None:
         print(f"[boot] stellaris.exe did not appear within {timeout_s:.0f}s", file=sys.stderr)
         return _fail("wait")
     print(f"[boot] pid={pid}")
+    if settle_s > 0:
+        time.sleep(settle_s)
 
     if allow_window:
         print("[boot] gate skipped by operator override (--allow-window)")
@@ -158,7 +179,7 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
     return 0 if install_rc == 0 else EXIT_FAILED
 
 
-def uninstall() -> int:
+def uninstall(dll_path: str) -> int:
     """Tear our detour down in the live pid and print `UNINSTALL rc=<n> verify=<n>`.
 
     Objects already patched keep pointing at our vtable (C4's policy): the engine
@@ -167,9 +188,9 @@ def uninstall() -> int:
     import c2_harness as harness
 
     pid = harness.resolve_pid("stellaris.exe")
-    dll_name = os.path.basename(DEFAULT_DLL.replace("\\", "/"))
+    dll_name = os.path.basename(dll_path.replace("\\", "/"))
     base = harness.resolve_base_address(pid, dll_name)
-    exports = harness.list_exports(DEFAULT_DLL)
+    exports = harness.list_exports(dll_path)
     rc = _signed32(harness.call_remote(pid, base, exports["C2NeoUninstall"]))
     verify = _signed32(harness.call_remote(pid, base, exports["C2NeoVerify"]))
     harness.assert_game_alive(pid)
@@ -177,14 +198,14 @@ def uninstall() -> int:
     return 0 if rc == 0 and verify == 0 else EXIT_FAILED
 
 
-def stats(*, game_log: str | None = None) -> int:
+def stats(dll_path: str, *, game_log: str | None = None) -> int:
     """Read the `C2NeoStatsInto` line (and optionally the log's byte offset) from a live pid."""
     import c2_harness as harness
 
     pid = harness.resolve_pid("stellaris.exe")
-    dll_name = os.path.basename(DEFAULT_DLL.replace("\\", "/"))
+    dll_name = os.path.basename(dll_path.replace("\\", "/"))
     base = harness.resolve_base_address(pid, dll_name)
-    exports = harness.list_exports(DEFAULT_DLL)
+    exports = harness.list_exports(dll_path)
     buf = harness.remote_alloc(pid, 512)
     harness.call_remote_with_arg(pid, base, exports["C2NeoStatsInto"], buf)
     text = harness.read_memory(pid, buf, 512).split(b"\0", 1)[0].decode("ascii", "replace")
@@ -210,15 +231,22 @@ def main(argv=None) -> int:
                         help="do not inject: print C2NeoStatsInto from the running pid")
     parser.add_argument("--uninstall", action="store_true",
                         help="do not inject: C2NeoUninstall + C2NeoVerify, then print both")
+    parser.add_argument("--launch", default=None,
+                        help="path to stellaris.exe: start it ourselves before polling")
+    parser.add_argument("--launch-args", default="",
+                        help="arguments for --launch, e.g. --continuelastsave")
+    parser.add_argument("--settle-s", type=float, default=0.0,
+                        help="sleep after the process appears, before injecting (default 0)")
     parser.add_argument("--log", default=None,
                         help="with --stats: also print this log's current byte offset")
     args = parser.parse_args(argv)
     if args.stats:
-        return stats(game_log=args.log)
+        return stats(args.dll, game_log=args.log)
     if args.uninstall:
-        return uninstall()
+        return uninstall(args.dll)
     return boot(args.dll, timeout_s=args.timeout_s, allow_window=args.allow_window,
-                rule=args.rule)
+                rule=args.rule, launch_exe=args.launch, launch_args=args.launch_args,
+                settle_s=args.settle_s)
 
 
 if __name__ == "__main__":
