@@ -76,7 +76,7 @@ def _container(ids):
     return {"raw_count": len(ids), "ids": list(ids)}
 
 
-GALAXY = list(range(1, 789))   # 788 systems, ids 1..788
+GALAXY = list(range(0, 788))   # 788 systems, ids 0..787 (the live container is 0-based)
 
 
 # --- contract ---------------------------------------------------------------------
@@ -153,6 +153,13 @@ def test_verdict_ids_out_of_range_is_a_negative():
     rows = _rows([1, 2, 999])
     assert verdict(_stats(), rows, _container(GALAXY), expected=788) == "ids_out_of_range"
     assert "ids_out_of_range" in EVIDENCE_VERDICTS
+
+
+def test_zero_based_ids_are_in_range():
+    """The galaxy container is 0-based (2026-11-02: ids 0..786), so id 0 is legal."""
+    rows = _rows([0, 1, 2])
+    container = _container(list(range(0, 788)))
+    assert verdict(_stats(), rows, container, expected=788, distinct=3) == "dispatch_named"
 
 
 def test_verdict_ids_not_in_container_is_a_negative():
@@ -251,3 +258,11 @@ def test_the_recording_path_is_lock_free():
     src = ZIG.read_text()
     assert "lockRec" not in src
     assert "@atomicRmw(u64, &head, .Add, 1, .monotonic)" in src
+
+
+def test_drain_passes_the_buffer_to_the_export():
+    """§91.7: `DrainInto(out)` needs `rcx`; calling it bare wrote through a garbage pointer
+    and the game's crash report named `C6ExecCallerDrainInto`."""
+    src = pathlib.Path(mod.__file__).read_text()
+    assert 'call_remote_with_arg(pid, base, exports["C6ExecCallerDrainInto"], buf)' in src
+    assert 'call_remote(pid, base, exports["C6ExecCallerDrainInto"])' not in src

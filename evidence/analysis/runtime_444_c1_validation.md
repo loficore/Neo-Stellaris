@@ -9740,3 +9740,55 @@ stats_delta=calls=787 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0 
 2. `last_id=786` 只证明「id 落在 `[1,787]` 且就是这一轮最后一个」;**不等于**它等于 `system_id`(§81.2 照旧)。
 3. `0x17F4950` 是「调用 `0x3B0F80` 的函数」,**没有**逐条确认它内部是 `for` 循环还是别种枚举;
    「循环在哪里」这句话的强度只到「它在 `0x17F4950` 这一层」。
+
+### §91.7 收口:死因是我们自己的驱动(不是记录路径),修好后一发 `dispatch_named`(2026-11-02)
+
+**死因定了。** 开 WER LocalDumps 之后游戏没写 dump(它自己的崩溃处理器先接管),但 Paradox 的崩溃目录里
+`crashes/stellaris_20261102_010604/` 有 `exception.txt` + 70 MB `minidump.dmp`:
+
+```
+Unhandled Exception C0000005 (EXCEPTION_ACCESS_VIOLATION) at 0x00007FF91AD17F27
+Stack Trace:
+  1   C6ExecCallerDrainInto (+ 551)
+  2   C6ExecCallerDrainInto (+ 551)
+```
+
+**崩在我们自己的 `DrainInto` 里**:驱动调它时用的是 `call_remote`(**不带参数**),而导出签名是
+`DrainInto(out: [*]u8)` ⇒ `rcx` 是垃圾,循环一旦真的有样本可拷就写飞。这解释了之前那条「只有记样本的构建会死」
+的相关性——没有样本时拷贝循环根本不执行。修法一行:`call_remote_with_arg(pid, base, exports["…DrainInto"], buf)`,
+并加了一条围栏钉住它(`test_drain_passes_the_buffer_to_the_export`)。
+⇒ **§91.2/§91.3 那两句「凶手在记录路径」作废**:记录路径(自旋锁、去重表、环形缓冲)从来没杀过游戏,
+那条相关性来自驱动侧的调用约定错误。
+
+**容器是 0 基的。** 修好后顺手只读了一次银河容器(`C:\temp\ns_container_ids.py`,零注入):
+
+```
+count 787   first10 [0..9]   last10 [777..786]   min 0  max 786  distinct 787
+```
+
+⇒ 之前 `--systems 787` + `[1,787]` 的判据把合法的 `id=0` 判成 `ids_out_of_range`。判据已改成
+`0 ≤ id < expected`(真正的约束是「⊆ 容器」那条),围栏加了一条 0 基的。
+
+**验证发**(artifact `C:\temp\c5_c19.tsv`,存档 `autosave_2225.01.01`,45 s 窗):
+
+```
+#meta overall_verdict=dispatch_named     #meta host_alive=1
+#meta entries=787  #meta distinct_ids=787 #meta container_raw_count=787
+#meta stats_delta=calls=3148 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0
+#meta uninstall_rc=0  #meta verify_rc=0   #meta gate=operator_override
+行(787 条,前三条):
+  0x3b101f  0  0x80  3  0x18ffbeae0  0x7f7f20
+  0x3b101f  1  0x80  3  0x18ffbeae0  0x7f7f20
+  0x3b101f  2  0x80  3  0x18ffbeae0  0x7f7f20
+```
+
+**787 行的 `caller_rva` 全部 = `0x3B101F`**,id 覆盖 `0..786`(与容器逐项相等),`mask=0x80`,
+`null_scope=0`,游戏活着、`uninstall`/`verify` 都是 0。⇒ 「谁在逐系统派发」由 §91.6 的**单次一致性**
+升级为**逐条读数**:派发点是 `0x3B101C call qword ptr [rax+0x48]`(虚表 slot[9]),在函数
+`0x3B0F80..0x3B1155` 内;`0x3B0F80` 的调用者之一在 `0x17F4950`(`effect_impl.cpp`);每轮的 scope 经 `rdx`
+传入,`+0x10` 是 id、`+0x08` 是 `0x80`。
+
+**这一节不能说的(三条)。**
+1. id `0..786` 是**容器里的 4 B 值**,`⊆ 容器` 只证明「同一个集合」,**不证明**它就是 `system_id`(§81.2 照旧)。
+2. 787 行是「4 轮里被去重后的那 787 个 id」,`occurrences` 3–4;不是「每轮各 787 行」的堆叠。
+3. `caller_rva` 是**一层**调用者;`0x17F4950` 之上是否还有队列/条件分派,本节没碰(§63/§66 的口径照旧)。

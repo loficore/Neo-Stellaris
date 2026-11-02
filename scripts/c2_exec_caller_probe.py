@@ -184,7 +184,9 @@ def verdict(stats, rows, container, *, expected, distinct=None):
         return "caller_mixed"
 
     guard_ids = {row["id"] for row in rows}
-    if any(not (1 <= eid <= expected) for eid in guard_ids):
+    # The container is **0-based** (2026-11-02 read: ids 0..786, 787 entries), so the range
+    # gate is `0 <= id < expected`; the real constraint is the subset test right below.
+    if any(not (0 <= eid < expected) for eid in guard_ids):
         return "ids_out_of_range"
     if not guard_ids <= set(container["ids"]):
         return "ids_not_in_container"
@@ -275,9 +277,16 @@ def read_stats(pid, base, exports, buf):
 
 
 def drain_entries(pid, base, exports, buf):
+    """`DrainInto(out)` takes the buffer in `rcx`: pass it, never call it bare.
+
+    2026-11-02: this used `call_remote` (no argument), so the export wrote through a garbage
+    `out`. It only crashed when there was something to copy — i.e. only in builds that
+    recorded samples — which is why three "recording" builds died and three "no rows" builds
+    survived. The game's own crash report pinned it: `C0000005 ... C6ExecCallerDrainInto`.
+    """
     import c2_harness as harness
 
-    count = harness.call_remote(pid, base, exports["C6ExecCallerDrainInto"]) & 0xFFFFFFFF
+    count = harness.call_remote_with_arg(pid, base, exports["C6ExecCallerDrainInto"], buf) & 0xFFFFFFFF
     blob = harness.read_memory(pid, buf, count * ENTRY_SIZE)
     return decode_entries(blob)
 

@@ -1634,7 +1634,11 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 2. **`scope_constant` 说的是「不是那个形状」,不是「引擎没有 scope」。** 第二实参若其实是 §26/§53 那个
    0x20 B 执行深度帧(`+0x08` 深度计数、`+0x10` helper),读出来的 id 就会是一个常数 —— 那一档只排除
    「第二实参是逐系统 scope」这一种读法。
-3. **分母写容器原始条数。** `--systems` 无默认值;§89.3 那次容器是 **788**(上一场存档的 787 是错的分母)。
+3. **`DrainInto` 必须带缓冲区参数,而且容器是 0 基的。** 导出签名是 `DrainInto(out: [*]u8)`,
+   用 `call_remote`(不带参)调它,`rcx` 就是垃圾 —— 只有真的拷到样本时才会写飞,于是它伪装成
+   「记录路径会杀游戏」的样子(2026-11-02 的真凶,游戏崩溃报告点名 `C6ExecCallerDrainInto`)。另外
+   银河容器的 id 是 **0 基**(实测 `0..786`,787 条),`[1,N]` 的判据会把合法的 0 判成越界。
+4. **分母写容器原始条数。** `--systems` 无默认值;§89.3 那次容器是 **788**(上一场存档的 787 是错的分母)。
    容器是活数据,只认一次读足的 blob(§81.1 ③)。
 
 **artifact**:`#meta` 在前(`overall_verdict` / `systems` / `save_name` / `container_raw_count` /

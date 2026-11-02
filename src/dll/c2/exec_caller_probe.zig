@@ -140,13 +140,12 @@ pub fn snapshot() Snapshot {
     };
 }
 
-/// Bounded capture (§91.6): the **first** `RING_CAP` calls are recorded, then the recorder
-/// closes itself.  An unbounded ring killed the game 3/3 (an unbounded append inside a
-/// 787-call burst), while count-only and count-plus-reads survived; bounding the work to a
-/// handful of writes keeps the information we actually need — the first few calls of a round
-/// all come from the same dispatcher — without the unbounded cost.
+/// Ring capacity (§91.7).  It was capped at 8 while the crash was blamed on the recorder;
+/// the game's own crash report then pinned the fault on the **driver** (`call_remote` without
+/// the buffer argument), so the full ring is back.  `RING_CAP < RING_LEN` still works: the
+/// recorder closes itself after `RING_CAP` samples.
 pub const RING_ENABLED = true;
-pub const RING_CAP: usize = 8;
+pub const RING_CAP: usize = RING_LEN;
 
 /// One recorded call. Pure: the host tests drive it directly.
 pub fn recordSample(caller_rva: u32, id: u32, mask: u32, self_ptr: u64, scope: u64) void {
