@@ -1655,7 +1655,7 @@ effect `neo_action`)→ `C1EffectId` → `C2NeoInstall(effect_id)`,最后打印�
 BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 ```
 
-只注册、只换逐系统派发槽(`+0x48`,§91.6),**不发脚本、不动窗口、不读日志** —— 观测是
+只注册、只在逐系统派发点 `0x3B0F80` 上装 token detour(§91.6/§93),**不发脚本、不动窗口、不读日志** —— 观测是
 `c2_neo_effect_check.py` 的活。退出码 `0` = 回执 `install_rc=0` 且 host 活着;`2` = 任一步失败并打
 `BOOT FAIL <step>`。
 
@@ -1672,6 +1672,11 @@ BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 4. **永不 `FreeLibrary`(AGENTS 约束 5)。** 回执里的 `sha16` 是这次注入的字节身份;同名模块已在
    进程里时 `refuse_if_resident` 会拒绝,换一个文件名 scp 新构建。窗口结束前跑一次 `--uninstall`:它打 `UNINSTALL rc= verify= alive=`,`rc`/`verify`
    非 0 就等于留下一个指向我们 DLL 的 vtable(已 patch 的对象不回滚)。
+
+**`--stats` 的一行**(键序固定):`calls`(我们的 token 被派发的次数)/ `matched`(过规则)/
+`log_calls`(真调了 `0x185BF60`)/ `last_id` / `rule_hits` / `installed` / `verify` /
+`dispatched`(detour 看到的总入口)。**`dispatched` 是判读的分水岭**:`calls=0` 且 `dispatched=0` =
+hook 不在路径上;`dispatched>0` 且 `calls=0` = 在路径上但 token 不符(§93.2 第一发就卡在这一格)。
 
 ### `scripts/c2_neo_effect_check.py --log PATH --offset N --marker "Neo: system" --expect K`
 
