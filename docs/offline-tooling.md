@@ -429,6 +429,10 @@ C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从�
    `id × 100000`;读侧把 `3.00000` 归一成 3,非整数保留浮点。
 4. **两段必须用同一条规则。** `assert_same_rule(write_rule, read_rule)` 按 `pack_rule` 的口径归一
    (`8` 与 `8:0` 相等)后比较,不等即 `ValueError` —— 写入段与读回段覆盖不同星系是假阴性/假阳性的来源。
+   **注意读回段本身不受 `--rule` 过滤**:mod 的 `if = { limit = { is_variable_set = neo_mark } }` 对
+   `every_system` 的每个系统都求值;若复用的存档里**上一窗已经写过** `neo_mark`,用部分规则
+   (例如 `--rule 100:0`)重打时,读回行数会包含旧的系统,大于 `matched`。本轮两发都用 `1:0`(全量),
+   所以计数相等;下一次用部分规则必须换干净存档,或先接受「读回 > matched」是残留而不是异常。
 5. **id 是存档局部的。** 这里的 system id 只对这份存档(与它的 sha256)有意义,不能当跨战役常量。
 
 ### `scripts/chokepoint_scores.py <edges.tsv> --out <scores.tsv> [--top N]`
