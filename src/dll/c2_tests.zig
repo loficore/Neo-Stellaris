@@ -12,6 +12,7 @@ const per_system = @import("c2/per_system_probe.zig");
 const neo_effect = @import("c2/neo_effect.zig");
 const neo_vtable = @import("c2/neo_vtable.zig");
 const neo_dispatch = @import("c2/neo_dispatch.zig");
+const neo_state = @import("c2/neo_state.zig");
 
 comptime {
     _ = trigger_eval;
@@ -19,6 +20,7 @@ comptime {
     _ = neo_effect;
     _ = neo_vtable;
     _ = neo_dispatch;
+    _ = neo_state;
 }
 
 test {
