@@ -9829,3 +9829,34 @@ count 787   first10 [0..9]   last10 [777..786]   min 0  max 786  distinct 787
 2. `rule_hits=40` 是**整个安装窗口**的累计(5 轮),而 `calls=3148` 是 `before` 之后的增量(4 轮)——
    两个数不是同一段时间,不能相除。
 3. 规则是 `id % mod == rem` 这种玩具判据;真正的「要道判定」要拿图度量(spec §4),本节不涉及。
+
+### §92.1 决策生效:只让选中的星系真的执行效果(2026-11-02,实机一发)
+
+§92 的 PoC 只做到「选出来、记下来」。这一发让**决定咬人**:`act=suppress` 时,不满足规则的星系
+在 detour 里**直接返回**,原效果根本不执行。
+
+**实现**:`C6ExecCallerSetAct(mode)`(1 = suppress);detour 里
+`if (act_suppress and ruleIsArmed() and !ruleMatches(id)) return 0;` —— 仍在读完 `[scope+0x10]` 之后、
+仍在同一个引擎线程上;满足规则的走原来的尾跳。驱动同时量 `marker_hits`(game.log 里那段增量的行数),
+因为测试 mod 的效果正是 `every_system { log = "PS_HIT" }`。
+
+**实机读数**(`C:\temp\c5_act.tsv`,存档 `autosave_2225.01.01`,45 s,`--rule 100:0 --act suppress`):
+
+```
+#meta act=suppress   #meta rule=100:0
+#meta stats_delta=calls=3148 last_id=786 last_caller=0x3b101f null_scope=0 patch_size=15 installed=1 verify=0
+#meta rule_hits=32   #meta rule_ids=0,100,…,700 (×4)
+#meta marker_hits=32 #meta entries=787  #meta distinct_ids=787  #meta container_raw_count=787
+#meta host_alive=1   #meta uninstall_rc=0  #meta verify_rc=0
+行(前三条): 0x3b101f  0/1/2  0x80  3  0x18ffbeae0  0x7f7650
+```
+
+**逐项对账**:派发次数 `3148 = 4×787`(**所有**星系仍然被走到);命中 `32 = 4×8`(每轮 8 个);
+而 game.log 里那段增量**正好 32 行** —— 也就是「787 次派发只有 8 次真的执行了效果」。
+⇒ **DLL 在引擎的派发线程里改变了游戏行为**,而不是只记录。
+
+**这一节不能说的(四条)。**
+1. 动作是**抑制**(让不符合规则的星系不执行原效果),不是**新增**效果;「给星系加新效果」还没做。
+2. 只测了一个 mod、一个效果(`log = "PS_HIT"`)、一条规则(`id%100==0`);换效果/换规则都快照式重跑。
+3. `marker_hits` 数的是**文本行**,如果别的 mod 也写同样的串会偏大(此处 `PS_HIT` 是测试 mod 独占)。
+4. `host_alive=1` 是**这一发**的事实;抑制改变了引擎的执行路径,但引擎其余部分没有被验证「无副作用」。

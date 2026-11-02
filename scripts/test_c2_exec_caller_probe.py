@@ -47,7 +47,7 @@ def test_the_ten_exports_exist_in_the_zig_source():
     for name in ("C6ExecCallerInstall", "C6ExecCallerUninstall", "C6ExecCallerVerify",
                  "C6ExecCallerLayout", "C6ExecCallerStatsInto", "C6ExecCallerSetDrainCap",
                  "C6ExecCallerDrainInto", "C6ExecCallerReset", "C6ExecCallerSetRule",
-                 "C6ExecCallerRuleHitsInto"):
+                 "C6ExecCallerRuleHitsInto", "C6ExecCallerSetAct"):
         assert f"export fn {name}" in src, f"missing export fn {name}"
 
 
@@ -284,3 +284,13 @@ def test_decode_hits_reads_the_count_then_the_ids():
 
 def test_rule_hits_is_evidence():
     assert "poc_rule_hits" in EVIDENCE_VERDICTS
+
+
+def test_count_marker_in_log_reads_only_the_delta(tmp_path):
+    log = tmp_path / "game.log"
+    log.write_text("old PS_HIT\n" * 3, encoding="utf-8")
+    offset = log.stat().st_size
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write("PS_HIT a\nPS_HIT b\n")
+    assert mod.count_marker_in_log(str(log), offset, "PS_HIT") == 2
+    assert mod.count_marker_in_log(str(log), None, "PS_HIT") is None

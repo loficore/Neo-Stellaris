@@ -1101,6 +1101,12 @@ export fn C6ExecCallerSetRule(bits: u64) callconv(.c) i32 {
     return 0;
 }
 
+/// §92.2:`mode=1` = 决策生效(不满足规则的星系**不再派发**),`0` = 只记录。
+export fn C6ExecCallerSetAct(mode: u32) callconv(.c) i32 {
+    c2_exec_caller.setAct(mode);
+    return 0;
+}
+
 /// `[count: u32][ids: u32 × 64]`,返回 count。
 export fn C6ExecCallerRuleHitsInto(out: [*]u8) callconv(.c) u32 {
     return c2_exec_caller.ruleHitsInto(out);

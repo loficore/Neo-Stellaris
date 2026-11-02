@@ -374,8 +374,21 @@ def decode_hits(words):
     return list(ids[:count])
 
 
+def count_marker_in_log(path, offset, marker):
+    """How many `marker` lines appeared in the log since `offset` (`None` = not measured)."""
+    if offset is None:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(offset)
+            text = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    return text.count(marker)
+
+
 def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
-        allow_window=False, rule="100:0"):
+        allow_window=False, rule="100:0", act="record", game_log=None, marker="PS_HIT"):
     """One shot in one game process. Cleanup runs in a finally; never FreeLibrary."""
     import time
 
@@ -397,6 +410,10 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
     harness.call_remote_with_arg(pid, base, exports["C6ExecCallerLayout"], layout_buf)
     layout = decode_layout(struct.unpack("<6I", harness.read_memory(pid, layout_buf, LAYOUT_WORDS * 4)))
 
+    from c4_wiring_probe import GAME_LOG, _file_size_or_none
+
+    log_path = os.path.expanduser(game_log or GAME_LOG)
+    log_offset = _file_size_or_none(log_path)
     rule_bits = encode_rule(rule)
     hits_buf = harness.remote_alloc(pid, 4 + RULE_HITS * 4)
 
@@ -404,6 +421,8 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
     install_rc = _signed32(harness.call_remote(pid, base, exports["C6ExecCallerInstall"]))
     decision = install_decision(install_rc, layout)
     harness.call_remote_with_arg(pid, base, exports["C6ExecCallerSetRule"], rule_bits)
+    harness.call_remote_with_arg(pid, base, exports["C6ExecCallerSetAct"],
+                                 1 if act == "suppress" else 0)
     harness.assert_game_alive(pid)
 
     meta = {
@@ -480,6 +499,8 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
             pid, base, exports["C6ExecCallerRuleHitsInto"], hits_buf))
         hit_blob = _safe(lambda: harness.read_memory(pid, hits_buf, 4 + RULE_HITS * 4), b"")
         hit_ids = decode_hits(struct.unpack(f"<{1 + RULE_HITS}I", hit_blob)) if hit_blob else []
+        meta["act"] = act
+        meta["marker_hits"] = count_marker_in_log(log_path, log_offset, marker)
         meta["rule"] = rule
         meta["rule_hits"] = len(hit_ids)
         meta["rule_ids"] = ",".join(str(i) for i in hit_ids)
@@ -520,6 +541,12 @@ def main(argv=None):
     parser.add_argument("--poll-s", type=float, default=120.0)
     parser.add_argument("--settle-s", type=float, default=3.0)
     parser.add_argument("--out", default="C:/temp/c5_exec_caller.tsv")
+    parser.add_argument("--act", default="record", choices=("record", "suppress"),
+                        help="record = only log the selection; suppress = systems that fail the "
+                             "rule are not dispatched at all (observable in game.log)")
+    parser.add_argument("--game-log", default=None)
+    parser.add_argument("--marker", default="PS_HIT",
+                        help="literal the effect writes per dispatch (the mod's log text)")
     parser.add_argument("--rule", default="100:0",
                         help="PoC rule MOD:REM — ids with id%%MOD==REM are selected inside the "
                              "dispatch; 0:0 disables (default 100:0)")
@@ -527,7 +554,7 @@ def main(argv=None):
 
     meta = run(args.dll, args.out, systems=args.systems, save_name=args.save_name,
                poll_s=args.poll_s, settle_s=args.settle_s, allow_window=args.allow_window,
-               rule=args.rule)
+               rule=args.rule, act=args.act, game_log=args.game_log, marker=args.marker)
     return 0 if meta.get("overall_verdict") in EVIDENCE_VERDICTS else 1
 
 

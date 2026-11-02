@@ -125,6 +125,24 @@ pub fn setRule(mod: u32, rem: u32) void {
     @memset(std.mem.asBytes(&hits), 0);
 }
 
+/// §92.2: `act = 1` makes the **decision bite** — systems that fail the rule are not dispatched
+/// at all (the detour returns before the original effect runs). The effect itself is the test
+/// mod's `log = "PS_HIT"`, so the change is observable in `game.log`: one line per selected
+/// system per month instead of one per system.
+var act_suppress: bool = false;
+
+pub fn setAct(mode: u32) void {
+    act_suppress = mode == 1;
+}
+
+pub fn ruleIsArmed() bool {
+    return rule_mod != 0;
+}
+
+pub fn suppresses() bool {
+    return act_suppress;
+}
+
 /// Pure: the host tests drive it.
 pub fn ruleMatches(id: u32) bool {
     if (rule_mod == 0) return false;
@@ -199,18 +217,19 @@ pub fn recordSample(caller_rva: u32, id: u32, mask: u32, self_ptr: u64, scope: u
 /// One call to the target: count it, resolve the caller RVA, read the second argument's two
 /// scope cells when it is a readable pointer, then append one sample. Unreadable degrades to
 /// `null_scope` plus a zeroed sample (so the call still shows up in the ring).
-pub fn recordCall(caller: usize, self: usize, scope: usize) void {
+pub fn recordCall(caller: usize, self: usize, scope: usize) u32 {
     _ = @atomicRmw(u64, &stats.calls, .Add, 1, .monotonic);
     const caller_rva = toRva(caller);
     if (!plausible(scope) or readU64(scope) == null) {
         _ = @atomicRmw(u64, &stats.null_scope, .Add, 1, .monotonic);
         recordSample(caller_rva, 0, 0, @intCast(self), @intCast(scope));
-        return;
+        return 0;
     }
     const id = readU32(scope, SCOPE_ID_OFF);
     if (ruleMatches(id)) recordRuleHit(id);
     recordSample(caller_rva, id, readU32(scope, SCOPE_MASK_OFF),
                  @intCast(self), @intCast(scope));
+    return id;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +351,9 @@ pub const OrigFn = *const fn (u64, u64, u64) callconv(.c) u64;
 fn dispatchDetour(self: u64, scope: u64, a3: u64) callconv(.c) u64 {
     // The hook is entered by `jmp [rip+0]` (detour.zig), so the top of the stack is still the
     // engine's return address: `@returnAddress()` is the dispatch site, not our trampoline.
-    recordCall(@returnAddress(), @intCast(self), @intCast(scope));
+    const id = recordCall(@returnAddress(), @intCast(self), @intCast(scope));
+    // §92.2: when the action is armed, a system that fails the rule is **not** dispatched.
+    if (act_suppress and ruleIsArmed() and !ruleMatches(id)) return 0;
     const f: OrigFn = @ptrCast(orig orelse return 0);
     // `.always_tail` is load-bearing, not a micro-optimisation (§91.1).  `detour.zig` builds
     // the trampoline by copying the target's prologue **verbatim** and appending a `jmp` back,
@@ -523,4 +544,19 @@ test "verify is -3 before the first install" {
     resetForTest();
     try std.testing.expectEqual(@as(i32, -3), verify());
     try std.testing.expect(!isInstalled());
+}
+
+test "act suppression is armed only by mode 1 and only with a rule" {
+    resetForTest();
+    setRule(0, 0);
+    setAct(1);
+    try std.testing.expect(suppresses());
+    try std.testing.expect(!ruleIsArmed());      // no rule -> nothing to suppress
+    setRule(100, 0);
+    try std.testing.expect(ruleIsArmed());
+    try std.testing.expect(ruleMatches(200));
+    try std.testing.expect(!ruleMatches(201));
+    setAct(0);
+    try std.testing.expect(!suppresses());
+    setRule(0, 0);
 }
