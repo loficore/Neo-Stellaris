@@ -9860,3 +9860,138 @@ count 787   first10 [0..9]   last10 [777..786]   min 0  max 786  distinct 787
 2. 只测了一个 mod、一个效果(`log = "PS_HIT"`)、一条规则(`id%100==0`);换效果/换规则都快照式重跑。
 3. `marker_hits` 数的是**文本行**,如果别的 mod 也写同样的串会偏大(此处 `PS_HIT` 是测试 mod 独占)。
 4. `host_alive=1` 是**这一发**的事实;抑制改变了引擎的执行路径,但引擎其余部分没有被验证「无副作用」。
+
+## §93 引擎按星系调用我们注册的 keyword —— `neo_action` 自己调官方 `log`(2026-11-02,实机两发,授权 = spec `2026-11-02-c5-add-effect-keyword-design.md`)
+
+**这一节回答的是「加」**,与 §92 的「抑制」相对:不是拦住一个已经在跑的效果,而是让**引擎**
+按星系调用我们注册的 keyword,我们的实现里再调一个**官方**效果(`log` = `0x185BF60`,§90.4),
+于是「我们决定的事」表现为游戏自己的行为。
+
+### §93.1 判据
+
+spec §1:`game.log` 每轮出现 N 行 `Neo: system <id>`,N = 命中数;游戏存活、装拆校验干净。
+
+### §93.2 第一发:换对象 vtable 那条路被否定(负结论)
+
+**时序先立住**(T1 = 进程一出现就注入,spec §2):
+
+- `stellaris.exe` 起于 **13:50:29.398**;
+- `C1 OK: trigger_id=19330 effect_id=19331` 写进 `C:\temp\c1_result.log` 于 **13:50:30.010**;
+- `setup.log` 里 `>=== NAMESPACE > 'neo_ps'` 直到 **13:51:04** 才出现(事件文件那时才被登记)。
+
+⇒ 注入早于脚本解析;**`error.log` 35 行、`Unexpected token` = 0**,所以 `neo_action` 在解析时已经有 token。
+
+**当时的机制**:C4 的 predicate detour(`0x3B1420`)在实例化时把 armed token 的对象 `[self]` 换成本
+DLL 的 vtable 副本,`slot[9]`(`+0x48`)指向我们的 body。月边界 `2248.07.01`(autosave 13:54:46)过了之后:
+
+```
+calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 installed=1 verify=0
+C4PredStatsInto -> pred_calls=485,569  pred_patched=0
+```
+
+**判**:脚本文件里解析出来的 effect 树**不走**谓词那条路 —— 485,569 次谓词调用里一次都没见到 19331,
+而注入比解析早 ~34 s,所以不是时序问题。§54.4 那次 `pred_patched 0 → 1` 是 **console 命令**的运行时
+实例化,不是「mod 文件里的一个 effect」。⇒ 这条挂载点对「脚本里的新 keyword」不可用。
+
+### §93.3 第二发:机制改成逐系统派发点 `0x3B0F80`
+
+依据是 §91.6/§91.7 的 787 条读数(`caller_rva` 全 = `0x3B101F`):`0x3B0F80` 收
+`(child_object, scope)`,**自己** `movsxd rbx, dword ptr [rcx+0x20]` 读 token,再
+`call [child+0xa8]`(scope 门)与 `call [child+0x48]`(body)。
+
+新实现 `src/dll/c2/neo_dispatch.zig`:
+
+- 指纹 = 目标前 **19 B**(`mov [rsp+0x18],rbx` / 五个 push / `sub rsp,0x20` / `mov rbp,rdx`),
+  全是栈操作与寄存器搬移 ⇒ 整段可直接抄进 trampoline;
+- token 等于 armed ⇒ 跑 `neo_vtable.runBody`(合成 0xF0 零块 + `+0x38` 的 MSVC 短串,调 `0x185BF60`);
+- 其它 token ⇒ `.always_tail` 转回原函数(`rsp` 必须与引擎自己调时一致,§91.1 三发全死的教训)。
+
+装:`C2NeoInstall(19331) rc=0`。拆:`UNINSTALL rc=0 verify=0 alive=1`。
+
+### §93.4 读数(pid 4152,dll `sqjs_c24.dll`,sha16 `7a80639715afdd5e`,存档 `autosave_2248.07.01`)
+
+```
+calls=9444 matched=9444 log_calls=9444 last_id=786 rule_hits=64 installed=1 verify=0 dispatched=30518
+```
+
+- `game.log` 自 offset **177** 起的增量:`seen=9444 expect=9444` ⇒ **`neo_lines_ok`**
+  (9,444 = **12 个月 × 787 星系**);
+- 行形态:`[14:02:25][effect_impl.cpp:21978]: [2250.2.1] Log effect,Neo: system 0. `;
+- 去重后 **787 个 id(0..786),每个恰好 12 次** ⇒ 每个星系每月一次;
+- `NEO_BODY = 0`:`neo_action` 的 body 里那行 `log = "NEO_BODY"` **从未执行** ⇒ 我们的 detour 真的
+  替代了子效果本身,不是并排跑;
+- `PS_HIT = 12`:控制组(同一次 `every_system` 里的 sibling `log`)证明事件确实跑了 12 轮;每月 787 条
+  **完全相同**的文本被引擎日志 sink 折成 1 条 —— 与 §54.3「783 个不同名字」同一现象;
+- `dispatched=30,518` = 窗口内 `0x3B0F80` 的全部入口(我们的 9,444 + 其它 21,074);
+- `error.log` 35 行、`Unexpected token` = 0。
+
+### §93.5 判词
+
+**`neo_lines_ok`。** spec §1 的判据成立:引擎按星系调用了我们注册的 keyword,我们的实现调了官方
+`log`,`game.log` 的增量行数与命中数精确相等;host 全程存活,`Install/Uninstall/Verify` 全 0。
+
+### §93.6 这一节不能说的(三条)
+
+1. **`scope+0x10` 仍是「容器里的那个 4 B 值」。** id 覆盖 `0..786` 且每轮与容器逐项相等,但**不证明**
+   它就是 `system_id`(§81.2 的边界照旧)。
+2. **`+0xd0` 的空串这次被真的读了 9,444 次**(栈上 `0xF0` 全零块),游戏存活 —— 这比 spec §3 的
+   「静态只证到它被当字符串读」多了一步;但仍然**没有**证明非空 `+0xd0` 的行为,也没有证明
+   `+0xe0`(上一行长度)被写过之后会怎样。
+3. **`dispatched` 不是「每轮 787」。** 它是整个窗口(12 个月 + 事件链)里 `0x3B0F80` 的入口总数,
+   只用来把「hook 没在路径上」与「在路径上但 token 不符」分开 —— 后者正是第一发读不出来的那一格。
+
+### §93.7 现场与回滚
+
+mod 的事件文件在 shot 前备份到 `C:\temp\neo_ps_probe_events.txt.bak-2026-11-02`,shot 后已**原样还原**;
+两发之间游戏都是 `WM_CLOSE` 关闭(没有 `TerminateProcess`);DLL **从未 `FreeLibrary`**(AGENTS 约束 5),
+离开游戏窗口即随进程回收;`C2NeoUninstall` 只把 `0x3B0F80` 的前 19 B 原样写回。
+
+### §93.8 整支分支复审后的追加更正(2026-11-02,同一窗口,零 shot)
+
+复审(整支分支)提了四条**口径**问题,读数一条没动。这一节只记「§93.1–§93.7 的话哪里说得比读数更满」:
+
+1. **我们跳过的不止「body 那一槽」。** `0x3B0F80` 在我们之前还做四件事:建 id→name 条目、
+   `new(0x48)` + ctor、调子对象的 **scope 门** `call [child+0xa8]`、以及一段计时/遥测,最后释放临时对象。
+   我们的 detour 在 token 命中时直接 `return`,这四件(含临时对象释放)对我们的 token **不再发生**。
+   ⇒ §93.5 的「引擎按星系调用了我们注册的 keyword」要读成:**引擎把这一轮送到了逐系统派发入口,且对象带着
+   我们的 token**;「引擎自己的 scope 门会放行」这一格本轮**没有**被观测(仍然没有观测)。
+   不修的理由写在这里,不写在别处:改机制就要重打一发,而判据(spec §1)不依赖那道门。
+2. **还原长度是 16 B,不是 19 B。** `EXPECTED_CODE` 是 19 B 的**指纹**,`detour.zig` 的 14 B JMP 按整条指令
+   边界只覆盖前 **16 B**(`mov rbp,rdx` 原地执行),`uninstall()` 写回的也是 `patch_size = 16`。
+   §93.7 那句「前 19 B 原样写回」措辞不准,结论(引擎字节完整还原)不变。
+3. **`scope+0x08`(mask)没有被读。** 本轮只读 `+0x10`;「id 落在 0..786 且与容器逐项相等」是观测,
+   不是构造性的类型门(§80.2 记的 `mask=0x80` 才是「这是 system scope」的信号)。
+4. **§93.4 的「787 个 id、每个恰好 12 次」现在有生产者了**:`scripts/c2_neo_effect_check.py --histogram`
+   (`histogram()` 纯函数,主机侧围栏钉住)。本轮那次读数是手工算的,数字不变。
+5. **日志 sink 的去重口径**:§54.3 的「783 ≠ 787」与本节「`PS_HIT=12`」都来自**同一批连续相同文本**被折叠,
+   不是整场会话去重 —— 否则 12 个月该只留 1 行。`Neo: system <id>` 每个 id 文本不同,所以不被折叠。
+6. **驱动侧的规则旗标**:失败分诊里写的「`--rule 0:0`(全放行)」是反的 —— `setRule` 把 `mod == 0` 当**关闭**;
+   全放行是 **`1:0`**(`id % 1 == 0`)。驱动自身默认就是 `1:0`。
+
+### §93.9 复审之后的第三发:最终产物的复验(2026-11-02,实机一发,预算用尽)
+
+复审的 minor 里有四条**改了行为**(`scope+0x08` 的 system-scope 类型门、文案超 15 B 时不出行、规则位
+打包成一个原子 u64、卸载时保留 `orig`),于是 §93.4 的读数属于**上一版字节**。这一发把最终产物重打一次,
+让取证的字节与仓库里的字节是同一份。
+
+**产物**:`sqjs_c25.dll`,sha16 `536a25ca01b793a4`;pid **8580**;mod 事件体与 §93.4 相同
+(`random_system = { every_system = { log = "PS_HIT"  neo_action = { log = "NEO_BODY" } } }`)。
+
+**读数**:
+
+```
+(暂停基线) calls=0 matched=0 log_calls=0 ... installed=1 verify=0 dispatched=0 null_scope=0 mask_odd=0
+(7 个月后) calls=5509 matched=5509 log_calls=5509 last_id=786 rule_hits=64 installed=1 verify=0 \
+           dispatched=16436 null_scope=0 mask_odd=0
+```
+
+- `game.log` 自 offset **177** 起的增量:`seen=5509 expect=5509` ⇒ **`neo_lines_ok`**;
+  `--histogram` 读出 **`ids=787 occurrences_min_max=7-7`**(5509 = 7 × 787);
+- `PS_HIT = 7`(控制组:事件跑了 7 轮,同一文本每月被 sink 折成 1 条);`NEO_BODY = 0`;
+- **`mask_odd = 0`**:5,509 次派发的 scope `+0x08` 全是 `0x80` ⇒ §93.8 第 3 条说的那道门现在不是
+  「观测到的 id 恰好落在 0..786」,而是**引擎自己的类型标记放行的**(仍然只在这一版字节上成立);
+- `UNINSTALL rc=0 verify=0 alive=1`;`error.log` 35 行、`Unexpected token` = 0;mod 文件已还原;
+  游戏以 `WM_CLOSE` 关闭。
+
+**判词**:`neo_lines_ok`。§93.4 的数字(9,444 / 12 个月)是**上一版字节**的读数,两条并存;
+以仓库里这一版为准的是本节。

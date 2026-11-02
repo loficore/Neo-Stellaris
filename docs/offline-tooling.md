@@ -1646,6 +1646,54 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 `install_rc` / `uninstall_rc` / `verify_rc` / `host_alive` / `entries_error`),然后六列行:
 `caller_rva id mask occurrences self_ptr scope_ptr`。
 
+### `scripts/c2_boot_inject.py [dll] --timeout-s 30 [--allow-window]` —— T1:启动期注入
+
+**「加」那条通道的第一个动作。** 进程一出现就注入,然后 `C1Run`(注册 trigger `neo_effect` +
+effect `neo_action`)→ `C1EffectId` → `C2NeoInstall(effect_id)`,最后打印一行
+
+```
+BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
+```
+
+只注册、只在逐系统派发点 `0x3B0F80` 上装 token detour(§91.6/§93),**不发脚本、不动窗口、不读日志** —— 观测是
+`c2_neo_effect_check.py` 的活。退出码 `0` = 回执 `install_rc=0` 且 host 活着;`2` = 任一步失败并打
+`BOOT FAIL <step>`。
+
+**判读陷阱(四条):**
+
+1. **注入必须早于脚本解析**(spec §2 的 T1)。晚一步,mod 里的 `neo_action` 没有 token id,落进
+   `0x5350D0` 的默认分支 → `0x1D092C0` 写一条 `Unexpected token`(§30),整套**静默失效**。驱动因此
+   50 ms 轮询 `stellaris.exe`;窗口里通常先起驱动等进程,再点 Play。
+2. **它不绕过世界状态机。** 函数里排在 `inject_dll` 前面的是 `gate_install("c2_neo")`(§1 的同一条门)。
+   T1 的时刻(进程刚起/还在 launcher)本来就不是 `IN_GAME_RUNNING`,所以真要打就带 `--allow-window`
+   —— 那是**人当场声明的前提**,不是默认开关。
+3. **SSH 落在 session 0,游戏在 session 1。** 从 SSH 直跑会看到 `NO_GAME`;整条命令要包进
+   `session_bridge.py`(`just win "python C:/temp/session_bridge.py C:/temp/c2_boot_inject.py …"`)。
+4. **永不 `FreeLibrary`(AGENTS 约束 5)。** 回执里的 `sha16` 是这次注入的字节身份;同名模块已在
+   进程里时 `refuse_if_resident` 会拒绝,换一个文件名 scp 新构建。窗口结束前跑一次 `--uninstall`:它打 `UNINSTALL rc= verify= alive=`,`rc`/`verify`
+   非 0 就等于留下一个指向我们 DLL 的 vtable(已 patch 的对象不回滚)。
+
+**`--stats` 的一行**(键序固定):`calls`(我们的 token 被派发的次数)/ `matched`(过规则)/
+`log_calls`(真调了 `0x185BF60`)/ `last_id` / `rule_hits` / `installed` / `verify` /
+`dispatched`(detour 看到的总入口)/ `null_scope`(第二实参读不了)/ `mask_odd`(scope 的 `+0x08`
+不是 `0x80` ⇒ 不是 system scope,body 不做)。**`dispatched` 是判读的分水岭**:`calls=0` 且
+`dispatched=0` = hook 不在路径上;`dispatched>0` 且 `calls=0` = 在路径上但 token 不符(§93.2 第一发
+就卡在这一格);`calls>0` 但 `matched=0` 且 `mask_odd>0` = 类型门在挡,不是规则。
+
+### `scripts/c2_neo_effect_check.py --log PATH --offset N --marker "Neo: system" --expect K`
+
+Spec §1 的判据只在这里:**`game.log` 自 `--offset` 起含有 `--marker` 的行数**,对 `--expect` 精确判。
+判决词四档 `neo_lines_ok` / `neo_lines_short` / `neo_lines_extra` / `neo_lines_unmeasured`
+(`--offset` 缺省或日志读不了;它**不是** `short`);退出码 `0` 只在 `ok`。
+
+**判读陷阱(三条):**
+
+1. **只认增量。** 787 个星系 × 游戏时长会把整份日志撑到十几 MB(2026-11-02 的 `game.log` 已 14 MB),
+   拿总行数当判据隔天就假绿。`--offset` 要在窗口开始时取(`stat().st_size`)。
+2. **多一行也是异常。** `extra` 不是「跑得更好」:重复注册、同一星系跑两次、或别的来源也在写这行。
+3. **`offset` 读不到就是 `unmeasured`,不是 `short` 也不是 `ok`。** 驱动层把「没量到」和「量到 0」
+   分开(`None` ≠ `0`);把两者混成一个词会把环境故障读成证据。
+
 ## 实机调试:桌面通道(`win-desktop` MCP)
 
 agent 自己能看屏幕、按**元素**点、打字 —— 用来替代「让操作者去点一下」的那类动作(事件窗、控制台投递、

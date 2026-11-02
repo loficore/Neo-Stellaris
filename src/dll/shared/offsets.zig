@@ -285,6 +285,15 @@ pub const keyword_reg = struct {
     pub const DONOR_TRIGGER_VTABLE: usize = 0x268ED08; // covers +0x78 = 0x1B4550, +0x80 = 0x349230
     pub const DONOR_EFFECT_VTABLE: usize = 0x2606FE0; // covers +0x78 = 0x1596B0, +0x98 = 0x3B1420
 
+    /// §91.6/§91.7 — the **per-system dispatch** slot. `0x3B0F80` runs
+    /// `call [rax+0xa8]` (scope gate) then `call [rax+0x48]` on the child effect, and the
+    /// callee's return address (`0x3B101F`) was the one caller of `log`'s `0x185BF60` in all
+    /// 787 rows of the 2026-11-02 reading. Statically: `log`'s vtable `0x25FC340` holds
+    /// `0x185BF60` at `+0x48`, and donor `0x2606FE0` holds `0x3B1160` there (execute the
+    /// object's children in this scope). This is the slot a per-system body replaces.
+    /// NOT slot[1] (`EFFECT_VTBL_EXECUTE`) and not slot[2] (`EFFECT_VTBL_INSTANTIATE`).
+    pub const EFFECT_VTBL_DISPATCH_IN_SCOPE: usize = 0x48;
+
     /// §24.6 — the value record's `+8` docstring, chosen conservatively: reuse the donor's OWN
     /// official `.rdata` string instead of shipping one from our DLL. The engine keeps this pointer
     /// for the lifetime of the db (the enumerate paths `0x3AF130`/`0x348450` read every node), and a

@@ -9,10 +9,16 @@ const std = @import("std");
 
 const trigger_eval = @import("c2/trigger_eval_probe.zig");
 const per_system = @import("c2/per_system_probe.zig");
+const neo_effect = @import("c2/neo_effect.zig");
+const neo_vtable = @import("c2/neo_vtable.zig");
+const neo_dispatch = @import("c2/neo_dispatch.zig");
 
 comptime {
     _ = trigger_eval;
     _ = per_system;
+    _ = neo_effect;
+    _ = neo_vtable;
+    _ = neo_dispatch;
 }
 
 test {
