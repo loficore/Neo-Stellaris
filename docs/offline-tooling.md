@@ -1670,7 +1670,8 @@ BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 3. **SSH 落在 session 0,游戏在 session 1。** 从 SSH 直跑会看到 `NO_GAME`;整条命令要包进
    `session_bridge.py`(`just win "python C:/temp/session_bridge.py C:/temp/c2_boot_inject.py …"`)。
 4. **永不 `FreeLibrary`(AGENTS 约束 5)。** 回执里的 `sha16` 是这次注入的字节身份;同名模块已在
-   进程里时 `refuse_if_resident` 会拒绝,换一个文件名 scp 新构建。
+   进程里时 `refuse_if_resident` 会拒绝,换一个文件名 scp 新构建。窗口结束前跑一次 `--uninstall`:它打 `UNINSTALL rc= verify= alive=`,`rc`/`verify`
+   非 0 就等于留下一个指向我们 DLL 的 vtable(已 patch 的对象不回滚)。
 
 ### `scripts/c2_neo_effect_check.py --log PATH --offset N --marker "Neo: system" --expect K`
 

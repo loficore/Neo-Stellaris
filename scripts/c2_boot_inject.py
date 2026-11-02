@@ -19,7 +19,8 @@
     python C:/temp/c2_boot_inject.py --stats --log "<...>/logs/game.log"   # read back
 
 `--rule MOD:REM`(默认 `1:0` = 所有 id)在安装成功后立刻装进 DLL;`--stats` 不注入,
-只把 `C2NeoStatsInto` 的一行(和日志当前字节偏移)打出来。
+只把 `C2NeoStatsInto` 的一行(和日志当前字节偏移)打出来;`--uninstall` 拆 detour 并返回
+`UNINSTALL rc= verify= alive=`,窗口结束前必须跑一次。
 
 退出码:`0` = 回执里有 `install_rc=0` 且 `alive=1`;`2` = 任一步失败(打印
 `BOOT FAIL <step>`);`gate_install` 拒绝时也是 2(它自己 `raise SystemExit(2)`)。
@@ -157,6 +158,25 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
     return 0 if install_rc == 0 else EXIT_FAILED
 
 
+def uninstall() -> int:
+    """Tear our detour down in the live pid and print `UNINSTALL rc=<n> verify=<n>`.
+
+    Objects already patched keep pointing at our vtable (C4's policy): the engine
+    bytes are restored, the DLL is never freed, and the process is expected to end.
+    """
+    import c2_harness as harness
+
+    pid = harness.resolve_pid("stellaris.exe")
+    dll_name = os.path.basename(DEFAULT_DLL.replace("\\", "/"))
+    base = harness.resolve_base_address(pid, dll_name)
+    exports = harness.list_exports(DEFAULT_DLL)
+    rc = _signed32(harness.call_remote(pid, base, exports["C2NeoUninstall"]))
+    verify = _signed32(harness.call_remote(pid, base, exports["C2NeoVerify"]))
+    harness.assert_game_alive(pid)
+    print(f"UNINSTALL rc={rc} verify={verify} alive=1")
+    return 0 if rc == 0 and verify == 0 else EXIT_FAILED
+
+
 def stats(*, game_log: str | None = None) -> int:
     """Read the `C2NeoStatsInto` line (and optionally the log's byte offset) from a live pid."""
     import c2_harness as harness
@@ -188,11 +208,15 @@ def main(argv=None) -> int:
                         help="MOD:REM armed after install; 1:0 = every id, 0:0 = off")
     parser.add_argument("--stats", action="store_true",
                         help="do not inject: print C2NeoStatsInto from the running pid")
+    parser.add_argument("--uninstall", action="store_true",
+                        help="do not inject: C2NeoUninstall + C2NeoVerify, then print both")
     parser.add_argument("--log", default=None,
                         help="with --stats: also print this log's current byte offset")
     args = parser.parse_args(argv)
     if args.stats:
         return stats(game_log=args.log)
+    if args.uninstall:
+        return uninstall()
     return boot(args.dll, timeout_s=args.timeout_s, allow_window=args.allow_window,
                 rule=args.rule)
 
