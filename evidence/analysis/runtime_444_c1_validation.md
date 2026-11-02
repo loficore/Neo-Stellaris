@@ -9368,3 +9368,495 @@ fresh-context 评审对 §85–§88 提了 4 项 Important,全部判决词不受
 
 **影响范围**:只动了两枚 scratch 探针的判定函数与追加本节;§85/§86/§87/§88 的正文、判决词、
 artifact TSV(853+1 行,复跑逐字节同)均未改。`just check` 全绿。
+
+## §89 `+0x70` 不在执行路径:`every_system` 真的跑起来之后 `calls=0`(2026-11-01,实机一发 + 驱动层修正)
+
+**这一节回答什么。** §82.2 把「谁把子效果送进某个 scope」判成 `execute`(**有条件**)之后,悬着的那半句是
+「派发 `+0x70` 的一侧须是执行侧,那个派发方静态未定位」。§81.2 的「`PS_HIT` ×1」让这件事无法开打 ——
+**循环本身有没有真的逐系统跑**没被证明过。本节用一次实机 shot 把两件事一起钉住:先让驱动真的逐系统跑
+(磁盘上的测试 mod 在 4.4.4 里原本**不通过解析**),再在同一时间窗里读 `0x3B1330` 的调用数。
+判决词:**`+0x70`(base impl `0x3B1330`)不在 `every_system` 的执行路径上**。
+
+**授权级。** 实机只记录 detour 属「点名」:本次由操作者当场裁定「接着打 per_system 那一发读数」后执行,
+gate 走**真门** `world_state`(`#meta gate=world_state`,不是 `operator_override`)。
+
+### §89.1 测试 mod 在 4.4.4 里是语法非法的(文件层,零 shot)
+
+`mod/neo_ps_probe`(目录 `C:\Users\13229\Documents\Paradox Interactive\Stellaris\mod\neo_ps_probe`)原本只有
+两个文件:`descriptor.mod`(108 B)与 `common/on_actions/neo_ps_probe_on_actions.txt`(141 B,开头带 UTF-8 BOM
+`EF BB BF`)。那份 on_actions 用的是:
+
+```
+on_monthly_pulse = { on_actions = { neo_ps_monthly } }
+neo_ps_monthly   = { effect = { every_system = { log = "PS_HIT" } } }
+```
+
+2026-11-01 19:25 把 mod 放进播放集后,`logs/error.log` 出现两条(注意**不是**「没加载」,是**解析失败**):
+
+```
+[19:25:45][persistent.cpp:41]: Error: "Unexpected token: on_actions, near line: 2
+" in file: "common/on_actions/neo_ps_probe_on_actions.txt" near line: 4
+[19:25:45][persistent.cpp:41]: Error: "Unexpected token: effect, near line: 8
+" in file: "common/on_actions/neo_ps_probe_on_actions.txt" near line: 12
+```
+
+**4.4.4 的 on_action 块只收 `events` / `random_events`。** 判据是游戏自己 `common/on_actions/*.txt` 的内层键
+直方图:`events` 391、`random_events` 78、`effect` **0**、`on_actions` **0**;真实 workshop mod 同口径
+(`1121692237` 的 `000_giga_early_on_actions.txt` 一律 `events = { <event_id> }`)。无 scope 的 on_action 里
+被触发的事件形状也有现成例子:vanilla `on_monthly_pulse`(见 `00_on_actions.txt:86`,`# No scope, like
+on_game_start`)挂的是 `crisis.120`,而该事件的形状是 `event = { hide_window = yes is_triggered_only = yes
+trigger = { … } immediate = { … } }`。
+
+**改写后**(原文件备份在 `C:\temp\neo_ps_probe_on_actions.txt.orig`;新文件无 BOM):
+
+```
+common/on_actions/neo_ps_probe_on_actions.txt : on_monthly_pulse = { events = { neo_ps.1 } }
+events/neo_ps_probe_events.txt (新建)         : namespace = neo_ps / event = { id = neo_ps.1
+                                                hide_window = yes is_triggered_only = yes
+                                                immediate = { every_system = { log = "PS_HIT [This.GetName]" } } }
+```
+
+改完 `error.log` 中该 mod 的条目数 = **0**。
+
+**这一半解释了 §81.5 的 `PS_HIT=0` 吗?不完全 —— 是两个独立原因同时成立。** ① 10-31 那一发跑的时候
+`dlc_load.json` 是 `{"disabled_dlcs":[],"enabled_mods":[]}`(该文件 `LastWriteTime` 2026-10-30 23:21:14,正是
+经启动器那次 `just launch` 重写的结果)⇒ 零 mod;② 即便清单里有,这份 on_actions 在 4.4.4 里也解析失败。
+⇒ `PS_HIT=0` 对 `+0x70` 一字未说(与 §84.1 的结论方向一致,但这次是**在真机上复现的**)。
+
+### §89.2 驱动语义:`every_system` 从「无 scope 事件」里只跑一次(实机,零 shot 成分)
+
+同一份事件体,两种入口,同一份存档里连测:
+
+| 事件体 | 读数 |
+|---|---|
+| `immediate = { every_system = { log = "PS_HIT" } }`(无 scope) | `2281.2.1 … 2281.10.1` **每月恰好 1 条**,9 个月 9 条 |
+| `immediate = { random_system = { every_system = { log = "PS_HIT [This.GetName]" } } }` | `2282.2.1 … 2282.6.1` **每月 784 条**,每月**去重系统名 784 个**;连续 51 个月累计 39,984 条 = 51×784 |
+
+⇒ §81.2 那个「`PS_HIT` ×1」不是引擎只跑一次,是**驱动没进 system scope**。vanilla 同口径的入口在
+`common/scripted_effects/00_scripted_effects.txt:3265`(`isolate_system`:注释写 `this = solar system`,
+体内 `every_system = { limit = { has_hyperlane_to = prev } … }`);从无 scope 事件「先随机进一个 system」
+的样板是 `crisis.120` 的 `immediate`。两条附带口径:**`log` 不做去重**(784 条同文本也全写),`[This.GetName]`
+**会展开**(vanilla 里要打字面量方括号才写 `\[`)。
+
+### §89.3 实机一发:窗内 12,544 次逐系统下发,`0x3B1330` 被调用 0 次
+
+命令(`session_bridge` 进 session 1,gate 真门):
+
+```
+python C:/temp/session_bridge.py --timeout-s 400 C:/temp/c2_per_system_probe.py C:/temp/sqjs_c7.dll \
+  --systems 787 --save-name autosave_2282.01.01 --watch-only --poll-s 150 --out C:/temp/c5_per_system.tsv
+```
+
+`#meta`(**`C:\temp\c5_per_system.tsv`**,注入文件 `sqjs_c7.dll` sha256
+`b8a82f61300bc4794fd6306ca16aa3757ed52f2ec220e7786e297f6aae3db964`,与本仓库 `zig build` 产物同 sha):
+`exe_base=0x7ff6f4250000`、`module_base=0x7ff8ed1f0000`、`layout_target_rva=0x3b1330`、
+`gate=world_state`、`install_rc=0`、`install_decision=ok`、
+`stats_delta=calls=0 matched=0 distinct_ids=0 dedupe_full=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=0`、
+`container_raw_count=788`、`container_ids_sha256=400ca2e3f9d144b6eafe2fc773dd1eeac0c9569b9e511a8cc8ca014d431741d7`、
+`systems=787`(见下「一处口径欠账」)、`uninstall_rc=0`、`verify_rc=0`、`host_alive=1`、`overall_verdict=no_calls`。
+
+**窗内独立读数**(同一 `game.log`,工具之外的证人):19:52:50–19:55:40 共 **12,544** 条 `PS_HIT`,
+覆盖 16 个完整月度脉冲(`2284.7.1 … 2285.10.1`),`12,544 = 16 × 784`。
+
+⇒ 窗内逐系统下发确凿发生了 16 轮、每轮 784 次,而 `0x3B1330`(以及**任何** self,因为 `calls` 本身为 0)
+一次都没被调用。**判决:`+0x70` 的 base impl 不在执行路径上**;它在 §82.1/§82.2 那批证据里的身份只到
+「`[vptr+0x70]` 的 761 个槽 + 其中 231 个 `vptr+0x08==0x3AFD30`」,不包含「执行期逐系统派发」。
+
+**两处口径欠账(写出来,不许含糊)。**
+
+1. **`systems=787` 是上一场存档的分母。** 本次 `container_raw_count=788`(同一次读足,见 §81.1 ③ 的 blob 纪律),
+   而实际下发 784 ⇒ 差的 4 条按 §81.1 ④ 归到 `[obj+0x137C] == 0` 的引擎过滤位。**本次没有逐条核对那 4 个 id**,
+   `788-784=4` 的归因只是沿用静态读数。下一发 `--systems` 应写 788。
+2. **仪器缺口:`--watch-only` 的 `log_hits` 结构上恒为 0。** 文档「`matched==0` 靠日志分 `no_calls` 与
+   `filter_missed`」那条纪律在 watch-only 下**在 artifact 内部不可执行**(驱动不发脚本,`log_hits` 只数
+   自己脚本的 marker)。所以本次 `overall_verdict=no_calls` 按工具自己的分类仍属环境档;**把它读成证据的
+   是窗外那 12,544 行 `game.log`**。修法(下一轮):给驱动加 `--marker <text>`,watch-only 也从 `game.log`
+   数窗内行数,让两义在 artifact 内可分。
+
+### §89.4 通道层读数(同一轮,四条)
+
+| 事实 | 读数 | 处置 |
+|---|---|---|
+| `just launch` 不幂等 | 游戏被带外 kill 后 `steam://rungameid` 不再拉起启动器窗口,连续两次 `LAUNCHER_WAIT result=timeout timeout_s=30`、`BRIDGE result=inner_exit code=21`(=`EXIT_LAUNCHER_WINDOW_MISSING`) | 改走 `session_bridge.py` + 直起 `stellaris.exe`(`channel_direct`);`dlc_load.json` 因此原样保留(启动器没机会重写) |
+| SSH 里直接起 exe = 没有桌面 | `Start-Process …\stellaris.exe` 得到的进程 `SessionId=0` | 必须经 `session_bridge`(它建 `NSWorldOneShot` 任务并 `/run /I`) |
+| `just launch` 的桌面门前置会陈旧 | `DESKTOP_GATE verdict=keep_awake_stale`,`exit 25`;`ns_awake_status.json` age=155129 s(43 h) | `just awake start`(之后 `STATE=serving … age=0.4s pid=15924`) |
+| 主机脚本落后仓库 | `C:\temp\game_supervisor.py` sha 前 16 位 `F38C7C01…` ≠ 仓库 `a67fe9e8…`;`popup_geometry.py` `CE097BA8…` ≠ `e9ef671d…` ⇒ **#32 的修复此前不在主机上** | `just deploy`(之后两枚 sha 与仓库一致);本轮 shot 的 `gate=world_state` 放行,是 D1 修复第一次在真战役窗上跑,但**只证明「没误判」**,不是压测 |
+
+另一条要收窄的旧口径:文档「注入的鼠标到不了 Stellaris,键盘可以」**只对进游戏后的 HUD/事件窗成立**。
+主菜单里 `Click` 有效(本轮点开「载入游戏」、点「读取最新存档」均生效),`Shortcut "space"` 一直有效
+(解/暂停各三次)。
+
+### §89.5 这一发不能说的(三条)
+
+1. **`calls=0` 只覆盖这一个函数、这一个窗。** 它证明 `0x3B1330` 在上述 150 s 内没被调用,不证明
+   「client 侧永远不经 `+0x70`」——`+0x70` 的另外 760 个槽、以及 parse 期的类实例化路径都没被这一发覆盖。
+2. **`PS_HIT` 计的是「下发体被执行」**,不证明子效果在每个 system scope 里执行成功(本次 `log` 无 scope 依赖,
+   所以这条证人只到「循环进过每个系统」)。
+3. **4 条被筛掉的系统没有逐条取证**(见 §89.3 欠账 1);`--systems` 的口径在本次 artifact 里是错的(stale 787)。
+
+**没动仓库里任何判定代码。** 本轮改的只有:测试 mod 的两个文件(仓库外)、`C:\temp` 里的部署副本、
+以及本节 + `docs/roadmap.md` 的 C5 行就地改写。`just check` 全绿。
+
+### §89.6 仪器缺口补上:`--watch-only --marker`,以及新的一档 `target_not_on_path`(2026-11-01,同一进程真机验证)
+
+§89.3 记了两笔欠账(① `--systems` 应写 788;② watch-only 的 `log_hits` 结构为 0、`no_calls` 与
+`filter_missed` 在 artifact 内不可分)。② 当轮就补掉了,并**在同一进程**上打了一发验证。
+
+**改了什么**(`scripts/c2_per_system_probe.py` + `scripts/test_c2_per_system_probe.py` 44→45 条):
+
+- `--marker TEXT`(只在 `--watch-only` 下合法;脚本模式下 marker 由 `script_marker` 从脚本里取,
+  两者同时给会被 `parser.error` 拒掉,退出码 2)。驱动在轮询**开始前**记下 game.log 的字节偏移,
+  轮询结束后只数那段增量,命中数进 `#meta log_hits=`,串进 `#meta marker=`;
+- `marker_hits` 的缺省是 **`None` 而不是 0** —— 0 会冒充「量过、循环没跑」;
+- 新 verdict **`target_not_on_path`**(进 `EVIDENCE_VERDICTS`,即 `exit 0`):`calls == 0` **且**
+  `marker_hits` 有命中 ⇒ 循环确凿跑过、detour 一次没响 ⇒ 靶不在执行路径上(对靶的负结论);
+  `calls == 0` 且 marker 无命中仍是 `no_calls`(环境档);`matched == 0` 且 marker 有命中则升为
+  `filter_missed`(过滤位对不上,是仪器侧),无 marker 时仍是 `loop_not_invoked`。
+
+**真机验证读数**(`C:\temp\c5_per_system_marker.tsv`,命令
+`… --watch-only --marker PS_HIT --systems 788 --poll-s 120`,经 `session_bridge` 进 session 1):
+
+```
+#meta marker=PS_HIT        #meta log_hits=8624
+#meta systems=788          #meta container_raw_count=788
+#meta stats_delta=calls=0 matched=0 distinct_ids=0 dedupe_full=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=0
+#meta gate=world_state     #meta install_rc=0   #meta layout_target_rva=0x3b1330
+#meta dll=sqjs_c9.dll      #meta dll_sha256=b8a82f61300bc4794fd6306ca16aa3757ed52f2ec220e7786e297f6aae3db964
+#meta overall_verdict=target_not_on_path
+#meta uninstall_rc=0       #meta verify_rc=0    #meta host_alive=1
+```
+
+`log_hits=8624 = 11 × 784`(120 s 窗内 11 个完整月度脉冲),`calls=0` ⇒ 与 §89.3 同一结论,但这次
+**artifact 自己就说得出**「循环跑了、靶没被调」,不需要窗外人工数日志。`systems=788` 与容器一致,
+§89.3 欠账 ① 也在这一发里对齐(那一发写的 787 是上一场存档的分母)。
+
+**改这一档时踩到的两个坑(照实记)。**
+
+1. **`--game-log` 缺省时算出 `hits=None`。** 第一版把 `game_log or ""` 直接喂给
+   `os.path.getsize`,空路径 stat 失败 ⇒ `offset=None` ⇒ 运行时打印 `marker=PS_HIT hits=None`,
+   artifact 里 `log_hits` 回落成 0。修法 = `resolve_game_log(game_log, default=None)`:
+   给了 `--game-log` 就用它,否则落到 `c4_wiring_probe.GAME_LOG`;`""` 与 `None` 同义,不再当路径用。
+   这条现在有一条会红的围栏(`test_resolve_game_log_falls_back_to_the_default_when_none_is_given`)。
+2. **同一个游戏进程里的第二发必须换 DLL 名。** `Uninstall` 只拆 hook、**不 `FreeLibrary`**(§45 的纪律),
+   所以 `refuse_if_resident` 会拒绝同名模块的第二次注入。本轮同一 pid 24852 上依次用了
+   `sqjs_c7.dll` → `sqjs_c8.dll` → `sqjs_c9.dll`(同一份字节、同一 sha256)。
+
+**这一节不能说的(两条)。** ① `target_not_on_path` 只覆盖被钩的**那一个** RVA 与**那一个**窗;
+`+0x70` 的其余 760 个槽、以及 parse/实例化侧都没被它触及。② `log_hits` 数的是**文本命中**,
+marker 选得太泛(marker 串同时出现在别的日志行里)会把它读大 —— 本轮的 `PS_HIT` 是测试 mod 独占的字面量。
+
+## §90 `+0x70` 那一族静态闭合:`every_system` 的 ctor/vtable/容器链,和为下一发选的唯一执行侧锚(2026-11-01,离线,零 shot)
+
+**这一节回答什么。** §89.3 的实机负结论是「窗内 16 个月度脉冲、12,544 次逐系统下发,而 `0x3B1330` 被调用 0 次」。
+本节把它从「守错路口」推到**结构性原因**,并且给出下一发唯一的锚:一个**确凿在執行路径上**的函数。
+
+### §90.1 `0x3B1330` 只有三个直接调用者,其中一个就是 `every_system` 自己的 `+0x70`
+
+`python3 scripts/fastcalls.py 0x3B1330`(逐字节匹配 `E8 rel32`,按 `.pdata` 函数分桶):
+
+| 调用点 | 所在函数 | 是什么 |
+|---|---|---|
+| 1 | `0x17F5FC0..0x17F6071` | 未命名(族外) |
+| 1 | `0x1A1B0E0..0x1A1B3ED` | 未命名(族外) |
+| 1 | **`0x1A76130..0x1A7643D`** | **`every_system` vtable `0x26562D0` 的 `+0x70` 覆写** = §80 那个逐系统循环(`0x1A762A0..0x1A76335`,`0x1A76324 call 0x3B1330`) |
+
+⇒ §89.3 的 `calls=0` **比原来那句话更强**:不是「base impl 没被用到」,而是**这三个调用者全部沉默** ——
+`+0x70` 这一族(以及它代表的 token 解释器路线)在那 16 个月里一次都没上过场。
+
+`fastcalls.py 0x1A76130` = **0 个直接调用点** ⇒ `+0x70` 只能经 vtable 到达(与 §82.1「761 个 `.rdata` 槽」一致)。
+
+### §90.2 `every_system` 的对象构造与 `+0xC0` 容器的身份(静态链)
+
+vtable `0x26562D0` 的完整槽位(`python3 scripts/disrva.py` + `.rdata` 直读):
+
+| 槽 | 值 | 备注 |
+|---|---|---|
+| slot[0] | `0x17F78D0` | 头 |
+| slot[1] `+0x08` | `0x3AFD30` | 与 donor 同一个 Execute 覆写 |
+| slot[2] `+0x10` | `0x17F7920` | **ExecuteActual**(§81.1 的那个) |
+| slot[8] `+0x40` | `0x3B0F80` | 家族公共槽 |
+| slot[9] `+0x48` | `0x17F79B0` | 栈上建容器的那个大函数(拷贝/打印类,不是循环) |
+| slot[14] `+0x70` | **`0x1A76130`** | 覆写(§80 的逐系统循环) |
+| slot[19] `+0x98` | `0x3B1420` | 谓词(bool) |
+| slot[20] `+0xa0` | `0x17F7950` | 合法性检查(`0x3B27E0` + `0x3B2A60`) |
+
+构造链(全部静态、逐条读过):
+
+```
+0x1A74EB0  ctor: alloc(0x188) -> base ctor 0x17F7860(obj, 0x80) -> [obj]=0x26562D0, [obj+8]=0x2615DB8
+0x17F7860  base ctor: call 0x3AFB40; [this]=0x24EA9B0, [this+8]=0x24EAA90;
+                     lea rcx,[rdi+0xC0]; call 0x34BA00          ; ← 在 +0xC0 上就地构造子容器
+                     [this]=0x2615AC8, [this+8]=0x2615DB8, [this+0x180]=mask
+0x34BA00   容器 ctor: call 0x3488E0; [rbx+0x78]=0x247A488; [rbx]=0x24B37C0;
+                     [rbx+0xB8]=0xF(SSO 容量)                  ; ← 带 std::string 的东西
+```
+
+⇒ `[self+0xC0]` 的 vtable = **`0x24B37C0`**,它的 `slot[5] (+0x28)` = **`0x348DB0`**。
+这正是 `0x17F7920` 尾部那条 `jmp [[self+0xC0]+0x28]` 的落点。
+
+### §90.3 `0x348DB0` 也是解释器,不是执行器
+
+`0x348DB0` 读的东西说明它是**一条 token 流解释循环**:`[scope+0x30]` = 当前 token、`[scope+0x38]` = token id、
+遇到 `0x438` 递归 `call [r14->0x28]`、并用 `[r14+0x70]` 做重入闸;不满足前置时它经 `0x15EFD0`(行 0x152,
+文件 0x24C74F8)报一条诊断。⇒ `+0x10 → +0xC0/+0x28` 这整条链同属**解析/解释侧**,与 §90.1 的 `calls=0` 自洽。
+
+### §90.4 下一发的锚:`log` 效果本体的入口 `0x185BF60`(唯一确凿在执行路径上的函数)
+
+搜法:logger 每条日志都带 `[file:line]`,而我们的 `PS_HIT` 行是 `effect_impl.cpp:21978`。
+`21978 = 0x55DA` 作为 32 位立即数在 `.text` 里**只出现一次**(`0x185C454`),紧跟着:
+
+```
+0185c44c  mov r9d, 0x10002
+0185c452  mov r8d, 0x55da                                  ; ← effect_impl.cpp:21978
+0185c458  lea rdx, [rip + 0xdb9e61]  ; -> 0x26162c0         ; "…\effect_impl\effect_impl.cpp"
+0185c45f  lea rcx, [rbp + 0x150]
+0185c466  call 0x15EFD0                                     ; 组 logger 消息
+…        mov rdx,[rdi+0x38]                                ; ← 效果对象 +0x38 = 日志正文("PS_HIT")
+…        lea rdx,[rip+0xd6b948] ; -> 0x25c7e00             ; ". "
+```
+
+`.pdata` 给出包含它的函数 = **`0x185BF60..0x185C5B7`(0x657 B)**。`.rdata` 里指向该入口的 qword 只有一处
+(`0x25FC388`),落在 `0x25FC280` 起的那张 vtable 里 —— **槽位下标未钉死**(vtable 头在 `0x25FC260` 还是
+`0x25FC280` 两种读法都成立,`0x3B01A0` 的位置在两读法下相差 2 槽),本节只钉入口地址,不钉槽号。
+
+⇒ 这个函数**已被实机证明每月跑 784 次**(§89.3 的 12,544 = 16×784 就是它写的行)。下一发就是钩它:
+记**返回地址**(= 谁在逐系统派发)与**实参 scope**(按 §80 的 scope 形状,`+0x10` 就是那 4 B 的星系 id),
+判据 = 每轮调用次数 ≈ 容器原始条数、`[scope+0x10]` 的去重值 ⊆ 容器 id 集。
+
+### §90.5 这一节不能说的(三条)
+
+1. **槽位下标未定**(见 §90.4);引用这张 vtable 时写地址,不要写「slot[N]」。
+2. **`0x185BF60` 是「`log` 效果的实现」这一点来自 `file:line` 立即数唯一性 + 正文取值 `[this+0x38]`,
+   不是来自类型信息**(该 build 没有 RTTI,§14)。
+3. **三个调用者沉默 ≠ `+0x70` 永远不上场**:§90.1 只覆盖 §89.3 那个 150 s 窗;读档、首次实例化、
+   其它场景(控制台、脚本热重载)都可能走它。
+
+## §91 第八把 guard 的六发实机:身份那一半拿到了,「谁在派发」还差一个能活的环形缓冲(2026-11-01/02,实机六发)
+
+**这一节记什么。** §90 定的锚(`log` 效果入口 `0x185BF60`)在实机上按「装上去 → 跑 → 读」走了六轮。
+三轮把**身份那一半**坐实(逐系统 scope + 星系 id),三轮把**死因**从「一装就死」夹到具体一段代码。
+`caller_rva`(谁在派发)仍然**未取到**——不是方向不明,是取它的那条路(`ring`)会杀游戏。
+
+**共同的读数口径**:容器 `container_raw_count=787`(`container_ids_sha256=5ce3c051…`),`--systems 787`,
+存档 `autosave_2225.01.01`(2223/2224 两份在其之前,同一战役);`salvage` 见每行。
+
+| # | 构建 / 记录路径 | `calls` | 其它读数 | host_alive | 判决 |
+|---|---|---|---|---|---|
+| 1 | 全量(自旋锁+去重表+环),`gate=world_state` | 4722 = 6×787 | `distinct_ids=787`、`null_scope=0`、`last_id=786` | **0** | `dispatch_denominator_mismatch`(`systems` 写了 788) |
+| 2 | 全量 + `--systems 787` | 787 | `distinct_ids=0`(半截读) | **0** | `caller_unnamed` |
+| 3 | 全量 + 尾跳修复(`@call(.always_tail)`) | 1574 = 2×787 | `distinct_ids=787`、`last_id=786` | **0** | `caller_unnamed` |
+| 4 | 只计数(`RECORD_MODE=0`) | 3148 = 4×787 | 无记录路径 | **1**(`uninstall_rc=0`/`verify_rc=0`) | `caller_unnamed` |
+| 5 | 计数+读内存(`RECORD_MODE=1`) | 3148 = 4×787 | `last_id=786`、`null_scope=0` | **1** | `caller_unnamed` |
+| 6 | 无锁环(`head` 原子追加,去重搬到驱动) | 787 | `distinct_ids=1`,行是零行 | **0** | `caller_unnamed` |
+| 7 | 无环(只留 `last_id`/`last_caller` 单槽) | 3935 ≈ 5×787 | `last_id=0`、`last_caller=0`、`null_scope=0` | **1** | `no_rows` |
+
+### §91.1 已落的两个修复
+
+1. **尾跳**:`detour.zig` 的 trampoline 是目标前 15 B 的**原样拷贝**,而守卫是 `call` 进去的 ⇒ `rsp` 低 8 B。
+   本靶前 15 B 正好是三条 `mov [rsp+0x10/0x18/0x20], reg`,偏移后三只被调用者保存寄存器从错格恢复。
+   修法 = `@call(.always_tail, f, …)`(编译期强制,围栏钉住)。
+2. **记录路径改无锁**(§91.2 的二分结论):环改成一个 `@atomicRmw(head)` 追加,去重搬回驱动
+   (`aggregate()`);发布构建**没有**自旋锁、没有去重表。
+
+### §91.2 二分:钩子无罪,记录路径有罪
+
+`RECORD_MODE` 三种构建(只计数 / 计数+读 / 全量)是**同一份靶、同一份存档、同一个 45 s 窗**:
+
+- 只计数 → 活;计数+读(两次 `VirtualQuery` + 两个 4 B 读) → 活,**`last_id=786` 且 `null_scope=0`** ⇒
+  「第二实参是逐系统 scope、`+0x10` 是星系 id」这条**身份读数成立**(与 #1 的 `distinct_ids=787` 互证);
+- 全量(再加锁 + 表 + 环写) → 死。⇒ 凶手在那一段,不在钩子、跳板、引擎读取。
+
+### §91.3 「无环」把游戏救回来了,但单槽采样不成立
+
+把环也关掉(只保留 `last_id` / `last_caller` 各一个原子槽)之后:7 号那一发 `calls=3935`、`host_alive=1`、
+`uninstall_rc=0` —— **游戏活下来了**,证明 §91.2 的凶手确实在「环写/表写」这段。
+但同一发里 `last_id=0`、`last_caller=0`:单槽只留**最后一次**采样,而最后一次不一定是派发上下文
+(也可能 `@returnAddress()` 在尾跳之后拿不到引擎地址)。**所以「谁在派发」这一格仍空**,不能拿单槽读数充数。
+
+### §91.4 顺带钉住的三条现场事实
+
+1. **`--systems` 必须按当前存档读**:同一战役在 2225 是 **787**、在 2307 是 **788**(星系数会变)。
+2. **`Uninstall` 不 `FreeLibrary`**:同一进程内第二次注入同名模块会被 `refuse_if_resident` 拒(`exit 2`),
+   连续 shot 必须换名(`sqjs_c10` → `c11` → …;字节可相同)。
+3. **`session_bridge` 调起的任务会抢焦点**(管理员 `cmd.exe` 前台),Stellaris 因此自动暂停 ⇒
+   闸门读到 `IN_GAME_PAUSED_CLEAN`。让游戏真的跑起来的办法是**任务起来后点一下游戏再发一次空格**,
+   或者用 `--allow-window` 从 SSH(session 0)直接跑 —— 后者不会弹出 cmd 窗口。
+
+### §91.5 这一节不能说的(三条)
+
+1. **`caller_rva` 仍未观测。** 「谁在逐系统派发」这一格是空的;`last_caller=0` 只说明单槽没采到,不说明引擎没有调用者。
+2. **`distinct_ids=787` 与容器 787 相等**,只证明「每轮每个 id 各来一次」;**不等于**那些 id 就是 `system_id`
+   (§81.2 的三条「不能说」照旧)。
+3. **六发里有三发死因只到「记录路径」这一层**:是环写的时序、还是逐调用多出来的那一小段开工,
+   **没有区分开**(需要 dump/调试器,本机没有)。下一任必须先把这一层分掉,再谈把 `caller_rva` 读出来。
+
+### §91.6 派发方读到了:`0x3B101F` 的返回地址 = `0x3B0F80` 里的 `call [rax+0x48]`(2026-11-02,实机一发 + 离线定位)
+
+**做法**:把环改成**有界采样**(只记前 `RING_CAP=8` 次,记满即关),这样每次调用最多做一次原子读;
+单槽 `last_caller` 同时保留。artifact `C:\temp\c5_c17.tsv`:
+
+```
+stats_delta=calls=787 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=786 last_caller=3870751
+#meta last_caller=0x3b101f   #meta gate=operator_override   #meta container_raw_count=787
+#meta host_alive=0           #meta died_mid_poll=1
+```
+
+- `last_caller = 0x3B101F` —— 在镜像 `.text` 内,是**调用点的返回地址**;
+- `last_id = 786` —— 同一发的 scope id,落在容器 id 集内(`[1,787]`)。
+
+**这个地址是什么**(离线直读 `scripts/disrva.py 0x3B0FA0`):
+
+```
+003b1000  mov  rax, qword ptr [rdi]
+003b1003  mov  rdx, rbp              ; ← 第二实参 = 逐系统 scope
+003b1006  mov  rcx, rdi              ; ← 第一实参 = 效果对象
+003b1009  call qword ptr [rax + 0xa8]   ; slot[21]:先问一次(谓词/前置)
+003b100f  test al, al
+003b1011  je   0x1403b1020
+003b1013  mov  rax, qword ptr [rdi]
+003b1016  mov  rdx, rbp
+003b1019  mov  rcx, rdi
+003b101c  call qword ptr [rax + 0x48]   ; ← 派发:slot[9],返回地址 = 0x3B101F
+003b101f  nop
+```
+
+⇒ **逐系统派发是一次 `[对象+0x48]`(slot[9]) 的虚调用**,位置在函数 **`0x3B0F80..0x3B1155`(469 B)** 内;
+`rdx` 就是那一轮的 scope(它的 `+0x10` 是 id,`+0x08` 是 mask,和 §80.2 一致)。
+
+**再上一层**(`scripts/fastcalls.py 0x3B0F80`):全库只有 **2** 个直接调用者 ——
+`0x3B2BE0..0x3B2E22`(函数里含字符串 `UpdateModifiers`)与
+**`0x17F4950..0x17F4C14`(含字符串 `effect_impl.cpp`)**;后者就是效果执行机器,
+`0x17F49B6 call 0x3B0F80` 是它的一次派发点。⇒ 「787 次/轮」的循环在 `0x17F4950` 这一层,
+`0x3B0F80` 是**单次派发**,`call [rax+0x48]` 是**子效果入口**。
+
+**这一发还是把游戏弄死了**(`host_alive=0`,`died_mid_poll=1`,`uninstall_rc=unknown`)——
+有界采样(8 条)也死,所以 §91.3「凶手在环写」这句话要收窄成:**凶手在「记录路径」这一层,
+且有界也躲不掉**;只计数 / 计数+读 / 完全无记录三种都活。下一步必须先拿到异常码(本地 dump 或
+调试器),再谈把这个仪器变成可常态使用的通道。
+
+**这一节不能说的(三条)。**
+1. `0x3B101F` 是**一次**(最后一次)采样的返回地址;`call [rax+0x48]` 是**唯一**的派发点这一点,
+   来自「同一次下发里 787 个 id 全来自它」的一致性,不是 787 次逐条记录。
+2. `last_id=786` 只证明「id 落在 `[1,787]` 且就是这一轮最后一个」;**不等于**它等于 `system_id`(§81.2 照旧)。
+3. `0x17F4950` 是「调用 `0x3B0F80` 的函数」,**没有**逐条确认它内部是 `for` 循环还是别种枚举;
+   「循环在哪里」这句话的强度只到「它在 `0x17F4950` 这一层」。
+
+### §91.7 收口:死因是我们自己的驱动(不是记录路径),修好后一发 `dispatch_named`(2026-11-02)
+
+**死因定了。** 开 WER LocalDumps 之后游戏没写 dump(它自己的崩溃处理器先接管),但 Paradox 的崩溃目录里
+`crashes/stellaris_20261102_010604/` 有 `exception.txt` + 70 MB `minidump.dmp`:
+
+```
+Unhandled Exception C0000005 (EXCEPTION_ACCESS_VIOLATION) at 0x00007FF91AD17F27
+Stack Trace:
+  1   C6ExecCallerDrainInto (+ 551)
+  2   C6ExecCallerDrainInto (+ 551)
+```
+
+**崩在我们自己的 `DrainInto` 里**:驱动调它时用的是 `call_remote`(**不带参数**),而导出签名是
+`DrainInto(out: [*]u8)` ⇒ `rcx` 是垃圾,循环一旦真的有样本可拷就写飞。这解释了之前那条「只有记样本的构建会死」
+的相关性——没有样本时拷贝循环根本不执行。修法一行:`call_remote_with_arg(pid, base, exports["…DrainInto"], buf)`,
+并加了一条围栏钉住它(`test_drain_passes_the_buffer_to_the_export`)。
+⇒ **§91.2/§91.3 那两句「凶手在记录路径」作废**:记录路径(自旋锁、去重表、环形缓冲)从来没杀过游戏,
+那条相关性来自驱动侧的调用约定错误。
+
+**容器是 0 基的。** 修好后顺手只读了一次银河容器(`C:\temp\ns_container_ids.py`,零注入):
+
+```
+count 787   first10 [0..9]   last10 [777..786]   min 0  max 786  distinct 787
+```
+
+⇒ 之前 `--systems 787` + `[1,787]` 的判据把合法的 `id=0` 判成 `ids_out_of_range`。判据已改成
+`0 ≤ id < expected`(真正的约束是「⊆ 容器」那条),围栏加了一条 0 基的。
+
+**验证发**(artifact `C:\temp\c5_c19.tsv`,存档 `autosave_2225.01.01`,45 s 窗):
+
+```
+#meta overall_verdict=dispatch_named     #meta host_alive=1
+#meta entries=787  #meta distinct_ids=787 #meta container_raw_count=787
+#meta stats_delta=calls=3148 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0
+#meta uninstall_rc=0  #meta verify_rc=0   #meta gate=operator_override
+行(787 条,前三条):
+  0x3b101f  0  0x80  3  0x18ffbeae0  0x7f7f20
+  0x3b101f  1  0x80  3  0x18ffbeae0  0x7f7f20
+  0x3b101f  2  0x80  3  0x18ffbeae0  0x7f7f20
+```
+
+**787 行的 `caller_rva` 全部 = `0x3B101F`**,id 覆盖 `0..786`(与容器逐项相等),`mask=0x80`,
+`null_scope=0`,游戏活着、`uninstall`/`verify` 都是 0。⇒ 「谁在逐系统派发」由 §91.6 的**单次一致性**
+升级为**逐条读数**:派发点是 `0x3B101C call qword ptr [rax+0x48]`(虚表 slot[9]),在函数
+`0x3B0F80..0x3B1155` 内;`0x3B0F80` 的调用者之一在 `0x17F4950`(`effect_impl.cpp`);每轮的 scope 经 `rdx`
+传入,`+0x10` 是 id、`+0x08` 是 `0x80`。
+
+**这一节不能说的(三条)。**
+1. id `0..786` 是**容器里的 4 B 值**,`⊆ 容器` 只证明「同一个集合」,**不证明**它就是 `system_id`(§81.2 照旧)。
+2. 787 行是「4 轮里被去重后的那 787 个 id」,`occurrences` 3–4;不是「每轮各 787 行」的堆叠。
+3. `caller_rva` 是**一层**调用者;`0x17F4950` 之上是否还有队列/条件分派,本节没碰(§63/§66 的口径照旧)。
+
+## §92 最小 PoC:在派发点按星系 id 做决定(2026-11-02,实机一发)
+
+**目标。** §91.7 之后我们已经能**看见**「哪一个星系正在被派发」。PoC 要证明的是下一步:
+**在引擎的派发线程里,按这个 id 做选择**——不是事后在 Linux 侧筛,而是 DLL 自己决断。
+
+**做法(第八把 guard 上扩两个导出,`src/dll/c2/exec_caller_probe.zig` + `src/dll/exports.zig`)。**
+
+- `C6ExecCallerSetRule(bits: u64)`:`bits = mod << 32 | rem`,规则 = `id % mod == rem`;`0:0` 关闭。
+  打包成一个 u64 是因为 `call_remote_with_arg` 只传一个寄存器。
+- `C6ExecCallerRuleHitsInto(out)`:`[count: u32][ids: u32 × 64]`,记录**前 64 个**命中的 id。
+- 命中判定在 `recordCall` 里、读完 `[scope+0x10]` 之后立刻做 —— 也就是**同一次派发、同一个线程**。
+
+**实机一发**(`C:\temp\c5_poc.tsv`,存档 `autosave_2225.01.01`,45 s 窗,`--rule 100:0`):
+
+```
+#meta overall_verdict=poc_rule_hits   #meta rule=100:0   #meta rule_hits=40
+#meta rule_ids=0,100,200,300,400,500,600,700,(×5)
+#meta entries=787  #meta distinct_ids=787  #meta container_raw_count=787
+#meta stats_delta=calls=3148 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0
+#meta uninstall_rc=0  #meta verify_rc=0   #meta host_alive=1
+行(前五条): 0x3b101f  0/1/2/3/4  0x80  3  0x18ffbeae0  0x7f7a80
+```
+
+- 命中集合**恰好**是 `{0,100,…,700}` —— 与「`id % 100 == 0`」逐项相等;
+- 40 = **5 轮 × 8 个**;**游戏活下来了**(`host_alive=1`,`uninstall`/`verify` 都是 0);
+- 同一发的 787 行仍然全部 `caller_rva = 0x3B101F`(派发点与 §91.7 一致)。
+
+**意义。** 这是这条线第一次「**看 → 选**」闭环:同一个钩子里既拿到星系身份,又按它的值做了决定,
+而且不破坏引擎(装/拆/校验都干净)。**「做」的那一半还没做**:PoC 的"动作"是**记录**命中的 id,
+不是改游戏状态(没写引擎内存、没调引擎的效果接口)。
+
+**这一节不能说的(三条)。**
+1. **选区 ≠ 生效**:命中的 id 只是被 DLL 自己记下来;游戏里发生的事和没装 DLL 时一样。
+2. `rule_hits=40` 是**整个安装窗口**的累计(5 轮),而 `calls=3148` 是 `before` 之后的增量(4 轮)——
+   两个数不是同一段时间,不能相除。
+3. 规则是 `id % mod == rem` 这种玩具判据;真正的「要道判定」要拿图度量(spec §4),本节不涉及。
+
+### §92.1 决策生效:只让选中的星系真的执行效果(2026-11-02,实机一发)
+
+§92 的 PoC 只做到「选出来、记下来」。这一发让**决定咬人**:`act=suppress` 时,不满足规则的星系
+在 detour 里**直接返回**,原效果根本不执行。
+
+**实现**:`C6ExecCallerSetAct(mode)`(1 = suppress);detour 里
+`if (act_suppress and ruleIsArmed() and !ruleMatches(id)) return 0;` —— 仍在读完 `[scope+0x10]` 之后、
+仍在同一个引擎线程上;满足规则的走原来的尾跳。驱动同时量 `marker_hits`(game.log 里那段增量的行数),
+因为测试 mod 的效果正是 `every_system { log = "PS_HIT" }`。
+
+**实机读数**(`C:\temp\c5_act.tsv`,存档 `autosave_2225.01.01`,45 s,`--rule 100:0 --act suppress`):
+
+```
+#meta act=suppress   #meta rule=100:0
+#meta stats_delta=calls=3148 last_id=786 last_caller=0x3b101f null_scope=0 patch_size=15 installed=1 verify=0
+#meta rule_hits=32   #meta rule_ids=0,100,…,700 (×4)
+#meta marker_hits=32 #meta entries=787  #meta distinct_ids=787  #meta container_raw_count=787
+#meta host_alive=1   #meta uninstall_rc=0  #meta verify_rc=0
+行(前三条): 0x3b101f  0/1/2  0x80  3  0x18ffbeae0  0x7f7650
+```
+
+**逐项对账**:派发次数 `3148 = 4×787`(**所有**星系仍然被走到);命中 `32 = 4×8`(每轮 8 个);
+而 game.log 里那段增量**正好 32 行** —— 也就是「787 次派发只有 8 次真的执行了效果」。
+⇒ **DLL 在引擎的派发线程里改变了游戏行为**,而不是只记录。
+
+**这一节不能说的(四条)。**
+1. 动作是**抑制**(让不符合规则的星系不执行原效果),不是**新增**效果;「给星系加新效果」还没做。
+2. 只测了一个 mod、一个效果(`log = "PS_HIT"`)、一条规则(`id%100==0`);换效果/换规则都快照式重跑。
+3. `marker_hits` 数的是**文本行**,如果别的 mod 也写同样的串会偏大(此处 `PS_HIT` 是测试 mod 独占)。
+4. `host_alive=1` 是**这一发**的事实;抑制改变了引擎的执行路径,但引擎其余部分没有被验证「无副作用」。

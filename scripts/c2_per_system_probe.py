@@ -14,8 +14,10 @@
 
   * `instrument_broken` —— layout 靶位不符 / 装着但 hook 丢了;
   * `script_refused` / `no_calls` / `filter_missed` / `dedupe_full` / `container_unreadable`
-    / `dispatch_denominator_mismatch` —— 环境或仪器档,**不是**证据;
+    / `dispatch_denominator_mismatch` / `loop_not_invoked` —— 环境或仪器档,**不是**证据;
   * `ids_out_of_range` / `ids_not_in_container` / `loop_not_per_system` —— 判负;
+  * `target_not_on_path` —— `--watch-only --marker` 下 ``calls == 0`` 而窗内 marker 有命中:
+    循环确凿跑过,detour 却一次没响 ⇒ 靶不在执行路径上(对**靶**的负结论,是证据);
   * `per_system_loop_filtered` —— 每轮次数 < 原始条数,但 id 唯一且都在容器里:
     `[obj+0x137C] == 0` 的系统被引擎自己的过滤位筛掉了(§81.1 ④),**不是判负**;
   * `per_system_loop` —— 每轮次数 == 原始条数,id 唯一、都在容器里、都落在 `[1,N]`。
@@ -66,6 +68,7 @@ VERDICTS = (
     "script_refused",
     "no_calls",
     "filter_missed",
+    "target_not_on_path",
     "dedupe_full",
     "container_unreadable",
     "dispatch_denominator_mismatch",
@@ -87,6 +90,7 @@ EVIDENCE_VERDICTS = (
     "loop_not_invoked",
     "loop_partial_watch",
     "per_system_loop_watch",
+    "target_not_on_path",
 )
 
 EXIT_REFUSED = 2               # pre-fire refusals (same code as `gate_install`)
@@ -201,20 +205,33 @@ def verdict(stats, rows, container, *, expected, script_sends, log_hits, layout=
     return "per_system_loop_filtered"
 
 
-def verdict_watch(stats, rows, container, *, expected):
+def verdict_watch(stats, rows, container, *, expected, marker_hits=None):
     """Watch-only judgement: no console script — the game's own scripts dispatch.
 
     Without a script there is no "one send = one run", so the invariant becomes
     **whole runs**: `matched` must be an exact multiple of the raw container size and the
     distinct ids must cover the whole container. A partial cover is not a system-count
     mismatch — it is "the game dispatched some systems", which is `loop_partial_watch`.
+
+    `marker_hits` (``--marker``: how many times the driver's own marker, e.g. the test
+    mod's `log = "PS_HIT"`, appeared in the game log *inside the shot window*) is the
+    independent receipt for "the loop really ran". Without it, `calls == 0` and
+    `matched == 0` each have two meanings that no artifact field can separate
+    (§89.3: the 2026-11-01 shot said `no_calls` while 12,544 dispatches were in the log).
+    ``None`` means the window was never opened, so the old environment readings stay —
+    a 0 would instead claim "measured, and the loop did not run".
     """
     if stats["installed"] == 1 and stats["verify"] != 0:
         return "instrument_broken"
     if stats["calls"] == 0:
-        return "no_calls"
+        # The detour never fired. With the marker we know whether the loop ran at all:
+        # ran -> the target is not on the execution path (a fact about the target);
+        # did not run -> nothing was dispatched, so the shot read nothing (environment).
+        return "target_not_on_path" if marker_hits else "no_calls"
     if stats["matched"] == 0:
-        return "loop_not_invoked"
+        # Hook alive, filter never matched: with the loop proven to run, the filter (not
+        # the game) is what failed to line up.
+        return "filter_missed" if marker_hits else "loop_not_invoked"
     if stats["dedupe_full"] != 0:
         return "dedupe_full"
     if not container or not container.get("ids"):
@@ -237,6 +254,58 @@ def verdict_watch(stats, rows, container, *, expected):
     if len(occurrences) != 1:
         return "loop_partial_watch"
     return "per_system_loop_watch"
+
+
+def marker_scope_error(watch_only, marker):
+    """`--marker` belongs to watch-only mode; `None` means the combination is fine.
+
+    Script mode derives its marker from the script itself (`script_marker`), so a
+    user-supplied marker there would be a second, silently ignored receipt.
+    """
+    if marker and not watch_only:
+        return ("--marker is only meaningful with --watch-only "
+                "(script mode reads the marker out of the script itself)")
+    return None
+
+
+def resolve_game_log(game_log=None, default=None):
+    """The log a shot reads: `--game-log` when given, else the game's own default.
+
+    An empty string is **not** "the current directory": passing it on made the live
+    2026-11-01 run compute `hits=None` (no window) while `--marker PS_HIT` was asked for.
+    """
+    if game_log:
+        return os.path.expanduser(game_log)
+    if default is None:
+        from c4_wiring_probe import GAME_LOG
+
+        default = GAME_LOG
+    return os.path.expanduser(default)
+
+
+def marker_window(log_path, marker):
+    """Open the marker window: the byte offset the delta will be read from.
+
+    `None` when no marker was asked for — the artifact must then say "not measured"
+    rather than "measured zero", because zero is what `no_calls` means.
+    """
+    if not marker:
+        return None
+    from c4_wiring_probe import _file_size_or_none
+
+    return _file_size_or_none(os.path.expanduser(log_path))
+
+
+def marker_hits_since(log_path, offset, marker):
+    """Marker hits in the log delta since `offset`; `None` when no window was opened."""
+    if offset is None or not marker:
+        return None
+    from c4_wiring_probe import _read_text_from
+
+    try:
+        return count_marker(_read_text_from(os.path.expanduser(log_path), offset) or "", marker)
+    except OSError:
+        return None
 
 
 def install_decision(rc, layout):
@@ -478,7 +547,7 @@ def gate_module(pid, dll_path, needed, allow_window=False):
 
 def run(dll_path, out_path, *, systems, save_name, script_file=None, game_log=None,
         cmd_file=DEFAULT_CMD_FILE, poll_s=120.0, settle_s=3.0, script_wait_s=180.0,
-        watch_only=False, allow_window=False):
+        watch_only=False, allow_window=False, marker=None):
     """One shot in one game process. Cleanup runs in a finally; never FreeLibrary."""
     import time
 
@@ -535,11 +604,17 @@ def run(dll_path, out_path, *, systems, save_name, script_file=None, game_log=No
 
         if watch_only:
             # No console script: the game's own monthly scripts do the dispatching.
+            # The marker window is opened *before* the poll so the receipt covers
+            # exactly the window the stats delta covers.
+            offset = marker_window(resolve_game_log(game_log), marker) if marker else None
             deadline = time.time() + poll_s
             after = before
             while time.time() < deadline:
                 time.sleep(1.0)
                 after = read_stats(pid, base, exports, stats_buf)
+            if marker:
+                hits = marker_hits_since(resolve_game_log(game_log), offset, marker)
+                print(f"[persystem] marker={marker} hits={hits}")
         else:
             script = open(script_file, encoding="utf-8").read().strip().splitlines()[0]
             sends = 1
@@ -573,7 +648,9 @@ def run(dll_path, out_path, *, systems, save_name, script_file=None, game_log=No
         })
         if watch_only:
             meta["mode"] = "watch"
-            meta["overall_verdict"] = verdict_watch(delta, rows, container, expected=systems)
+            meta["marker"] = marker or ""
+            meta["overall_verdict"] = verdict_watch(delta, rows, container, expected=systems,
+                                                    marker_hits=hits if marker else None)
         else:
             meta["mode"] = "script"
             meta["overall_verdict"] = verdict(delta, rows, container, expected=systems,
@@ -610,6 +687,11 @@ def main(argv=None):
                         help="operator-declared premise: skip gate_install (recorded in meta)")
     parser.add_argument("--watch-only", action="store_true",
                         help="send nothing: let the game's own scripts dispatch")
+    parser.add_argument("--marker", default=None,
+                        help="watch-only only: literal the game's own scripts leave in the "
+                             "game log (e.g. the test mod's PS_HIT). Its hits inside the shot "
+                             "window are the independent receipt that the loop ran at all — "
+                             "without it, calls==0 cannot be told from 'nothing dispatched'")
     parser.add_argument("--game-log", default=None)
     parser.add_argument("--cmd-file", default=DEFAULT_CMD_FILE)
     parser.add_argument("--poll-s", type=float, default=120.0)
@@ -620,10 +702,14 @@ def main(argv=None):
 
     if not args.watch_only and not args.script_file:
         parser.error("--script-file is required unless --watch-only is given")
+    scope_error = marker_scope_error(args.watch_only, args.marker)
+    if scope_error:
+        parser.error(scope_error)
     meta = run(args.dll, args.out, systems=args.systems, save_name=args.save_name,
                script_file=args.script_file, game_log=args.game_log, cmd_file=args.cmd_file,
                poll_s=args.poll_s, settle_s=args.settle_s, script_wait_s=args.script_wait_s,
-               watch_only=args.watch_only, allow_window=args.allow_window)
+               watch_only=args.watch_only, allow_window=args.allow_window,
+               marker=args.marker)
     return 0 if meta.get("overall_verdict") in EVIDENCE_VERDICTS else 1
 
 

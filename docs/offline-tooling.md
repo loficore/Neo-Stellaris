@@ -1428,7 +1428,7 @@ system-scoped 的 `is_rim_system`(token 18203,`--rim-token` 可改)。两段**�
 `decode_entry` / `install_decision` / `artifact_rows` / `parse_mask` / `parse_c1_result` /
 `script_marker` / `sha_gate` / `build_meta` / `preflight_paths` / `refuse_if_resident`,常量
 `STATS_KEYS` / `VERDICTS` / `EVIDENCE_VERDICTS` / `SUPERVISOR_CMD_NAME` / `SUPERVISOR_CMD_DIR`)由
-`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**44 条**),无游戏、无 Windows API、零 shot。
+`python3 -m pytest scripts/test_c2_trigger_pred_probe.py -q` 覆盖(**45 条**),无游戏、无 Windows API、零 shot。
 
 **drain 的坑(2026-10-28 review Critical)**:满环是 `RING_LEN * ENTRY_SIZE` = **10,240 B**,而
 `C4TrigPredStatsInto` 的文本缓冲只有 512 B。驱动在 drain 前必须 `remote_alloc(RING_LEN * ENTRY_SIZE)`
@@ -1540,7 +1540,7 @@ scp Windows_Jiaolong:C:/temp/c4_trig_eval.tsv evidence/logs/c5_trig_eval_4_4_4.t
 (不是 30);verdict 把 poll 窗算进去(`overall_verdict`);未送达的命令不会被下一条覆盖(`delivered` 假
 就停)。
 
-### `scripts/c2_per_system_probe.py [dll] --systems N --save-name NAME --script-file <path> [--poll-s 120] [--settle-s 3] [--script-wait-s 180] [--out C:/temp/c5_per_system.tsv] [--cmd-file C:/temp/ns_game_cmd.txt]`
+### `scripts/c2_per_system_probe.py [dll] --systems N --save-name NAME --script-file <path> [--poll-s 120] [--settle-s 3] [--script-wait-s 180] [--out C:/temp/c5_per_system.tsv] [--cmd-file C:/temp/ns_game_cmd.txt]` / `… --watch-only [--marker TEXT]`
 
 **第七把 guard,C5 数据面的第三发。** 靶是 base effect parse **`0x3B1330`**(§81.1):`every_system`
 的逐系统循环体每轮 `mov rcx,r14 ; call 0x3B1330`,所以「按 `[self] == vtable 0x26562D0` 过滤后的
@@ -1551,10 +1551,15 @@ scp Windows_Jiaolong:C:/temp/c4_trig_eval.tsv evidence/logs/c5_trig_eval_4_4_4.t
 (`matched`);下发带过去的 id 去重后的个数(`distinct_ids`)。「每轮」= `matched / script_sends` ——
 每轮次数 == distinct id 数、id 都落在 `[1,N]` 且都在容器里,才是「每系统一次」。
 
-**verdict 值域(十二档)**:证据档 `per_system_loop` / `per_system_loop_filtered` /
-`loop_not_per_system` / `ids_out_of_range` / `ids_not_in_container`;环境或仪器档
+**verdict 值域(16 档)**:证据档 `per_system_loop` / `per_system_loop_filtered` /
+`loop_not_per_system` / `ids_out_of_range` / `ids_not_in_container` / `per_system_loop_watch` /
+`loop_partial_watch` / `loop_not_invoked` / `target_not_on_path`;环境或仪器档
 `instrument_broken`(永远优先)/ `script_refused` / `no_calls` / `filter_missed` / `dedupe_full` /
-`container_unreadable` / `dispatch_denominator_mismatch`。后六档**不是证据**。
+`container_unreadable` / `dispatch_denominator_mismatch`。环境档**不是证据**。
+
+`target_not_on_path` 是 2026-11-01 补的那一档(§89.3):`--watch-only --marker TEXT` 下
+`calls == 0` **而**窗内 marker 有命中 —— 循环确凿跑过、detour 一次没响 ⇒ 靶不在执行路径上。
+这是**对靶的负结论**,所以它算证据(`exit 0`),与 `no_calls`(什么都没下发,环境档)必须分开。
 
 **门序**(照 §70.6 与兄弟驱动的家族纪律):`preflight_paths`(脚本路径 + 命令通道的名字**和**目录)
 → `sha_gate`(打印并记录注入文件的 sha256;文件不在 `exit 2`)→ `gate_module`(八个导出 +
@@ -1564,14 +1569,23 @@ settle → 读基线 stats → **外部读容器** → 发脚本 → 等 `.seen`
 drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact(先 meta-only 再追加行)。
 `Install` 返回 `-2` **不重试**;`-7` 打 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`;**绝不 FreeLibrary**。
 
-**判读陷阱(本仪器专属,三条;都是「读数算术的三条纪律」的实例):**
+**判读陷阱(本仪器专属,四条;都是「读数算术的三条纪律」的实例):**
 
 1. **`matched == 0` 有两种含义,靠日志分。** 循环没跑 ⇒ `no_calls`;跑了但过滤器错了 ⇒
-   `filter_missed`。分开它们的唯一独立量是脚本自己 `log = "PS_HIT"` 在 game.log 里留下的行数
-   (`log_hits`)。**看见 `matched=0` 先去数日志,不要先改脚本。**
+   `filter_missed`。分开它们的唯一独立量是脚本自己的 `log = "PS_HIT"` 在 game.log 里留下的行数
+   (`log_hits`)。**看见 `matched=0` 先去数日志,不要先改脚本。** `--watch-only` 里没有脚本,
+   `log_hits` 结构上恒为 0 —— 所以这个模式**必须**配 `--marker`(填游戏自己脚本留下的那串字面量,
+   例如测试 mod 的 `PS_HIT`):驱动在轮询开始前记下 game.log 的字节偏移,轮询结束后只数那段增量,
+   命中数进 `log_hits`、串进 `#meta marker=`。缺口是怎么被发现的:§89.3 那一发 `calls=0` /
+   `verdict=no_calls`,而窗内 `game.log` 里躺着 12,544 条 `PS_HIT` —— 同一个 artifact 自己说不清
+   「循环跑了、靶没被调」还是「什么都没跑」;补上 `--marker` 之后前者判 `target_not_on_path`(证据)、
+   后者仍是 `no_calls`(环境)。`marker_hits` 缺省是 `None` 而不是 `0`,因为 0 会冒充「量过、没跑」。
 2. **`distinct_ids` 是下界。** 去重表 4,096 槽;`dedupe_full != 0` 时新的 distinct id 不再计数,
    那一档(`dedupe_full`)不许用来支持任何结论。
-3. **容器是活数据。** `+0x590` 的向量随时会变;先读计数再读向量会得到一套从未同时存在的 id。
+3. **同一个游戏进程里的第二发必须换 DLL 名。** `Uninstall` 只拆 hook、**不 `FreeLibrary`**,所以
+   `refuse_if_resident` 会拒绝同名模块的第二次注入 —— 同一 pid 上的连续 shot 用 `sqjs_c7` / `c8` / `c9`
+   这样的递增名(字节与 sha256 可以完全相同)。
+4. **容器是活数据。** `+0x590` 的向量随时会变;先读计数再读向量会得到一套从未同时存在的 id。
    驱动只认**一次读足 `count*4` 字节**的 blob,长度对不上就直接 `container_unreadable`。
    另:`per_system_loop_filtered`(每轮次数 < 原始条数)是引擎的过滤位 `[obj+0x137C] == 0`
    在起作用,**不是**「循环不是每系统」。
@@ -1588,8 +1602,49 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 跳过 `gate_install`(artifact 的 `gate=operator_override` 是它的记号)—— 只有在状态机与屏幕矛盾
 (§81.3 的 `window=dialog` 假阳性)且人当场确认时才用。
 
-判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**37 条**),
+判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**45 条**),
 无游戏、无 Windows API。
+
+### `scripts/c2_exec_caller_probe.py [dll] --systems N --save-name NAME [--poll-s 120] [--out C:/temp/c5_exec_caller.tsv] [--allow-window]`
+
+**第八把 guard:C5 缺的那一格「谁在逐系统派发」+ 星系 id(§90.4 定的锚)。** 靶 = `log` 效果的实现
+`0x185BF60`(`effect_impl.cpp:21978` 的行号立即数 `0x55DA` 在 `.text` 里只出现一次)。为什么是它:
+§89.3 的实机读数证明它每月跑 784 次,§90.1 证明 `+0x70`/token 解释器那一族在同一窗口里整族沉默
+——它是目前**唯一确凿在執行路径上**的函数。
+
+**这一发问三件事**:① 每次调用的**返回地址**(= 谁在派发);② 第二实参按 §80.2 的形状读
+`+0x08`(mask)与 `+0x10`(id);③ 那批 id 去重后是否 ⊆ 银河容器 `[[0x3260BB0]+0x590]`、是否落在 `[1,N]`。
+模式只有一种(watch):不投递任何脚本,让游戏自己的月度脉冲驱动。
+
+**verdict 值域(十一档)**:证据档 `dispatch_named` / `ids_out_of_range` / `ids_not_in_container`;
+环境或仪器档 `instrument_broken`(永远优先)/ `no_calls` / `dedupe_full` / `container_unreadable` /
+`dispatch_denominator_mismatch` / `caller_unnamed` / `caller_mixed` / `scope_constant`。环境档**不是证据**。
+
+**门序**与兄弟驱动同一条:`sha_gate`(打印并记录注入文件 sha256;文件不在 `exit 2`)→ `gate_module`
+(八个导出 + `C2Sanity==42`)→ `refuse_if_resident`(同名模块已映射就拒绝)→ `gate_install("execcaller")`
+→ `inject_dll` → `C6ExecCallerLayout` 对账(靶必须 `0x185BF60`,第 6 词必须是 0:本仪器没有 vtable 过滤器)
+→ `Reset` → `Install` → settle → 读基线 stats → **外部读容器** → 轮询 → drain → `Uninstall` + `Verify`
++ settle + `assert_game_alive` → 写 artifact。`Install` 返回 `-2` 不重试;`-7` 打
+`RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`;**绝不 FreeLibrary**。
+
+**判读陷阱(本仪器专属,三条):**
+
+1. **返回地址只是「一层」调用者。** 它若也是虚派发(`call [rax+0x10]` 那种),一层不够 —— 下一发要
+   把这一层当新的锚再往上走一次;不要拿一层读成「最终派发方」。
+2. **`scope_constant` 说的是「不是那个形状」,不是「引擎没有 scope」。** 第二实参若其实是 §26/§53 那个
+   0x20 B 执行深度帧(`+0x08` 深度计数、`+0x10` helper),读出来的 id 就会是一个常数 —— 那一档只排除
+   「第二实参是逐系统 scope」这一种读法。
+3. **`DrainInto` 必须带缓冲区参数,而且容器是 0 基的。** 导出签名是 `DrainInto(out: [*]u8)`,
+   用 `call_remote`(不带参)调它,`rcx` 就是垃圾 —— 只有真的拷到样本时才会写飞,于是它伪装成
+   「记录路径会杀游戏」的样子(2026-11-02 的真凶,游戏崩溃报告点名 `C6ExecCallerDrainInto`)。另外
+   银河容器的 id 是 **0 基**(实测 `0..786`,787 条),`[1,N]` 的判据会把合法的 0 判成越界。
+4. **分母写容器原始条数。** `--systems` 无默认值;§89.3 那次容器是 **788**(上一场存档的 787 是错的分母)。
+   容器是活数据,只认一次读足的 blob(§81.1 ③)。
+
+**artifact**:`#meta` 在前(`overall_verdict` / `systems` / `save_name` / `container_raw_count` /
+`container_ids_sha256` / `stats_delta` / `dll` / `dll_sha256` / `module_base` / `exe_base` /
+`install_rc` / `uninstall_rc` / `verify_rc` / `host_alive` / `entries_error`),然后六列行:
+`caller_rva id mask occurrences self_ptr scope_ptr`。
 
 ## 实机调试:桌面通道(`win-desktop` MCP)
 

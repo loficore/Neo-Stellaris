@@ -319,3 +319,64 @@ def test_watch_instrument_broken_wins():
 def test_gate_label_records_an_operator_override():
     assert gate_label(False) == "world_state"
     assert gate_label(True) == "operator_override"
+
+
+# --- watch-only + --marker: the two meanings of `calls/matched == 0` --------------
+
+
+def test_watch_calls_zero_with_marker_hits_is_a_target_negative():
+    """The loop demonstrably ran (marker lines in game.log) yet the detour never fired.
+
+    That is a fact about the *target*, not an environment reading: before `--marker`
+    existed, the same artifact said `no_calls` and could not be told apart from
+    "the game dispatched nothing at all" (2026-11-01, §89).
+    """
+    stats = _stats(calls=0, matched=0)
+    reading = verdict_watch(stats, [], _container(GALAXY), expected=787, marker_hits=12_544)
+    assert reading == "target_not_on_path"
+    assert reading in EVIDENCE_VERDICTS
+
+
+def test_watch_matched_zero_with_marker_hits_is_filter_missed():
+    stats = _stats(calls=5, matched=0)          # hook alive, vtable filter never matched
+    assert verdict_watch(stats, [], _container(GALAXY), expected=787,
+                         marker_hits=784) == "filter_missed"
+
+
+def test_watch_marker_hits_absent_keeps_the_two_environment_readings():
+    """No `--marker` on the command line -> `None` -> the old readings, unchanged."""
+    assert verdict_watch(_stats(calls=0, matched=0), [], _container(GALAXY),
+                         expected=787) == "no_calls"
+    assert verdict_watch(_stats(calls=5, matched=0), [], _container(GALAXY),
+                         expected=787) == "loop_not_invoked"
+
+
+def test_marker_zero_hits_is_not_a_target_negative():
+    stats = _stats(calls=0, matched=0)
+    assert verdict_watch(stats, [], _container(GALAXY), expected=787,
+                         marker_hits=0) == "no_calls"
+
+
+def test_target_not_on_path_is_in_the_vocabulary_and_is_evidence():
+    assert "target_not_on_path" in VERDICTS
+    assert "target_not_on_path" in EVIDENCE_VERDICTS
+
+
+def test_marker_scope_error_refuses_marker_without_watch_only():
+    assert mod.marker_scope_error(watch_only=True, marker="PS_HIT") is None
+    assert mod.marker_scope_error(watch_only=False, marker=None) is None
+    message = mod.marker_scope_error(watch_only=False, marker="PS_HIT")
+    assert message and "--watch-only" in message
+
+
+def test_marker_window_is_none_without_a_marker():
+    """No `--marker` -> no window -> `None` (not 0: 0 would read as "the loop never ran")."""
+    assert mod.marker_window("C:/temp/game.log", None) is None
+    assert mod.marker_hits_since("C:/temp/game.log", None, "PS_HIT") is None
+
+
+def test_resolve_game_log_falls_back_to_the_default_when_none_is_given():
+    """`--game-log` absent must not mean "empty path" (2026-11-01 live run read nothing)."""
+    assert mod.resolve_game_log(None, default="C:/temp/game.log") == "C:/temp/game.log"
+    assert mod.resolve_game_log("", default="C:/temp/game.log") == "C:/temp/game.log"
+    assert mod.resolve_game_log("C:/temp/mine.log", default="C:/temp/game.log") == "C:/temp/mine.log"
