@@ -10173,3 +10173,92 @@ dispatched=72429 null_scope=0 mask_odd=0 writes=7083 skipped=0 score_writes=7083
   sha256 `980A3DF14371D25ACE9181AB1E90C7B1A3B4FD15CC42F6255A5F760959797F0F`;收尾后 host 上
   `stellaris.exe` 进程数 = 0。
 - **不改表**:`chokepoint_table.zig`、`justfile` 的 save sha 门、C4 的 `TIER1_MIN/TIER2_MIN` 语义一处未动。
+
+## §96 脚本参数关键字 —— 引擎自己的解析器把 `which`/`value` 填进对象(2026-11-03,实机一发,授权 = spec `2026-11-03-c5-param-keyword-design.md`)
+
+**这一节回答的是「参数」**:§93 让引擎按星系调用我们的 effect,§94/§95 让 DLL 里的常量写进世界;
+这一发让**脚本**给我们的 keyword 传参 —— 新 effect `neo_set` 复用官方 `set_variable` 的 `class_info`,
+由引擎的类驱动解析器把 `which = neo_probe` / `value = 42` 填进对象,我们的 detour 只做透明转发。
+
+### §96.1 判据
+
+1. **参数被解析**:存档里 787 个系统都有 `neo_probe`,值 = **42**(脚本字面量);
+2. **我们的 body 跑了**:`set_calls = set_runs = M × 787`;
+3. **回归**:`calls = matched = writes = score_writes = log_calls = M × 787`,`skipped = score_skipped = 0`;
+4. **没碰坏**:`error.log` 无 `Unexpected token` / `Unknown effect` / `Unknown trigger`;装拆 `rc=0`/`verify=0`;
+   host 存活;mod 按备份还原;
+5. **注册本身**:`C1SetId` 非 0,`C1 OK` 日志含 `set_id=`。
+
+### §96.2 解析链静态原件(零 shot,`evidence/disasm/set_variable_parse.c`)
+
+`set_variable` 的 vtable `0x25EA560` 槽位(qword 直读,`.rdata` 不是指令):
+
+- `slot[4] +0x20 = 0x3B1770`(先 `call [rax+0x28]`);
+- `slot[5] +0x28 = 0x188E240` = 字段解析器:函数内 `add rbx, 0xD0`(名字串)与
+  `call 0x3515A0`(值来源),随后 `0x1CEFEB0` / `0x1CEFD70`(字符串/数字写入);
+- `slot[9] +0x48 = 0x188E1D0` = 我们转发的官方 body。
+
+⇒ 解析器挂在**对象 vtable** 上,不是按 token 分支的 switch;只要 `class_info` 相同,解析就会落进同一对象。
+这和 spec §3 的假设一致,且原件第一次被落盘。
+
+### §96.3 注册、读数与窗口
+
+- `c1_preflight.py neo_set` → `VERDICT: name is clear`,退出码 0(2026-11-03;`neo_set` 不在
+  9,863 descriptor + 1,610 keyword name 里,大小写折叠后也不在)。
+- 本发:`sqjs_c47.dll`,sha16 **`6e756dc6b8d2385b`**,pid **6228**,`--settle-s 5`,
+  `--rule 1:0 --act write`。
+- 回执:`BOOT dll=sqjs_c47.dll sha=6e756dc6b8d2385b effect_id=19343 set_id=19344 install_rc=0 alive=1`
+  ⇒ 第三个 keyword 的 token id 是 **19344**(`neo_action` 是 19343)。
+- 暂停基线(`game.log` 偏移 **177**):
+  `calls=0 … installed=1 verify=0 dispatched=0 … set_calls=0 set_runs=0`。
+- 跑 **11 个月**后(暂停,25 s 内两次 `--stats` 逐字相同):
+  ```
+  calls=8657 matched=8657 log_calls=8657 last_id=786 rule_hits=64 installed=1 verify=0
+  dispatched=95526 null_scope=0 mask_odd=0 writes=8657 skipped=0
+  score_writes=8657 score_skipped=0 set_calls=8657 set_runs=8657
+  ```
+  `8657 = 11 × 787`;`set_calls` 与 `set_runs` 相等 ⇒ 对象进了 detour,且官方 body 地址解析到了。
+- `game.log` 自偏移 177 起:`Neo: system` **8,657**、`NEO_TIER2` **165**(= 15×11)、
+  `NEO_TIER1` **605**(= 55×11)、`NEO_FLAG2` **165**、`NEO_FLAG1` **605**、`PS_HIT` **11**。
+- `error.log` 35 行;`Unexpected token` / `Unknown effect` / `Unknown trigger` / `neo_set` 各 **0**。
+- 装拆:`UNINSTALL rc=0 verify=0 alive=1`;收尾后 host 上 `stellaris.exe` 进程数 = 0。
+
+### §96.4 存档读数
+
+- 本发载入:`autosave_2258.01.01.sav`,sha256 `961273f30e03aaa0d0697d0815168c71ed15390a312263a360b1232043abe675`。
+- 收尾拉回:`autosave_2258.07.01.sav`,sha256 `7701350a4f76ac45f52885c8a7105da24a623adb1caeef69b779aa9e596c06ed`。
+- `neo_probe`:**787 个系统,值全 = 42**(min = max = 42)。
+- 回归:`neo_mark` 787 个、逐项 = id(**0 处不等**);`neo_score` 787 个、逐项 =
+  `chokepoint_scores_4_4_4.tsv` 的 score 列(**0 处不等**,min 0 / max 286)。
+- `neo_tier2` **15**、`neo_tier1` **55**,两个集合都与离线分层集合**相等**(`flags_blocks=584`)。
+- 图身份(窗口前,零 shot):从本发载入的存档重建 **787 系统 / 1,217 无向边 / 1 连通块**,
+  重算的七列与源 TSV 相同(TSV 的 git blob 是 CRLF,`chokepoint_scores.py` 输出 LF ⇒ 比较按
+  `tr -d '\r'` 归一;788 行逐字节相等)。
+
+### §96.5 判词
+
+**`params_parsed_by_official_parser`。** spec §5 的五条全部成立:参数来自脚本字面量、由引擎的
+类驱动解析器填进对象;我们的 body 是透明转发(`set_calls == set_runs`);既有 `neo_action` 路径
+(`calls`/`writes`/`score_writes`/tier/flag)零回归;官方与存档两侧都干净;注册本身拿到了非零 token。
+
+### §96.6 这一节不能说的(三条)
+
+1. **只证了 `which` / `value` 这一对字段。** `set_variable` 的其它写法(例如 `value` 的表达式形式、
+   省略 `which`)未测 —— 解析器是官方的,但我们没有逐字段取证。
+2. **我们的 body 是透明转发,没有改参数内容。** 「能改参数」留给后续计划;本节的判据只到
+   「参数被解析进对象,且我们确实把同一个对象交给了官方 body」。
+3. **`neo_probe` 会持久化。** 复用的存档里上一窗的值会混淆读数;本节用「读的是本发之后的
+   autosave」与 `set_calls` 成对读数来分开,不是跨窗口承诺。
+
+### §96.7 现场与通道
+
+- **发数**:预算 ≤2;实际 **1 发**(`--settle-s 5`,启动即注入,`BOOT` 一次成功)。
+- **事件窗**:跑窗口里游戏自己弹出一个普通事件窗(星海共同体),`world_state` 读成
+  `WINDOW_UNSTABLE` ⇒ `click_option` 的租约被拒(该门要求 `IN_GAME_RUNNING`,只要有窗就不可能满足)。
+  按监督器文档的**人工测量**路径 `just game dismiss 594 21`(先取整屏截图量 ✖ 的 inset)关窗,
+  没有绕过租约、没有直接 `SendInput` 脚本。这条门与「事件窗自己暂停游戏」的组合是**通道欠账**,不是本计划的代码。
+- **`neo_action` 语义未动**:`chokepoint_table.zig`、`justfile` 的 save sha 门、C4 的
+  `TIER1_MIN/TIER2_MIN` 一处未改。
+- **mod**:事件体 = C5-SCORE 原样 + 第一个 `every_system` 里 `neo_action = { }` 之后一行
+  `neo_set = { which = neo_probe value = 42 }`(部署 sha256 `0de6b8ee5c7ec0f74ea5a3f92f7f3efaca7fa08d5e209ceaafe952297c099afc`);
+  收尾按备份还原为 `980a3df14371d25ace9181ab1e90c7b1a3b4fd15cc42f6255a5f760959797f0f`。

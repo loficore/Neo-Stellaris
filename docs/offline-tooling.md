@@ -1685,11 +1685,16 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 ### `scripts/c2_boot_inject.py [dll] --timeout-s 30 [--allow-window]` —— T1:启动期注入
 
 **「加」那条通道的第一个动作。** 进程一出现就注入,然后 `C1Run`(注册 trigger `neo_effect` +
-effect `neo_action`)→ `C1EffectId` → `C2NeoInstall(effect_id)`,最后打印一行
+effect `neo_action` + effect `neo_set`)→ `C1EffectId` → `C1SetId` → `C2NeoArmSet(set_id)` →
+`C2NeoInstall(effect_id)`,最后打印一行
 
 ```
-BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
+BOOT dll=<name> sha=<sha16> effect_id=<n> set_id=<m> install_rc=0 alive=1
 ```
+
+`C2NeoArmSet` **必须排在 `C2NeoInstall` 之前**:`setToken` / `setSetToken` 都拒绝在 detour
+已安装后改武装 —— 两个 token 一次 install 成型。`C1SetId` 为 0 时驱动打 `BOOT FAIL c1_set`,
+`C2NeoArmSet` 返回非 0 时打 `BOOT FAIL arm_set`。
 
 只注册、只在逐系统派发点 `0x3B0F80` 上装 token detour(§91.6/§93),**不发脚本、不动窗口、不读日志** —— 观测是
 `c2_neo_effect_check.py` 的活。`--act log|write`(默认 `log`)在安装成功后调 `C2NeoSetAct`:
@@ -1727,7 +1732,9 @@ BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 `dispatched`(detour 看到的总入口)/ `null_scope`(第二实参读不了)/ `mask_odd`(scope 的 `+0x08`
 不是 `0x80` ⇒ 不是 system scope,body 不做)。C5-WRITE 在行尾追加 `writes`(真调了官方 `set_variable`
 body 的次数)/ `skipped`(该写但 body/vtable 地址没解析到);C5-SCORE 再追加
-`score_writes`(真调了 `neo_score` 那次 body 的次数)/ `score_skipped`(越界 id 或地址没解析到)。
+`score_writes`(真调了 `neo_score` 那次 body 的次数)/ `score_skipped`(越界 id 或地址没解析到);
+C5-PARAM 再追加 `set_calls`(token 命中 `neo_set` 的次数)/ `set_runs`(真把对象交给官方
+`set_variable` body 的次数)—— 两者不等就是 body 地址没解析到,不是参数没解析。
 **`dispatched` 是判读的分水岭**:`calls=0` 且
 `dispatched=0` = hook 不在路径上;`dispatched>0` 且 `calls=0` = 在路径上但 token 不符(§93.2 第一发
 就卡在这一格);`calls>0` 但 `matched=0` 且 `mask_odd>0` = 类型门在挡,不是规则。`writes=0` 且
