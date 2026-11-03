@@ -332,10 +332,10 @@ insert_fn, remove_fn`} 一一对应。
 > 本节复现探针 = `scripts/scratch/2026-11_graph_runtime/hyperlane_read_scan.py`(Task 3);真实读数见 §2.6。
 > 地址仍是 module-base-relative RVA;函数边界取自 `.pdata`(按 RUNTIME_FUNCTION 链走,不是只看首块)。
 
-### §2.1 简报 Step-1 前提的否证:`+0x78` 是比较运算符 token id,不是 opcode
+### §2.1 简报 Step-1 前提的否证:`+0x78` 存的是比较运算符 id,不是 opcode
 
-简报 Step-1 的推理是「对象 `+0x78` 存着一个 token/opcode(`num_neighbor_systems` 实测 `0x165`),⇒ 读路径
-必须按 **opcode 分派**」。**读数对、推断错**:
+简报 Step-1 的推理是「对象 `+0x78` 存着一个 token/opcode(`num_neighbor_systems` 实测存的是 `0x165`),⇒ 读路径
+必须按 **opcode 分派**」。**读数(`0x165` 是存进去的那个值)对、推断错**:
 
 1. **`+0x78` 在一个比较体里被当作「比较运算符 id」派发**。共享比较体 `0x1a92090`(vtable `0x269a348` 的
    `+0x18` 槽,同时被 20+ 个 trigger vtable 的 `+0x18` 槽引用)是:
@@ -355,14 +355,17 @@ insert_fn, remove_fn`} 一一对应。
    ⇒ 默认落到 `0x1a92193 xor al,al`(false)。六个分支全是 `cmp [邻居结果], [本对象结果]` + `setcc`,
    这是**比较运算符**的派发,不是「按图 opcode 找 handler」。
 
-2. **`0x165` 是这一族的默认比较运算符 id,不是 `has_hyperlane_to` 专属、更不是 opcode**。两个写入点:
+2. **`0x165` 是这一族工厂写进 `+0x78` 的「默认存储值」,不是 `has_hyperlane_to` 专属、更不是 opcode**。
+   两个写入点:
    - `0x1b2a53b mov dword ptr [rbx + 0x78], 0x165` —— `has_hyperlane_to` 工厂 `0x1b2a510` 内联写,紧接着
      `0x1b2a54f lea rax,[rip+0xb75892]` 换 vtable → `0x269fde8`;
    - `0x187b9f7 mov dword ptr [rdi + 0x78], 0x165` —— 共享基类构造器 `0x187b9e0` 写;它由
      `num_neighbor_systems` 工厂 `0x1b33930` 在 `0x1b33964 call 0x14187b9e0` 调用(该工厂**自己不直接写** `+0x78`)。
 
-   ⇒ 简报「`num_neighbor_systems` 实测 `0x165`」是对的;把它当 opcode 才是错的(否则就会去解释器里找
-   「`0x165` 分支」,而那里根本没有)。
+   ⇒ 简报「`num_neighbor_systems` 实测 `0x165`」这个**读数**是对的;把它当 opcode 才是错的(否则就会去
+   解释器里找「`0x165` 分支」,而那里根本没有)。并且 `0x165` 也**不是** `0x1a92090` 认得的运算符 id:
+   它落在上面第 1 条那个六元集合**之外**,所以存着 `0x165` 的这一族对象走到该比较体时,比较恒落到
+   `0x1a92193 xor al,al`(false)。**派发键始终是 vtable 槽,不是 `0x165`。**
 
 3. **派发仍按 vtable 槽,不是按 opcode**(负对照,探针 `[2b]` 由字节数出):
    - 通用解释器 `0x348db0..0x349212`(275 条指令)里:`dword 0x165` **0 处**;含
@@ -495,7 +498,7 @@ BFS `0x8cbb30..0x8cc5a9`:
 **限制(不阻断判决,如实记下)**:
 - 静态无法确定引擎运行时**具体调哪一个 vtable 槽**(类特定 `+0x18` vs 通用 `+0x28`)。本节证明的是:
   三条读路径**可达**、且读路径**不在**通用解释器里 —— 不是「运行时一定走 A/B/C 三者之一」。
-- token id `0x165` 静态映射不到名字(descriptor 数组 `0x337b400` 在 BSS);不影响判决。
+- 字段里存的 `0x165` 这个值静态映射不到名字(descriptor 数组 `0x337b400` 在 BSS);不影响判决。
 
 ### §2.6 复现(真实读数)
 
@@ -517,7 +520,7 @@ BFS `0x8cbb30..0x8cc5a9`:
   elem_stride         = 0x20
   elem_id_off         = +8
   owner               = system_object(解析器解出 / frontier 装载)
-  op_field_off        = 0x78(比较运算符 token id,不是 opcode)
+  op_field_off        = 0x78(比较运算符 id 槽位;族默认值 0x165 不在 0x1a92090 的集合内)
 ```
 
 与 §1 的字段对齐:`read_handler_rva` 是本节新增(§1 给的是 `resolver_rva` 与写例程);

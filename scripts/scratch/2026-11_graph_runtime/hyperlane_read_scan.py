@@ -64,12 +64,13 @@ from capstone.x86 import X86_OP_MEM, X86_REG_INVALID, X86_REG_RIP  # noqa: E402
 HAS_VTABLE = 0x269FDE8       # has_hyperlane_to 的 vtable(.rdata)
 FACTORY = 0x1B2A510          # has_hyperlane_to 的工厂(new(0x3c0) 后写 +0x78 / vtable)
 OPDISPATCH = 0x1A92090       # 读 [self+0x78] 并派发比较运算符的共享基体
-OP_FIELD_OFF = 0x78          # 存比较运算符 token id 的字段
-HAS_OP_VALUE = 0x165         # 该字段的**族默认值**(见下:两侧工厂都把它写成 0x165)
+OP_FIELD_OFF = 0x78          # 存比较运算符 id 的字段(族默认值 0x165 **不在** 0x1a92090 的集合内)
+HAS_OP_VALUE = 0x165         # 该字段的**族默认存储值**(见下:两侧工厂都把它写成 0x165);
+                             #   注意它**不是** 0x1a92090 认得的运算符 id(不在其六元集合内)
 NN_FACTORY = 0x1B33930       # num_neighbor_systems 的工厂(它自己**不直接**写 +0x78)
 SHARED_CTOR = 0x187B9E0      # num_neighbor_systems 工厂调用的**共享基类构造器**:
                              #   0x187b9f7 写 `[rdi+0x78] = 0x165` —— 所以 0x165 不是
-                             #   has_hyperlane_to 专属,而是这一族的默认比较运算符 id
+                             #   has_hyperlane_to 专属,而是这一族写进该字段的**默认存储值**
 
 NN_THUNK_END = 0x1A92455     # 0x1a92450 是裸 thunk(不在 .pdata),边界人工定
 SHARED_BASE = 0x1A91A80      # 比较 trigger 的共享基体(尾跳 [vtable+0x20])
@@ -139,7 +140,8 @@ EXPECTED_SITES: list[tuple[str, int, int, str]] = [
     #       num_neighbor_systems 专属 —— 简报那半句是对的,错的是把它当 opcode);
     #   (b) num_neighbor_systems 工厂 **不直接写** +0x78,而是 0x1b33964 调共享基类
     #       构造器 0x187b9e0,由 0x187b9f7 `mov dword ptr [rdi+0x78],0x165` 写进去。
-    # 两条合起来 ⇒ 0x165 是**族默认的比较运算符 id**,不是「图的 opcode」。
+    # 两条合起来 ⇒ 0x165 是**族默认存储值**,既不是「图的 opcode」,
+    # 也不在 0x1a92090 认得的运算符集合内(所以该比较恒为 false)。
     ("has_factory", FACTORY, 0x1B2A53B, "mov dword ptr [rbx + 0x78], 0x165"),
     ("has_factory", FACTORY, 0x1B2A54F, "lea rax, [rip + 0xb75892]"),
     ("nn_factory", NN_FACTORY, 0x1B33964, "call 0x14187b9e0"),
@@ -450,7 +452,7 @@ def main() -> int:
             ok = False
     print(f"  {len(EXPECTED_SITES)} 个站点逐字核对 —— "
           + ("全部相等 OK" if ok else "**存在不一致**"))
-    print("  §2.1 `+0x78 = 0x165` 的两个写入点(族默认比较运算符 id,不是 opcode):")
+    print("  §2.1 `+0x78 = 0x165` 的两个写入点(族默认**存储值**,不是 opcode、也不在运算符集合内):")
     print("    0x1b2a53b  has_hyperlane_to 工厂内联写 [rbx+0x78]")
     print("    0x187b9f7  共享基类构造器 0x187b9e0 写 [rdi+0x78]"
           "(num_neighbor_systems 工厂 0x1b33964 调它)")
@@ -626,7 +628,7 @@ def main() -> int:
     print(f"  elem_stride         = 0x{ELEM_STRIDE:x}")
     print(f"  elem_id_off         = +8")
     print(f"  owner               = system_object(解析器解出 / frontier 装载)")
-    print(f"  op_field_off        = 0x{OP_FIELD_OFF:x}(比较运算符 token id,不是 opcode)")
+    print(f"  op_field_off        = 0x{OP_FIELD_OFF:x}(比较运算符 id 槽位;族默认值 0x165 不在 0x1a92090 的集合内)")
     return 0
 
 
