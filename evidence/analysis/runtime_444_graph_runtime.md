@@ -842,3 +842,98 @@ just win "python C:/temp/session_bridge.py C:/temp/c2_graph_read.py C:/temp/sqjs
    `IN_GAME_PAUSED_CLEAN`(exit 2,同样不算读数);用桌面通道(`win-desktop` `Shortcut "enter"` 答掉
    默认选项)恢复运行后立刻重打才通过。**这不是 `--allow-window` 的用途** —— 那一档只给「状态机与
    屏幕矛盾且人当场确认」。
+
+## §5 改一条边并重算(2026-11-04):`(5,9)` 进出各一次,全图分数跟着变
+
+**授权级**:点名 ×2(2 发预算里的第二发)。**同一进程**(pid 23640)的**第二个模块名**
+`sqjs_g2.dll`(与 `sqjs_g1.dll` **同 sha**:`012c460e…`)—— `refuse_if_resident` 拒绝同名重注。
+写路径只经引擎自己的两个例程(`0x8BBAA0` / `0x8BBC20`),本 DLL 不写任何引擎字节。
+
+### §5.1 命令与真实输出
+
+```
+just win "python C:/temp/session_bridge.py C:/temp/c2_graph_read.py C:/temp/sqjs_g2.dll \
+  --expect-systems 788 --expect-edges 1219 --save-name autosave_2260.01.01 \
+  --mutate 5,9 --kill-after --out C:/temp/c5_graph_mutation.tsv"
+```
+
+```
+[graph] dll=C:/temp/sqjs_g2.dll sha256=012c460e1d23f9cb3c35598ec7ce200fd536c332dca05277b27b9dc7d252e1a3
+[graph] pid=23640 dll=C:/temp/sqjs_g2.dll
+[graph] sqjs_g2.dll base: 0x7ff829350000
+[graph] C2Sanity == 42, game alive ?? read authorized
+[graph] verdict=graph_mutation_recompute_named  (5, 9): 1219 -> 1220 -> 1219
+[graph] artifact=C:/temp/c5_graph_mutation.tsv
+[graph] taskkill /F /PID 23640 rc=0 ?? session not saved
+```
+
+`#meta`(`evidence/logs/c5_graph_mutation_4_4_4.log` 前 30 行)里与改边相关的几格:
+
+```
+#meta mutation=5-9
+#meta mutation_steps=step=base edges=1219 rc=0|step=add edges=- rc=0|step=add_read edges=1220 rc=0|step=remove edges=- rc=0|step=remove_read edges=1219 rc=0
+#meta overall_verdict=graph_mutation_recompute_named
+#meta index_ptr=0x16c355838  table_ptr=0x1ca587180  bound=1024
+#meta systems=788  edges=1219  skipped=0  max_id=787  host_alive=1
+```
+
+五个 `step=` 是**逐步**写的:任何一步返回码非 0 或边集不是「+1 再 −1」,后面的导出一个都不再调
+(`classify_mutation` 的 `mutation_left_dirty`,由 `scripts/test_c2_graph_read.py` 的 5 条围栏钉住)。
+
+### §5.2 三份快照:集合层面逐项闭合
+
+产物 = `evidence/logs/c5_graph_mutation_4_4_4.log.{base,add,remove}`(每行 `a<TAB>b<TAB>1`;
+第三列是**占位**,读数里没有边长,主机侧度量是无权 Brandes)。
+
+| 关系 | 结果 |
+|---|---|
+| `base == remove` | **真**(且两份文件 sha256 相同:`462dfd3f…`) |
+| `add == base ∪ {(5,9)}` | **真**(恰好一条,两端的容器都写到了) |
+| `base` vs `autosave_2260.01.01.sav`(独立解析器) | 双向零差(base-only ∅, save-only ∅) |
+| 计数 | `1219 → 1220 → 1219` |
+
+注意 `(5,9)` 在**改边前不存在**(基线上 `5` 与 `9` 各 4 度),所以 +1 是**新边**,不是重复写。
+
+### §5.3 主机侧重算:400/788 个系统的分数变了
+
+```python
+import pathlib, sys
+sys.path.insert(0, "scripts")
+import chokepoint_scores as cs
+base = cs.build_adjacency(cs._read_edges(pathlib.Path("evidence/logs/c5_graph_mutation_4_4_4.log.base")))
+mut  = cs.build_adjacency(cs._read_edges(pathlib.Path("evidence/logs/c5_graph_mutation_4_4_4.log.add")))
+b = {r["system_id"]: r for r in cs.score_rows(base)}
+m = {r["system_id"]: r for r in cs.score_rows(mut)}
+changed = [k for k in b if b[k]["score"] != m[k]["score"]]
+```
+
+真读数:**`changed = 400`(共 788 个系统)**;最大三处分数差 ——
+
+| 系统 | 改边前 | 改边后 | Δ |
+|---|---|---|---|
+| **5** | 4 | **233** | +229 |
+| **9** | 34 | **253** | +219 |
+| 337 | 34 | 210 | +176 |
+
+`5` 与 `9` 各自从 4 度变成 5 度、又是新捷径的两端 —— 它们自己的 betweenness 涨得最多,
+其余 397 个系统的变化是这条新边对全图最短路集合的重新分配。**分母没动**:`n` 仍是 788,
+所以这不是重新标定,是同一条公式在新边上重算。
+
+### §5.4 这一发**已能说**(三条)
+
+1. **引擎自己的加/删边例程在活体里可用**:`0x8BBAA0` 一次调用即让**两端**的容器都多出对方 id
+   (我们按 §1.1 的形状各调一次,和引擎执行体一样);`0x8BBC20` 一次调用即删干净 ——
+   三个快照在**集合层面**闭合,不是「计数回去了但边不对」。
+2. **图一变,重算的分数就跟着变**:400/788 个系统分数改变,且变化集中在新增捷径的两端。
+3. **改边是真实副作用,已按计划收尾**:`taskkill /F`(rc=0)、未存档、未退回主菜单;
+   改动前的战役存档在 `C:/temp/c5_save_backup_1474567734/`(5 份)。
+
+### §5.5 这一发**仍不能说**(硬边界)
+
+1. **运行时内的重算仍未验证。** §5.3 的分数是**主机 Python** 重算的;引擎自己在边变更后会不会
+   立刻让 `chokepoint_dynamic` 那套量失效、有没有缓存、什么时候重算 —— 一格都没测。这是 M5
+   (trigger 落地)的输入,不是本计划的结论。
+2. **只证了「一条边」**。多边连锁、删一条本来不存在的边、改边后引擎自己的寻路/舰队路径是否
+   立即使用新图 —— 都没测(边删掉后我们立刻杀进程,没有让游戏继续跑)。
+3. **`0x8BBC20` 的 `&id` 参数约定只在这一处对上**:`(rcx=self, rdx=&other_id)` 各一次,
+   与 §1.1 的 `01874cbd` 形状一致;换成别的调用形状(例如一次传两个 id)没有验证。

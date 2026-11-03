@@ -107,12 +107,16 @@ VERDICTS = (
     "graph_live_read_named",
     "graph_live_read_partial",
     "graph_live_read_disagree",
+    "graph_mutation_recompute_named",
+    "mutation_left_dirty",
 )
 EVIDENCE_VERDICTS = (
     "graph_live_read_unstable",
     "graph_live_read_named",
     "graph_live_read_partial",
     "graph_live_read_disagree",
+    "graph_mutation_recompute_named",
+    "mutation_left_dirty",
 )
 
 EXIT_REFUSED = 2        # pre-flight / environment gate refusal (same code as `gate_install`)
@@ -285,6 +289,50 @@ def classify(stats, rows, expected, layout_words, env, again=None, rows_complete
     return "graph_live_read_disagree", detail
 
 
+def classify_mutation(seq, x, y, base_rows, added_rows, removed_rows=None):
+    """`(verdict, detail)` for the `--mutate` shot's three snapshots.
+
+    `seq` = `[base, after_add, after_remove]`. Each entry carries `edges` and `rc`:
+    for the base step `rc` is the **read** code, for the other two it is the code the
+    mutation export returned (and, when a read followed, `read_rc` is that read's code).
+
+    The acceptance is deliberately narrow: the add must land **exactly** one edge, and it
+    must be *this* pair; the remove must put the edge count back **and** the set back.
+    Anything else is `mutation_left_dirty` and names the step that failed — Review Focus #5
+    says stop, do not try to "repair" the graph and carry on.
+    """
+    pair = (min(x, y), max(x, y))
+    base, after_add, after_remove = seq
+
+    if base.get("rc", 0) not in (0, -4):
+        return "mutation_left_dirty", f"base step: C5GraphRead == {base['rc']} — nothing to mutate"
+    if after_add.get("rc", 0) != 0:
+        return "mutation_left_dirty", f"add step: C5GraphMutateAdd == {after_add['rc']}"
+    if after_add.get("read_rc", 0) not in (0, -4):
+        return "mutation_left_dirty", f"add step: the post-add read == {after_add['read_rc']}"
+    if after_add["edges"] != base["edges"] + 1:
+        return "mutation_left_dirty", (
+            f"add step: edges {base['edges']} -> {after_add['edges']} (expected +1)"
+        )
+    if pair not in set(map(tuple, added_rows)):
+        return "mutation_left_dirty", f"add step: {pair} is not in the post-add edge set"
+
+    if after_remove.get("rc", 0) != 0:
+        return "mutation_left_dirty", f"remove step: C5GraphMutateRemove == {after_remove['rc']}"
+    if after_remove.get("read_rc", 0) not in (0, -4):
+        return "mutation_left_dirty", f"remove step: the post-remove read == {after_remove['read_rc']}"
+    if after_remove["edges"] != base["edges"]:
+        return "mutation_left_dirty", (
+            f"remove step: edges {after_remove['edges']} != base {base['edges']}"
+        )
+    if removed_rows is not None and set(map(tuple, removed_rows)) != set(map(tuple, base_rows)):
+        return "mutation_left_dirty", "remove step: the edge set is not the base set"
+
+    return "graph_mutation_recompute_named", (
+        f"{pair}: {base['edges']} -> {after_add['edges']} -> {after_remove['edges']}"
+    )
+
+
 # --- artifact ---------------------------------------------------------------------
 
 
@@ -306,6 +354,29 @@ def write_artifact(path, meta_lines, rows):
             handle.write(f"#meta {line}\n")
         for a, b in rows:
             handle.write(f"{a}\t{b}\n")
+
+
+def write_edge_snapshots(out_path, base_rows, add_rows, remove_rows):
+    """`<out>.base` / `.add` / `.remove`: three edge tables for the host-side recompute.
+
+    Three columns (`a`, `b`, `1`): the third is a **placeholder** — the read path gives
+    ids only, and the host-side metric is unweighted (Brandes over an undirected
+    unweighted graph). Keeping the column makes `chokepoint_scores._read_edges` usable
+    verbatim, which is what §5's recompute snippet calls.
+    """
+    for suffix, rows in (("base", base_rows), ("add", add_rows), ("remove", remove_rows)):
+        with open(f"{out_path}.{suffix}", "w", encoding="utf-8", newline="\n") as handle:
+            for a, b in rows:
+                handle.write(f"{a}\t{b}\t1\n")
+
+
+def kill_game(pid):
+    """Kill the session rather than saving or parking it (the plan's cleanup rule)."""
+    import subprocess
+
+    result = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                            capture_output=True, text=True)
+    print(f"[graph] taskkill /F /PID {pid} rc={result.returncode} — session not saved")
 
 
 # --- pre-fire gates ---------------------------------------------------------------
@@ -411,8 +482,12 @@ def read_once(pid, base, exports, stats_buf, drain_buf):
 
 
 def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_file=None,
-        allow_window=False, settle_s=0.0):
-    """One shot in one game process. No hook is installed and nothing is unloaded."""
+        allow_window=False, settle_s=0.0, mutate=None, kill_after=False):
+    """One shot in one game process. No hook is installed and nothing is unloaded.
+
+    `mutate=(x, y)` switches the shot to the three-snapshot form: Read (base) →
+    MutateAdd → Read → MutateRemove → Read, and every step goes into `#meta`.
+    """
     import time
 
     import c2_harness as harness
@@ -443,8 +518,45 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
     if settle_s:
         time.sleep(settle_s)
 
-    rc1, stats1, rows1 = read_once(pid, base, exports, stats_buf, drain_buf)
-    rc2, stats2, rows2 = read_once(pid, base, exports, stats_buf, drain_buf)
+    step_lines = []
+    if mutate is None:
+        rc1, stats1, rows1 = read_once(pid, base, exports, stats_buf, drain_buf)
+        rc2, stats2, rows2 = read_once(pid, base, exports, stats_buf, drain_buf)
+    else:
+        # The mutation sequence is fixed and each step is recorded **before** the next
+        # one runs: if a step fails, the artifact still says which one and the rest is
+        # never called (Review Focus #5).
+        x, y = mutate
+        pair = (x << 32) | (y & 0xFFFF_FFFF)
+
+        rc1, stats1, rows1 = read_once(pid, base, exports, stats_buf, drain_buf)
+        step_lines.append(f"step=base edges={stats1['edges']} rc={rc1}")
+
+        add_rc = _signed32(harness.call_remote_with_arg(pid, base, exports["C5GraphMutateAdd"],
+                                                        pair))
+        step_lines.append(f"step=add edges=- rc={add_rc}")
+        seq = [dict(stats1, rc=rc1), {"edges": -1, "rc": add_rc}, {"edges": -1, "rc": 0}]
+
+        rows_add, rows_rm = [], []
+        read_rc_add, read_rc_rm = None, None
+        if add_rc == 0:
+            read_rc_add, stats_add, rows_add = read_once(pid, base, exports, stats_buf, drain_buf)
+            seq[1] = dict(stats_add, rc=add_rc, read_rc=read_rc_add)
+            step_lines.append(f"step=add_read edges={stats_add['edges']} rc={read_rc_add}")
+
+            rm_rc = _signed32(harness.call_remote_with_arg(pid, base, exports["C5GraphMutateRemove"],
+                                                           pair))
+            step_lines.append(f"step=remove edges=- rc={rm_rc}")
+            seq[2] = {"edges": -1, "rc": rm_rc}
+            if rm_rc == 0:
+                read_rc_rm, stats_rm, rows_rm = read_once(pid, base, exports, stats_buf,
+                                                          drain_buf)
+                seq[2] = dict(stats_rm, rc=rm_rc, read_rc=read_rc_rm)
+                step_lines.append(f"step=remove_read edges={stats_rm['edges']} rc={read_rc_rm}")
+
+        write_edge_snapshots(out_path, rows1, rows_add, rows_rm)
+        stats2 = stats1
+        rc2 = rc1
 
     try:
         harness.assert_game_alive(pid)
@@ -452,18 +564,23 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
     except Exception:                    # noqa: BLE001 — a dead host is a reading
         alive = False
 
-    env = {
-        "rc": rc1,
-        "gate": "operator_override" if allow_window else "world_state",
-        "exports_ok": True,
-        "alive": alive,
-        "expect_systems": expect_systems,
-        "expect_edges": expect_edges,
-    }
-    # Two reads: the verdict compares them, and `rows_complete` is the driver's own
-    # check that the drain gave back as many rows as the stats claimed.
-    verdict, detail = classify(stats1, rows1, expected, layout, env,
-                               again=rows2, rows_complete=(len(rows1) == stats1["edges"]))
+    if mutate is None:
+        env = {
+            "rc": rc1,
+            "gate": "operator_override" if allow_window else "world_state",
+            "exports_ok": True,
+            "alive": alive,
+            "expect_systems": expect_systems,
+            "expect_edges": expect_edges,
+        }
+        # Two reads: the verdict compares them, and `rows_complete` is the driver's own
+        # check that the drain gave back as many rows as the stats claimed.
+        verdict, detail = classify(stats1, rows1, expected, layout, env,
+                                   again=rows2, rows_complete=(len(rows1) == stats1["edges"]))
+    else:
+        verdict, detail = classify_mutation(seq, mutate[0], mutate[1], base_rows=rows1,
+                                            added_rows=rows_add,
+                                            removed_rows=rows_rm if read_rc_rm is not None else None)
 
     meta = {
         "overall_verdict": verdict,
@@ -483,13 +600,16 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
         "read2_edges": stats2["edges"],
         "layout": format_layout(layout),
         "host_alive": int(alive),
-        "gate": env["gate"],
+        "gate": "operator_override" if allow_window else "world_state",
         "read1_rc": rc1,
         "read2_rc": rc2,
         "read2_systems": stats2["systems"],
         "read2_skipped": stats2["skipped"],
         "detail": detail,
     }
+    if mutate is not None:
+        meta["mutation"] = f"{min(mutate)}-{max(mutate)}"
+        meta["mutation_steps"] = "|".join(step_lines)
     write_artifact(out_path, build_meta(meta), rows1)
     print(f"[graph] verdict={verdict}  {detail}")
     print(f"[graph] artifact={out_path}")
@@ -499,6 +619,8 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
               "scripts/dll_ubsan_site.py before anything else (AGENTS 约束 8)",
               file=sys.stderr)
         return meta, EXIT_HOST_DEAD
+    if kill_after:
+        kill_game(pid)
     return meta, 0
 
 
@@ -520,12 +642,31 @@ def main(argv=None):
                              "reading is two explicit reads, and polling would mask a tear)")
     parser.add_argument("--allow-window", action="store_true",
                         help="operator-declared premise: skip gate_install (recorded in meta)")
+    parser.add_argument("--mutate", default=None, metavar="FROM,TO",
+                        help="mutation shot: Read -> MutateAdd -> Read -> MutateRemove -> Read "
+                             "on this pair (both within 0..0xFFFF, not an existing edge)")
+    parser.add_argument("--kill-after", action="store_true",
+                        help="after the artifact is written, taskkill the game (no save, no "
+                             "menu: the plan's cleanup for a mutation shot)")
     args = parser.parse_args(argv)
+
+    mutate = None
+    if args.mutate:
+        parts = args.mutate.split(",")
+        if len(parts) != 2:
+            parser.error("--mutate wants FROM,TO")
+        try:
+            a, b = (int(part) for part in parts)
+        except ValueError:
+            parser.error("--mutate wants two integers")
+        if not (0 <= a <= 0xFFFF and 0 <= b <= 0xFFFF) or a == b:
+            parser.error("--mutate endpoints must be distinct ids inside 0..65535")
+        mutate = (a, b)
 
     _, code = run(args.dll, args.out, expect_systems=args.expect_systems,
                   expect_edges=args.expect_edges, save_name=args.save_name,
                   edges_file=args.edges_file, allow_window=args.allow_window,
-                  settle_s=args.poll_s)
+                  settle_s=args.poll_s, mutate=mutate, kill_after=args.kill_after)
     return code
 
 

@@ -123,3 +123,51 @@ def test_parse_artifact_refuses_a_short_row():
     meta, rows = mod.parse_artifact("#meta edges=1\n0\t1\t9\n")
     assert meta == {"edges": "1"}
     assert rows == []          # 三列不是一对 id:不猜
+
+
+# --- Task 4: 改一条边再读两次 ------------------------------------------------
+
+
+def test_mutation_delta_plus_one_then_back():
+    seq = [stats(787, 1217), stats(787, 1218), stats(787, 1217)]
+    verdict, detail = mod.classify_mutation(
+        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)])
+    assert verdict == "graph_mutation_recompute_named"
+    assert "(5, 9)" in detail
+
+
+def test_mutation_that_leaves_the_graph_dirty_names_the_step():
+    seq = [stats(787, 1217), stats(787, 1218), stats(787, 1219)]
+    verdict, detail = mod.classify_mutation(
+        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)])
+    assert verdict == "mutation_left_dirty"
+    assert "remove" in detail
+
+
+def test_mutation_whose_add_never_landed_is_dirty_at_add():
+    # edges +1 但边集里没有那一对 ⇒ add 没落进容器(或落到了别的系统上)。
+    seq = [stats(787, 1217), stats(787, 1218), stats(787, 1217)]
+    verdict, detail = mod.classify_mutation(
+        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 10)])
+    assert verdict == "mutation_left_dirty"
+    assert "add" in detail
+
+
+def test_mutation_that_came_back_with_a_different_set_is_dirty():
+    # 计数回到基线,但边集不是同一套 ⇒ 删错了边或删多了。
+    other = [(0, 1), (1, 2), (3, 4)]
+    seq = [stats(787, 1217), stats(787, 1218), stats(787, 1217)]
+    verdict, detail = mod.classify_mutation(
+        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)],
+        removed_rows=other)
+    assert verdict == "mutation_left_dirty"
+    assert "remove" in detail
+
+
+def test_mutation_with_a_nonzero_export_code_is_dirty():
+    # 导出返回码非 0(解析失败/越界)⇒ 后面的步骤都不许再调,直接判脏。
+    seq = [dict(stats(787, 1217)), dict(stats(787, 1218), rc=-2), stats(787, 1217)]
+    verdict, detail = mod.classify_mutation(
+        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)])
+    assert verdict == "mutation_left_dirty"
+    assert "add" in detail
