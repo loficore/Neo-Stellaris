@@ -312,13 +312,14 @@ fn pairPresent(existing: []const Edge, a: u16, b: u16) bool {
 /// 内存派生地址的**检查加法**:`base + off` 溢出不回绕,直接给 `null`。
 /// 回绕后的地址不是任何真实对象 —— 拿它去读只会越界;而 Debug 构建里未检查的 `+`
 /// 会 panic,出货 DLL 就是 Debug(AGENTS 约束 8:一次 trip → `abort()` → 退出码 3)。
-fn addAddr(base: usize, off: usize) ?usize {
+/// `pub` 是给 `graph_probe` 复用的:同一个溢出契约,不抄第二份。
+pub fn addAddr(base: usize, off: usize) ?usize {
     return std.math.add(usize, base, off) catch null;
 }
 
 /// 内存派生地址的**检查乘加**:`base + idx * stride + off`,乘法与两次加法都不回绕。
 /// 溢出的任何一步都化作 `null`,调用方当「读不到」处理(逐项 `skipped`)。
-fn elemAddr(base: usize, idx: usize, stride: usize, off: usize) ?usize {
+pub fn elemAddr(base: usize, idx: usize, stride: usize, off: usize) ?usize {
     const scaled = std.math.mul(usize, idx, stride) catch return null;
     const rel = std.math.add(usize, scaled, off) catch return null;
     return std.math.add(usize, base, rel) catch null;

@@ -229,6 +229,7 @@ const c2_trigger_pred = @import("c2/trigger_pred_probe.zig");
 const c2_trigger_eval = @import("c2/trigger_eval_probe.zig");
 /// C5 数据面第三发(§81):逐系统下发点 `0x3B1330` 的只读 guard。
 const c2_per_system = @import("c2/per_system_probe.zig");
+const c2_graph_probe = @import("c2/graph_probe.zig");
 const c2_exec_caller = @import("c2/exec_caller_probe.zig");
 /// C5-ADD(§93):`neo_action` 的逐系统派发点、body 与导出。
 const c2_neo_vtable = @import("c2/neo_vtable.zig");
@@ -1057,6 +1058,53 @@ export fn C5PerSystemDrainInto(out: [*]u8) callconv(.c) u32 {
 /// 清计数 + 环 + 去重表 + drain 容量;不卸载 hook,也不清镜像窗口(必须在 Install 之前调)。
 export fn C5PerSystemReset() callconv(.c) void {
     c2_per_system.reset();
+}
+
+// ---------------------------------------------------------------------------
+// C5-GRAPH(§4/§5):运行时星连图的只读探针 + 两个改边导出。
+//
+// **不挂钩子**。只读发只做 ReadProcessMemory;改边只调引擎自己的
+// `0x8BBAA0` / `0x8BBC20`(§1.1),不写引擎的字节,也不留 detour。
+// 两参改边导出收**一个 u64**(低 32 = from、高 32 = to):`CreateRemoteThread`
+// 的 lpParameter 只落一个寄存器,`fn(u32, u32)` 的第二参不可达(裁定见 SDD ledger)。
+// ---------------------------------------------------------------------------
+
+/// `0` 成功且 `skipped==0`;`-1` 模块基址取不到;`-2` 索引对象不可读/越界;
+/// `-3` 边表超过内部容量;`-4` 读成功但有 `skipped`(带欠账的证据,不是失败)。
+export fn C5GraphRead() callconv(.c) i32 {
+    return c2_graph_probe.readOnce();
+}
+
+/// 八个布局词(见 `graph_probe.layoutInto`);返回 8。
+export fn C5GraphLayout(out: [*]u32) callconv(.c) u32 {
+    const words: *[8]u32 = @ptrCast(out);
+    return c2_graph_probe.layoutInto(words);
+}
+
+/// 64 B:`u64 × 8` = systems, edges, skipped, max_id, index_ptr, table_ptr, bound, module_base。
+export fn C5GraphStatsInto(out: [*]u8) callconv(.c) i32 {
+    return c2_graph_probe.statsInto(out[0..c2_graph_probe.STATS_SIZE]);
+}
+
+/// 每行 4 B(`u16 a`, `u16 b`),按 `(a, b)` 升序;返回行数。
+export fn C5GraphDrainInto(out: [*]u8) callconv(.c) u32 {
+    return c2_graph_probe.drainSorted(out[0..c2_graph_probe.MAX_EDGES * 4]);
+}
+
+/// 清上一发的 stats 与行数(不碰 hook —— 本模块没有 hook)。
+export fn C5GraphReset() callconv(.c) void {
+    c2_graph_probe.reset();
+}
+
+/// `pair` 低 32 = from、高 32 = to。`0` 成功;`-1`/`-2` 解析失败(from / to);
+/// `-3` 任一 id 超出被承认的 u16 空间。
+export fn C5GraphMutateAdd(pair: u64) callconv(.c) i32 {
+    return c2_graph_probe.mutateAdd(@truncate(pair), @truncate(pair >> 32));
+}
+
+/// 同 `C5GraphMutateAdd` 的打包约定;走 `0x8BBC20`。
+export fn C5GraphMutateRemove(pair: u64) callconv(.c) i32 {
+    return c2_graph_probe.mutateRemove(@truncate(pair), @truncate(pair >> 32));
 }
 
 // ---------------------------------------------------------------------------

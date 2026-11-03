@@ -11,15 +11,19 @@
 // linkage accommodation, not a runtime defense. Sites below point here instead
 // of restating the rationale.
 //
-// moduleFunction and allocNear are deliberately NOT guarded: Zig only emits
-// the bodies reachable from a root, and every path to these two is folded
-// before it gets here — the four c2 install()s (predicate_hook, scope_probe,
-// live_probe, donor_exec_probe) open with
+// moduleFunction joined this family on 2026-11-04: C5-GRAPH's probe is the first
+// path that makes `exports.zig` (a native test root) reference it, and the
+// unguarded extern landed as `undefined symbol: GetModuleHandleW` in the Linux
+// link.
+// allocNear is still deliberately NOT guarded: Zig only emits the bodies
+// reachable from a root, and every path to it is folded before it gets here —
+// the four c2 install()s (predicate_hook, scope_probe, live_probe,
+// donor_exec_probe) open with
 // `if (!is_windows) return error.Unsupported;`, and the scripted install()s
 // are reached only through the LookupHookInstall/ExecHookInstall exports,
 // which open with `if (!is_windows) return -2;` — plus, for
 // exec_hook.installWith, the two c2 probe install()s named first. No test
-// reaches installHookArmed. A guard here would be a second gate over
+// reaches installHookArmed. A guard there would be a second gate over
 // already-dead code.
 
 const std = @import("std");
@@ -92,6 +96,10 @@ pub fn isCommitted(addr: usize) bool {
 /// Resolve an RVA inside stellaris.exe to its live absolute address.
 /// The HMODULE returned by GetModuleHandleW *is* the image base.
 pub fn moduleFunction(rva: usize) !*anyopaque {
+    // 2026-11-04:C5-GRAPH 的探针让 `exports.zig`(一个 native Linux test root)
+    // 第一次真正引用到这里 —— 于是 `GetModuleHandleW` 在 Linux 链接里落成未定义符号。
+    // 按本文件头的既有约定,把它并进「comptime 早退」那一族;Windows 侧的行为不变。
+    if (comptime builtin.os.tag != .windows) return error.ModuleNotFound;
     const name_w: [*:0]const u16 = &[_:0]u16{ 's', 't', 'e', 'l', 'l', 'a', 'r', 'i', 's', '.', 'e', 'x', 'e', 0 };
     const h = GetModuleHandleW(name_w) orelse return error.ModuleNotFound;
     return @ptrFromInt(@intFromPtr(h) + rva);
