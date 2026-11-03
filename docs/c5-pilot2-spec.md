@@ -173,7 +173,7 @@ $ awk -F'\t' 'NR>1 {print $6}' evidence/xrefs/keyword_behaviour_registration_4_4
 
 三档标签:`pinned(§N)` = 取证卷已钉;`静态推断(未验证)` = 静态材料给出的候选机制,没有运行时读数;
 `未观测` = 从未被任何读数触及。出处 § 指取证卷(`runtime_444_structures.md` §1–§15、
-`runtime_444_keyword_pipeline.md` §16–§23、`runtime_444_c1_validation.md` §24–§66、
+`runtime_444_keyword_pipeline.md` §16–§23、`runtime_444_c1_validation.md` §24–§96、
 `runtime_444_graph_runtime.md` §1–§3(图写/读路径与 M1–M3 离线收口,2026-11-03))。
 
 | 需要的数据/字段 | C5 里干什么 | 当前状态 |
@@ -183,7 +183,7 @@ $ awk -F'\t' 'NR>1 {print $6}' evidence/xrefs/keyword_behaviour_registration_4_4
 | 注册管线:mint `0x1D13270` → value `new(0x10)` → BST insert(`0x3AEF60` / `0x348150`)→ class_info ALIAS | 新 keyword 进入引擎的四步(`AGENTS.md` 配方) | `pinned(§18 §20 §21 §24)` |
 | donor effect vtable `0x2606FE0` 25 槽可复制(slot[1]=Execute、slot[2]=instantiate、slot[19]=谓词) | 实现侧对象形状与谓词槽 | `pinned(§52)` |
 | donor-shaped 对象的执行是否落进 slot[1] 共用覆写 `0x3AFD30` | 决定实例化/执行路线走哪一族;读数归 §5 的探针 | `静态推断(未验证)` —— §57.4 把 (a) 支变成有具体机制的候选,三岔未判掉 |
-| 星系对象句柄从哪来(我们的求值体内如何拿到被度量的对象) | 图度量的对象来源,一切读取的前提 | `静态推断(未验证)` —— 引擎侧 **id→系统对象解析路径**已静态定形(§1.2:解析器 `0x3939f0`,id 取自 scope `+0x10`,经全局表 `0x3260b98` + 回退 `0x325d880` 解出系统对象),写路径判决词 `edge_store_write_named`;**我们求值体内的取值来源仍要 M4 读数**(§59 `no_scope_candidate` 未撤)。 |
+| 星系对象句柄从哪来(我们的求值体内如何拿到被度量的对象) | 图度量的对象来源,一切读取的前提 | **`pinned(§91.6/§91.7)`** —— **实机已观测**(2026-11-02,一发):驱动 787 行里 `caller_rva` 全 = `0x3B101F`(= `0x3B0F80` 内 `call 0x3B101C [rax+0x48]` 的返回地址),id 覆盖 `0..786` 且与容器逐项相等,verdict **`dispatch_named`** ⇒ 每轮 scope 经 `rdx` 传入、**`+0x10` 是 id**。引擎侧 id→系统对象的**解析路径**另由本计划静态定形(§1.2:解析器 `0x3939f0`,全局表 `0x3260b98` + 回退 `0x325d880`)与判决词 `edge_store_write_named` —— **那部分是容器偏移,仍是 `静态推断(未验证)`,不是本行**。 |
 | hyperlane 星连边集(运行时形态的星系图) | 任何图度量的输入 | `静态推断(未验证)` —— 静态已定形:边 = 系统对象 `+0x588` 容器(数据 `+0x590`、容量 `+0x598`、计数 `+0x59c`、步长 `0x20`、元素 `+8` = 邻居 id),写路径 `edge_store_write_named`(§1)、trigger 侧三条独立读路径 `edge_store_read_confirmed`(§2)。**布局未在实机读数验证**;id 是存档局部。 |
 | 帝国可见性/归属的运行时字段 | 若裁定②选「帝国可见」口径 | `未观测` |
 | `SYSTEM_BOTTLENECK_RADIUS` 在引擎内的读取形态(全局缓存还是逐调用读) | 对齐官方半径口径,避免双标 | `静态推断(未验证)` —— trigger docstring 引 NDefines 符号(§0 的 doc 原文);引擎内部读点没碰过 |
@@ -252,6 +252,9 @@ docstring 策略),同样被裁定③的 trigger 口径牵动。
   本文档零 shot。
 - **不含算法本体与实现步骤。** 5 项裁定未定、星系句柄来源未观测、星连边运行时形态未观测、galaxy map
   文件未拷 —— 实施计划等这四件事收齐再写。
+  **(2026-11-03 追注,历史条目不删):5 项裁定已落(§5 第 4 条)、galaxy map 已拷(§5 第 3 条);
+  「星系句柄来源」已于 2026-11-02 实机观测(§91.6/§91.7,`dispatch_named`)—— 详见 §5 末尾的
+  2026-11-02 / 2026-11-03 追注;仍未收口的是**星连边容器的运行时布局**(静态推断),不是句柄来源。**
 - **不新增 QuickJS `extern fn` 绑定。** 段5 决策未变,`src/dll/exports.zig:351-353` 的禁令未放宽(§65
   判 `abi_closed_static` 也只排除了一半,放宽要人点头)。
 - **v1 只做图度量那一半。** 「种族占比 → 资源产出 / 对母国的外交与战争态度」不在 v1 内:它需要
@@ -304,3 +307,12 @@ create(`0x189A620`)与 class_info vtable(`0x260F498` 的 `+0x78 = 0x3B01A0`),不
 「靶在哪」,而是**驱动**:要让 `every_system` 作为父 effect 的子效果被分发(测试 mod 的
 `on_monthly_pulse`,或 issue #32 修好后的控制台投递)。原句「靶位 `0x1A91A80`」已由 §79 判负(求值槽
 不是每系统一次),不再指向它。
+
+**(2026-11-02 追注,不改上文历史叙述)**:「§5 的当前账」里说「只剩 2(星系句柄来源)未收口」、
+「句柄本身仍未观测」是**写于 2026-10-31 的状态**,随后已被实机读数取代 —— 2026-11-02 的
+`scripts/c2_exec_caller_probe.py` 一发里,逐系统派发的 787 行 `caller_rva` 全 = `0x3B101F`,
+id 覆盖 `0..786` 且与容器逐项相等,`mask=0x80`、`null_scope=0`、`host_alive=1`、`uninstall/verify=0`,
+verdict **`dispatch_named`**(`runtime_444_c1_validation.md` §91.6/§91.7)⇒ **「星系句柄来源」已观测**。
+**(2026-11-03 补)**:本计划(Task 1–6)是**纯离线静态**取证,定形的是**容器偏移与 id→对象解析路径的
+静态形状**(`runtime_444_graph_runtime.md` §1–§3),**没有使用**上述实机读数、也没有新增实机动作;
+两者不是同一格:句柄来源 = `pinned(§91.6/§91.7)`,容器/偏移布局 = `静态推断(未验证)`。

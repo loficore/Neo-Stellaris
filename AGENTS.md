@@ -179,7 +179,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 |---|---|---|
 | `0x3939F0` | **id→系统对象解析器**(叶子函数、无 `.pdata`):`id` 取自 scope `+0x10`;经全局 `0x3260B98` 的表 `[obj+0x18]`、界 `[obj+0x20]`,`entry = [表 + slot*16 + 8]`,`entry+8 == id`;失败回退 `0x325D880`(两个全局都在 BSS,静态不可定值) | `runtime_444_graph_runtime.md` §1.2 §1.11 |
 | `0x8BBAA0` / `0x8BBC20` | 边增 / 删例程;边容器 = 系统对象 `+0x588`(数据 `+0x590`、容量 `+0x598`、计数 `+0x59c`、步长 `0x20`、元素 `+8` = 邻居 id)。两 keyword 两侧同形 ⇒ 写路径判决 **`edge_store_write_named`**;`add_hyperlane`/`remove_hyperlane` 的 `+0x48` 执行体 = `0x1874540` / `0x1874A00` | 同卷 §1 |
-| `0x1AFE500` / `0x1AE3700` / `0x1B86E30` | trigger 侧**三条独立**读路径(`has_hyperlane_to` `+0x18` / `closest_system` `+0x18` / `num_neighbor_systems` `+0xf0`→`0x1B87240`),读到同一组 `+0x590`/`+0x59c`、同 stride、同元素布局 ⇒ 读路径判决 **`edge_store_read_confirmed`** | 同卷 §2 |
+| `0x1AFE500` / `0x1AE3700` / `0x1B86E30` | trigger 侧**三条独立**读路径的**读点层**(三格都是实际访存容器偏移的函数):`has_hyperlane_to` vtable `+0x18` = `0x1AFE500`、`closest_system` vtable `+0x18` = `0x1AE3700`、`num_neighbor_systems` vtable `+0xf0` = `0x1B87240`(**槽目标**;读点是它内部采集体 `0x1B86E30`)。三条读点都落到同一组 `+0x590`/`+0x59c`、同 stride `0x20`、同元素布局 ⇒ 读路径判决 **`edge_store_read_confirmed`** | 同卷 §2 |
 | `0x296CC68` | 跨子系统的脏/世代**位掩码全局**(增/删边都置位);在 §88 窗口之外,是裁定④的**可选**优化候选,**不推翻** `no_version_signal` | 同卷 §1.4.1 §3.7 |
 
 ### 已证伪 — 不要再当锚点用
