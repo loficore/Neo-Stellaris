@@ -29,7 +29,11 @@ host-tests:
 chokepoints-check:
     python3 scripts/chokepoints_emit.py --tsv evidence/xrefs/chokepoint_scores_4_4_4.tsv --out src/dll/c2/chokepoint_table.zig --save-sha 6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e --check
 
-check: build test fence host-tests chokepoints-check
+# Graph-fixture drift fence: regenerate src/dll/c2/graph_fixture.zig in memory and compare.
+graph-fixture-check:
+    python3 scripts/graph_fixture_emit.py --edges evidence/xrefs/c5_campaign_edges_4_4_4.tsv --scores evidence/xrefs/chokepoint_scores_4_4_4.tsv --out src/dll/c2/graph_fixture.zig --check
+
+check: build test fence host-tests chokepoints-check graph-fixture-check
 
 # NOTE: the world-state machine is TWO files and they must travel together with
 # its Windows halves — world_state.py is the pure machine (one directory up in
