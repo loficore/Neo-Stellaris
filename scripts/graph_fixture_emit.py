@@ -51,7 +51,11 @@ class GraphFixtureDataError(ValueError):
 
 
 def _uint_field(raw: str, line_no: int, name: str) -> int:
-    if not raw.isdigit():
+    # ``str.isdigit`` is true for non-ASCII digits such as ``²`` that ``int``
+    # then rejects, which would escape as an uncaught ValueError (rc 1) instead
+    # of the documented GraphFixtureDataError (rc 2).  ``isdecimal`` plus an
+    # ASCII guard accepts exactly the strings ``int`` parses.
+    if not (raw.isascii() and raw.isdecimal()):
         raise GraphFixtureDataError(
             f"line {line_no}: {name} is not a non-negative integer: {raw!r}"
         )
