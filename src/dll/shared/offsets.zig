@@ -311,6 +311,59 @@ pub const keyword_reg = struct {
     pub const DONOR_EFFECT_DOCSTRING: usize = 0x2616260; // "Prevents enclosed effects from being displayed in tooltip"
 };
 
+/// 图运行时**只读读图器**的偏移常量(`src/dll/c2/galaxy_graph.zig`)。
+/// [VERIFIED 4.4.4 STATIC] —— 全部来自字节级静态取证,**尚无任何运行时读数**:
+/// 写路径见 evidence/analysis/runtime_444_graph_runtime.md §1.2(id→系统对象解析器)、
+/// §1.3(系统对象 `+0x588` 的边容器);trigger 侧三条独立读路径见 §2.2/§2.3/§2.4。
+/// 每个常量旁的注释给的是**站点地址 + 基址来源**(§87 口径:识别容器靠基址来源,不靠位移)。
+pub const graph = struct {
+    /// `0x393a0b mov rax, qword ptr [rip + 0x2ecd186]` — 全局槽,里面存的是**系统索引对象**的
+    /// 绝对地址(引擎拿到它当指针,再解 `+0x18`/`+0x20`)。`readGraph` 的 `galaxy` 参数 = 该对象的
+    /// 绝对地址,**不是**本全局的 RVA、也不是模块基址。
+    /// §1.2 同时更正简报的 `0x3260BB0`:`0x3260b98 + 0x18 == 0x3260bb0` 只是 `.data` 里相邻,
+    /// 不是同一格;两者都在 BSS(文件里没有字节),静态不可定值。base = exe image(全局槽本身)。
+    pub const RVA_SYSTEM_INDEX_GLOBAL: usize = 0x3260B98; // §1.2, 0x393a0b
+    /// `0x393a41 mov rax, qword ptr [rip + 0x2ec9e38]` — 解析失败时的**回退系统对象**全局。
+    /// 本模块**不用**它:解析不上的邻居端点被丢弃并计入 `skipped`,不伪造成一个真系统。
+    /// base = exe image(全局槽本身)。
+    pub const RVA_FALLBACK_SYSTEM: usize = 0x325D880; // §1.2, 0x393a41
+    /// `0x393a26 cmp ecx, dword ptr [rax + 0x20]` — 槽数上界(被比较的是 `id & 0xFFFFFF`)。
+    /// base = 系统索引对象(`[0x3260b98]`)。
+    pub const INDEX_BOUND_OFF: usize = 0x20;
+    /// `0x1afe5f6 mov rax, qword ptr [rdx + 0x18]` — 槽表指针(同一形态在解析器 `0x393a2b`:
+    /// `mov rax, qword ptr [rax + 0x18]`)。base = 系统索引对象(`[0x3260b98]`)。
+    pub const INDEX_TABLE_OFF: usize = 0x18;
+    /// `0x393a32 mov rax, qword ptr [rax + rcx*8 + 8]` — 表首槽在 `table + 8`:
+    /// 表基址的前 8 字节不是槽。base = 槽表指针(`[系统索引对象+0x18]`)。
+    pub const TABLE_SLOT_OFFSET: usize = 0x08;
+    /// `0x1afe607 cmp dword ptr [rdx + 8], r8d` — 表项就是**系统对象**,其 `+8` 是系统 id。
+    /// base = 槽表项(`qword[table + slot*8 + 8]`)。
+    pub const SYSTEM_ID_OFF: usize = 0x08;
+    /// `0x8bbb53 lea rcx, [rdi + 0x588]` — 边容器基址(vtable 头那 8 字节)。base = 系统对象。
+    /// 三条读路径(§2.2–§2.4)都不读这个 vtable 字,本模块也不读。
+    pub const EDGE_VECTOR_OFF: usize = 0x588;
+    /// `0xa6aae3 mov rdx, qword ptr [rdi + 0x590]`(§2.2;§2.3 `0x8cc03f`、§2.4 `0x1b86f80` 同)
+    /// — 边元素数组指针。base = 系统对象。
+    pub const EDGE_DATA_OFF: usize = 0x590;
+    /// `0x8cf8ef mov ecx, dword ptr [rcx + 0x10]` — 容量;`rcx` = 边容器基址(系统对象 +0x588),
+    /// 故系统对象偏移 = 0x588 + 0x10。base = 边容器基址。
+    pub const EDGE_CAPACITY_OFF: usize = 0x598;
+    /// `0xa6aaea movsxd r9, dword ptr [rdi + 0x59c]`(§2.2;§2.3 `0x8cc034`、§2.4 `0x1b86f5d` 同)
+    /// — 元素计数(dword;引擎按有符号读,本模块按无符号读并对 0..=MAX_EDGE_COUNT 设防)。
+    /// base = 系统对象。
+    pub const EDGE_COUNT_OFF: usize = 0x59C;
+    /// `0xa6aaff shl r9, 5` / `0xa6ab50 add rdx, 0x20` — 元素步长。base = 边元素数组。
+    pub const EDGE_STRIDE: usize = 0x20;
+    /// `0xa6ab16 mov r8d, dword ptr [rdx + 8]` — 元素 `+8` = 邻居系统 id。base = 边元素。
+    pub const EDGE_ID_OFF: usize = 0x08;
+    /// 本模块的**防御性**上限,不是引擎常量:容器计数超过它,该容器整段按损坏跳过
+    /// (计入 `skipped`),不进循环。787 系统的真实度远低于此。
+    pub const MAX_EDGE_COUNT: usize = 4096;
+    /// 本模块的**防御性**上限,不是引擎常量:索引对象 `+0x20` 的槽数超过它,
+    /// 判头部损坏(`error.UnreadableIndex`),不逐槽扫 2^32 次。
+    pub const MAX_TABLE_SLOTS: usize = 1 << 20;
+};
+
 /// CEffect object offsets.
 /// [FALSIFIED 3.x] 4.4.4 has NO central dispatch switch — effects are polymorphic
 /// CEffect::Execute via vtable call (evidence/analysis/runtime_444_structures.md).
@@ -608,4 +661,33 @@ test "C4 execution-path constants are pinned" {
     try std.testing.expectEqual(@as(usize, 0x349230), k.RVA_TRIGGER_PREDICATE);
     try std.testing.expect(k.RVA_TRIGGER_PREDICATE != k.RVA_EFFECT_PREDICATE);
     try std.testing.expect(k.RVA_TRIGGER_PREDICATE < text_end);
+}
+
+test "graph: §1/§2 read-path offsets are pinned to the disasm sites" {
+    // A single wrong field here would silently read a different object's memory,
+    // so each constant is pinned to the instruction it was read from rather than
+    // to a caller's expectation. The site addresses are in the comment block.
+    try std.testing.expectEqual(@as(usize, 0x3260B98), graph.RVA_SYSTEM_INDEX_GLOBAL);
+    try std.testing.expectEqual(@as(usize, 0x325D880), graph.RVA_FALLBACK_SYSTEM);
+    try std.testing.expectEqual(@as(usize, 0x20), graph.INDEX_BOUND_OFF);
+    try std.testing.expectEqual(@as(usize, 0x18), graph.INDEX_TABLE_OFF);
+    try std.testing.expectEqual(@as(usize, 0x08), graph.TABLE_SLOT_OFFSET);
+    try std.testing.expectEqual(@as(usize, 0x08), graph.SYSTEM_ID_OFF);
+    try std.testing.expectEqual(@as(usize, 0x588), graph.EDGE_VECTOR_OFF);
+    try std.testing.expectEqual(@as(usize, 0x590), graph.EDGE_DATA_OFF);
+    try std.testing.expectEqual(@as(usize, 0x598), graph.EDGE_CAPACITY_OFF);
+    try std.testing.expectEqual(@as(usize, 0x59c), graph.EDGE_COUNT_OFF);
+    try std.testing.expectEqual(@as(usize, 0x20), graph.EDGE_STRIDE);
+    try std.testing.expectEqual(@as(usize, 0x08), graph.EDGE_ID_OFF);
+    // The container base at +0x588 is the vtable word; the fields the three read
+    // paths (§2.2–§2.4) actually load are data +0x590, capacity +0x598, count +0x59c.
+    try std.testing.expect(graph.EDGE_VECTOR_OFF < graph.EDGE_DATA_OFF);
+    try std.testing.expect(graph.EDGE_DATA_OFF + @sizeOf(u64) <= graph.EDGE_CAPACITY_OFF);
+    try std.testing.expect(graph.EDGE_CAPACITY_OFF + @sizeOf(u32) <= graph.EDGE_COUNT_OFF);
+    // §1.2: the brief's 0x3260BB0 is exactly `global + 0x18` — an adjacent .data cell,
+    // NOT the same qword the resolver loads (`0x393a0b` loads 0x3260B98 itself).
+    try std.testing.expectEqual(@as(usize, 0x3260BB0), graph.RVA_SYSTEM_INDEX_GLOBAL + graph.INDEX_TABLE_OFF);
+    try std.testing.expect(graph.RVA_SYSTEM_INDEX_GLOBAL != keyword_reg.RVA_GALAXY_MAP_DB);
+    try std.testing.expectEqual(@as(usize, 4096), graph.MAX_EDGE_COUNT);
+    try std.testing.expectEqual(@as(usize, 1 << 20), graph.MAX_TABLE_SLOTS);
 }
