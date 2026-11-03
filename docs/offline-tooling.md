@@ -406,18 +406,21 @@ name builder concatenates at runtime (§25.4).
 10. **id 是存档局部的。** 这里的 `system_id` 只对这份存档(与它的 sha256)有意义;换一局、换一版,
     同一个数字指向另一个星系。表不能当跨战役常量用。
 
-### `scripts/c5_variable_probe.py --sav PATH --name neo_mark`
+### `scripts/c5_variable_probe.py --sav PATH <--name VAR | --flag FLAG> [--all]`
 
-C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从存档里逐项对值。工具解 `.sav` 的 ZIP、
+C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从存档里逐项对值。C5-SCORE 的判据 3:
+官方 `set_star_flag` 落下的 flag,同样从存档里数系统。工具解 `.sav` 的 ZIP、
 读文本 `gamestate`,复用 `save_hypergraph.py` 的 tokenizer,只做**窄**筛选:
 
 ```
-<container>={ <system id>={ … variables={ <name>=<value> … } … } … }
+<container>={ <system id>={ … variables={ <name>=<value> … } … flags={ <flag>=… } … } … }
 ```
 
 `<container>` 接受 `galactic_object`(4.4.4 真存档)与 `systems`(测试/旧形状);变量接受
-`name=value` 与 `{ name=… value=… }` 两种编码。输出一行 `name: systems=N min=… max=… sample=…`
-(抽前 5 个 system id 的值);没有该变量是 `systems=0`,退出 0。
+`name=value` 与 `{ name=… value=… }` 两种编码。`--name` 输出 `name: systems=N min=… max=… sample=…`
+(抽前 5 个 system id 的值);`--flag` 只判 **flag 键存在**、不判值,输出
+`flag: systems=N flags_blocks=… sample=…`,加 `--all` 打 `ids=<全量升序>`(用于和离线 tier 集合逐项比对)。
+没有该变量/flag 是 `systems=0`,退出 0。
 
 **判读陷阱:**
 1. **`.sav` 是 ZIP,`gamestate` 是文本。** 不是 ZIP / 没有 `gamestate` / 前 4096 字符有 NUL ⇒
@@ -429,11 +432,15 @@ C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从�
    `id × 100000`;读侧把 `3.00000` 归一成 3,非整数保留浮点。
 4. **两段必须用同一条规则。** `assert_same_rule(write_rule, read_rule)` 按 `pack_rule` 的口径归一
    (`8` 与 `8:0` 相等)后比较,不等即 `ValueError` —— 写入段与读回段覆盖不同星系是假阴性/假阳性的来源。
-   **注意读回段本身不受 `--rule` 过滤**:mod 的 `if = { limit = { is_variable_set = neo_mark } }` 对
-   `every_system` 的每个系统都求值;若复用的存档里**上一窗已经写过** `neo_mark`,用部分规则
-   (例如 `--rule 100:0`)重打时,读回行数会包含旧的系统,大于 `matched`。本轮两发都用 `1:0`(全量),
-   所以计数相等;下一次用部分规则必须换干净存档,或先接受「读回 > matched」是残留而不是异常。
-5. **id 是存档局部的。** 这里的 system id 只对这份存档(与它的 sha256)有意义,不能当跨战役常量。
+   **注意读回段本身不受 `--rule` 过滤**:mod 的读回只问「这个系统有没有这个变量/flag」,对
+   `every_system` 的每个系统都求值;若复用的存档里**上一窗已经写过**,用部分规则(例如 `--rule 100:0`)
+   重打时,读回行数会包含旧的系统,大于 `matched`。C5-SCORE 那一发用 `1:0`(全量),所以计数相等。
+5. **flag 只判键存在、不判值。** 存档里系统 `flags={ neo_tier2=… }` 的值是引擎内部数据,不是脚本值;
+   `--flag` 数的是「有这个键的系统」。`flags_blocks=N` 是本存档里带 `flags` 块的系统数(这一局 586),
+   用来分开「没有 flag」与「根本没有 flags 块」两种 0。
+6. **flag 会持久化。** `set_star_flag` 写进存档后不会因为窗口结束而消失;换窗口/换存档时会读到上一轮
+   的残留。要和离线 tier 集合逐项比对时用 `--flag … --all` 拿全量 id,而不是只看 `sample=`。
+7. **id 是存档局部的。** 这里的 system id 只对这份存档(与它的 sha256)有意义,不能当跨战役常量。
 
 ### `scripts/chokepoint_scores.py <edges.tsv> --out <scores.tsv> [--top N]`
 
@@ -1703,12 +1710,23 @@ BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 4. **永不 `FreeLibrary`(AGENTS 约束 5)。** 回执里的 `sha16` 是这次注入的字节身份;同名模块已在
    进程里时 `refuse_if_resident` 会拒绝,换一个文件名 scp 新构建。窗口结束前跑一次 `--uninstall`:它打 `UNINSTALL rc= verify= alive=`,`rc`/`verify`
    非 0 就等于留下一个指向我们 DLL 的 vtable(已 patch 的对象不回滚)。
+5. **50 ms 注入不一定稳。** 2026-11-03 的一次尝试在进程出现后立刻注入,游戏在写 `setup.log` **之前**
+   就崩了(Application 日志:stellaris.exe / ntdll / c0000005;没有 Paradox crash 目录);同一份 DLL
+   晚了 2 分钟注入到已载入的游戏里则存活。`--settle-s 5` 的同一发成功。判据:host 死但 `setup.log`
+   时间戳没变 ⇒ 先怀疑注入时机,不要先怀疑 mod。
+6. **`session_bridge` 的任务会排到 +120 s 并同时 `/run`。** 任务没及时删掉时,排定的那份会**再跑一次**
+   shim;对 `--launch` 命令就是**第二个游戏进程**(`resolve_base_address` 按进程名查,会报
+   `appears 2 times`)。每次调用返回后立刻 `schtasks /delete /tn NSWorldOneShot /f`。
+7. **暂停键可能被吞。** `space` 不生效时先读两次 `--stats`(间隔 25 s)确认真的在跑;`esc`(打开游戏
+   菜单)也能停住模拟,2026-11-03 的窗口就是用它停的。
 
 **`--stats` 的一行**(键序固定):`calls`(我们的 token 被派发的次数)/ `matched`(过规则)/
 `log_calls`(真调了 `0x185BF60`)/ `last_id` / `rule_hits` / `installed` / `verify` /
 `dispatched`(detour 看到的总入口)/ `null_scope`(第二实参读不了)/ `mask_odd`(scope 的 `+0x08`
 不是 `0x80` ⇒ 不是 system scope,body 不做)。C5-WRITE 在行尾追加 `writes`(真调了官方 `set_variable`
-body 的次数)/ `skipped`(该写但 body/vtable 地址没解析到)。**`dispatched` 是判读的分水岭**:`calls=0` 且
+body 的次数)/ `skipped`(该写但 body/vtable 地址没解析到);C5-SCORE 再追加
+`score_writes`(真调了 `neo_score` 那次 body 的次数)/ `score_skipped`(越界 id 或地址没解析到)。
+**`dispatched` 是判读的分水岭**:`calls=0` 且
 `dispatched=0` = hook 不在路径上;`dispatched>0` 且 `calls=0` = 在路径上但 token 不符(§93.2 第一发
 就卡在这一格);`calls>0` 但 `matched=0` 且 `mask_odd>0` = 类型门在挡,不是规则。`writes=0` 且
 `skipped>0` = body 地址没解析到(`resolveFromGame`),不是变量容器返回 0。

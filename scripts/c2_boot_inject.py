@@ -19,7 +19,8 @@
     python C:/temp/c2_boot_inject.py --stats --log "<...>/logs/game.log"   # read back
 
 `--rule MOD:REM`(默认 `1:0` = 所有 id)在安装成功后立刻装进 DLL;`--act log|write`
-(默认 `log`)决定命中时只写日志,还是日志 + 在系统 scope 上写 `neo_mark`(C5-WRITE);
+(默认 `log`)决定命中时只写日志,还是日志 + 在系统 scope 上写两个变量
+(`neo_mark` = 星系 id,`neo_score` = 离线图分数;C5-WRITE + C5-SCORE);
 `--stats` 不注入,只把 `C2NeoStatsInto` 的一行(和日志当前字节偏移)打出来;
 `--uninstall` 拆 detour 并返回 `UNINSTALL rc= verify= alive=`,窗口结束前必须跑一次。
 
@@ -305,7 +306,7 @@ def main(argv=None) -> int:
     parser.add_argument("--rule", default="1:0",
                         help="MOD:REM armed after install; 1:0 = every id, 0:0 = off")
     parser.add_argument("--act", default="log", choices=("log", "write"),
-                        help="log = 只写日志(C5-ADD);write = 日志 + 系统变量 neo_mark")
+                        help="log = 只写日志(C5-ADD);write = 日志 + 写 neo_mark 与 neo_score")
     parser.add_argument("--stats", action="store_true",
                         help="do not inject: print C2NeoStatsInto from the running pid")
     parser.add_argument("--pred", action="store_true",

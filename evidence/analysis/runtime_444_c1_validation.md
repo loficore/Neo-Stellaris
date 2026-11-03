@@ -10085,3 +10085,91 @@ mod 的事件文件在 shot 前备份到 `C:\temp\neo_ps_probe_events.txt.bak-20
   (b) 暂停键可能被吞一次,读数与日志要取**同一时刻**的 `--stats` 与日志增量,否则会差一个月的 787;
   (c) 读回段不受 `--rule` 过滤 —— 它只问「这个系统有没有 `neo_mark`」,复用的存档里上一窗写下的
   变量会让部分规则的读回行数大于 `matched`。两发都用 `1:0`,所以本节的相等成立;部分规则必须换干净存档。
+
+## §95 数据驱动的系统状态 —— 离线分数进游戏,官方 DSL 按分数分支(2026-11-03,实机一发可用,授权 = spec `2026-11-02-c5-score-state-design.md`)
+
+**这一节回答的是「数据」**:C5-WRITE 写进去的是星系 id(替身);这一发把**离线算出来的图分数**
+写进 `neo_score`,让普通 mod 用官方 `check_variable` 按阈值分支、用 `set_star_flag` 落下真实状态,
+再由官方 `has_star_flag` 与存档双侧读回。
+
+### §95.1 判据
+
+1. `calls = matched = writes = score_writes = N × 787`;`skipped = score_skipped = 0`;
+2. 每月 `NEO_TIER2` = **15**、`NEO_TIER1` = **55**(离线分层精确相等);
+3. 存档里 15/55 个系统分别带 `neo_tier2`/`neo_tier1`,`NEO_FLAG2/1` 的窗口计数同样逐月相等;
+4. 存档里 787 个系统的 `neo_score` 逐个 = 离线表分数,`neo_mark` 逐个 = id;
+5. `error.log` 干净、装拆 `rc=0`/`verify=0`、host 存活、mod 还原。
+
+### §95.2 图身份(窗口前,离线,零 shot)
+
+- 本发载入的存档 `autosave_2257.07.01.sav`(sha256 `fa6f3bfdd8fd3d3ff0f46d8f343befc707231d51e98637882b7032f37dff2e2e`):
+  重建 `787` 系统 / `1,217` 无向边 / 1 连通块;
+- `chokepoint_scores.py` 重算的七列与 `evidence/xrefs/chokepoint_scores_4_4_4.tsv` **逐字节相同**;
+- 分层:`score >= 200` = **15**,`100..199` = **55**,其余 **717**(与 C4 的 `EXPECTED_TIERS` 一致)。
+⇒ 烘焙进 `chokepoint_table.zig` 的表对本战役有效,不改表、不改 `justfile` 的 save sha 门。
+
+### §95.3 读数(pid 14000,`sqjs_c46.dll`,sha16 `7c07130a40eb6a19`,effect_id 19343,`--settle-s 5`)
+
+暂停基线(`game.log` 偏移 **177**):
+```
+calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 installed=1 verify=0 dispatched=0
+null_scope=0 mask_odd=0 writes=0 skipped=0 score_writes=0 score_skipped=0
+```
+
+跑 9 个月后(暂停,25 s 内两次相同):
+```
+calls=7083 matched=7083 log_calls=7083 last_id=786 rule_hits=64 installed=1 verify=0
+dispatched=72429 null_scope=0 mask_odd=0 writes=7083 skipped=0 score_writes=7083 score_skipped=0
+```
+`7083 = 9 × 787`。
+
+`game.log` 自偏移 177 起:
+- `Neo: system` **7,083**(写 id 那一路);
+- `NEO_TIER2` **135** = 15 × 9(15 个不同 id,每个 9 次);
+- `NEO_TIER1` **495** = 55 × 9(55 个不同 id,每个 9 次);
+- `NEO_FLAG2` **135**、`NEO_FLAG1` **495**(集合与 tier 行相同);
+- `PS_HIT` 9(控制组,同文本折叠);
+- 行形态:`[...][effect_impl.cpp:21978]: [2257.8.1] Log effect, file: events/neo_ps_probe_events.txt
+  line: 28. NEO_TIER2 82`。
+
+`error.log` 35 行,`Unknown trigger`/`Unknown effect`/`Unexpected token` 各 **0**。
+
+### §95.4 存档读数
+
+`autosave_2258.01.01.sav`(sha256 `961273f30e03aaa0d0697d0815168c71ed15390a312263a360b1232043abe675`):
+
+- `neo_mark`:787 个系统,逐项 = id,**0 处不等**;
+- `neo_score`:787 个系统,逐项 = `chokepoint_scores_4_4_4.tsv` 的 score 列,**0 处不等**;min 0 / max 286;
+- `neo_tier2`:15 个系统,集合与离线 `score >= 200` 的集合**相等**;
+- `neo_tier1`:55 个系统,集合与离线 `100..199` 的集合**相等**;
+- `flags_blocks=586`(有 `flags` 块的系统数,用来把「没有该 flag」与「没有 flags 块」分开)。
+
+### §95.5 判词
+
+**`score_drives_official_state`。** spec §5 的五条:计数相等、tier 精确 15/55、两个 flag 集合与离线一致、
+存档两值逐项相等、官方未受损。⇒ **我们的数据被普通 mod 逻辑消费,引擎自己比值、自己落官方状态、
+自己读回。**
+
+### §95.6 这一节不能说的(三条)
+
+1. **分数表是存档局部的。** 只在「本战役 787 系统、图未变」时有效;换存档/换战役分数会指向别的星系
+   (§94.6 第 3 条同源)。本节用「重算分数 == 源 TSV」证明这一发有效,不是跨战役承诺。
+2. **`check_variable` 只证了阈值比较。** 15/55/717 的分层精确相等证明引擎比了每个系统的分数;但没有证
+   `==` 精确相等,也没有证非整数/负数。
+3. **star flag 会持久化。** `set_star_flag` 写下的 `neo_tier*` 不会因窗口结束消失;后续窗口/存档会读到
+   上一轮的残留,`--flag … --all` 是唯一能逐项对集合的读法。
+
+### §95.7 现场、失败与回滚
+
+- **发数**:预算 ≤2;实际 **2 次启动尝试**。第 1 次(50 ms 注入)在游戏写 `setup.log` **之前**崩
+  (Application 日志:stellaris.exe / ntdll / c0000005;无 Paradox crash 目录,无我们的导出)。同一份 DLL
+  在已载入的游戏里只 load 不 install 时存活;第 2 次用 `--settle-s 5` 成功。⇒ 失败归「早期注入时机」,
+  不是新代码;`c2_selfabort_repro.py` 也判该 DLL 不自杀。
+- **通道事故**:`session_bridge` 的一次性任务会排到 +120 s 并同时 `/run`;任务没及时删掉时排定的那份会
+  再跑一次 shim,对 `--launch` 命令等于**第二个游戏进程**(`resolve_base_address` 报 `appears 2 times`)。
+  本窗口每次调用后手动 `schtasks /delete /tn NSWorldOneShot /f`。
+- **暂停**:`space` 被吞了一次;`esc`(菜单)停住模拟后读数稳定(两次 `--stats` 间隔 25 s 相同)。
+- **装拆**:`C2NeoInstall rc=0`;`UNINSTALL rc=0 verify=0 alive=1`;mod 文件按备份还原,
+  sha256 `980A3DF14371D25ACE9181AB1E90C7B1A3B4FD15CC42F6255A5F760959797F0F`;收尾后 host 上
+  `stellaris.exe` 进程数 = 0。
+- **不改表**:`chokepoint_table.zig`、`justfile` 的 save sha 门、C4 的 `TIER1_MIN/TIER2_MIN` 语义一处未动。
