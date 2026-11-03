@@ -313,8 +313,8 @@ pub const keyword_reg = struct {
 
 /// 图运行时**只读读图器**的偏移常量(`src/dll/c2/galaxy_graph.zig`)。
 /// [VERIFIED 4.4.4 STATIC] —— 全部来自字节级静态取证,**尚无任何运行时读数**:
-/// 写路径见 evidence/analysis/runtime_444_graph_runtime.md §1.2(id→系统对象解析器)、
-/// §1.3(系统对象 `+0x588` 的边容器);trigger 侧三条独立读路径见 §2.2/§2.3/§2.4。
+/// 写路径见 evidence/analysis/runtime_444_graph_runtime.md §1.2(id→系统对象解析器;表项步长
+/// 的勘误见 §1.11)、§1.3(系统对象 `+0x588` 的边容器);trigger 侧三条独立读路径见 §2.2/§2.3/§2.4。
 /// 每个常量旁的注释给的是**站点地址 + 基址来源**(§87 口径:识别容器靠基址来源,不靠位移)。
 pub const graph = struct {
     /// `0x393a0b mov rax, qword ptr [rip + 0x2ecd186]` — 全局槽,里面存的是**系统索引对象**的
@@ -333,11 +333,18 @@ pub const graph = struct {
     /// `0x1afe5f6 mov rax, qword ptr [rdx + 0x18]` — 槽表指针(同一形态在解析器 `0x393a2b`:
     /// `mov rax, qword ptr [rax + 0x18]`)。base = 系统索引对象(`[0x3260b98]`)。
     pub const INDEX_TABLE_OFF: usize = 0x18;
-    /// `0x393a32 mov rax, qword ptr [rax + rcx*8 + 8]` — 表首槽在 `table + 8`:
-    /// 表基址的前 8 字节不是槽。base = 槽表指针(`[系统索引对象+0x18]`)。
-    pub const TABLE_SLOT_OFFSET: usize = 0x08;
+    /// **表项记录步长 = 16 B**。证据是两条相邻指令:`0x393a2f add rcx, rcx`(`rcx` 此前是
+    /// `slot` ⇒ `rcx = 2*slot`)之后才是 `0x393a32 mov rax, qword ptr [rax + rcx*8 + 8]`,
+    /// 合起来 `rax = [表 + slot*16 + 8]`。**那个 `add rcx,rcx` 就是步长翻倍的全部证据** ——
+    /// 按 8 字节步长直接读 `[表 + slot*8 + 8]` 是**错的**(勘误见
+    /// evidence/analysis/runtime_444_graph_runtime.md §1.11)。base = 槽表指针
+    /// (`[系统索引对象+0x18]`,由 `0x393a2b mov rax, qword ptr [rax + 0x18]` 装入)。
+    pub const TABLE_RECORD_SIZE: usize = 16; // §1.11, 0x393a2f + 0x393a32
+    /// **16 B 记录里,系统对象指针在记录的 `+8`**:记录的前 8 字节不是指针
+    /// (`0x393a32` 的 `... + 8`)。base = 表项记录(`表 + slot*16`)。
+    pub const TABLE_SLOT_PTR_OFF: usize = 0x08; // §1.11, 0x393a32
     /// `0x1afe607 cmp dword ptr [rdx + 8], r8d` — 表项就是**系统对象**,其 `+8` 是系统 id。
-    /// base = 槽表项(`qword[table + slot*8 + 8]`)。
+    /// base = 表项记录里那个指针(`qword[table + slot*16 + 8]`)。
     pub const SYSTEM_ID_OFF: usize = 0x08;
     /// `0x8bbb53 lea rcx, [rdi + 0x588]` — 边容器基址(vtable 头那 8 字节)。base = 系统对象。
     /// 三条读路径(§2.2–§2.4)都不读这个 vtable 字,本模块也不读。
@@ -671,7 +678,10 @@ test "graph: §1/§2 read-path offsets are pinned to the disasm sites" {
     try std.testing.expectEqual(@as(usize, 0x325D880), graph.RVA_FALLBACK_SYSTEM);
     try std.testing.expectEqual(@as(usize, 0x20), graph.INDEX_BOUND_OFF);
     try std.testing.expectEqual(@as(usize, 0x18), graph.INDEX_TABLE_OFF);
-    try std.testing.expectEqual(@as(usize, 0x08), graph.TABLE_SLOT_OFFSET);
+    try std.testing.expectEqual(@as(usize, 0x08), graph.TABLE_SLOT_PTR_OFF);
+    // §1.11: the record stride is 16 B because of `0x393a2f add rcx,rcx` before the
+    // `[rax + rcx*8 + 8]` load. An 8-byte stride is the falsified reading.
+    try std.testing.expectEqual(@as(usize, 16), graph.TABLE_RECORD_SIZE);
     try std.testing.expectEqual(@as(usize, 0x08), graph.SYSTEM_ID_OFF);
     try std.testing.expectEqual(@as(usize, 0x588), graph.EDGE_VECTOR_OFF);
     try std.testing.expectEqual(@as(usize, 0x590), graph.EDGE_DATA_OFF);

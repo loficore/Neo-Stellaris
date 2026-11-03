@@ -200,6 +200,10 @@ test "chokepoint_dynamic: synthetic fixture matches the offline scores" {
 // 镜像是一个 little-endian 的字节区,边界检查得像真内存:任何越界读都会置
 // `escaped`,于是测试能断言读图器从不走出结构(每一次解引用都经过 Memory.read)。
 // 偏移全部取自 `offsets.graph`,所以镜像与读图器不会各走各的。
+//
+// 表项按 §1.11 的 **16 字节记录**布:记录 `+8` 是系统对象指针。
+// 「诱饵位」`table + slot*8 + 8` 是 8 字节步长实现会读到的地方(见 `setDecoy`),
+// 用专门的回归测试盯着它 —— 步长写错时,读图器会静默读到别的对象,而不报错。
 // ---------------------------------------------------------------------------
 
 const gg = galaxy_graph;
@@ -218,6 +222,9 @@ const Mirror = struct {
     /// 每个槽一份边元素块(步长 0x20)。
     const EDGES: usize = BASE + 0x2_1000;
     const EDGE_BLOCK: usize = 0x200;
+    /// 诱饵记录区(8 字节步长实现的陷阱),见 `setDecoy`。
+    const DECOY: usize = BASE + 0x3_0000;
+    const DECOY_STRIDE: usize = 0x100;
 
     buf: [SIZE]u8 = [_]u8{0} ** SIZE,
     /// 让这个地址上的读失败(0 = 不失败)。
@@ -258,7 +265,25 @@ fn elemIdAddr(slot: usize, k: usize) usize {
 }
 
 fn slotAddr(slot: usize) usize {
-    return Mirror.TABLE + gg_off.TABLE_SLOT_OFFSET + slot * @sizeOf(usize);
+    // §1.11: records are 16 B; the entry pointer sits at record +8.
+    return Mirror.TABLE + slot * gg_off.TABLE_RECORD_SIZE + gg_off.TABLE_SLOT_PTR_OFF;
+}
+
+/// 8 字节步长实现会读到的「诱饵位」:`table + slot*8 + 8`。
+/// (只有奇数槽适用:偶数槽的 `slot*8+8` 正好压在真指针上。)
+fn decoySlotAddr(slot: usize) usize {
+    return Mirror.TABLE + slot * 8 + 8;
+}
+
+fn decoyObjAddr(k: usize) usize {
+    return Mirror.DECOY + k * Mirror.DECOY_STRIDE;
+}
+
+/// 在 `table + slot*8 + 8` 放一个指针,指向 id 与 `slot` **不匹配**的记录。
+/// 16 字节步长的正确实现永远不读这一格;8 字节步长的实现会读到它并因此算错。
+fn setDecoy(m: *Mirror, slot: usize, k: usize, id: u32) void {
+    putQword(m, decoySlotAddr(slot), decoyObjAddr(k));
+    putDword(m, decoyObjAddr(k) + gg_off.SYSTEM_ID_OFF, id);
 }
 
 fn putBytes(m: *Mirror, addr: usize, bytes: []const u8) void {
@@ -443,5 +468,83 @@ test "galaxy_graph: an unreadable index header is an error, not an empty graph" 
         Mirror.GALAXY,
         &out,
     ));
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: the table record stride is 16 bytes, not 8" {
+    var m = Mirror{};
+    setGalaxy(&m, 4, Mirror.TABLE);
+    // 活着的槽取奇数(1 与 3):偶数槽的诱饵位 `slot*8+8` 正好压在真指针上,布不了诱饵。
+    setSystem(&m, 1, 1, &.{3});
+    setSystem(&m, 3, 3, &.{1});
+    // 诱饵:8 字节步长的实现会读到 `table + slot*8 + 8`,拿到 id 不匹配的记录。
+    setDecoy(&m, 1, 0, 0x1111);
+    setDecoy(&m, 3, 1, 0x2222);
+
+    var out: [8]gg.Edge = undefined;
+    const stats = try gg.readGraph(mirrorMemory(&m), Mirror.GALAXY, &out);
+
+    // 16 字节步长:槽 1 与槽 3 都活着,一条无向边 1-3,没有丢弃项。
+    try std.testing.expectEqual(@as(usize, 2), stats.systems);
+    try std.testing.expectEqual(@as(usize, 1), stats.edges);
+    try std.testing.expectEqual(@as(usize, 0), stats.skipped);
+    try expectEdges(&.{.{ 1, 3 }}, out[0..stats.edges]);
+    // 8 字节步长的实现会在这里读到诱饵(两个槽都变成不匹配 ⇒ systems=0/edges=0/skipped=3)。
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: a null index object or a null table is error.UnreadableIndex" {
+    var m = Mirror{};
+    setGalaxy(&m, 3, Mirror.TABLE);
+    var out: [8]gg.Edge = undefined;
+
+    // galaxy == 0:连头部都不该去读(地址 0x20 不在镜像里,读了就会 escaped)。
+    try std.testing.expectError(error.UnreadableIndex, gg.readGraph(
+        mirrorMemory(&m),
+        0,
+        &out,
+    ));
+    // 表指针为空:索引对象在,但它没有表 —— 这不是「没有边」。
+    setGalaxy(&m, 3, 0);
+    try std.testing.expectError(error.UnreadableIndex, gg.readGraph(
+        mirrorMemory(&m),
+        Mirror.GALAXY,
+        &out,
+    ));
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: a zero slot bound is error.UnreadableIndex, not an empty graph" {
+    var m = Mirror{};
+    setGalaxy(&m, 0, Mirror.TABLE);
+    var out: [8]gg.Edge = undefined;
+    try std.testing.expectError(error.UnreadableIndex, gg.readGraph(
+        mirrorMemory(&m),
+        Mirror.GALAXY,
+        &out,
+    ));
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: a count beyond the container capacity is skipped, never walked" {
+    var m = Mirror{};
+    setGalaxy(&m, 3, Mirror.TABLE);
+    // 系统 0 的容器头说 2 个元素,但只分配了 1 个(capacity = 1)。
+    setSystem(&m, 0, 0, &.{1});
+    setSystem(&m, 1, 1, &.{});
+    setSystem(&m, 2, 2, &.{});
+    putDword(&m, objAddr(0) + gg_off.EDGE_COUNT_OFF, 2);
+    // 第二个元素**读不出来**:读图器若按 count 走,要么读到它、要么在此处失败,
+    // 两者都会让下面的断言(edges == 0)不成立。
+    m.fail_at = elemIdAddr(0, 1);
+
+    var out: [8]gg.Edge = undefined;
+    const stats = try gg.readGraph(mirrorMemory(&m), Mirror.GALAXY, &out);
+
+    // 容器头与分配不自洽 ⇒ 整段跳过,不按 count 走过分配边界。
+    try std.testing.expectEqual(@as(usize, 1), stats.skipped);
+    try std.testing.expectEqual(@as(usize, 3), stats.systems);
+    // 系统 0 是唯一可能的边来源,它被跳过 ⇒ 一条边都没有。
+    try std.testing.expectEqual(@as(usize, 0), stats.edges);
     try std.testing.expect(!m.escaped);
 }

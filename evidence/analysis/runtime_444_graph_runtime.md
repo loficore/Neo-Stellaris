@@ -320,6 +320,40 @@ insert_fn, remove_fn`} 一一对应。
 
 ⇒ 读本卷不要顺手把 §88 当被证伪,读 §88 也不要把本卷的 `+0x588/+0x590/+0x59c` 套上去。
 
+### §1.11 勘误(2026-11-03,Task 6):表项记录步长是 **16 B**,不是 8 B
+
+§1.2 的指令清单里那句注释 `; entry = [表 + idx*8 + 8]` **不完整**:它漏抄了紧邻的
+`0x393a2f add rcx, rcx`(槽号在寻址前被**翻倍**)。原文照抄如下(基址 `0x140000000`):
+
+```
+00393a20  and   ecx, 0xffffff
+00393a26  cmp   ecx, dword ptr [rax + 0x20]
+00393a29  jae   0x140393a41
+00393a2b  mov   rax, qword ptr [rax + 0x18]
+00393a2f  add   rcx, rcx                  ; rcx = 2 * slot  <-- 就是这一步
+00393a32  mov   rax, qword ptr [rax + rcx*8 + 8]
+```
+
+`rcx` 在 `0x393a20` 时是 `id & 0xFFFFFF`(= 槽号),到 `0x393a2f` 被 `add rcx,rcx` 翻倍,
+于是 `0x393a32` 的 `[rax + rcx*8 + 8]` 实际是 **`[表 + slot*16 + 8]`**。
+
+- **表项记录 = 16 B**;记录的 `+0` 不是指针,**系统对象指针在记录 `+8`**。
+- 两句站点:`0x393a2f add rcx,rcx`(步长翻倍)+ `0x393a32 mov rax,[rax+rcx*8+8]`(取值);
+  基址来源仍是 `0x393a2b mov rax,[rax+0x18]`(即 `[系统索引对象+0x18]`)。
+- 按 8 字节步长读 `[表 + slot*8 + 8]` 会落在**记录头**或**前一条记录**上,**静默读错对象**,
+  不报错 —— 这类错误只能靠上面那条 `add rcx,rcx` 预先排除。
+
+**影响面(仅此,不牵动别处)**:
+
+1. **§1.2 其余结论不变**:`id` 来自 scope `+0x10`(非 `+0`)、边界 `[对象+0x20]`、
+   表指针 `[对象+0x18]`、命中条件 `entry+8 == id`、回退对象 `0x325d880` —— 全部照旧。
+   本节只是把 §1.2 里那一行**寻址注释**补成完整的三条指令。
+2. **§1.3 的字段表不受影响**:那是**系统对象 `+0x588` 的边容器**(数据 `+0x590`、容量 `+0x598`、
+   计数 `+0x59c`、步长 `0x20`),与系统索引对象的**表项步长**是两回事,互不涉及。
+3. **Task 6 的读图器**(`src/dll/c2/galaxy_graph.zig`)按本条实现:两次查表
+   (`readGraph` 枚举槽、`resolves` 核对邻居)都用 `表 + slot*16 + 8`;常量
+   `offsets.graph.TABLE_RECORD_SIZE = 16` 与 `TABLE_SLOT_PTR_OFF = 8` 指本条。
+
 ## §2 读路径(trigger 侧):`has_hyperlane_to` / `closest_system` / `num_neighbor_systems`
 
 判决:**`edge_store_read_confirmed`** —— 三条**互相独立**的 trigger 侧读路径都落到 §1 的同一组

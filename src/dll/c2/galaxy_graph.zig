@@ -21,12 +21,14 @@
 // 不是模块基址,不是那个全局槽自己的地址,也不是解析器的回退对象。该对象:
 // `+0x18` = 槽表指针,`+0x20` = 槽数上界。
 //
-// 解析口径(§1.2,引擎自己那次查表):
+// 解析口径(§1.2,引擎自己那次查表;表项步长的勘误见 §1.11):
 //   slot = id & 0xFFFFFF
 //   slot >= bound        → 查不到
-//   entry = qword[table + slot*8 + 8]   (表基址的前 8 字节不是槽)
+//   entry = qword[table + slot*16 + 8]  (记录 16 B,指针在记录 +8;见下)
 //   entry == 0           → 查不到
 //   dword[entry+8] != id → 查不到(引擎用这一条挡住陈旧/别名表项)
+// **16 不是 8**:引擎在 `0x393a2f` 先 `add rcx,rcx` 把槽号翻倍,才 `0x393a32` 读
+// `[rax + rcx*8 + 8]` ⇒ 步长是 16 B。按 8 B 步长读会落到记录的**头**上,静默读错对象。
 // 枚举时没有「请求 id」,于是用同一不变量的另一面:表项可达 ⇔ (entry_id & 0xFFFFFF) == slot。
 // 所以本模块**从不把系统 id 当槽位下标**(也不把槽位下标当系统 id);邻居 id 也是经同一次
 // 表查核对(§2.2 的 `0xa6ab3b cmp dword ptr [rax+8], r8d`),而不是伪造端点。
@@ -41,13 +43,18 @@
 //   * 表项 id 与槽位不自洽(`id & 0xFFFFFF != slot`,陈旧/别名表项);
 //   * 表项 id 超出 u16(`Edge` 装不下);
 //   * 容器计数读失败,或计数 > `MAX_EDGE_COUNT`,或计数 > 0 而数据指针为空;
+//   * 容器容量读失败,或 `count > capacity`(容器头与分配不自洽,拒绝走过分配边界);
 //   * 邻居元素 id 读失败,或超出 u16,或经表查核对不上(`entry_id == id` 不成立)。
 // 空槽位**不算**丢弃项(那是稀疏索引表的正常形态);自环与重复无向对是**过滤**、不计入。
 //
 // 短 `out`:唯一的多余错误是 `error.BufferTooSmall`。首次写不下时立刻返回,`out[0..k]` 是
-// 枚举序的**确定性前缀** —— 不是静默截断后当成功(但注意 error union 拿不回统计值)。
-// 索引对象头部读不到、或 `+0x20` 的槽数超防御上限 → `error.UnreadableIndex`:
-// 拿不到银河对象就是拿不到图,返回空图会把「读不到」伪装成「没有边」。
+// 枚举序的**确定性前缀** —— 不是静默截断后当成功。但**注意:走 error union 就丢掉了
+// `ReadStats`**,所以那个前缀只是「给日志看」的信息;调用方若要拿到可续写的断点,必须先用
+// 一趟只有计数意义的调用把 `out` 量好(或自己给足 `out.len`),不能指望从 `BufferTooSmall`
+// 里读出 `k`。
+// 索引对象头部读不到、或 `galaxy == 0`、`table == 0`、或 `+0x20` 的槽数为 0 或超防御上限
+// → `error.UnreadableIndex`:拿不到银河对象就是拿不到图,返回空图会把「读不到」伪装成
+// 「没有边」(I1/I2)。
 
 const std = @import("std");
 const cd = @import("chokepoint_dynamic.zig");
@@ -66,8 +73,10 @@ pub const ReadStats = struct { systems: usize, edges: usize, skipped: usize };
 
 pub const Error = error{
     /// `out` 装不下唯一边集;`out[0..k]` 是枚举序的确定性前缀(见文件头)。
+    /// **统计值在 error union 里丢了** —— `k` 只对日志有意义;要续写断点请自己量好 `out`。
     BufferTooSmall,
-    /// 索引对象头部(`+0x18` 表指针 / `+0x20` 槽数)读不到,或槽数超出防御上限。
+    /// 索引对象头部(`+0x18` 表指针 / `+0x20` 槽数)读不到,或 `galaxy`/`table` 为空指针,
+    /// 或槽数为 0,或槽数超出防御上限。
     UnreadableIndex,
 };
 
@@ -80,16 +89,21 @@ const MAX_ID: u32 = std.math.maxInt(u16);
 /// 返回 `systems` = 表里活着的系统数,`edges` = 写进 `out` 的唯一边数,
 /// `skipped` = 被丢弃的枚举项数(口径见文件头)。
 pub fn readGraph(mem: Memory, galaxy: usize, out: []Edge) Error!ReadStats {
+    // 空指针不是「空图」:判头部失败,别把「读不到」伪装成「没有边」(I1)。
+    if (galaxy == 0) return error.UnreadableIndex;
     const bound = readDword(mem, galaxy + graph.INDEX_BOUND_OFF) orelse return error.UnreadableIndex;
+    // 槽数为 0 只能是「头部读到了但内容不像索引对象」——同样按读不到处理(I2)。
+    if (bound == 0) return error.UnreadableIndex;
     if (bound > graph.MAX_TABLE_SLOTS) return error.UnreadableIndex;
     const table = readPtr(mem, galaxy + graph.INDEX_TABLE_OFF) orelse return error.UnreadableIndex;
+    if (table == 0) return error.UnreadableIndex;
 
     var stats = ReadStats{ .systems = 0, .edges = 0, .skipped = 0 };
 
     const slots: usize = bound;
     var slot: usize = 0;
     while (slot < slots) : (slot += 1) {
-        const entry = readPtr(mem, table + graph.TABLE_SLOT_OFFSET + slot * @sizeOf(usize)) orelse {
+        const entry = readSlot(mem, table, slot) orelse {
             stats.skipped += 1;
             continue;
         };
@@ -132,6 +146,18 @@ fn readSystemEdges(
         stats.skipped += 1;
         return;
     }
+    // 容量(`容器基址+0x10`,§1.3):`count > capacity` 说明容器头与分配不自洽,
+    // 此时**不许**按 count 走 —— 那会走过分配边界。整段跳过并计数。
+    // 口径注记:容量按**元素数**读;若引擎那边其实是字节口径,健康向量恒有
+    // `capacity >= count`,本检查同样不会误伤。
+    const capacity = readDword(mem, system + graph.EDGE_CAPACITY_OFF) orelse {
+        stats.skipped += 1;
+        return;
+    };
+    if (count > capacity) {
+        stats.skipped += 1;
+        return;
+    }
     const data = readPtr(mem, system + graph.EDGE_DATA_OFF) orelse {
         stats.skipped += 1;
         return;
@@ -167,18 +193,24 @@ fn readSystemEdges(
     }
 }
 
-/// 引擎自己的查表形状(§1.2):`id & 0xFFFFFF` 定槽,槽表项非空且 `entry_id == id`。
+/// 引擎自己的查表形状(§1.2;步长见 §1.11):`id & 0xFFFFFF` 定槽,
+/// `entry = qword[表 + slot*16 + 8]`,槽表项非空且 `entry_id == id`。
 /// 这不是「按 id 取第几个系统」——槽位是算出来的,而且必须被表项自己确认。
 fn resolves(mem: Memory, table: usize, bound: u32, id: u32) bool {
     const slot = id & MASK24;
     if (slot >= bound) return false;
-    const entry = readPtr(
-        mem,
-        table + graph.TABLE_SLOT_OFFSET + @as(usize, slot) * @sizeOf(usize),
-    ) orelse return false;
+    const entry = readSlot(mem, table, slot) orelse return false;
     if (entry == 0) return false;
     const entry_id = readDword(mem, entry + graph.SYSTEM_ID_OFF) orelse return false;
     return entry_id == id;
+}
+
+/// 读第 `slot` 号表项里的系统对象指针。
+/// **表项步长是 16 B**(`0x393a2f add rcx,rcx` → `0x393a32 mov rax,[rax+rcx*8+8]`),
+/// 指针在记录的 `+8` —— 不是一个 8 字节的 qword 数组(§1.11 勘误)。
+fn readSlot(mem: Memory, table: usize, slot: usize) ?usize {
+    const addr = table + slot * graph.TABLE_RECORD_SIZE + graph.TABLE_SLOT_PTR_OFF;
+    return readPtr(mem, addr);
 }
 
 fn pairPresent(existing: []const Edge, a: u16, b: u16) bool {
