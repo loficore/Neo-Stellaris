@@ -2080,3 +2080,16 @@ def test_ubsan_site_truncated_input_exits_2_not_a_no_pdata_finding(tmp_path, cap
     assert "Traceback" not in err, err
     assert err.startswith("[ubsan_site] "), err
     assert err.count("\n") == 1, err
+
+
+def test_base_lookup_is_keyed_on_the_pid():
+    """Two ``stellaris.exe`` processes made a name-keyed lookup ambiguous.
+
+    2026-11-03: a second game (the bridge ran its one-shot twice) made
+    ``Get-Process stellaris`` return the module twice and the driver refused
+    with ``appears 2 times``.  The lookup must name the pid the driver injected.
+    """
+    cmd = c2_harness.base_lookup_command(4242, "sqjs_test.dll")
+    assert "-Id 4242" in cmd
+    assert "Get-Process stellaris" not in cmd
+    assert "ModuleName -eq 'sqjs_test.dll'" in cmd

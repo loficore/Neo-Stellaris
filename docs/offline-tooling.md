@@ -1710,13 +1710,15 @@ BOOT dll=<name> sha=<sha16> effect_id=<n> install_rc=0 alive=1
 4. **永不 `FreeLibrary`(AGENTS 约束 5)。** 回执里的 `sha16` 是这次注入的字节身份;同名模块已在
    进程里时 `refuse_if_resident` 会拒绝,换一个文件名 scp 新构建。窗口结束前跑一次 `--uninstall`:它打 `UNINSTALL rc= verify= alive=`,`rc`/`verify`
    非 0 就等于留下一个指向我们 DLL 的 vtable(已 patch 的对象不回滚)。
-5. **50 ms 注入不一定稳。** 2026-11-03 的一次尝试在进程出现后立刻注入,游戏在写 `setup.log` **之前**
-   就崩了(Application 日志:stellaris.exe / ntdll / c0000005;没有 Paradox crash 目录);同一份 DLL
-   晚了 2 分钟注入到已载入的游戏里则存活。`--settle-s 5` 的同一发成功。判据:host 死但 `setup.log`
-   时间戳没变 ⇒ 先怀疑注入时机,不要先怀疑 mod。
-6. **`session_bridge` 的任务会排到 +120 s 并同时 `/run`。** 任务没及时删掉时,排定的那份会**再跑一次**
-   shim;对 `--launch` 命令就是**第二个游戏进程**(`resolve_base_address` 按进程名查,会报
-   `appears 2 times`)。每次调用返回后立刻 `schtasks /delete /tn NSWorldOneShot /f`。
+5. **50 ms 注入不一定稳,现在默认等 5 s。** 2026-11-03 的一次尝试在进程出现后立刻注入,游戏在写
+   `setup.log` **之前**就崩了(Application 日志:stellaris.exe / ntdll / c0000005;没有 Paradox crash
+   目录);同一份 DLL 晚了 2 分钟注入到已载入的游戏里则存活。`--settle-s 5` 的同一发成功,之后
+   `c2_boot_inject.py` 的默认值就是 **5 s**(脚本解析在启动后 ~30 s,所以 T1 仍成立)。判据:host 死但
+   `setup.log` 时间戳没变 ⇒ 先怀疑注入时机,不要先怀疑 mod。
+6. **一次性任务的 `/st` 是 `00:00`(已过时间),只有 `/run` 能点火。** 2026-11-03 之前它排到 +120 s
+   又同时 `/run`:任务没删掉时,排定的那份会**再跑一次** shim;对 `--launch` 就是**第二个游戏进程**。
+   现在残留任务不会自己跑;`finally` 仍会删任务。`resolve_base_address` 同时改成按 **pid** 查
+   (`Get-Process -Id`),第二个游戏也不会再让它报 `appears 2 times`。
 7. **暂停键可能被吞。** `space` 不生效时先读两次 `--stats`(间隔 25 s)确认真的在跑;`esc`(打开游戏
    菜单)也能停住模拟,2026-11-03 的窗口就是用它停的。
 
@@ -2357,6 +2359,12 @@ just win "python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_scope_prob
 最后,`/run /I` 点火,等哨兵、删任务、打印输出与退出码。哨兵在输出之后,所以读的时候按
 **最后一个** `EXIT=` 切分,不会被命令自己打印的内容骗到;拿不到哨兵返回 4(**不知道**
 发生了什么,不是成功)。
+
+**一次性任务的 `/st` 固定成 `00:00`(已过时间)。** 2026-11-03 之前它排到 `now + 120 s` 又同时
+`/run`;对跑得久一点的探针(或删除竞争),排定的那份会再跑一次 shim —— 对 `--launch` 命令就是
+第二个游戏进程。改成一个已经过去的时间后,触发时间永远错过,只有 `/run` 能点火;`finally` 里
+删任务的逻辑不变。`task_create_args` 是纯函数,`test_the_task_never_schedules_a_second_run`
+钉住了 `/st` 与 `/sc once`。
 
 **读回那一半也有围栏了。** 2026-10-28 之前只测 shim 文本;`run_interactive` 读回 `OUT_PATH` 时
 漏了 `open` 的 `mode`,实机上炸的是 `TypeError: _open_file() missing 1 required positional
