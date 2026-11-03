@@ -10,7 +10,7 @@ import c2_boot_inject as mod
 
 def test_receipt_is_one_line_with_the_required_fields():
     line = mod.receipt(dll="sqjs.dll", sha16="deadbeefdeadbeef", effect_id=18818,
-                       install_rc=0, alive=True)
+                       set_id=18819, install_rc=0, alive=True)
     assert line.startswith("BOOT ")
     for token in ("dll=sqjs.dll", "sha=deadbeefdeadbeef", "effect_id=18818",
                   "install_rc=0", "alive=1"):
@@ -19,9 +19,21 @@ def test_receipt_is_one_line_with_the_required_fields():
 
 
 def test_receipt_reports_a_dead_host_as_alive_0():
-    line = mod.receipt(dll="x.dll", sha16="0" * 16, effect_id=1, install_rc=-4, alive=False)
+    line = mod.receipt(dll="x.dll", sha16="0" * 16, effect_id=1, set_id=2, install_rc=-4,
+                       alive=False)
     assert "install_rc=-4" in line
     assert "alive=0" in line
+
+
+def test_receipt_carries_the_set_id():
+    line = mod.receipt(dll="x.dll", sha16="0" * 16, effect_id=19331, set_id=19332,
+                       install_rc=0, alive=True)
+    assert "set_id=19332" in line
+
+
+def test_the_set_exports_are_in_the_drivers_needed_tuple():
+    assert "C1SetId" in mod.NEEDED
+    assert "C2NeoArmSet" in mod.NEEDED
 
 
 def test_sha16_is_the_first_16_hex_digits_of_the_file(tmp_path):

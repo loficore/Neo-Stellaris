@@ -3,7 +3,8 @@
 
 与兄弟驱动的区别:它**不发脚本、不动窗口、不读日志**,只做四件事
 
-    wait_for_process → inject_dll → C1Run → C1EffectId → C2NeoInstall(effect_id)
+    wait_for_process → inject_dll → C1Run → C1EffectId → C1SetId
+    → C2NeoArmSet(set_id) → C2NeoInstall(effect_id)
 
 并且把结果压成一行回执(`BOOT ...`),所以实机窗口里「注入有没有赶上脚本解析」
 可以从一行读到,不必翻三份日志。
@@ -56,6 +57,8 @@ NEEDED = (
     "C2Sanity",
     "C1Run",
     "C1EffectId",
+    "C1SetId",
+    "C2NeoArmSet",
     "C2NeoInstall",
     "C2NeoSetRule",
     "C2NeoSetAct",
@@ -85,9 +88,10 @@ def _require_exports(dll_path: str) -> dict | None:
     return exports
 
 
-def receipt(*, dll: str, sha16: str, effect_id: int, install_rc: int, alive: bool) -> str:
+def receipt(*, dll: str, sha16: str, effect_id: int, set_id: int, install_rc: int,
+            alive: bool) -> str:
     """One line, fixed field order — the window note quotes it verbatim."""
-    return (f"BOOT dll={dll} sha={sha16} effect_id={effect_id} "
+    return (f"BOOT dll={dll} sha={sha16} effect_id={effect_id} set_id={set_id} "
             f"install_rc={install_rc} alive={1 if alive else 0}")
 
 
@@ -219,6 +223,16 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
     effect_id = harness.call_remote(pid, base, exports["C1EffectId"])
     if effect_id == 0:
         return _fail("c1_effect")
+    set_id = harness.call_remote(pid, base, exports["C1SetId"])
+    if set_id == 0:
+        return _fail("c1_set")
+
+    # The set token must be armed BEFORE install: both setToken and
+    # setSetToken refuse to change the arming once the detour is live.
+    arm_set_rc = _signed32(
+        harness.call_remote_with_arg(pid, base, exports["C2NeoArmSet"], set_id))
+    if arm_set_rc != 0:
+        return _fail("arm_set")
 
     install_rc = _signed32(
         harness.call_remote_with_arg(pid, base, exports["C2NeoInstall"], effect_id))
@@ -228,7 +242,7 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
         # C5-WRITE:`write` = 日志 + 系统变量;默认 `log` 保持 C5-ADD 的行为不变。
         harness.call_remote_with_arg(pid, base, exports["C2NeoSetAct"], pack_act(act))
 
-    print(receipt(dll=dll_name, sha16=digest, effect_id=effect_id,
+    print(receipt(dll=dll_name, sha16=digest, effect_id=effect_id, set_id=set_id,
                   install_rc=install_rc, alive=True))
     return 0 if install_rc == 0 else EXIT_FAILED
 
