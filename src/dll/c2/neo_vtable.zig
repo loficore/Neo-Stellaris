@@ -60,6 +60,10 @@ var stat_writes: u64 = 0;
 var stat_skipped: u64 = 0;
 var stat_score_writes: u64 = 0;
 var stat_score_skipped: u64 = 0;
+/// C5-PARAM: how many times `runSet` actually called the official body. The
+/// pair with `setCalls()` is the spec's §8 triage (`calls>0, runs=0` = address
+/// never resolved).
+var stat_set_runs: u64 = 0;
 var stat_null_scope: u64 = 0;
 var stat_non_system_scope: u64 = 0;
 var last_id: u32 = 0;
@@ -131,6 +135,20 @@ fn writeScore(id: u32, scope: u64) bool {
     const body: *const fn (u64, u64) callconv(.c) void = @ptrFromInt(state_body_addr);
     body(@intFromPtr(&obj), scope);
     return true;
+}
+
+/// C5-PARAM: the `neo_set` body. Transparent forward — the loader already
+/// parsed `which` / `value` into this object through the shared class_info
+/// (`set_variable`'s vtable slot[5] = `0x188E240`), so all we do is hand the
+/// same object and scope to the official body (`0x188E1D0`). No engine memory
+/// is written by us; the official body owns the write.
+pub fn runSet(child: u64, scope: u64, a3: u64) u64 {
+    _ = a3;
+    if (state_body_addr == 0) return 0;
+    const body: *const fn (u64, u64) callconv(.c) void = @ptrFromInt(state_body_addr);
+    body(child, scope);
+    _ = @atomicRmw(u64, &stat_set_runs, .Add, 1, .monotonic);
+    return 0;
 }
 
 /// The per-system body. Order is load-bearing (plan Task 2 Step 3): count →
@@ -243,6 +261,11 @@ pub fn scoreSkipped() u64 {
     return @atomicLoad(u64, &stat_score_skipped, .monotonic);
 }
 
+/// C5-PARAM: `runSet` really reached the official `set_variable` body.
+pub fn setRuns() u64 {
+    return @atomicLoad(u64, &stat_set_runs, .monotonic);
+}
+
 pub fn lastId() u32 {
     return @atomicLoad(u32, &last_id, .monotonic);
 }
@@ -271,6 +294,7 @@ pub fn resetForTest() void {
     stat_skipped = 0;
     stat_score_writes = 0;
     stat_score_skipped = 0;
+    stat_set_runs = 0;
     stat_null_scope = 0;
     stat_non_system_scope = 0;
     last_id = 0;
@@ -281,6 +305,39 @@ pub fn resetForTest() void {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+test "set_runs starts at zero and reset clears it" {
+    resetForTest();
+    try std.testing.expectEqual(@as(u64, 0), setRuns());
+}
+
+var fwd_self: u64 = 0;
+var fwd_scope: u64 = 0;
+
+fn stubForward(self_ptr: u64, scope: u64) callconv(.c) void {
+    fwd_self = self_ptr;
+    fwd_scope = scope;
+}
+
+test "runSet forwards the same child and scope to the official body and counts the run" {
+    resetForTest();
+    state_body_addr = @intFromPtr(&stubForward);
+    const r = runSet(0x1234_5678, 0x9ABC_DEF0, 0);
+    try std.testing.expectEqual(@as(u64, 0), r);
+    try std.testing.expectEqual(@as(u64, 0x1234_5678), fwd_self);
+    try std.testing.expectEqual(@as(u64, 0x9ABC_DEF0), fwd_scope);
+    try std.testing.expectEqual(@as(u64, 1), setRuns());
+}
+
+test "runSet does not call or count when the body address is unresolved" {
+    resetForTest();
+    fwd_self = 0;
+    fwd_scope = 0;
+    const r = runSet(0x1234_5678, 0x9ABC_DEF0, 0);
+    try std.testing.expectEqual(@as(u64, 0), r);
+    try std.testing.expectEqual(@as(u64, 0), fwd_self);
+    try std.testing.expectEqual(@as(u64, 0), setRuns());
+}
 
 test "rule hits are recorded in call order and capped" {
     resetForTest();

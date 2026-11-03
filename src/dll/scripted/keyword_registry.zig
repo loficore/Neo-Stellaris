@@ -364,6 +364,17 @@ pub const ClassInfo = struct {
             .docstring = module_base + kr.DONOR_EFFECT_DOCSTRING,
         };
     }
+
+    /// C5-PARAM: `neo_set` borrows `set_variable`'s class_info, so the engine's
+    /// own class-driven parser (vtable slot[5] = `0x188E240`) fills `which` /
+    /// `value` into the object it creates. Nothing is fabricated; the object
+    /// layout and the parser are the official pair.
+    pub fn setVariableDonor(module_base: usize) ClassInfo {
+        return .{
+            .class_info = module_base + kr.DONOR_SETVARIABLE_CLASS_INFO,
+            .docstring = module_base + kr.DONOR_SETVARIABLE_DOCSTRING,
+        };
+    }
 };
 
 pub const Registration = struct {
@@ -560,6 +571,13 @@ test "§24.6 donor ClassInfo: the trigger db is C1's first target" {
     try std.testing.expectEqual(@as(u64, base + kr.DONOR_EFFECT_DOCSTRING), eff.docstring);
     try std.testing.expect(trig.class_info != eff.class_info);
     try std.testing.expect(trig.docstring != eff.docstring);
+}
+
+test "setVariableDonor aliases set_variable's official class_info and docstring" {
+    const base = 0x140000000;
+    const d = ClassInfo.setVariableDonor(base);
+    try std.testing.expectEqual(base + 0x2608D18, d.class_info);
+    try std.testing.expectEqual(base + 0x263ADD0, d.docstring);
 }
 
 test "substitution: changing (id, name) touches only the id and the name bytes" {

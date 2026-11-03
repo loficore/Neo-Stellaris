@@ -10,7 +10,7 @@ import c2_boot_inject as mod
 
 def test_receipt_is_one_line_with_the_required_fields():
     line = mod.receipt(dll="sqjs.dll", sha16="deadbeefdeadbeef", effect_id=18818,
-                       install_rc=0, alive=True)
+                       set_id=18819, install_rc=0, alive=True)
     assert line.startswith("BOOT ")
     for token in ("dll=sqjs.dll", "sha=deadbeefdeadbeef", "effect_id=18818",
                   "install_rc=0", "alive=1"):
@@ -19,9 +19,21 @@ def test_receipt_is_one_line_with_the_required_fields():
 
 
 def test_receipt_reports_a_dead_host_as_alive_0():
-    line = mod.receipt(dll="x.dll", sha16="0" * 16, effect_id=1, install_rc=-4, alive=False)
+    line = mod.receipt(dll="x.dll", sha16="0" * 16, effect_id=1, set_id=2, install_rc=-4,
+                       alive=False)
     assert "install_rc=-4" in line
     assert "alive=0" in line
+
+
+def test_receipt_carries_the_set_id():
+    line = mod.receipt(dll="x.dll", sha16="0" * 16, effect_id=19331, set_id=19332,
+                       install_rc=0, alive=True)
+    assert "set_id=19332" in line
+
+
+def test_the_set_exports_are_in_the_drivers_needed_tuple():
+    assert "C1SetId" in mod.NEEDED
+    assert "C2NeoArmSet" in mod.NEEDED
 
 
 def test_sha16_is_the_first_16_hex_digits_of_the_file(tmp_path):
@@ -84,6 +96,29 @@ def test_pack_act_rejects_an_unknown_mode():
 
     with pytest.raises(ValueError):
         mod.pack_act("modify")
+
+
+def test_install_followups_arms_on_success_and_disarms_on_failure():
+    assert mod.install_followups(0) == ("arm_rule", "arm_act")
+    assert mod.install_followups(-4) == ("disarm",)
+    assert mod.install_followups(-1) == ("disarm",)
+
+
+def test_boot_arms_the_set_token_before_install_and_disarms_on_failure():
+    """Ordering is load-bearing: both arming calls refuse after install.
+
+    The set token is armed before `C2NeoInstall`; if install fails, the driver
+    must go through `C2NeoUninstall` so the armed token does not outlive the
+    failed attempt. Source-order fence, same style as the NEEDED fence above.
+    """
+    import pathlib
+    import re
+
+    src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+    boot = src[src.index("def boot("):src.index("def uninstall(")]
+    order = re.findall(r'exports\["(\w+)"\]', boot)
+    assert order.index("C1SetId") < order.index("C2NeoArmSet") < order.index("C2NeoInstall")
+    assert "C2NeoUninstall" in boot
 
 
 def test_a_bad_rule_is_a_usage_error_not_a_traceback():
