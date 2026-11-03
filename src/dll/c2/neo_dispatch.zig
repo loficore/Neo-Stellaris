@@ -60,6 +60,9 @@ const OBJECT_TOKEN_OFF: usize = offsets.keyword_reg.EFFECT_OBJECT_TOKEN_ID;
 // ---------------------------------------------------------------------------
 
 var armed_token: u32 = 0;
+/// C5-PARAM: the second token. `neo_action` and `neo_set` are armed side by
+/// side; the role decides which path a dispatch entry takes.
+var armed_set_token: u32 = 0;
 var installed = false;
 var hook: ?detour_mod.Hook = null;
 var orig: ?*anyopaque = null;
@@ -72,6 +75,7 @@ var saved_code: [32]u8 = [_]u8{0} ** 32;
 /// could not tell apart.
 var stat_seen: u64 = 0;
 var stat_ours: u64 = 0;
+var stat_set_calls: u64 = 0;
 var last_token: u32 = 0;
 
 // ---------------------------------------------------------------------------
@@ -93,6 +97,18 @@ pub fn shouldRun(value: u32) bool {
     return armed != 0 and value == armed;
 }
 
+/// Which of our two keywords an object token belongs to. 0 never matches: the
+/// engine never writes it, so an uninitialised `[child+0x20]` must stay `.none`
+/// even when neither token is armed (`armed_*` defaults are also 0).
+pub const Role = enum { none, action, set };
+
+pub fn roleFor(value: u32) Role {
+    if (value == 0) return .none;
+    if (value == @atomicLoad(u32, &armed_token, .monotonic)) return .action;
+    if (value == @atomicLoad(u32, &armed_set_token, .monotonic)) return .set;
+    return .none;
+}
+
 // ---------------------------------------------------------------------------
 // The detour
 // ---------------------------------------------------------------------------
@@ -103,9 +119,16 @@ fn dispatchDetour(child: u64, scope: u64, a3: u64) callconv(.c) u64 {
     _ = @atomicRmw(u64, &stat_seen, .Add, 1, .monotonic);
     const child_token = readU32(@intCast(child), OBJECT_TOKEN_OFF);
     @atomicStore(u32, &last_token, child_token, .monotonic);
-    if (shouldRun(child_token)) {
-        _ = @atomicRmw(u64, &stat_ours, .Add, 1, .monotonic);
-        return neo_vtable.runBody(scope, a3);
+    switch (roleFor(child_token)) {
+        .action => {
+            _ = @atomicRmw(u64, &stat_ours, .Add, 1, .monotonic);
+            return neo_vtable.runBody(scope, a3);
+        },
+        .set => {
+            _ = @atomicRmw(u64, &stat_set_calls, .Add, 1, .monotonic);
+            return neo_vtable.runSet(child, scope, a3);
+        },
+        .none => {},
     }
     const f: OrigFn = @ptrCast(orig orelse return 0);
     // `.always_tail` is load-bearing — see the module header.
@@ -126,6 +149,21 @@ pub fn setToken(value: u32) error{ InvalidToken, AlreadyInstalled }!void {
 
 pub fn clearToken() void {
     @atomicStore(u32, &armed_token, 0, .monotonic);
+    @atomicStore(u32, &armed_set_token, 0, .monotonic);
+}
+
+/// Arm the token C1 minted for `neo_set`. Same shape as `setToken`: 0 is
+/// rejected (it would match every uninitialised object) and the arming cannot
+/// change once the detour is installed — the driver arms both tokens before
+/// `C2NeoInstall` for exactly this reason.
+pub fn setSetToken(value: u32) error{ InvalidToken, AlreadyInstalled }!void {
+    if (value == 0) return error.InvalidToken;
+    if (installed) return error.AlreadyInstalled;
+    @atomicStore(u32, &armed_set_token, value, .monotonic);
+}
+
+pub fn clearSetToken() void {
+    @atomicStore(u32, &armed_set_token, 0, .monotonic);
 }
 
 pub fn token() u32 {
@@ -217,6 +255,13 @@ pub fn lastToken() u32 {
     return @atomicLoad(u32, &last_token, .monotonic);
 }
 
+/// C5-PARAM: dispatch entries whose token was `neo_set`'s. The pair with
+/// `setRuns()` separates "the loader did not route our token here" from
+/// "it did, but the body address never resolved".
+pub fn setCalls() u64 {
+    return @atomicLoad(u64, &stat_set_calls, .monotonic);
+}
+
 /// One line, fixed key order: the plan's seven keys followed by `dispatched` —
 /// the entry count the detour saw, which is what makes `calls=0` readable.
 /// C5-WRITE appends `writes`/`skipped`, C5-SCORE appends `score_writes`/
@@ -227,7 +272,7 @@ pub fn statsInto(out: []u8) usize {
         out,
         "calls={d} matched={d} log_calls={d} last_id={d} rule_hits={d} installed={d} verify={d} " ++
             "dispatched={d} null_scope={d} mask_odd={d} writes={d} skipped={d} " ++
-            "score_writes={d} score_skipped={d}\n",
+            "score_writes={d} score_skipped={d} set_calls={d} set_runs={d}\n",
         .{
             ours(),
             neo_vtable.matched(),
@@ -243,6 +288,8 @@ pub fn statsInto(out: []u8) usize {
             neo_vtable.skipped(),
             neo_vtable.scoreWrites(),
             neo_vtable.scoreSkipped(),
+            setCalls(),
+            neo_vtable.setRuns(),
         },
     ) catch return 0;
     return written.len;
@@ -250,6 +297,7 @@ pub fn statsInto(out: []u8) usize {
 
 pub fn resetForTest() void {
     armed_token = 0;
+    armed_set_token = 0;
     installed = false;
     hook = null;
     orig = null;
@@ -257,6 +305,7 @@ pub fn resetForTest() void {
     saved_code = [_]u8{0} ** 32;
     stat_seen = 0;
     stat_ours = 0;
+    stat_set_calls = 0;
     last_token = 0;
     neo_vtable.resetForTest();
 }
@@ -293,12 +342,26 @@ test "verify is -3 before the first install" {
     try std.testing.expect(!fingerprintMatches());
 }
 
+test "roleFor routes the action and set tokens without crossing" {
+    resetForTest();
+    try setToken(101);
+    try setSetToken(202);
+    try std.testing.expectEqual(Role.action, roleFor(101));
+    try std.testing.expectEqual(Role.set, roleFor(202));
+    try std.testing.expectEqual(Role.none, roleFor(0));
+    try std.testing.expectEqual(Role.none, roleFor(303));
+    try std.testing.expectError(error.InvalidToken, setSetToken(0));
+    clearToken();
+    try std.testing.expectEqual(Role.none, roleFor(101));
+    try std.testing.expectEqual(Role.none, roleFor(202));
+}
+
 test "statsInto keeps the driver's key order and appends dispatched" {
     resetForTest();
     var buf: [STATS_SIZE]u8 = undefined;
     const n = statsInto(&buf);
     const expected = "calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 " ++
         "installed=0 verify=-3 dispatched=0 null_scope=0 mask_odd=0 " ++
-        "writes=0 skipped=0 score_writes=0 score_skipped=0\n";
+        "writes=0 skipped=0 score_writes=0 score_skipped=0 set_calls=0 set_runs=0\n";
     try std.testing.expectEqualStrings(expected, buf[0..n]);
 }
