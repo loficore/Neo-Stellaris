@@ -786,3 +786,15 @@ test "graph_probe: max_id comes from table entries, not from bound" {
     try std.testing.expectEqual(@as(?u16, 3), s.max_id);
     try std.testing.expect(!m.escaped);
 }
+
+test "neo_vtable: the live score source fails closed without the engine" {
+    const nv = neo_vtable;
+    try std.testing.expectEqual(@as(u32, 0), nv.scoreSource());
+    // live 源在 Linux 上没有模块可解析 ⇒ null,而且**不许**悄悄回退到烘焙表
+    // (回退会把"没读到"伪装成"表里的 0",M5 §7 的判词就废了)。
+    try std.testing.expectEqual(@as(i32, 0), nv.setScoreSource(1));
+    try std.testing.expectEqual(@as(?u16, null), nv.scoreFor(0));
+    try std.testing.expectEqual(@as(i32, 0), nv.setScoreSource(0));
+    try std.testing.expect(nv.scoreFor(0) != null);
+    try std.testing.expectEqual(@as(i32, -1), nv.setScoreSource(9)); // 未知来源不静默
+}

@@ -233,6 +233,33 @@ const c2_graph_probe = @import("c2/graph_probe.zig");
 const c2_exec_caller = @import("c2/exec_caller_probe.zig");
 /// C5-ADD(§93):`neo_action` 的逐系统派发点、body 与导出。
 const c2_neo_vtable = @import("c2/neo_vtable.zig");
+
+/// M5:`neo_score` 的来源。`0` = 烘焙表(`chokepoint_table.zig`),`1` = 活体重算
+/// (读 `C5Graph*` 同一套容器 + `chokepoint_dynamic`,指纹变了才重算)。`-1` = 未知值。
+export fn C2NeoScoreSource(mode: u32) callconv(.c) i32 {
+    return c2_neo_vtable.setScoreSource(mode);
+}
+
+export fn C2NeoScoreSourceGet() callconv(.c) u32 {
+    return c2_neo_vtable.scoreSource();
+}
+
+/// live 源的计数:`u64 × 8` = evaluated, recomputed, cached_hits, non_system_scope,
+/// out_of_range, read_failed, system_count, fingerprint。返回 64。
+export fn C2NeoLiveStatsInto(out: [*]u8) callconv(.c) i32 {
+    const snap = c2_neo_vtable.liveSnapshot();
+    const s = snap.stats;
+    const words = [8]u64{ s.evaluated, s.recomputed, s.cached_hits, s.non_system_scope,
+        s.out_of_range, s.read_failed, @intCast(snap.count), snap.fingerprint };
+    var i: usize = 0;
+    while (i < words.len) : (i += 1) std.mem.writeInt(u64, out[i * 8 ..][0..8], words[i], .little);
+    return 64;
+}
+
+/// 清 live 源的计数与缓存(不改变来源选择)。
+export fn C2NeoLiveReset() callconv(.c) void {
+    c2_neo_vtable.resetLiveSource();
+}
 const c2_neo_dispatch = @import("c2/neo_dispatch.zig");
 const c2_neo_effect = @import("c2/neo_effect.zig");
 const c = @import("quickjs/bindings.zig");

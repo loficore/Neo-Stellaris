@@ -17,6 +17,7 @@
 // 不写引擎内存、不改对象 `[self]`、不 FreeLibrary。
 
 const std = @import("std");
+const graph_trigger = @import("../scripted/graph_trigger.zig");
 const builtin = @import("builtin");
 const offsets = @import("../shared/offsets.zig");
 const windows = @import("../hooking/windows.zig");
@@ -117,8 +118,34 @@ fn writeState(id: u32, scope: u64) bool {
     return true;
 }
 
-/// C5-SCORE 的表查找:运行时 id 越界(别的战役、新系统)返回 null,绝不越界读表。
+/// `neo_score` 的来源。0 = 烘焙表(C5-SCORE 原行为),1 = 活体重算(M5)。
+/// 单个原子 u32:dispatch 线程永远读不到半更新值,与 `act_mode` 同一条纪律。
+var score_source: u32 = graph_trigger.SCORE_SOURCE_TABLE;
+
+/// `0` 接受;`-1` = 未知来源(越界值不许静默当成 table)。
+pub fn setScoreSource(mode: u32) i32 {
+    if (mode > graph_trigger.SCORE_SOURCE_LIVE) return -1;
+    @atomicStore(u32, &score_source, mode, .monotonic);
+    return 0;
+}
+
+pub fn liveSnapshot() @TypeOf(graph_trigger.liveSnapshot()) {
+    return graph_trigger.liveSnapshot();
+}
+
+pub fn resetLiveSource() void {
+    graph_trigger.resetLive();
+}
+
+pub fn scoreSource() u32 {
+    return @atomicLoad(u32, &score_source, .monotonic);
+}
+
+/// C5-SCORE 的分数来源:烘焙表,或(在 live 源下)**每次求值都问活体图**。
+/// live 源拿不到就返回 null(`score_skipped`),**绝不回退到烘焙表** —— 两条源混用会让
+/// "这个分数是图算的还是表查的"这个判词失去意义(M5 §7)。
 pub fn scoreFor(id: u32) ?u16 {
+    if (scoreSource() == graph_trigger.SCORE_SOURCE_LIVE) return graph_trigger.liveScore(id);
     if (id >= chokepoint_table.SCORE_COUNT) return null;
     return chokepoint_table.scores[id];
 }

@@ -117,3 +117,155 @@ pub fn count(stats: *Stats, decision: Decision) void {
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// 活体分数(M5 v1 的载体:effect 体内重算)
+//
+// 调用方是 C5-SCORE 的写手(`neo_vtable.writeScore`):它原本读
+// `chokepoint_table.zig` 里那张**烘焙表**,现在多一个 live 源 —— 每次求值先从活体
+// 容器的计数和得到指纹,指纹变了才整趟重读 + 重算(§93 的 effect 路径已证明我们的
+// 代码真的按星系被调用,这里只换"分数从哪来")。
+// ---------------------------------------------------------------------------
+
+const graph_probe = @import("../c2/graph_probe.zig");
+const cd = @import("../c2/chokepoint_dynamic.zig");
+const gg = @import("../c2/galaxy_graph.zig");
+const graph = @import("../shared/offsets.zig").graph;
+const windows = @import("../hooking/windows.zig");
+
+/// `neo_score` 的两个来源。0 = 烘焙表(C5-SCORE 原行为),1 = 活体重算(本计划)。
+pub const SCORE_SOURCE_TABLE: u32 = 0;
+pub const SCORE_SOURCE_LIVE: u32 = 1;
+
+var live_scores: [MAX_SYSTEMS]u16 = undefined;
+var live_art: [MAX_SYSTEMS]u8 = undefined;
+var live_bridge: [MAX_SYSTEMS]u8 = undefined;
+var live_count: usize = 0;
+var live_fingerprint: u64 = 0;
+/// live 源自己的计数(与烘焙表的计数器分开:混在一起会分不清是哪条路写进去的)。
+pub var live_stats: Stats = .{};
+
+/// 活体分数。`null` = 这一趟拿不到(读失败/越界/空图),调用方按 `score_skipped` 处理 ——
+/// **绝不**回退到烘焙表:两条源混用会让 §7 的判词失去意义。
+pub fn liveScore(id: u32) ?u16 {
+    if (id > std.math.maxInt(u16)) return null;
+
+    const module_base = @intFromPtr(windows.moduleFunction(0) catch return null);
+    const global = std.math.add(usize, module_base, graph.RVA_SYSTEM_INDEX_GLOBAL) catch return null;
+    var buf: [@sizeOf(usize)]u8 = undefined;
+    if (!windows.readProcessMemory(global, &buf)) return null;
+    const index = std.mem.readInt(usize, &buf, .little);
+    if (index == 0) return null;
+
+    const mem = Memory{ .ctx = undefined, .read = memRead };
+    const bound = readDword(mem, gg.addAddr(index, graph.INDEX_BOUND_OFF) orelse {
+        live_stats.read_failed +%= 1;
+        return null;
+    }) orelse {
+        live_stats.read_failed +%= 1;
+        return null;
+    };
+    const table = readPtr(mem, gg.addAddr(index, graph.INDEX_TABLE_OFF) orelse {
+        live_stats.read_failed +%= 1;
+        return null;
+    }) orelse {
+        live_stats.read_failed +%= 1;
+        return null;
+    };
+    if (table == 0 or bound == 0 or bound > graph.MAX_TABLE_SLOTS) {
+        live_stats.read_failed +%= 1;
+        return null;
+    }
+
+    // 指纹:每个活槽的系统对象 `+0x59C` 之和。**任何一个槽读不到**就把指纹打成 0
+    // (= 「这一趟没读到」),于是 `shouldRecompute` 为假、上一份分数保留 —— fail-closed。
+    var sum: u64 = 0;
+    var unreadable = false;
+    var slot: usize = 0;
+    while (slot < bound) : (slot += 1) {
+        const entry = readPtr(mem, gg.elemAddr(table, slot, graph.TABLE_RECORD_SIZE, graph.TABLE_SLOT_PTR_OFF) orelse {
+            unreadable = true;
+            break;
+        }) orelse {
+            unreadable = true;
+            break;
+        };
+        if (entry == 0) continue;
+        const edges_here = readDword(mem, gg.addAddr(entry, graph.EDGE_COUNT_OFF) orelse {
+            unreadable = true;
+            break;
+        }) orelse {
+            unreadable = true;
+            break;
+        };
+        sum +%= edges_here;
+    }
+    const now: u64 = if (unreadable) 0 else sum;
+
+    if (!shouldRecompute(live_fingerprint, now)) {
+        if (id >= live_count) return null;
+        live_stats.evaluated +%= 1;
+        live_stats.cached_hits +%= 1;
+        return live_scores[id];
+    }
+
+    graph_probe.readAt(mem, index) catch {
+        live_stats.read_failed +%= 1;
+        return null;
+    };
+    const stats = graph_probe.lastStats();
+    const max_id = stats.max_id orelse {
+        live_stats.read_failed +%= 1;
+        return null;
+    };
+    const n: usize = @as(usize, max_id) + 1;
+    if (n == 0 or n > MAX_SYSTEMS) {
+        live_stats.read_failed +%= 1;
+        return null;
+    }
+    cd.analyze(std.heap.page_allocator, graph_probe.rows(), n, .{
+        .scores = live_scores[0..n],
+        .articulation = live_art[0..n],
+        .bridge_endpoint = live_bridge[0..n],
+    }) catch {
+        live_stats.read_failed +%= 1;
+        return null;
+    };
+
+    live_count = n;
+    live_fingerprint = now;
+    live_stats.evaluated +%= 1;
+    live_stats.recomputed +%= 1;
+    return if (id < n) live_scores[id] else null;
+}
+
+pub fn liveSnapshot() struct { count: usize, fingerprint: u64, stats: Stats } {
+    return .{ .count = live_count, .fingerprint = live_fingerprint, .stats = live_stats };
+}
+
+pub fn resetLive() void {
+    live_count = 0;
+    live_fingerprint = 0;
+    live_stats = .{};
+}
+
+/// 与 `galaxy_graph.Memory` 是同一个形状(读图器的入参),这里只是本地别名 ——
+/// 不重定义第二个结构,免得两边调用的不相容。
+const Memory = gg.Memory;
+
+fn memRead(_: *anyopaque, addr: usize, len: usize, buf: []u8) bool {
+    _ = len;
+    return windows.readProcessMemory(addr, buf);
+}
+
+fn readDword(mem: Memory, addr: usize) ?u32 {
+    var buf: [4]u8 = undefined;
+    if (!mem.read(mem.ctx, addr, buf.len, &buf)) return null;
+    return std.mem.readInt(u32, &buf, .little);
+}
+
+fn readPtr(mem: Memory, addr: usize) ?usize {
+    var buf: [@sizeOf(usize)]u8 = undefined;
+    if (!mem.read(mem.ctx, addr, buf.len, &buf)) return null;
+    return std.mem.readInt(usize, &buf, .little);
+}
