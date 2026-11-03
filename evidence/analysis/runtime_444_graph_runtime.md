@@ -654,8 +654,9 @@ vtable 槽派发)。**报「词」不报「槽号」**:静态无法确定引擎�
 ### §3.5 `galaxy_graph` 合成围栏(Task 6)
 
 `src/dll/c2/galaxy_graph.zig` 只经注入的 `Memory.read` 触碰内存(**文件里没有一个 `@ptrFromInt`**),
-测试侧接合成字节镜像(`c2_tests.zig`),生产侧将来接真内存。围栏 = `c2_tests.zig` 里 **11** 条
-`galaxy_graph:` 测试(`chokepoint_dynamic:` 另有 **7** 条,合计 **18** 条命名测试):
+测试侧接合成字节镜像(`c2_tests.zig`),生产侧将来接真内存。围栏 = `c2_tests.zig` 里 **16** 条
+`galaxy_graph:` 测试(`chokepoint_dynamic:` 另有 **7** 条,合计 **23** 条命名测试;
+`zig test --test-filter "galaxy_graph"` 报 **17** 是因为它还带上了根 `test_0`):
 
 1. `galaxy_graph: three systems, two edges, read out of a synthetic mirror`
 2. `galaxy_graph: an unreadable neighbour id is skipped, not fatal`
@@ -668,10 +669,15 @@ vtable 槽派发)。**报「词」不报「槽号」**:静态无法确定引擎�
 9. `galaxy_graph: a null index object or a null table is error.UnreadableIndex`
 10. `galaxy_graph: a zero slot bound is error.UnreadableIndex, not an empty graph`
 11. `galaxy_graph: a count beyond the container capacity is skipped, never walked`
+12. `galaxy_graph: sparse ids carry the max id, and the adapter sizes the graph from it`
+13. `galaxy_graph: an empty galaxy reports max_id == null, not a zero id`
+14. `galaxy_graph: a table entry pointer near maxInt is skipped, not an overflow`
+15. `galaxy_graph: an edge-data pointer near maxInt is skipped, not an overflow`
+16. `galaxy_graph: a galaxy address near maxInt is UnreadableIndex, not an overflow`
 
 每条镜像都按 §1.11 的 **16 B 记录**布(指针在记录 `+8`),并专门埋「诱饵位」`table + slot*8 + 8`,
 用第 8 条盯住 —— 步长写成 8 B 会**静默读到别的对象**而不报错。第 4 条钉「无跨调用缓存」
-(两次调用之间改图,第二次必须读到新边;Review Focus #3)。计划期全套 Zig 测试 = **884 passed**。
+(两次调用之间改图,第二次必须读到新边;Review Focus #3)。全套 Zig 测试 = **889 passed**。
 
 ### §3.6 三条「不能说」(本计划的诚实边界)
 

@@ -579,11 +579,16 @@ test "galaxy_graph: sparse ids carry the max id, and the adapter sizes the graph
         .bridge_endpoint = &bri,
     });
 
-    // 手算(并用 scripts/chokepoint_scores.py 以同样的 43 节点/两条边交叉核对过):
-    // 43 个节点、边 0-7 与 7-42。唯一跨过 7 的无序对是 {0,42};
-    // 分母 (43-1)(43-2)/2 = 861。score[7] = round(1000 * 1/861) = round(1.1614) = 1。
-    // 其余节点介数为 0 ⇒ score 0。若调用方错用 system_count=3,分母会变成 1,
-    // 每个分数被静默重标定 —— 正是这条契约要挡住的事(§2.5 / spec 裁定⑤)。
+    // 期望值**手算自本模块自己的 `n = system_count` 契约**,不是从别处抄的:
+    // 43 个节点(= system_count,其中 40 个是孤立 id)、边 0-7 与 7-42。
+    // 本模块的无向 Brandes 每对各算一次、事后 `/2`:7 从源 0 与源 42 各得 1.0
+    // ⇒ 原始 2.0、`/2` 后 1.0;分母 `(43-1)(43-2)/2 = 861`;
+    // score[7] = round(1000 * 1.0/861) = round(1.1614) = 1。其余节点介数 0 ⇒ score 0。
+    // **`scripts/chokepoint_scores.py` 不能当这条的 oracle**:它的 `n = len(adjacency)`
+    // 由边的端点推出,表示不了孤立节点 —— 在这个 0/7/42 链上只会给出 n=3、score[7]=1000。
+    // 「孤立节点照进分母」正是本模块与离线工具的**故意**差异(见 chokepoint_dynamic 文件头),
+    // 也正是这条契约必须被本测试钉住的原因。若调用方错用 system_count=3,分母变成 1,
+    // 每个分数被静默重标定 —— 正是 spec 裁定⑤禁止的事。
     try std.testing.expectEqual(@as(u16, 1), scores[7]);
     for (scores, 0..) |s, i| {
         if (i != 7) try std.testing.expectEqual(@as(u16, 0), s);
