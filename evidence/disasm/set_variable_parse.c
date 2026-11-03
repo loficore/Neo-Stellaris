@@ -84,7 +84,7 @@
   0188e323  lea     r9, [rbp - 0x31]
   0188e327  lea     rdx, [rbp - 0x49]
   0188e32b  lea     rcx, [rbp + 0xf]
-; stellaris.exe  .text RVA 0x3b1770-0x3b17e0
+; stellaris.exe  .text RVA 0x3b1770-0x3b1830
   003b1770  mov     dword ptr [rsp + 0x20], r9d
   003b1775  mov     qword ptr [rsp + 0x10], rdx
   003b177a  push    rbp
@@ -118,3 +118,22 @@
   003b17d3  test    ebx, ebx
   003b17d5  jle     0x1403b1802
   003b17d7  nop     word ptr [rax + rax]
+  003b17e0  mov     r8d, 3
+  003b17e6  lea     rdx, [rip + 0x2116363]  ; -> 0x24c7b50
+  003b17ed  lea     rcx, [rbp - 0x40]
+  003b17f1  call    0x141c89700  ; -> 0x1c89700
+  003b17f6  sub     rbx, 1
+  003b17fa  jne     0x1403b17e0
+  003b17fc  mov     ebx, dword ptr [rbp + 0x98]
+  003b1802  mov     rax, qword ptr [r12]
+  003b1806  mov     r8, r13
+  003b1809  lea     rdx, [rsp + 0x28]
+  003b180e  mov     rcx, r12
+  003b1811  call    qword ptr [rax + 0x28]
+  003b1814  nop     
+  003b1815  mov     dword ptr [r14], edi
+  003b1818  mov     qword ptr [r14 + 8], rdi
+  003b181c  lea     rsi, [r14 + 0x10]
+  003b1820  mov     qword ptr [rsp + 0x58], rsi
+  003b1825  mov     qword ptr [rsi], rdi
+  003b1828  mov     qword ptr [rsi + 0x10], rdi

@@ -10193,7 +10193,7 @@ dispatched=72429 null_scope=0 mask_odd=0 writes=7083 skipped=0 score_writes=7083
 
 `set_variable` 的 vtable `0x25EA560` 槽位(qword 直读,`.rdata` 不是指令):
 
-- `slot[4] +0x20 = 0x3B1770`(先 `call [rax+0x28]`);
+- `slot[4] +0x20 = 0x3B1770`(`0x3B17CC` 先 `call [rax+0x58]`,`0x3B1811` 再 `call [rax+0x28]`;
 - `slot[5] +0x28 = 0x188E240` = 字段解析器:函数内 `add rbx, 0xD0`(名字串)与
   `call 0x3515A0`(值来源),随后 `0x1CEFEB0` / `0x1CEFD70`(字符串/数字写入);
 - `slot[9] +0x48 = 0x188E1D0` = 我们转发的官方 body。

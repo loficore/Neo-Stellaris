@@ -311,6 +311,34 @@ test "set_runs starts at zero and reset clears it" {
     try std.testing.expectEqual(@as(u64, 0), setRuns());
 }
 
+var fwd_self: u64 = 0;
+var fwd_scope: u64 = 0;
+
+fn stubForward(self_ptr: u64, scope: u64) callconv(.c) void {
+    fwd_self = self_ptr;
+    fwd_scope = scope;
+}
+
+test "runSet forwards the same child and scope to the official body and counts the run" {
+    resetForTest();
+    state_body_addr = @intFromPtr(&stubForward);
+    const r = runSet(0x1234_5678, 0x9ABC_DEF0, 0);
+    try std.testing.expectEqual(@as(u64, 0), r);
+    try std.testing.expectEqual(@as(u64, 0x1234_5678), fwd_self);
+    try std.testing.expectEqual(@as(u64, 0x9ABC_DEF0), fwd_scope);
+    try std.testing.expectEqual(@as(u64, 1), setRuns());
+}
+
+test "runSet does not call or count when the body address is unresolved" {
+    resetForTest();
+    fwd_self = 0;
+    fwd_scope = 0;
+    const r = runSet(0x1234_5678, 0x9ABC_DEF0, 0);
+    try std.testing.expectEqual(@as(u64, 0), r);
+    try std.testing.expectEqual(@as(u64, 0), fwd_self);
+    try std.testing.expectEqual(@as(u64, 0), setRuns());
+}
+
 test "rule hits are recorded in call order and capped" {
     resetForTest();
     var i: u32 = 0;
