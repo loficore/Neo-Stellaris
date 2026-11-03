@@ -319,3 +319,214 @@ insert_fn, remove_fn`} 一一对应。
   偏移站点。§88 的 `no_version_signal` 只覆盖它自己的窗口。)
 
 ⇒ 读本卷不要顺手把 §88 当被证伪,读 §88 也不要把本卷的 `+0x588/+0x590/+0x59c` 套上去。
+
+## §2 读路径(trigger 侧):`has_hyperlane_to` / `closest_system` / `num_neighbor_systems`
+
+判决:**`edge_store_read_confirmed`** —— 三条**互相独立**的 trigger 侧读路径都落到 §1 的同一组
+`{neighbor_vector_off = 0x590, neighbor_count_off = 0x59c}`、同一 **stride 0x20**、同一「元素 `+8` = 系统 id」,
+而且三条路径的**基址来源**都能追回 §1 的解析器(`0x3939f0` 的全局表 `0x3260b98` + 回退 `0x325d880`)解出
+或 §1 写路径灌进容器的那批系统对象。读路径**不是**经通用解释器 `0x348db0` 走的(负对照见 §2.1.3)——
+所以简报 Step-3 里「读侧找到了、但只能经通用解释器」那一档、以及「两侧不一致」那一档,本卷都不采用,
+采用上面这一句。
+
+> 本节复现探针 = `scripts/scratch/2026-11_graph_runtime/hyperlane_read_scan.py`(Task 3);真实读数见 §2.6。
+> 地址仍是 module-base-relative RVA;函数边界取自 `.pdata`(按 RUNTIME_FUNCTION 链走,不是只看首块)。
+
+### §2.1 简报 Step-1 前提的否证:`+0x78` 是比较运算符 token id,不是 opcode
+
+简报 Step-1 的推理是「对象 `+0x78` 存着一个 token/opcode(`num_neighbor_systems` 实测 `0x165`),⇒ 读路径
+必须按 **opcode 分派**」。**读数对、推断错**:
+
+1. **`+0x78` 在一个比较体里被当作「比较运算符 id」派发**。共享比较体 `0x1a92090`(vtable `0x269a348` 的
+   `+0x18` 槽,同时被 20+ 个 trigger vtable 的 `+0x18` 槽引用)是:
+
+   ```
+   01a920b1  call   qword ptr [rax + 0xf0]   ; 先取「邻居收集」的结果(见 §2.4)
+   01a920d3  mov    ecx, dword ptr [rbx + 0x78]  ; <-- 把 +0x78 当**比较运算符 id** 读出来
+   01a920d6  cmp    ecx, 0x3cb
+   01a920e0  sub    ecx, 1
+   01a920e5  sub    ecx, 0x1d2
+   01a92100  setl   al     01a92118  setg   al    01a92130  sete   al
+   01a92148  setge  al     01a9216d  setne  al    01a92185  setle  al
+   01a92193  xor    al, al                              ; 集合外的 id -> false
+   ```
+
+   可达的 id 集合 = `{1(=), 0x1d3(>), 0x1d4(<), 0x3cb(>=), 0x3cc(<=), 0x427(!=)}`;**`0x165` 不在集合内**
+   ⇒ 默认落到 `0x1a92193 xor al,al`(false)。六个分支全是 `cmp [邻居结果], [本对象结果]` + `setcc`,
+   这是**比较运算符**的派发,不是「按图 opcode 找 handler」。
+
+2. **`0x165` 是这一族的默认比较运算符 id,不是 `has_hyperlane_to` 专属、更不是 opcode**。两个写入点:
+   - `0x1b2a53b mov dword ptr [rbx + 0x78], 0x165` —— `has_hyperlane_to` 工厂 `0x1b2a510` 内联写,紧接着
+     `0x1b2a54f lea rax,[rip+0xb75892]` 换 vtable → `0x269fde8`;
+   - `0x187b9f7 mov dword ptr [rdi + 0x78], 0x165` —— 共享基类构造器 `0x187b9e0` 写;它由
+     `num_neighbor_systems` 工厂 `0x1b33930` 在 `0x1b33964 call 0x14187b9e0` 调用(该工厂**自己不直接写** `+0x78`)。
+
+   ⇒ 简报「`num_neighbor_systems` 实测 `0x165`」是对的;把它当 opcode 才是错的(否则就会去解释器里找
+   「`0x165` 分支」,而那里根本没有)。
+
+3. **派发仍按 vtable 槽,不是按 opcode**(负对照,探针 `[2b]` 由字节数出):
+   - 通用解释器 `0x348db0..0x349212`(275 条指令)里:`dword 0x165` **0 处**;含
+     `+0x588/+0x590/+0x59c/+0x78` 位移的访存 **0 条**;却有 **5 条**间接 `call [reg+..]`
+     (`0x348f33 [rax+8]`、`0x348ffe [rax+0x28]`、`0x349062 [rax]`、`0x349072 [rax+0x30]`、`0x34907d [rax+8]`)
+     —— 它自己就是按 **vtable 槽**派发的,这正是否证「按 `0x165` opcode 分派」的反证。
+   - `has_hyperlane_to` 的 `+0x20` 比较槽 `0x1afde20..0x1afe4f2`(280 条指令):邻居容器访存 0 条、
+     间接 call/jmp 0 条。
+   - `closest_system` 的 `+0x28 = 0x348db0`(裸 thunk 目标)与 `has_hyperlane_to` 的 `+0x28 = 0x1a91a80`
+     都只是**通用解释器/共享基体**这一档;类特定读体在各自的 **`+0x18`**(或 `num_neighbor_systems` 的 `+0xf0`)。
+     `0x1a91a80` 的尾巴 `0x1a91ac0 jmp qword ptr [rax + 0x20]` 也是 vtable 槽派发。
+
+**结论**:Step-1 前提被证伪;读路径要在**类特定 vtable 槽**里找,而不是在 `0x348db0` 里找 `0x165` 分支。
+
+### §2.2 读路径 A:`has_hyperlane_to` vtable `0x269fde8` 的 `+0x18 = 0x1afe500`
+
+vtable dump(探针 `[1b]`):`0x269fde8`:`+0x18=0x1afe500`(`+0x20=0x1afde20` 比较、`+0x28=0x1a91a80`
+共享基体、`+0x80=0x349230` 共享比较体)。
+
+`0x1afe500..0x1afe74b`(`.pdata` 单块)**内联了 §1 的解析器**,再把解出的系统对象交给核心读体:
+
+| 站点 | 指令 | 作用 |
+|---|---|---|
+| `0x1afe5d0` | `mov rdx, qword ptr [rip + 0x17625c1]` | → 全局 **`0x3260b98`**(§1 系统索引) |
+| `0x1afe5ef` | `cmp eax, dword ptr [rdx + 0x20]` | 边界 = `[global+0x20]` |
+| `0x1afe5f6` | `mov rax, qword ptr [rdx + 0x18]` | 表 = `[global+0x18]` |
+| `0x1afe607` | `cmp dword ptr [rdx + 8], r8d` | entry `+8` == id |
+| `0x1afe60d` | `mov rdx, qword ptr [rip + 0x175f26c]` | → 回退对象 **`0x325d880`** |
+| `0x1afe5fd` | `mov rdx, qword ptr [rax + rcx*8 + 8]` | 命中分支:解出的**系统对象** → rdx |
+| `0x1afe621` | `call 0x140a6aa10` | 核心读体 |
+
+核心读体 `0xa6aa10..0xa6ada7`(**这就是读 §1 容器的地方**):
+
+| 站点 | 指令 | 作用 |
+|---|---|---|
+| `0xa6aa3a` | `mov rdi, rdx` | **基址来源**:rdi = 第二实参 = `0x1afe621` 传进来的、解析器解出的系统对象 |
+| `0xa6aae3` | `mov rdx, qword ptr [rdi + 0x590]` | **数据指针 = `+0x590`** |
+| `0xa6aaea` | `movsxd r9, dword ptr [rdi + 0x59c]` | **计数 = `+0x59c`** |
+| `0xa6aaff` | `shl r9, 5` | 计数 × **0x20** = stride |
+| `0xa6ab16` | `mov r8d, dword ptr [rdx + 8]` | 元素 `+8` = **邻居系统 id** |
+| `0xa6ab2a` | `mov rax, qword ptr [r11 + 0x18]` | 用**同一个** §1 解析器条目核对 |
+| `0xa6ab3b` | `cmp dword ptr [rax + 8], r8d` | entry `+8` == 邻居 id |
+| `0xa6ab50` | `add rdx, 0x20` | 按 **0x20** 步进 |
+
+⇒ owner = §1 系统对象(解析器返回值);offsets `+0x590`/`+0x59c`;stride 0x20;元素 `+8` = id。与 §1 逐项相等。
+
+### §2.3 读路径 B:`closest_system` vtable `0x267faa0` 的 `+0x18 = 0x1ae3700`
+
+`0x1ae3700..0x1ae3928` 同样内联 §1 解析器(`0x1ae372e`→`0x3260b98`、`0x1ae3746 cmp [rdx+0x20]`、
+`0x1ae3750 mov rax,[rdx+0x18]`、`0x1ae375e cmp [rdi+8],r8d`、回退 `0x1ae3764`→`0x325d880`),
+然后把系统对象交给「按 hyperlane 步数搜索」的两条骨架:
+
+```
+01ae383b  mov  rcx, rdi        ; <-- rcx = §1 解析器解出的系统对象
+01ae384c  call 0x1408c24d0
+01ae3853  call 0x1408c25f0
+008c24e0  mov  rdi, rcx        ; 基址来源 = 入参 = 系统对象
+008c2520  mov  rdx, rdi
+008c2545  call 0x1408cbb30     ; BFS
+```
+
+BFS `0x8cbb30..0x8cc5a9`:
+
+- frontier 是**栈上结构**(不是全局):`0x8cbbf8 lea r15,[rsp+0x20]` → `0x8cbbfd mov [rbp+8],r15` →
+  `0x8cbd75 mov r15,[rbp+8]`(复用)。三元组 **stride 0x18**:`0x8cbc93 mov [r15 + rbx*8], rdx`
+  (`rbx = 3*idx`,`idx` = 系统 id 的低 16 位:`0x8cbc72 mov esi,[rdx+8]` → `and esi,0xffffff` →
+  `0x8cbc84 movsx r13,si` → `0x8cbc88 lea rbx,[r13*2]` → `0x8cbc90 add rbx,r13`)。
+  三元组 `+0` 装的是函数入参 `rdx` = **§1 解析器解出的系统对象**。
+- 取三元组:`0x8cbf93 lea rax,[r8 + r8*2]`(rax = 3*idx)、`0x8cbf97 lea r12,[r15 + rax*8]`(r12 = 三元组)。
+- 容器读:**基址 `r12` ← `0x8cbf97`**,而 `[r12]` 是系统对象指针:
+
+```
+008cc030  mov  rax, qword ptr [r12]            ; 三元组 +0 = 系统对象
+008cc034  mov  ebx, dword ptr [rax + 0x59c]    ; 计数 = +0x59c
+008cc03f  mov  rax, qword ptr [rax + 0x590]    ; 数据 = +0x590
+008cc046  mov  ebx, dword ptr [rcx + rax + 8]  ; 元素 +8 = id
+008cc45d  add  rcx, 0x20                       ; stride 0x20
+```
+
+- **§1.10 / §87 边界**:`0x8cbb61 mov rax, qword ptr [rip + 0x2995048]` → **`0x3260bb0`**(§88 的对象),
+  `0x8cbb68 movsxd r9, dword ptr [rax + 0x59c]` 只用它来**量 frontier 缓冲大小**;这不是邻居读点
+  —— 同位移、不同对象,不要套 §1。
+
+⇒ owner = §1 系统对象(经 frontier 中转);offsets `+0x590`/`+0x59c`;stride 0x20;元素 `+8` = id。
+
+### §2.4 读路径 C:`num_neighbor_systems` vtable `0x266c108` 的 `+0xf0 = 0x1b87240`
+
+**注意 `+0x18 = 0x1b3cbc0` 不是读路径**:它是**比较体**,`0x1b3cbca mov rax,[rcx]`(自 vtable)后
+`0x1b3cbe0 call qword ptr [rax + 0xf0]` 取「邻居收集」结果再比较 —— 与 §2.1 的 `0x1a92090` 同形。
+真正的读路径在 **`+0xf0 = 0x1b87240`**(probe `[1b]` 实读 `0x266c108 +0xf0 = 0x1b87240`)。
+
+`0x1b87240..0x1b875a5` 内联 §1 解析器(`0x1b87281`→`0x3260b98`、`0x1b872a2 mov rax,[r9+0x18]`、
+`0x1b872b0 cmp [r15+8],edx`、回退 `0x1b872b6`→`0x325d880`),取自身 id `0x1b873d5 mov edx,[r15+8]`,
+再 `0x1b873dc call 0x141b86e30`。
+
+收集器 `0x1b86e30..0x1b8723a` 再解一次 §1 解析器(`0x1b86e64`→`0x3260b98`、`0x1b86e6b`→`0x325d880`、
+查表 `0x1b86e8c`/`0x1b86ebf`、`0x1b86e96 cmp [rax+8],edx`),然后遍历 §1 容器:
+
+| 站点 | 指令 | 作用 | 基址来源 |
+|---|---|---|---|
+| `0x1b86e9e` | `mov r8d, dword ptr [rax + 0x59c]` | **计数 = `+0x59c`** | rax ← `0x1b86e8c` 解出的 entry(或 `0x1b86e9b` 回退) |
+| `0x1b86ed1` | `movsxd rax, dword ptr [rax + 0x59c]` | 计数 = `+0x59c` | rax ← `0x1b86ebf` 解出的 entry(或 `0x1b86ece` 回退) |
+| `0x1b86f5d` | `movsxd r13, dword ptr [r14 + 0x59c]` | **计数 = `+0x59c`** | r14 ← `0x1b86f5a mov r14, r8`(解出的系统对象) |
+| `0x1b86f80` | `mov rax, qword ptr [r14 + 0x590]` | **数据 = `+0x590`** | r14 ← `0x1b86f5a mov r14, r8` |
+| `0x1b86f87` | `mov ebx, dword ptr [r15 + rax + 8]` | 元素 `+8` = **id** | `r15` = 字节偏移(`0x1b86f6d xor r15d,r15d` → `0x1b870fc add r15,0x20`) |
+| `0x1b870fc` | `add r15, 0x20` | **stride 0x20**(循环 `0x1b8700b jne 0x141b86f80`) | — |
+
+基址的两路合流(都是**系统对象**,位移相同 ⇒ 与 §1 是同一个容器):`0x1b86e99 je`(解出的 entry)/
+`0x1b86e9b mov rax,r14`(回退 `0x325d880`);`0x1b86f58 jne`(r14 保持回退)/ `0x1b86f5a mov r14,r8`(解出的)。
+
+⇒ owner = §1 系统对象;offsets `+0x590`/`+0x59c`;stride 0x20;元素 `+8` = id。
+
+### §2.5 三角互证与判决
+
+| | 读路径 A | 读路径 B | 读路径 C |
+|---|---|---|---|
+| 入口 | vtable `0x269fde8` `+0x18` = `0x1afe500` → `0xa6aa10` | vtable `0x267faa0` `+0x18` = `0x1ae3700` → `0x8cbb30` | vtable `0x266c108` `+0xf0` = `0x1b87240` → `0x1b86e30` |
+| 数据 `+0x590` | `0xa6aae3 [rdi+0x590]` | `0x8cc03f [rax+0x590]` | `0x1b86f80 [r14+0x590]` |
+| 计数 `+0x59c` | `0xa6aaea [rdi+0x59c]` | `0x8cc034 [rax+0x59c]` | `0x1b86f5d [r14+0x59c]` |
+| stride 0x20 | `0xa6aaff shl r9,5` / `0xa6ab50 add rdx,0x20` | `0x8cc45d add rcx,0x20` | `0x1b870fc add r15,0x20` |
+| 元素 id `+8` | `0xa6ab16 [rdx+8]` | `0x8cc046 [rcx+rax+8]` | `0x1b86f87 [r15+rax+8]` |
+| **基址来源** | `0xa6aa3a mov rdi,rdx`(调用方 `0x1afe621` 传的解析器返回值) | `0x8cbf97 lea r12,[r15+rax*8]` 的 `[r12]`,由 `0x8cbc93` 从入参装入 | `0x1b86f5a mov r14,r8`(解析器返回值) |
+| 内联 §1 解析器 | `0x1afe5d0`→`0x3260b98` / `0x1afe60d`→`0x325d880` | `0x1ae372e`→`0x3260b98` / `0x1ae3764`→`0x325d880` | `0x1b86e64`→`0x3260b98` / `0x1b86e6b`→`0x325d880` |
+
+三条路径彼此独立(A 在 `has_hyperlane_to` 的比较体、B 在 hyperlane 步数搜索 BFS、C 在邻居计数收集器),
+却读到**同一组 offsets、同一 stride、同一元素布局、同一 owner(§1 解析器解出的系统对象)**。按 §87 口径,
+识别靠**基址来源**而不是位移 —— 三条路径的基址来源都钉在「§1 解析器返回的系统对象」上,与 §88 那个经
+全局 `0x3260bb0` 到达的 stride-4 对象(§2.3 的 `0x8cbb61`)**不同源**。
+
+**限制(不阻断判决,如实记下)**:
+- 静态无法确定引擎运行时**具体调哪一个 vtable 槽**(类特定 `+0x18` vs 通用 `+0x28`)。本节证明的是:
+  三条读路径**可达**、且读路径**不在**通用解释器里 —— 不是「运行时一定走 A/B/C 三者之一」。
+- token id `0x165` 静态映射不到名字(descriptor 数组 `0x337b400` 在 BSS);不影响判决。
+
+### §2.6 复现(真实读数)
+
+`hyperlane_read_scan.py` 从字节里重读 **104 个站点** + 三条读路径的 rip 目标解码,逐字比对;
+任一不等即不落判决字段并退出 1。干净 shell 实跑(EXIT=0,`[check] 全部读数与计划期一致`):
+
+```
+[2] 104 个站点逐字核对 —— 全部相等 OK
+[2b] generic_interp 0x348db0..0x349212: 0x165 立即数 0 处;+0x588/+0x590/+0x59c/+0x78 访存 0 条;
+     间接 call/jmp [reg+..] 5 条(vtable 槽派发 —— 这正是「不按 opcode 派发」的反证)
+[3] 16 个 rip 目标解码 —— 全部 OK(含 nn_eval / nn_collect 的解析器全局与回退)
+[5b] 0x1b86f80  mov rax, qword ptr [r14 + 0x590]   ; 基址 r14 来源: 0x1b86f5a mov r14, r8
+     0x1b86f5d  movsxd r13, dword ptr [r14 + 0x59c]
+[check] 全部读数与计划期一致
+  read_handler_rva    = 0x1afe500(has_hyperlane_to +0x18) / 0x1ae3700(closest_system +0x18)
+                        / 0x1b86e30(num_neighbor_systems +0xf0 -> 0x1b87240)
+  neighbor_vector_off = 0x590
+  neighbor_count_off  = 0x59c
+  elem_stride         = 0x20
+  elem_id_off         = +8
+  owner               = system_object(解析器解出 / frontier 装载)
+  op_field_off        = 0x78(比较运算符 token id,不是 opcode)
+```
+
+与 §1 的字段对齐:`read_handler_rva` 是本节新增(§1 给的是 `resolver_rva` 与写例程);
+`neighbor_vector_off` / `neighbor_count_off` **两侧逐项相等**,Task 6 的门控字段可直接对接:
+
+```
+read_handler_rva    = 0x1afe500(has_hyperlane_to +0x18)
+                    / 0x1ae3700(closest_system +0x18)
+                    / 0x1b86e30(num_neighbor_systems +0xf0 -> 0x1b87240)
+neighbor_vector_off = 0x590        # == §1
+neighbor_count_off  = 0x59c        # == §1
+```
