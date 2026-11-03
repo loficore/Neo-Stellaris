@@ -10,8 +10,10 @@
 // 换成派发点:`0x3B0F80`(§91.6/§91.7 的 787 条读数全部从它的 `0x3B101C` 进来)。
 // 它收 `(child_object, scope)`,先按 §91.6 读 `[child+0x20]` 的 token id,再
 // `call [child_vptr+0xa8]`(scope 门)与 `call [child_vptr+0x48]`(body)。
-// 我们的 detour 只做一件事:**token 是我们的**就不转发,直接跑 `neo_vtable.runBody`,
-// 其余 token 原样 `jmp` 回原函数(`.always_tail`,因为 trampoline 是把目标被覆盖的那几条
+// 我们的 detour 只做**路由**:**token 是我们的**就不转发 —— `neo_action` 走
+// `neo_vtable.runBody`,`neo_set`(C5-PARAM)先记 `set_calls` 再透明转发
+// `neo_vtable.runSet`(官方 `set_variable` body);其余 token 原样 `jmp` 回原函数
+// (`always_tail`,因为 trampoline 是把目标被覆盖的那几条
 //   指令逐字节抄过去再跳回 —— 本靶 `patch_size = 16`,剩下的 `mov rbp,rdx` 原地执行;
 //   普通 `call` 会把 `rsp` 压低 8 字节,抄过去的 `[rsp+0x18]` 写点就错位 —— §91.1 那次
 //   三发全死的教训)。
@@ -104,7 +106,7 @@ pub const Role = enum { none, action, set };
 
 pub fn roleFor(value: u32) Role {
     if (value == 0) return .none;
-    if (value == @atomicLoad(u32, &armed_token, .monotonic)) return .action;
+    if (shouldRun(value)) return .action;
     if (value == @atomicLoad(u32, &armed_set_token, .monotonic)) return .set;
     return .none;
 }
@@ -149,7 +151,7 @@ pub fn setToken(value: u32) error{ InvalidToken, AlreadyInstalled }!void {
 
 pub fn clearToken() void {
     @atomicStore(u32, &armed_token, 0, .monotonic);
-    @atomicStore(u32, &armed_set_token, 0, .monotonic);
+    clearSetToken();
 }
 
 /// Arm the token C1 minted for `neo_set`. Same shape as `setToken`: 0 is

@@ -168,7 +168,7 @@ C1_RESULT_LOG = r"C:\temp\c1_result.log"
 
 
 def parse_c1_result(text):
-    """`C1 OK: trigger_id=<N> effect_id=<M>` -> N, or 0.
+    """`C1 OK: trigger_id=<N> effect_id=<M> set_id=<K>` -> N, or 0.
 
     Fallback for a process where `neo_effect` was already registered by an earlier DLL
     copy: `C1Run` may then fold a duplicate-insert to a non-zero error and return 0, while

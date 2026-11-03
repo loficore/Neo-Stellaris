@@ -10227,6 +10227,8 @@ dispatched=72429 null_scope=0 mask_odd=0 writes=7083 skipped=0 score_writes=7083
 
 - 本发载入:`autosave_2258.01.01.sav`,sha256 `961273f30e03aaa0d0697d0815168c71ed15390a312263a360b1232043abe675`。
 - 收尾拉回:`autosave_2258.07.01.sav`,sha256 `7701350a4f76ac45f52885c8a7105da24a623adb1caeef69b779aa9e596c06ed`。
+- 两份存档相隔 6 个月(本发窗口读数继续到第 11 个月):判据都是**每月倍数**,不要求窗口月数与
+  存档快照月数相等;`neo_probe` 只在第一次写入时产生,后续保持 42。
 - `neo_probe`:**787 个系统,值全 = 42**(min = max = 42)。
 - 回归:`neo_mark` 787 个、逐项 = id(**0 处不等**);`neo_score` 787 个、逐项 =
   `chokepoint_scores_4_4_4.tsv` 的 score 列(**0 处不等**,min 0 / max 286)。
@@ -10259,6 +10261,8 @@ dispatched=72429 null_scope=0 mask_odd=0 writes=7083 skipped=0 score_writes=7083
   没有绕过租约、没有直接 `SendInput` 脚本。这条门与「事件窗自己暂停游戏」的组合是**通道欠账**,不是本计划的代码。
 - **`neo_action` 语义未动**:`chokepoint_table.zig`、`justfile` 的 save sha 门、C4 的
   `TIER1_MIN/TIER2_MIN` 一处未改。
+- **与 §93.8 同一条 caveat**:detour 命中 `neo_set` 后直接转 `0x188E1D0`,**不跑** `0x3B0F80`
+  自己的 scope 门(`call [child+0xa8]`)与计时/临时对象块;本节没有另行观测那扇门对 `neo_set` 会放行。
 - **mod**:事件体 = C5-SCORE 原样 + 第一个 `every_system` 里 `neo_action = { }` 之后一行
   `neo_set = { which = neo_probe value = 42 }`(部署 sha256 `0de6b8ee5c7ec0f74ea5a3f92f7f3efaca7fa08d5e209ceaafe952297c099afc`);
   收尾按备份还原为 `980a3df14371d25ace9181ab1e90c7b1a3b4fd15cc42f6255a5f760959797f0f`。

@@ -1,3 +1,8 @@
+; set_variable parse chain — stellaris.exe 4.4.4 (Clausewitz, image base 0x140000000)
+; produced by: raw qword read of vtable 0x25EA560 (.rdata, not instructions)
+;              + scripts/disrva.py 0x188E240 --end=0x188E330
+;              + scripts/disrva.py 0x3B1770 --end=0x3B1830
+; NOTE: 4.4.4-only RVAs; do not reuse for another game version.
 ; vtable 0x25EA560 slots (set_variable)
 ; slot[0] +0x00 = 0x18a8700
 ; slot[1] +0x08 = 0x3afd30

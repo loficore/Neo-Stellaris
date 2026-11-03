@@ -138,6 +138,18 @@ def pack_act(act: str) -> int:
         raise ValueError(f"act must be one of {sorted(ACT_CODES)}, got {act!r}") from None
 
 
+def install_followups(install_rc: int) -> tuple:
+    """What the driver does after `C2NeoInstall`, in order.
+
+    Success: arm the per-system rule, then the action mode. Failure: disarm.
+    The set token was armed *before* install, and an install failure leaves no
+    hook behind but does leave that token armed; `C2NeoUninstall` is the
+    documented way to clear **both** tokens, and is a no-op for the hook when
+    nothing is installed.
+    """
+    return ("arm_rule", "arm_act") if install_rc == 0 else ("disarm",)
+
+
 def _fail(step: str) -> int:
     print(fail_line(step), file=sys.stderr)
     return EXIT_FAILED
@@ -237,10 +249,14 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
     install_rc = _signed32(
         harness.call_remote_with_arg(pid, base, exports["C2NeoInstall"], effect_id))
     harness.assert_game_alive(pid)
-    if install_rc == 0:
-        harness.call_remote_with_arg(pid, base, exports["C2NeoSetRule"], pack_rule(rule))
-        # C5-WRITE:`write` = 日志 + 系统变量;默认 `log` 保持 C5-ADD 的行为不变。
-        harness.call_remote_with_arg(pid, base, exports["C2NeoSetAct"], pack_act(act))
+    for step in install_followups(install_rc):
+        if step == "arm_rule":
+            harness.call_remote_with_arg(pid, base, exports["C2NeoSetRule"], pack_rule(rule))
+        elif step == "arm_act":
+            # C5-WRITE:`write` = 日志 + 系统变量;默认 `log` 保持 C5-ADD 的行为不变。
+            harness.call_remote_with_arg(pid, base, exports["C2NeoSetAct"], pack_act(act))
+        else:
+            harness.call_remote(pid, base, exports["C2NeoUninstall"])
 
     print(receipt(dll=dll_name, sha16=digest, effect_id=effect_id, set_id=set_id,
                   install_rc=install_rc, alive=True))

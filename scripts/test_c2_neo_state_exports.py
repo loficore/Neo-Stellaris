@@ -19,7 +19,7 @@ def test_set_act_is_listed_in_the_drivers_needed_tuple():
     assert '"C2NeoSetAct"' in src.split("NEEDED = (", 1)[1].split(")", 1)[0]
 
 
-def test_stats_line_ends_with_the_write_counters():
+def test_stats_line_orders_the_write_counters():
     src = (REPO / "src/dll/c2/neo_dispatch.zig").read_text(encoding="utf-8")
     body = src.split("fn statsInto", 1)[1]
     assert body.index("writes={d}") < body.index("skipped={d}")

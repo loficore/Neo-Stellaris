@@ -98,6 +98,29 @@ def test_pack_act_rejects_an_unknown_mode():
         mod.pack_act("modify")
 
 
+def test_install_followups_arms_on_success_and_disarms_on_failure():
+    assert mod.install_followups(0) == ("arm_rule", "arm_act")
+    assert mod.install_followups(-4) == ("disarm",)
+    assert mod.install_followups(-1) == ("disarm",)
+
+
+def test_boot_arms_the_set_token_before_install_and_disarms_on_failure():
+    """Ordering is load-bearing: both arming calls refuse after install.
+
+    The set token is armed before `C2NeoInstall`; if install fails, the driver
+    must go through `C2NeoUninstall` so the armed token does not outlive the
+    failed attempt. Source-order fence, same style as the NEEDED fence above.
+    """
+    import pathlib
+    import re
+
+    src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+    boot = src[src.index("def boot("):src.index("def uninstall(")]
+    order = re.findall(r'exports\["(\w+)"\]', boot)
+    assert order.index("C1SetId") < order.index("C2NeoArmSet") < order.index("C2NeoInstall")
+    assert "C2NeoUninstall" in boot
+
+
 def test_a_bad_rule_is_a_usage_error_not_a_traceback():
     import pytest
 
