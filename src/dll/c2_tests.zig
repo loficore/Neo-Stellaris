@@ -139,6 +139,38 @@ test "chokepoint_dynamic: an endpoint outside the system range is an error" {
     ));
 }
 
+test "chokepoint_dynamic: an isolated system counts toward the denominator and scores 0" {
+    // n = system_count = 4 (this module's contract), NOT len(adjacency) = 3:
+    // the denominator is (4-1)(4-2)/2 = 3, so score[1] = round(1000 * (1 / 3)) = 333.
+    // The offline tool normalises by len(adjacency) = 3 and would print 1000 here —
+    // the two agree only when every system has degree >= 1 (true for the fixture).
+    var scores: [4]u16 = undefined;
+    var art: [4]u8 = undefined;
+    var bri: [4]u8 = undefined;
+    var edges = [_]cd.Edge{ .{ .a = 0, .b = 1 }, .{ .a = 1, .b = 2 } };
+    try cd.analyze(std.testing.allocator, &edges, 4, .{
+        .scores = &scores,
+        .articulation = &art,
+        .bridge_endpoint = &bri,
+    });
+    try std.testing.expectEqualSlices(u16, &.{ 0, 333, 0, 0 }, &scores);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 1, 0, 0 }, &art);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 1, 1, 0 }, &bri);
+}
+
+test "chokepoint_dynamic: output slices shorter than system_count are error.LengthMismatch" {
+    var scores: [2]u16 = undefined;
+    var art: [3]u8 = undefined;
+    var bri: [3]u8 = undefined;
+    var edges = [_]cd.Edge{.{ .a = 0, .b = 1 }};
+    try std.testing.expectError(error.LengthMismatch, cd.analyze(
+        std.testing.allocator,
+        &edges,
+        3,
+        .{ .scores = &scores, .articulation = &art, .bridge_endpoint = &bri },
+    ));
+}
+
 test "chokepoint_dynamic: synthetic fixture matches the offline scores" {
     const alloc = std.testing.allocator;
     const edges = try alloc.alloc(cd.Edge, fx.EDGE_COUNT);

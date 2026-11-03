@@ -1,7 +1,13 @@
 // chokepoint_dynamic.zig — 纯 Zig 的图度量:Brandes 介数中心性 + 迭代式 Tarjan。
 //
-// 口径与 scripts/chokepoint_scores.py 相同:无权无向,每对无序点只计一次(`/2`),
+// 口径与 scripts/chokepoint_scores.py 相同的地方:无权无向,每对无序点只计一次(`/2`),
 // 归一化分母 `(n-1)(n-2)/2`,`score = round(1000 * normalized)` 后夹到 u16。
+//
+// **n 的定义是故意的差异,不是笔误**:本模块 `n = caller's system_count` —— 孤立系统
+// 计入分母、拿到 score 0(它们同样进入割点/桥扫描,但不可能命中);离线工具的
+// `n = len(adjacency)`(degree-0 节点既不在行集也不在分母)。两者**只要每个系统
+// degree >= 1 就完全一致**,787 系统 fixture 正是如此 —— 所以 golden 逐项相等;
+// 一旦有孤立系统,同一个图会得到不同分母(本模块 n 更大、分数更小)。
 //
 // 为了逐位复现 Python 的浮点结果,推导顺序也照抄:
 //   * source 升序;每个 source 内邻居升序(BFS 队列 FIFO);
@@ -10,7 +16,7 @@
 // 取整用 round-half-to-even(Python `int(round(x))` 的语义),而不是 Zig `@round`
 // 的 half-away-from-zero —— 恰好落在 .5 的边界只有这一种差别。
 //
-// 与 Python 的**故意**差异(只影响脏输入,787 系统的真值表是干净的):
+// 与 Python 的另外两处**故意**差异(只影响脏输入,787 系统的真值表是干净的):
 //   * 自环与重复边**忽略**(Python 那边 raise ValueError);
 //   * 端点 >= system_count 返回 error,而不是 panic。
 // 迭代式 Tarjan 避免 787 帧递归;桥两端都标 bridge_endpoint;根的割点规则 = DFS 子数 > 1。
