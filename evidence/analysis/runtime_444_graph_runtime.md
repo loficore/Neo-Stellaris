@@ -567,3 +567,141 @@ read_handler_rva    = 0x1afe500(has_hyperlane_to +0x18)
 neighbor_vector_off = 0x590        # == §1
 neighbor_count_off  = 0x59c        # == §1
 ```
+
+## §3 M1–M3 离线收口(2026-11-03):判决词、算法一致性、三条「不能说」
+
+> 本节把 Task 1–6 的读数收口成可被下一份 **M4(实机)** 计划直接引用的状态。**本计划零 shot、
+> 零进程、零联网**;§3 里没有一行是运行时读数 —— §1/§2 的字节级静态取证 + 两个 Zig 侧合成镜像
+> 测试是全部输入。所有地址仍是 module-base-relative RVA(image base `0x140000000`,ASLR on)。
+
+### §3.1 五个 keyword 的锚点表(Task 1)
+
+执行体/求值槽的锚点表在 `evidence/disasm/graph_keywords_4_4_4.c`(Task 1 生成物,只在校验通过时落盘):
+
+| keyword | class_info | factory | vtable | +0x20 | +0x28 | +0x48 | +0x80 |
+|---|---|---|---|---|---|---|---|
+| `add_hyperlane` | `0x260d4e0` | `0x189d510` | `0x25f7448` | `0x3b1770` | `0x1874820` | `0x1874540` | `0x1b4550` |
+| `remove_hyperlane` | `0x260d4d0` | `0x189d580` | `0x25f7368` | `0x3b1770` | `0x1874cf0` | `0x1874a00` | `0x1b4550` |
+| `has_hyperlane_to` | `0x269db28` | `0x1b2a510` | `0x269fde8` | `0x1afde20` | `0x1a91a80` | `0x1afe750` | `0x349230` |
+| `num_neighbor_systems` | `0x269c3c8` | `0x1b33930` | `0x266c108` | `0x1a92070` | `0x1a92450` | `0x1b875b0` | `0x349230` |
+| `spawn_system` | `0x26097f8` | `0x18a52b0` | `0x25ecc10` | `0x3b1770` | `0x18f7770` | `0x18f6b90` | `0x1b4550` |
+
+- **写侧目标**:`add_hyperlane` / `remove_hyperlane` 的执行槽 = vtable `+0x48`(`0x1874540` / `0x1874a00`)。
+- **读侧目标**:`has_hyperlane_to` 的类特定读体在 vtable `+0x18` = `0x1afe500`;`closest_system`
+  `+0x18` = `0x1ae3700`;`num_neighbor_systems` 的邻居收集在 vtable `+0xf0` = `0x1b87240`。
+  三者**都不是**通用解释器 `0x348db0` / 共享求值基体 `0x1a91a80`(那两档只挂 `+0x28`/`+0x20`)。
+- `spawn_system` 的 `+0x48` = `0x18f6b90`;**只做了锚点,没有跟读它的写路径**(见 §3.6 ③)。
+
+### §3.2 §1 判决词:`edge_store_write_named`
+
+写路径(id→系统对象解析器 + 边存储 + 增/删例程)在 `add` 与 `remove` **两侧同形且逐条可证**;
+`add`/`remove` 只在增/删例程分叉,**解析器、容器所有者、三个偏移两侧逐条相等**(§1.7),**没有取并集**。
+核心读数:
+
+```
+resolver_rva        = 0x3939f0      (§1.2,叶子函数、无 .pdata)
+edge_owner          = system_object(解析器返回) + 0x588
+neighbor_vector_off = 0x590         (数据;容量 0x598、计数 0x59c)
+elem_stride         = 0x20          (元素 +8 = 系统 id)
+insert_fn           = 0x8bbaa0      (通用 push_back 0x8cf8d0)
+remove_fn           = 0x8bbc20
+```
+
+- **id 的来源是 scope `+0x10`**,不是 scope `+0`(`0x3939fa` 取 id、`0x3939fd` 存栈局部、
+  `0x393a12 lea rcx,[rsp+8]` 才让 `rcx` 指那个局部)。
+- **基址来源钉死**:两个 keyword 里的容器基址 `rbx`/`rdi` 来自 `0x3939f0` 的返回值
+  (`0x1874583` ← `0x187457e call 0x1403939f0`),不是栈、不是全局(§87 口径)。
+- 两个解析器全局 `0x3260b98`(系统索引)/ `0x325d880`(回退)在文件里**没有字节**(BSS)⇒
+  静态不可定值,只报读点与解引用偏移(§1.2)。
+
+### §3.3 §2 判决词:`edge_store_read_confirmed`
+
+三条**互相独立**的 trigger 侧读路径(A:`has_hyperlane_to` 的比较体;B:`closest_system` 的
+hyperlane 步数 BFS;C:`num_neighbor_systems` 的邻居计数收集器)都读到 §1 的**同一组** offsets、
+**同一 stride 0x20**、**同一「元素 `+8` = id」**,而且三条路径的基址来源都能追回 §1 的解析器
+返回值或它灌进容器的那批系统对象:
+
+| | 读路径 A | 读路径 B | 读路径 C |
+|---|---|---|---|
+| 入口 | `0x269fde8 +0x18` = `0x1afe500` → `0xa6aa10` | `0x267faa0 +0x18` = `0x1ae3700` → `0x8cbb30` | `0x266c108 +0xf0` = `0x1b87240` → `0x1b86e30` |
+| 数据 `+0x590` | `0xa6aae3` | `0x8cc03f` | `0x1b86f80` |
+| 计数 `+0x59c` | `0xa6aaea` | `0x8cc034` | `0x1b86f5d` |
+| stride 0x20 | `0xa6aaff`/`0xa6ab50` | `0x8cc45d` | `0x1b870fc` |
+| 元素 id `+8` | `0xa6ab16` | `0x8cc046` | `0x1b86f87` |
+
+**§2.1 否证的简报前提**:`+0x78` 存的不是 opcode。`num_neighbor_systems` 实测存 `0x165` 是**读数**
+(对),但该槽被共享比较体 `0x1a92090` 当**比较运算符 id** 派发(可达集合
+`{1(=), 0x1d3(>), 0x1d4(<), 0x3cb(>=), 0x3cc(<=), 0x427(!=)}`),`0x165` **不在集合内** ⇒
+默认落到 `0x1a92193 xor al,al`(恒 false)。派发键始终是 **vtable 槽**;通用解释器 `0x348db0` 里
+`0x165` **0 处**、`+0x588/+0x590/+0x59c/+0x78` 访存 **0 条**,却有 5 条 `call [reg+…]`(它自己就按
+vtable 槽派发)。**报「词」不报「槽号」**:静态无法确定引擎运行时**具体调哪一个** vtable 槽
+(类特定 `+0x18` vs 通用 `+0x28`),本节证明的是三条路径**可达**、且读路径**不在**通用解释器里。
+
+### §3.4 算法对 787/1,217 的逐项一致(Task 4 + Task 5)
+
+- 输入(存档局部):`evidence/xrefs/c5_campaign_edges_4_4_4.tsv`(**787 系统 / 1,217 条**无向边,
+  每边一次 `a<TAB>b<TAB>length`)+ `evidence/xrefs/chokepoint_scores_4_4_4.tsv`(7 列,CRLF)。
+- 生成物:`src/dll/c2/graph_fixture.zig`(`SYSTEM_COUNT = 787`、`EDGE_COUNT = 1217`、`edges` +
+  `expected_scores` / `expected_articulation` / `expected_bridge_endpoint`)。
+- 算法:`src/dll/c2/chokepoint_dynamic.zig`(CSR + Brandes(betweenness,无向无权,归一化)+
+  迭代 Tarjan(割点/桥);round-half-to-even;分母 `n` = 调用方给的 `system_count`,不是边表里
+  出现的最大 id)。
+- **一致项**:`chokepoint_dynamic: synthetic fixture matches the offline scores` 用 `analyze()` 在
+  1,217 条边上重算 787 个系统的三个数组,`expectEqualSlices` 三个都过 ⇒ **787/787 × 三数组全等**,
+  即 `betweenness → score`(round-half-to-even)、割点、桥端三项与离线七列表逐项一致。
+- 去重/去自环口径与生成器一致(`graph_fixture_emit.py --check` 的漂移门 + `analyze` 的同一口径)。
+
+### §3.5 `galaxy_graph` 合成围栏(Task 6)
+
+`src/dll/c2/galaxy_graph.zig` 只经注入的 `Memory.read` 触碰内存(**文件里没有一个 `@ptrFromInt`**),
+测试侧接合成字节镜像(`c2_tests.zig`),生产侧将来接真内存。围栏 = `c2_tests.zig` 里 **11** 条
+`galaxy_graph:` 测试(`chokepoint_dynamic:` 另有 **7** 条,合计 **18** 条命名测试):
+
+1. `galaxy_graph: three systems, two edges, read out of a synthetic mirror`
+2. `galaxy_graph: an unreadable neighbour id is skipped, not fatal`
+3. `galaxy_graph: sparse ids resolve through the table, never as slot indices`
+4. `galaxy_graph: no cross-call caching of edges or pointers`
+5. `galaxy_graph: a short out buffer is error.BufferTooSmall, not a silent truncation`
+6. `galaxy_graph: an absurd edge count is capped, never walked`
+7. `galaxy_graph: an unreadable index header is an error, not an empty graph`
+8. `galaxy_graph: the table record stride is 16 bytes, not 8`
+9. `galaxy_graph: a null index object or a null table is error.UnreadableIndex`
+10. `galaxy_graph: a zero slot bound is error.UnreadableIndex, not an empty graph`
+11. `galaxy_graph: a count beyond the container capacity is skipped, never walked`
+
+每条镜像都按 §1.11 的 **16 B 记录**布(指针在记录 `+8`),并专门埋「诱饵位」`table + slot*8 + 8`,
+用第 8 条盯住 —— 步长写成 8 B 会**静默读到别的对象**而不报错。第 4 条钉「无跨调用缓存」
+(两次调用之间改图,第二次必须读到新边;Review Focus #3)。计划期全套 Zig 测试 = **884 passed**。
+
+### §3.6 三条「不能说」(本计划的诚实边界)
+
+1. **偏移是静态推断,没有一次运行时读数。** §1/§2 的一百九十余个站点是**字节级静态**读数;
+   合成镜像只证明**代码形状**(给定这些偏移,读图/度量得到的推论链自洽),**不证明活体布局**。
+   两个系统索引全局在 BSS,静态连指针值都读不出。
+2. **读图器没有接任何实机通道。** `galaxy_graph.zig` 的 `Memory.read` **生产实现不存在**;
+   在 M4 接上真内存、并确认 §3.1 的 vtable 槽真的被执行路径走到之前,`resolveFromGame` 类入口
+   **不得被调用** —— 拿一个未验证的指针调真机读会静默读错对象(§1.11 的 16/8 步长就是范例)。
+3. **图变更后的重算未验证。** `add_hyperlane` / `remove_hyperlane` / `spawn_system` **只做了静态
+   锚点**:没有钩子、没有置脏、没有实机。§1.4 的增例程确实置了脏位,但**没有证据**显示引擎后续会
+   重算我们关心的量;`spawn_system` 的写路径整个没跟。
+
+### §3.7 `0x296cc68` 是**可选**信号候选,不改 §88 的 `no_version_signal`
+
+增/删边都会置**同一个广义脏/世代位掩码全局 `0x296cc68`**(§1.4.1:24 个交叉引用横跨多个子系统,
+17 个置位、4 个写 `2`、只有 2 个读点,是按位测试的掩码字,**不是**边专属标志)。它是裁定④
+「变更钩子」的一个**可选**候选,但:
+
+- 它是**全局字**,**不在** `runtime_444_c1_validation.md` §88 扫描的那个对象 `+0x580..+0x5c0` 窗口内
+  ⇒ §88 的 `no_version_signal` **只管它自己的窗口**,本卷的写点**不构成反例**,§88 也**不否定**本卷
+  的 stride-0x20 容器(§1.10 已记录边界)。所以本条的披露**不推翻** §88 的 `no_version_signal`。
+- 本计划**不依赖**任何版本信号:裁定④已改为「脚本显式调用时**全量重读边表 + 重算**」,变更钩子
+  只是**可选优化**,不是正确性前提(见本计划 Spec delta / `docs/c5-pilot2-spec.md` §3.1 ④)。
+
+### §3.8 勘误:表项记录步长是 **16 B**,不是 8 B(§1.11)
+
+§1.2 的寻址注释原先写 `entry = [表 + idx*8 + 8]`,**漏抄**了 `0x393a2f add rcx, rcx`(槽号在寻址前
+翻倍)⇒ 实际是 `[表 + slot*16 + 8]`。**表项记录 = 16 B,系统对象指针在记录 `+8`**;按 8 B 步长读会
+落在记录头或前一条记录上、**静默读错对象**。Task 6 的读图器按 16 B 实现
+(`offsets.graph.TABLE_RECORD_SIZE = 16` / `TABLE_SLOT_PTR_OFF = 8`);§1.2 其余结论(id 来自 scope
+`+0x10`、边界 `[对象+0x20]`、表指针 `[对象+0x18]`、命中条件 `entry+8 == id`、回退 `0x325d880`)全部
+照旧,§1.3 的边容器字段表不受影响。

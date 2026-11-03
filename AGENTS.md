@@ -17,6 +17,7 @@ registration pipeline and identify extension points for new effects/triggers.
 | 取证 §16–§23(注册管线:driver、descriptor、thunk 数组、token 分配器、class_info、消费者) | `evidence/analysis/runtime_444_keyword_pipeline.md` |
 | 取证 §24–§89(donor 别名与 ABI 修正、C2 QuickJS bootstrap 与自杀链 §38–§50、C4 执行路径 §52–§57、scope 载体重打两次 shot §58–§59、零 shot 帧构造点回溯 §60、普查表第 1 行帧来源=透传 §61、普查表 12 行 `incoming_arg` 逐函数读完=全是 slot[2] 透传 §62、队列派发方三口径互证 §63、孤儿 handler 案卷 §64、Zig `extern fn` 布局契约双侧钉死 §65、两段形态派发方 §66、donor 第一次 shot 只读采样=静默窗口 §67、scope 深跟读第二次 shot=修正仪器后第一发 `scope_candidate`(§56 误配仪器下已 14 条命中)且两条边非血缘 §68、同族 slot[2] 证人 shot 与载入窗口 §69、证人+donor 载入后重打与 spec §4 判决落点 §70、族外靶离线定形 §71、族外证人第一次正读 §72、`h1..h6=0` 的口径 §72.8、`0xCC4220` 三条静态路线 §72.9、scope 新形状一发(预算 27,`verdict_d2=no_depth2_lead` ⇒ §68.8 ② 触发)§73、B2 复采(七把仍个个相等但值 2,090→2,494,`hist_overflow=0`)§74、触发评价路径形状 §75、触发谓词第一发(787 次求值只调 11 次、X 恒 0x80)§76、求值槽 `0x1A91A80` 的静态形状(32 B 指纹、尾调 slot[4]、`ctx+0x158` 类型门、`ctx+0x278` 被当对象传出去)§77、孤儿 handler 删除后的门禁/出货字节不变 §78、求值槽判负(不是每系统一次)§79、逐系统循环/靶的层/派发方/mod 判据/#32 纯函数缺陷 §80–§84、class_info 0x260F498 插入点 = 静态 registrar 尾跳 0x3AEF60(`insertion_named`)§85、子表 0x25EBAB8 的 +0x70 = 0x3B1EF0 递归字符串写手(`same_family_parse_dispatch`)§86、备用靶 0x1A76324 下游一层无 `[scope+0x10]` 读点(`no_scope_id_read_depth1`)§87、图版本信号候选表(`no_version_signal`;+0x59C = 平凡计数)§88、`+0x70` 不在执行路径(测试 mod 在 4.4.4 里解析失败 + `every_system` 需 system scope 入口;窗内 12,544 次逐系统下发 = 16×784 而 `0x3B1330` 的 `calls=0`)§89) | `evidence/analysis/runtime_444_c1_validation.md` |
 | 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
+| 取证 §1–§3(运行时星连图:**§1 写路径** `edge_store_write_named` / **§2 读路径** `edge_store_read_confirmed` / **§3 M1–M3 离线收口**) | `evidence/analysis/runtime_444_graph_runtime.md` |
 | 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
 | world_state 窗口状态机(agent 唯一入口 `ns_world`、租约与惰性 `RESTORE_INCOMPLETE`、反刷预算、黄金集、OCR 换型读数) | `docs/offline-tooling.md` 的「scripts/windows/ns_world.py」一节 |
 | 阶段状态、前置、授权级别 | `docs/roadmap.md` |
@@ -168,6 +169,18 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x1B5B10` | `CScriptedEffectTemplateDatabase` ctor(中可信度) | `anchors_4_4_4` |
 | `0x5BBF80` | token-id 二分查找派发树 — **不是 keyword 注册表** | §17 |
 | `0x9F5750` / `0x9F6420` / `0x9F65E0` | Event command handlers(需更深 trace 选点) | `anchors_4_4_4` |
+
+### 运行时星连图(离线静态定形;**无运行时读数**)
+
+五个图相关 keyword 的锚点表在 `evidence/disasm/graph_keywords_4_4_4.c`;以下偏移全部来自
+**字节级静态取证**,尚未接实机(§3 的三条「不能说」见 `runtime_444_graph_runtime.md` §3.6)。
+
+| RVA | 含义 | 证据 |
+|---|---|---|
+| `0x3939F0` | **id→系统对象解析器**(叶子函数、无 `.pdata`):`id` 取自 scope `+0x10`;经全局 `0x3260B98` 的表 `[obj+0x18]`、界 `[obj+0x20]`,`entry = [表 + slot*16 + 8]`,`entry+8 == id`;失败回退 `0x325D880`(两个全局都在 BSS,静态不可定值) | `runtime_444_graph_runtime.md` §1.2 §1.11 |
+| `0x8BBAA0` / `0x8BBC20` | 边增 / 删例程;边容器 = 系统对象 `+0x588`(数据 `+0x590`、容量 `+0x598`、计数 `+0x59c`、步长 `0x20`、元素 `+8` = 邻居 id)。两 keyword 两侧同形 ⇒ 写路径判决 **`edge_store_write_named`**;`add_hyperlane`/`remove_hyperlane` 的 `+0x48` 执行体 = `0x1874540` / `0x1874A00` | 同卷 §1 |
+| `0x1AFE500` / `0x1AE3700` / `0x1B86E30` | trigger 侧**三条独立**读路径(`has_hyperlane_to` `+0x18` / `closest_system` `+0x18` / `num_neighbor_systems` `+0xf0`→`0x1B87240`),读到同一组 `+0x590`/`+0x59c`、同 stride、同元素布局 ⇒ 读路径判决 **`edge_store_read_confirmed`** | 同卷 §2 |
+| `0x296CC68` | 跨子系统的脏/世代**位掩码全局**(增/删边都置位);在 §88 窗口之外,是裁定④的**可选**优化候选,**不推翻** `no_version_signal` | 同卷 §1.4.1 §3.7 |
 
 ### 已证伪 — 不要再当锚点用
 

@@ -479,6 +479,27 @@ C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从�
 生成器自己复现 `zig fmt` 的多行列对齐,所以 `zig fmt --check src/dll/c2/chokepoint_table.zig`
 必须为 0 —— 若不为 0,先修生成器的排版,不要在产物上手改(下次 `--out` 会覆盖)。
 
+### `scripts/graph_fixture_emit.py --edges E.tsv --scores S.tsv --out PATH [--check]`
+
+把两张开源表编译成 Zig 合成围栏 `src/dll/c2/graph_fixture.zig`:`SYSTEM_COUNT`/`EDGE_COUNT`、
+`edges`(每条无向边一次 `.{a, b}`,a < b),以及 `expected_scores`/`expected_articulation`/
+`expected_bridge_endpoint` 三个数组。`--edges` 是 `save_hypergraph.py` 的 `a<TAB>b<TAB>length`
+(每边一次、可带表头);`--scores` 是 `chokepoint_scores.py` 的七列表(CRLF 容忍)。产物是
+`chokepoint_dynamic.zig` 在 golden 测试里逐项复算的对照物(取证卷 §3.4:787/787 × 三数组全等);
+生成器自己复现 `zig fmt` 的冒号对齐,所以 `zig fmt --check src/dll/c2/graph_fixture.zig` 必须为 0。
+
+判读陷阱:
+
+1. **id 是存档局部的**(与 `chokepoint_table.zig` 同一 caveat):产物只对捕获那批表的存档有意义。
+   换存档/换版本都要重生成;生成器把「星系总数 ≠ 787」当硬错误(退出 2),不静默重标。
+2. **两个 TSV 都要给**:边表管拓扑、分数表管 `expected_*`;任一为空退出 2(「0 个星系」不是结论)。
+3. **坏输入一律退出 2**:自环、重复边、端点越界、`system_id` 非从 0 稠密、`score` 超 u16、
+   行字段数不对。边表里的 `length` 只做校验,产物只带拓扑(不带长度)。
+4. **`--check` 是漂移围栏**:内存里重渲染与磁盘逐字节比,不同(或文件缺失)退出 **1**(不是 2)。
+   根目录 `just graph-fixture-check` 与 `just check` 都跑它;改了任一 TSV 不重生会让围栏红。
+
+**退出码**:0 = 正常;1 = `--check` 漂移;2 = 坏输入 / 输出不可读(各一行 stderr)。
+
 ## C1 硬门
 
 ### `scripts/c1_preflight.py --name NAME [--name ...] [--db effects|triggers]`
