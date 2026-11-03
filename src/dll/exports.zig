@@ -35,6 +35,8 @@ var base_address: usize = 0;
 var c1_result: ?keyword_registry.Registration = null;
 var c1_error: ?keyword_registry.RegisterError = null;
 var c1_effect_id: u32 = 0;
+/// C5-PARAM: the effect-side token C1 minted for `neo_set`. 0 = never run/failed.
+var c1_set_id: u32 = 0;
 
 /// Retrieve the stored engine pointer. Returns null if not yet set.
 pub fn getEnginePtr() ?*anyopaque {
@@ -179,16 +181,33 @@ export fn C1Run() callconv(.c) u32 {
         return 0;
     };
 
+    // C5-PARAM: register effect `neo_set`, aliasing set_variable's class_info so
+    // the loader's own parser fills `which` / `value` into the object.
+    const holder_set = keyword_registry.NameHolder.inlineSso("neo_set");
+    const info_set = keyword_registry.ClassInfo.setVariableDonor(game_base);
+    const set_result = keyword_registry.register(&eng, .effects, &holder_set, info_set) catch |err| {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "C1 set FAIL: error={d}\n", .{@intFromError(err)}) catch "C1 set FAIL\n";
+        writeLogStatic("C:\\temp\\c1_result.log", msg);
+        return 0;
+    };
+
     var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "C1 OK: trigger_id={d} effect_id={d}\n", .{ trigger_result.token_id, effect_result.token_id }) catch "C1 OK\n";
+    const msg = std.fmt.bufPrint(&buf, "C1 OK: trigger_id={d} effect_id={d} set_id={d}\n", .{ trigger_result.token_id, effect_result.token_id, set_result.token_id }) catch "C1 OK\n";
     writeLogStatic("C:\\temp\\c1_result.log", msg);
     c1_effect_id = effect_result.token_id;
+    c1_set_id = set_result.token_id;
     return trigger_result.token_id;
 }
 
 /// The effect-side token from the last successful C1Run. 0 = never run/failed.
 export fn C1EffectId() callconv(.c) u32 {
     return c1_effect_id;
+}
+
+/// C5-PARAM: the `neo_set` token from the last successful C1Run. 0 = never run/failed.
+export fn C1SetId() callconv(.c) u32 {
+    return c1_set_id;
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,6 +1084,15 @@ export fn C2NeoInstall(token: u32) callconv(.c) i32 {
     return 0;
 }
 
+/// C5-PARAM: arm the `neo_set` token. Must be called **before** `C2NeoInstall`:
+/// `setToken`/`setSetToken` both refuse to change the arming once the detour is
+/// installed (one install = one armed pair).
+/// 码表:`0` ok | `-1` 坏 token / 已安装。
+export fn C2NeoArmSet(token: u32) callconv(.c) i32 {
+    c2_neo_dispatch.setSetToken(token) catch return -1;
+    return 0;
+}
+
 /// 只拆我们自己的 dispatch detour;引擎字节按保存的 `patch_size`(= 16 B,整条指令
 /// 边界;19 B 是指纹长度,多出来的 3 B 从未被改写)原样写回。
 /// 码表:`0` ok | `-6` 还原后指纹不符(`RESTORE_INCOMPLETE`,**不要 FreeLibrary**)。
@@ -1080,7 +1108,8 @@ export fn C2NeoVerify() callconv(.c) i32 {
 }
 
 /// 一行,键序固定为 `calls matched log_calls last_id rule_hits installed verify dispatched`,
-/// C5-WRITE 在行尾追加 `writes skipped`,C5-SCORE 再追加 `score_writes score_skipped`(老键位不动)。
+/// C5-WRITE 在行尾追加 `writes skipped`,C5-SCORE 再追加 `score_writes score_skipped`,
+/// C5-PARAM 再追加 `set_calls set_runs`(老键位不动)。
 export fn C2NeoStatsInto(out: [*]u8) callconv(.c) i32 {
     return @intCast(c2_neo_dispatch.statsInto(out[0..c2_neo_dispatch.STATS_SIZE]));
 }
@@ -1590,4 +1619,8 @@ test "C4ShimProbeInstall folds every install error to its documented code" {
 test "C4ShimProbeUninstall folds RestoreIncomplete to -7 and nothing else" {
     try std.testing.expectEqual(@as(i32, -7), shimUninstallCode(error.RestoreIncomplete));
     try std.testing.expectEqual(@as(i32, -1), shimUninstallCode(error.OutOfMemory));
+}
+
+test "C1SetId is zero before any registration" {
+    try std.testing.expectEqual(@as(u32, 0), C1SetId());
 }

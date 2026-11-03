@@ -280,6 +280,10 @@ pub const keyword_reg = struct {
     /// Smallest objects on each side; both verified against the slots above by reading raw qwords.
     pub const DONOR_TRIGGER_CLASS_INFO: usize = 0x269CAA8; // has_crisis_perk + has_menace_perk, new(0x80)
     pub const DONOR_EFFECT_CLASS_INFO: usize = 0x2611070; // hidden_effect, new(0xc0)
+    /// C5-PARAM (§94, §96): `set_variable`'s own class_info and `.rdata` docstring.
+    /// ALIAS, never a fabricated object — same rule as the two donors above.
+    pub const DONOR_SETVARIABLE_CLASS_INFO: usize = 0x2608D18;
+    pub const DONOR_SETVARIABLE_DOCSTRING: usize = 0x263ADD0;
     pub const DONOR_TRIGGER_CREATE: usize = 0x1B30450; // [VERIFIED 4.4.4] §24.3
     pub const DONOR_EFFECT_CREATE: usize = 0x1893130; // [VERIFIED 4.4.4] §24.3
     pub const DONOR_TRIGGER_VTABLE: usize = 0x268ED08; // covers +0x78 = 0x1B4550, +0x80 = 0x349230
