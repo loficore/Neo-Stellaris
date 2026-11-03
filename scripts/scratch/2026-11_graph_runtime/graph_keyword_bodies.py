@@ -12,6 +12,8 @@ create)、factory 反汇编到第一个 `ret` 得到的 vtable、以及 vtable �
         --emit-c evidence/disasm/graph_keywords_4_4_4.c
 
 `--emit-c` 落的反汇编原件就是 `evidence/disasm/graph_keywords_4_4_4.c` 的生成命令。
+**只有与计划期 Expected 表逐项核对通过时才落盘**:任一不等 → `exit 1`、不写文件,避免从一次
+失败的探针里产出一份好看的证据表。
 
 vtable 判定口径(为什么不是简报里那句字面启发式):
     简报写的是「`lea rax,[rip+X]` 后紧跟 `mov [rbx],rax`」。字面照搬会**错两处**,
@@ -71,6 +73,10 @@ EXPECTED = {
 _RIP_RE = re.compile(r"\[rip \+ (0x[0-9a-f]+)\]")
 # 只认「qword ptr [reg]」——偏移 0,不是 [reg + 8] 那种次 vtable
 _QWORD_REG0_RE = re.compile(r"^qword ptr \[([a-z0-9]+)\]$")
+
+# §77 那张「352 张表共用的触发求值槽」。只是给派生出的槽值加一条**值条件**注记:
+# 只有当某 keyword 的 +0x28 读数等于它时才附注,不参与任何取值。
+SHARED_EVAL_SLOT_RVA = 0x1A91A80
 
 
 def _md():
@@ -270,12 +276,22 @@ def render_c(rows) -> str:
         lines.append(f"; {r['keyword']:<22} 0x{r['class_info']:x}  0x{r['factory']:x}   "
                      f"{vt:<10} " + " ".join(f"{c:<10}" for c in cells))
     lines.append(";")
-    lines.append("; 执行/求值槽(简报 Expected 表点名的那些):")
-    lines.append(";   add_hyperlane        +0x48 = 0x1874540")
-    lines.append(";   remove_hyperlane     +0x48 = 0x1874a00")
-    lines.append(";   has_hyperlane_to     +0x20 = 0x1afde20, +0x28 = 0x1a91a80 (352 张表共用的求值槽)")
-    lines.append(";   num_neighbor_systems +0x28 = 0x1a92450 (thunk -> 0x348db0)")
-    lines.append(";   spawn_system         +0x48 = 0x18f6b90")
+    lines.append("; 执行/求值槽(简报 Expected 表点名的那些;**值全部由上面的读数格式化**,"
+                 "不是手写常量):")
+    for r in rows:
+        parts = []
+        for off in sorted(EXPECTED[r["keyword"]]["slots"]):
+            s = r["slots"].get(off)
+            if s is None:
+                parts.append(f"+0x{off:02x} = -")
+                continue
+            txt = f"+0x{off:02x} = 0x{s['rva']:x}"
+            if s["thunk"] is not None:
+                txt += f" (thunk -> 0x{s['thunk']:x})"
+            if s["rva"] == SHARED_EVAL_SLOT_RVA:
+                txt += " (352 张表共用的求值槽)"
+            parts.append(txt)
+        lines.append(f";   {r['keyword']:<21}" + ", ".join(parts))
     lines.append(";")
     lines.append("; ==================== 逐 keyword 原件 ====================")
     for r in rows:
@@ -300,7 +316,11 @@ def render_c(rows) -> str:
             lines.append(f"  {ins.address - BASE:08x}  {ins.mnemonic:<7} {ins.op_str}{note}")
     lines.append(";")
     lines.append("; ==================== 校验 ====================")
-    lines.append("; 见 Task 1 报告:探针 --emit-c 前先跑 print_check,五组逐项与计划期 Expected 表相等。")
+    lines.append("; 本文件由 --emit-c **只在校验通过时**写出:探针先与计划期 Expected 表逐项核对,"
+                 "任一不等就")
+    lines.append("; 拒绝落盘(exit 1、不写文件)。所以本文件的内容必然与探针这一次的读数一致,"
+                 "不可能从一次")
+    lines.append("; 失败的探针里产出一份好看的证据表。")
     return "\n".join(lines) + "\n"
 
 
@@ -324,6 +344,10 @@ def main(argv: list[str]) -> int:
     ok = print_check(rows)
 
     if emit_c is not None:
+        if not ok:
+            # 交叉校验没过 —— 绝不落盘:否则一份「好看」的证据文件会来自一次失败的探针。
+            print("[emit-c] 交叉校验失败 —— 拒绝落盘(不写文件)", file=sys.stderr)
+            return 1
         out = pathlib.Path(emit_c)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(render_c(rows), encoding="utf-8")
