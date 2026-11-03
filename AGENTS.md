@@ -170,10 +170,13 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x5BBF80` | token-id 二分查找派发树 — **不是 keyword 注册表** | §17 |
 | `0x9F5750` / `0x9F6420` / `0x9F65E0` | Event command handlers(需更深 trace 选点) | `anchors_4_4_4` |
 
-### 运行时星连图(离线静态定形;**无运行时读数**)
+### 运行时星连图(静态定形 **+ 2026-11-04 实机两发**)
 
-五个图相关 keyword 的锚点表在 `evidence/disasm/graph_keywords_4_4_4.c`;以下偏移全部来自
-**字节级静态取证**,尚未接实机(§3 的三条「不能说」见 `runtime_444_graph_runtime.md` §3.6)。
+五个图相关 keyword 的锚点表在 `evidence/disasm/graph_keywords_4_4_4.c`。下表偏移原先全部来自
+**字节级静态取证**;M4 已用 `C5Graph*` 只读探针在活体里读出整张图(`systems=788/edges=1219`,
+与同期存档由独立解析器复现的边集**双向零差**),并用 `0x8BBAA0`/`0x8BBC20` 改了**一条**边再删回
+(`1219→1220→1219`,全图重算 400/788 个系统分数变化)⇒ 容器偏移这一格已是**实机读数**,
+§3.6 的三条「不能说」(运行时内重算、多边连锁、读一致性跨帧)仍然成立。
 
 | RVA | 含义 | 证据 |
 |---|---|---|
@@ -181,6 +184,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x8BBAA0` / `0x8BBC20` | 边增 / 删例程;边容器 = 系统对象 `+0x588`(数据 `+0x590`、容量 `+0x598`、计数 `+0x59c`、步长 `0x20`、元素 `+8` = 邻居 id)。两 keyword 两侧同形 ⇒ 写路径判决 **`edge_store_write_named`**;`add_hyperlane`/`remove_hyperlane` 的 `+0x48` 执行体 = `0x1874540` / `0x1874A00` | 同卷 §1 |
 | `0x1AFE500` / `0x1AE3700` / `0x1B86E30` | trigger 侧**三条独立**读路径(**A/B 两格是 vtable 槽目标,C 一格是深层读体**,不是同一层):A `has_hyperlane_to` vtable `+0x18` = `0x1AFE500`,其下层容器访存函数 = `0xa6aa10`(§2.2);B `closest_system` vtable `+0x18` = `0x1AE3700`,下层 = `0x8cbb30`(§2.3);C `num_neighbor_systems` vtable `+0xf0` = `0x1B87240`,**读体就是本行的 `0x1B86E30`**(§2.4)。三条读路径都落到同一组 `+0x590`/`+0x59c`、同 stride `0x20`、同元素布局 ⇒ 读路径判决 **`edge_store_read_confirmed`** | 同卷 §2 |
 | `0x296CC68` | 跨子系统的脏/世代**位掩码全局**(增/删边都置位);在 §88 窗口之外,是裁定④的**可选**优化候选,**不推翻** `no_version_signal` | 同卷 §1.4.1 §3.7 |
+| `C5Graph*`(七个导出,`src/dll/c2/graph_probe.zig`) | **实机通道**:`Read`/`Layout`/`StatsInto`/`DrainInto`/`Reset` 只读(无 hook);`MutateAdd`/`MutateRemove` 收**一个 u64**(低 32 = from、高 32 = to,`CreateRemoteThread` 只给一个寄存器)并转调 `0x8BBAA0`/`0x8BBC20`,两者各调**两次**(两个方向,§1.1)。驱动 `scripts/c2_graph_read.py` **必须经 `session_bridge.py`**(SSH 落 session 0 读不到窗口 ⇒ 门拒装) | `runtime_444_graph_runtime.md` §4 §5 |
 
 ### 已证伪 — 不要再当锚点用
 

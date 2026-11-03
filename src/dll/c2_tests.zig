@@ -16,6 +16,7 @@ const neo_state = @import("c2/neo_state.zig");
 const chokepoint_dynamic = @import("c2/chokepoint_dynamic.zig");
 const graph_fixture = @import("c2/graph_fixture.zig");
 const galaxy_graph = @import("c2/galaxy_graph.zig");
+const graph_probe = @import("c2/graph_probe.zig");
 const offsets = @import("shared/offsets.zig");
 
 comptime {
@@ -28,6 +29,7 @@ comptime {
     _ = chokepoint_dynamic;
     _ = graph_fixture;
     _ = galaxy_graph;
+    _ = graph_probe;
     _ = offsets;
 }
 
@@ -702,5 +704,85 @@ test "galaxy_graph: a slot id above the u16 range is skipped, not admitted" {
     try std.testing.expectEqual(@as(usize, 0), stats.edges);
     try std.testing.expectEqual(@as(usize, 1), stats.skipped);
     try std.testing.expectEqual(@as(?u16, 1), stats.max_id);
+    try std.testing.expect(!m.escaped);
+}
+
+// ---------------------------------------------------------------------------
+// graph_probe: 实机只读探针的纯逻辑面(布局词 / stats 编码 / drain 门 / 容器分档)
+//
+// 与 `galaxy_graph` 用同一套合成镜像:探针自己只多两件事 —— 把「模块基址 + 全局槽」
+// 解析出的**索引对象地址**交给 `readGraph`,以及把结果编码成驱动能读的字节。
+// 所以下面第 4/5 条测的是「探针在镜像上重放的那一趟」,不是 `readGraph` 的新语义。
+// ---------------------------------------------------------------------------
+
+const gp = graph_probe;
+
+test "graph_probe: layout words are the offsets the evidence pins" {
+    var words: [8]u32 = undefined;
+    try std.testing.expectEqual(@as(u32, 8), gp.layoutInto(&words));
+    try std.testing.expectEqual(@as(u32, 0x3260B98), words[1]);
+    try std.testing.expectEqual(@as(u32, 0x18), words[2]);
+    try std.testing.expectEqual(@as(u32, 0x20), words[3]);
+    try std.testing.expectEqual(@as(u32, 16), words[4]);
+    try std.testing.expectEqual(@as(u32, 8), words[5]);
+    try std.testing.expectEqual(@as(u32, 0x59C), words[6]);
+    try std.testing.expectEqual(@as(u32, 0x20), words[7]);
+}
+
+test "graph_probe: stats encoding puts max_id null at u64 max" {
+    const s = gp.StatsSnapshot{ .systems = 3, .edges = 2, .skipped = 0, .max_id = null };
+    var buf: [64]u8 = undefined;
+    gp.encodeStats(&buf, s, .{ .index = 0x1000, .table = 0x2000, .bound = 4, .module = 0x140000000 });
+    try std.testing.expectEqual(@as(u64, 3), std.mem.readInt(u64, buf[0..8], .little));
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), std.mem.readInt(u64, buf[24..32], .little));
+}
+
+test "graph_probe: drain refuses a short buffer and writes nothing" {
+    const rows = [_]cd.Edge{ .{ .a = 0, .b = 1 }, .{ .a = 1, .b = 2 } };
+    var out: [8]u8 = undefined;
+    try std.testing.expectEqual(@as(u32, 2), gp.drainInto(&out, &rows));
+    try std.testing.expectEqual(@as(u16, 0), std.mem.readInt(u16, out[0..2], .little));
+    try std.testing.expectEqual(@as(u16, 1), std.mem.readInt(u16, out[2..4], .little));
+    var tight: [4]u8 = @splat(0xAA);
+    try std.testing.expectEqual(@as(u32, 0xFFFF_FFFF), gp.drainInto(&tight, &rows));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xAA, 0xAA, 0xAA, 0xAA }, &tight);
+}
+
+test "graph_probe: a container with count>0 but no data is skipped, not an empty system" {
+    // Review Focus #1:空容器(count=0)与坏容器(count>0 但 data=0)不是同一档。
+    var m = Mirror{};
+    setGalaxy(&m, 1, Mirror.TABLE);
+    const obj = objAddr(0);
+    putQword(&m, slotAddr(0), obj);
+    putDword(&m, obj + gg_off.SYSTEM_ID_OFF, 0);
+    putDword(&m, obj + gg_off.EDGE_CAPACITY_OFF, 1);
+    putDword(&m, obj + gg_off.EDGE_COUNT_OFF, 1);
+    // data 指针故意留 0:计数说「有 1 条」,容器说「没有数据」。
+
+    try gp.readAt(mirrorMemory(&m), Mirror.GALAXY);
+
+    const s = gp.lastStats();
+    try std.testing.expectEqual(@as(usize, 1), s.systems); // 系统本身是活的
+    try std.testing.expectEqual(@as(usize, 0), s.edges); // 但没有边
+    try std.testing.expectEqual(@as(usize, 1), s.skipped); // 且这一项是**丢弃**,不是空
+    try std.testing.expectEqual(@as(usize, 0), gp.rows().len);
+    try std.testing.expect(!m.escaped);
+}
+
+test "graph_probe: max_id comes from table entries, not from bound" {
+    // Review Focus #2:bound=8、活槽 {0,1,3}、空槽 2/4..7 ⇒ max_id==3(不是 7)。
+    var m = Mirror{};
+    setGalaxy(&m, 8, Mirror.TABLE);
+    setSystem(&m, 0, 0, &.{1});
+    setSystem(&m, 1, 1, &.{0});
+    setSystem(&m, 3, 3, &.{});
+
+    try gp.readAt(mirrorMemory(&m), Mirror.GALAXY);
+
+    const s = gp.lastStats();
+    try std.testing.expectEqual(@as(usize, 3), s.systems);
+    try std.testing.expectEqual(@as(usize, 1), s.edges);
+    try std.testing.expectEqual(@as(usize, 0), s.skipped);
+    try std.testing.expectEqual(@as(?u16, 3), s.max_id);
     try std.testing.expect(!m.escaped);
 }

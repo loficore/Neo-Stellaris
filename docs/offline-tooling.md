@@ -1665,6 +1665,41 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**45 条**),
 无游戏、无 Windows API。
 
+### `scripts/c2_graph_read.py [dll] --expect-systems N --expect-edges N --save-name NAME [--edges-file PATH] [--mutate FROM,TO] [--kill-after] [--out C:/temp/c5_graph_read.tsv]`
+
+**M4 的实机读图通道。** 不挂钩子:只读段只经 `ReadProcessMemory` 走 `C5GraphRead`→`StatsInto`→
+`DrainInto`(连读**两次**,两次的边集就是判据 —— 活容器撕裂读只有比两次才看得见),`--mutate` 段经
+`C5GraphMutateAdd`/`Remove` 调引擎自己的 `0x8BBAA0`/`0x8BBC20` 并按固定顺序
+`base → add → add_read → remove → remove_read` 逐步写 `#meta step=`。判决词十档(见脚本 docstring);
+`--kill-after` 在 artifact 写完后 `taskkill /F`,不存档、不退回主菜单。
+
+**判读陷阱(六条):**
+
+1. **容器是活数据。** 只认「一次读足的 blob」:驱动先读 `edges` 再按 4 B × n 取行,并且**连读两次**;
+   两次不等就是 `graph_live_read_unstable`(判负),不是「再多读几次取平均」。
+2. **`count>0` 而 `data==0` 是坏容器,空容器是 `count==0`。** 两者在 `skipped` 上分档:
+   系统本身照样计入 `systems`,容器整段跳过并计 `skipped`(探针侧口径 = `galaxy_graph` 的 `skipped`)。
+3. **同一进程的第二发必须换模块名**(`sqjs_g1` → `sqjs_g2`):`refuse_if_resident` 会拒绝同名重注,
+   而同一份字节可以重复注入 —— 换名不是换代码。
+4. **改边是真实副作用。** `--mutate` 只在**一次性副本**上跑;三个快照必须闭合
+   (`add == base ∪ {(x,y)}` 且 `base == remove`),否则判 `mutation_left_dirty` 并**立即停手**,
+   不要试图「修回去」;跑完 `--kill-after` 杀进程(autosave 每分钟一次,改过的图不能被自动存下去)。
+5. **必须经 `session_bridge.py` 跑。** SSH 落在 **session 0**,`EnumWindows` 看不到游戏窗口 ⇒
+   `gate_install` 以 `no game window` 拒装(exit 2,未注入、**不算一次读数**)。2026-11-04 第一次
+   实打就是撞在这里。
+6. **事件窗会把游戏按暂停,而 `install` 只认 `IN_GAME_RUNNING`。** 同一天第二次拒装是
+   `IN_GAME_PAUSED_CLEAN`;用桌面通道 `Shortcut "enter"` 答掉默认选项恢复运行再打。
+   `--allow-window` **不是**给这种情形的(它是「状态机与屏幕矛盾且人当场确认」)。
+
+**对账口径**:给 `--edges-file` 时判词要求边集**逐项相等**;离线边表若来自更早的存档,
+先看差集是不是「会话内新生成的系统」(2026-11-04:差两条 `(315,787)`/`(575,787)`,同期存档
+`autosave_2260.01.01.sav` 双向零差)—— **不要直接改期望值**,换一份**同期** oracle。
+`<out>.base/.add/.remove` 是三列(`a<TAB>b<TAB>1`,第三列占位),这样
+`chokepoint_scores._read_edges` 可以原样吃。
+
+判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖(**17 条**):八档读判词 +
+五条改边判词 + `parse_artifact` 两条,无游戏、无 Windows API。
+
 ### `scripts/c2_exec_caller_probe.py [dll] --systems N --save-name NAME [--poll-s 120] [--out C:/temp/c5_exec_caller.tsv] [--allow-window]`
 
 **第八把 guard:C5 缺的那一格「谁在逐系统派发」+ 星系 id(§90.4 定的锚)。** 靶 = `log` 效果的实现

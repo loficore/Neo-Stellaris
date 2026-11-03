@@ -749,3 +749,240 @@ vtable 槽派发)。**报「词」不报「槽号」**:静态无法确定引擎�
 (`offsets.graph.TABLE_RECORD_SIZE = 16` / `TABLE_SLOT_PTR_OFF = 8`);§1.2 其余结论(id 来自 scope
 `+0x10`、边界 `[对象+0x20]`、表指针 `[对象+0x18]`、命中条件 `entry+8 == id`、回退 `0x325d880`)全部
 照旧,§1.3 的边容器字段表不受影响。
+
+## §4 实机读一发(2026-11-04):容器偏移在活体成立;离线 oracle 差的是**一条新系统**,不是偏移
+
+**授权级**:点名 ×1(计划 `2026-11-03-runtime-graph-live` Task 3,2 发预算里的第一发)。
+**只读**:探针没有任何 hook(无 detour、无 trampoline、无引擎字节改动),读路径只经
+`ReadProcessMemory`;两个改边导出**一次都没调**。
+
+### §4.1 命令与真实输出
+
+```
+just win "python C:/temp/session_bridge.py C:/temp/c2_graph_read.py C:/temp/sqjs_g1.dll \
+  --expect-systems 787 --expect-edges 1217 --save-name autosave_2258.07.01 \
+  --edges-file C:/temp/c5_campaign_edges_4_4_4.tsv --out C:/temp/c5_graph_read.tsv"
+```
+
+```
+[graph] dll=C:/temp/sqjs_g1.dll sha256=012c460e1d23f9cb3c35598ec7ce200fd536c332dca05277b27b9dc7d252e1a3
+[graph] pid=23640 dll=C:/temp/sqjs_g1.dll
+[graph] sqjs_g1.dll base: 0x7ff82a180000
+[graph] C2Sanity == 42, game alive ?? read authorized
+[graph] verdict=graph_live_read_disagree  systems=788 edges=1219 vs expect systems=787 edges=1217; (315, 787) in read1 only
+[graph] artifact=C:/temp/c5_graph_read.tsv
+```
+
+`#meta` 全文 = `evidence/logs/c5_graph_live_read_4_4_4.log` 的 26 行 meta(artifact 是驱动原样输出,
+1,242 行 = 26 meta + 1,219 边行,写盘时刻 `2026-11-04 00:37:49`)。关键格:
+
+| 键 | 值 | 键 | 值 |
+|---|---|---|---|
+| `module_base` | `0x7ff78c120000`(**stellaris.exe** 的基址) | `index_ptr` | `0x16c355838` |
+| `table_ptr` | `0x1ca587180` | `bound` | **1024** |
+| `systems` | **788** | `max_id` | **787** |
+| `edges` | **1219** | `skipped` | **0** |
+| `read2_systems` | 788 | `read2_edges` | **1219** |
+| `read1_rc` / `read2_rc` | 0 / 0 | `read2_skipped` | 0 |
+| `layout` | `0x1,0x3260b98,0x18,0x20,0x10,0x8,0x59c,0x20` | `host_alive` | 1 |
+
+`layout` 八格与 `offsets.graph` 逐格相等(**字 4 = `0x10` = 16 B 记录步长**,不是 8)⇒ 仪器对账过。
+`bound=1024` 而 `max_id=787` 是 Review Focus #2 要的形状:上界来自**表项自证**(`max_id`),不是
+`bound-1`;788 个活系统 id 唯一且 `<= 787` ⇒ 覆盖恰为 `0..787`(稠密,无空洞)。
+
+### §4.2 判决词:**对旧 oracle 是 `disagree`,对同期 oracle 是 `named`**
+
+- `overall_verdict=graph_live_read_disagree`(artifact 原样)= 对 `c5_campaign_edges_4_4_4.tsv`
+  (由**已不存在的** `autosave_2231.07.01.sav` 烘出)的口径。**不是** `instrument_broken`:
+  layout 全中、`skipped=0`、两次读相等(判词先判 `unstable`,没走到那一档)、宿主存活。
+- **同期 oracle = `autosave_2260.01.01.sav`**(写于 `00:37:34`,比 artifact 早 **15 s**;读发生在
+  它之后)⇒ 边集与本次读数**双向零差**,判词按同一 `classify` 规则应为 `graph_live_read_named`。
+
+### §4.3 差分:两个 oracle 把「偏移漂了」与「战役往前走了」分开
+
+| oracle | 来源 | 边 | live-only | oracle-only |
+|---|---|---|---|---|
+| `c5_campaign_edges_4_4_4.tsv` | `autosave_2231.07.01.sav`(已退役,sha `32413c3e…`) | 1,217 | `(315,787)`、`(575,787)` | **∅** |
+| `autosave_2259.07.01.sav` | 同战役,`2026-11-04 00:34:36` 写盘 | 1,217 | `(315,787)`、`(575,787)` | **∅** |
+| `autosave_2260.01.01.sav` | 同战役,`2026-11-04 00:37:34` 写盘 | 1,219 | **∅** | **∅** |
+
+即:**离线表 1,217 条一条不少地读回来了**(oracle-only 恒 ∅),live 多出的两条都挂在 **id 787** 上 ——
+那是 `0..786` 之后的下一个 id,出现在 `2259.07.01` 与 `2260.01.01` 两份存档之间(游戏内同一次读档会话里
+从 2259 跑到 2260,月速最快档)。两次之间的窗里只多了一个系统,与「事件生成新星系」的形状一致
+(该战役当时正在跑 `风信子号` 调查链)。
+
+**因此这句判词必须写清**:`disagree` 记的是「活体与 2231 的离线表不相等」这一事实,**不是**「偏移错了」。
+把 live 与同期存档逐项对齐后差集为空 ⇒ 容器(`+0x588/+0x590/+0x598/+0x59c`)、解析器(`0x3939f0` 的
+表形状)、16 B 记录步长、u16 端点这一整条链在活体里**成立**。
+
+### §4.4 这一发**已能说**(三条)
+
+1. **容器偏移在活体里成立**:1,219 条边 × 两个端点全部按 `+0x590`/`+0x59c`/步长 `0x20`/元素 `+8` 读出,
+   `skipped=0`,且同一份数据在存档侧由**完全独立的解析器**(`scripts/save_hypergraph.py`,ZIP +
+   Clausewitz tokenizer)逐项复现 ⇒ 两侧 1,219/1,219 相等。
+2. **id 覆盖 `0..787`**:788 个系统、id 唯一、`max_id=787`、`bound=1024` ⇒ 覆盖稠密且上界来自表项自证。
+3. **边集与离线表的关系是「包含 + 两条新边」**:1,217 条旧边**逐项相等**(差集为空),多出的两条是
+   id 787 的两条 hyperlane;不是漏读、不是错位、不是去重口径变了。
+
+### §4.5 这一发**仍不能说**(三条)
+
+1. **没证明每次读都一致**:只测了同一进程内的**两次**连续读(相等),没有跨帧/跨月/跨暂停的重复读,
+   也没有对同一容器做并发读。`graph_live_read_unstable` 这一档存在,但本发没触发,等于**没测到**它。
+2. **没证明图变更后引擎会重算**:本发只读;`add_hyperlane`/`remove_hyperlane` 的写路径仍未实机调用,
+   §3.6 第 3 条的边界原样保留。
+3. **只在这一场战役、这一版 exe 上**:`_1474567734`(788 系统 / 1,219 边)、stellaris.exe 4.4.4、
+   且 oracle 是**同一次会话内**的存档;换战役、换版本、换读档时机都要重测。
+
+### §4.6 操作侧的两条环境档(不算读数,记在这里因为下次一定还会踩)
+
+1. **SSH 直跑驱动会永远被门挡住**:`ssh` 落在 **session 0**,`EnumWindows` 看不到游戏窗口 ⇒
+   `gate_install` 以 `no game window` 拒装(exit 2,未注入、未耗预算)。所有要过门的驱动必须经
+   `session_bridge.py`(`schtasks /run /I` 落到交互会话)。
+2. **事件窗会把游戏按暂停,`install` 只认 `IN_GAME_RUNNING`**:本发第一次经 bridge 跑时读到
+   `IN_GAME_PAUSED_CLEAN`(exit 2,同样不算读数);用桌面通道(`win-desktop` `Shortcut "enter"` 答掉
+   默认选项)恢复运行后立刻重打才通过。**这不是 `--allow-window` 的用途** —— 那一档只给「状态机与
+   屏幕矛盾且人当场确认」。
+
+## §5 改一条边并重算(2026-11-04):`(5,9)` 进出各一次,全图分数跟着变
+
+**授权级**:点名 ×2(2 发预算里的第二发)。**同一进程**(pid 23640)的**第二个模块名**
+`sqjs_g2.dll`(与 `sqjs_g1.dll` **同 sha**:`012c460e…`)—— `refuse_if_resident` 拒绝同名重注。
+写路径只经引擎自己的两个例程(`0x8BBAA0` / `0x8BBC20`),本 DLL 不写任何引擎字节。
+
+### §5.1 命令与真实输出
+
+```
+just win "python C:/temp/session_bridge.py C:/temp/c2_graph_read.py C:/temp/sqjs_g2.dll \
+  --expect-systems 788 --expect-edges 1219 --save-name autosave_2260.01.01 \
+  --mutate 5,9 --kill-after --out C:/temp/c5_graph_mutation.tsv"
+```
+
+```
+[graph] dll=C:/temp/sqjs_g2.dll sha256=012c460e1d23f9cb3c35598ec7ce200fd536c332dca05277b27b9dc7d252e1a3
+[graph] pid=23640 dll=C:/temp/sqjs_g2.dll
+[graph] sqjs_g2.dll base: 0x7ff829350000
+[graph] C2Sanity == 42, game alive ?? read authorized
+[graph] verdict=graph_mutation_recompute_named  (5, 9): 1219 -> 1220 -> 1219
+[graph] artifact=C:/temp/c5_graph_mutation.tsv
+[graph] taskkill /F /PID 23640 rc=0 ?? session not saved
+```
+
+`#meta`(`evidence/logs/c5_graph_mutation_4_4_4.log` 前 30 行)里与改边相关的几格:
+
+```
+#meta mutation=5-9
+#meta mutation_steps=step=base edges=1219 rc=0|step=add edges=- rc=0|step=add_read edges=1220 rc=0|step=remove edges=- rc=0|step=remove_read edges=1219 rc=0
+#meta overall_verdict=graph_mutation_recompute_named
+#meta index_ptr=0x16c355838  table_ptr=0x1ca587180  bound=1024
+#meta systems=788  edges=1219  skipped=0  max_id=787  host_alive=1
+```
+
+五个 `step=` 是**逐步**写的:任何一步返回码非 0 或边集不是「+1 再 −1」,后面的导出一个都不再调
+(`classify_mutation` 的 `mutation_left_dirty`,由 `scripts/test_c2_graph_read.py` 的 5 条围栏钉住)。
+
+### §5.2 三份快照:集合层面逐项闭合
+
+产物 = `evidence/logs/c5_graph_mutation_4_4_4.log.{base,add,remove}`(每行 `a<TAB>b<TAB>1`;
+第三列是**占位**,读数里没有边长,主机侧度量是无权 Brandes)。
+
+| 关系 | 结果 |
+|---|---|
+| `base == remove` | **真**(且两份文件 sha256 相同:`462dfd3f…`) |
+| `add == base ∪ {(5,9)}` | **真**(恰好一条,两端的容器都写到了) |
+| `base` vs `autosave_2260.01.01.sav`(独立解析器) | 双向零差(base-only ∅, save-only ∅) |
+| 计数 | `1219 → 1220 → 1219` |
+
+注意 `(5,9)` 在**改边前不存在**(基线上 `5` 与 `9` 各 4 度),所以 +1 是**新边**,不是重复写。
+
+### §5.3 主机侧重算:400/788 个系统的分数变了
+
+```python
+import pathlib, sys
+sys.path.insert(0, "scripts")
+import chokepoint_scores as cs
+base = cs.build_adjacency(cs._read_edges(pathlib.Path("evidence/logs/c5_graph_mutation_4_4_4.log.base")))
+mut  = cs.build_adjacency(cs._read_edges(pathlib.Path("evidence/logs/c5_graph_mutation_4_4_4.log.add")))
+b = {r["system_id"]: r for r in cs.score_rows(base)}
+m = {r["system_id"]: r for r in cs.score_rows(mut)}
+changed = [k for k in b if b[k]["score"] != m[k]["score"]]
+```
+
+真读数:**`changed = 400`(共 788 个系统)**;最大三处分数差 ——
+
+| 系统 | 改边前 | 改边后 | Δ |
+|---|---|---|---|
+| **5** | 4 | **233** | +229 |
+| **9** | 34 | **253** | +219 |
+| 337 | 34 | 210 | +176 |
+
+`5` 与 `9` 各自从 4 度变成 5 度、又是新捷径的两端 —— 它们自己的 betweenness 涨得最多,
+其余 397 个系统的变化是这条新边对全图最短路集合的重新分配。**分母没动**:`n` 仍是 788,
+所以这不是重新标定,是同一条公式在新边上重算。
+
+### §5.4 这一发**已能说**(三条)
+
+1. **引擎自己的加/删边例程在活体里可用**:`0x8BBAA0` 一次调用即让**两端**的容器都多出对方 id
+   (我们按 §1.1 的形状各调一次,和引擎执行体一样);`0x8BBC20` 一次调用即删干净 ——
+   三个快照在**集合层面**闭合,不是「计数回去了但边不对」。
+2. **图一变,重算的分数就跟着变**:400/788 个系统分数改变,且变化集中在新增捷径的两端。
+3. **改边是真实副作用,已按计划收尾**:`taskkill /F`(rc=0)、未存档、未退回主菜单;
+   改动前的战役存档在 `C:/temp/c5_save_backup_1474567734/`(5 份)。
+
+### §5.5 这一发**仍不能说**(硬边界)
+
+1. **运行时内的重算仍未验证。** §5.3 的分数是**主机 Python** 重算的;引擎自己在边变更后会不会
+   立刻让 `chokepoint_dynamic` 那套量失效、有没有缓存、什么时候重算 —— 一格都没测。这是 M5
+   (trigger 落地)的输入,不是本计划的结论。
+2. **只证了「一条边」**。多边连锁、删一条本来不存在的边、改边后引擎自己的寻路/舰队路径是否
+   立即使用新图 —— 都没测(边删掉后我们立刻杀进程,没有让游戏继续跑)。
+3. **`0x8BBC20` 的 `&id` 参数约定只在这一处对上**:`(rcx=self, rdx=&other_id)` 各一次,
+   与 §1.1 的 `01874cbd` 形状一致;换成别的调用形状(例如一次传两个 id)没有验证。
+
+## §6 M4 收口(2026-11-04):导出契约、两发判词、能用它们回答什么
+
+### §6.1 导出清单与返回码(`src/dll/c2/graph_probe.zig` → `src/dll/exports.zig`)
+
+| 导出 | 入参 | 返回 | 语义 |
+|---|---|---|---|
+| `C5GraphRead` | — | `0` / `-1` / `-2` / `-3` / `-4` | `0` 成功且 `skipped==0`;`-1` 模块基址取不到;`-2` 索引对象不可读/越界;`-3` 边表超 `MAX_EDGES`(4,096);`-4` 读成功但有 `skipped`(带欠账,不是失败) |
+| `C5GraphLayout` | `out: [*]u32` | `8` | 八词:`version, RVA_SYSTEM_INDEX_GLOBAL, INDEX_TABLE_OFF, INDEX_BOUND_OFF, TABLE_RECORD_SIZE, TABLE_SLOT_PTR_OFF, EDGE_COUNT_OFF, EDGE_STRIDE` |
+| `C5GraphStatsInto` | `out: [*]u8` | `64` / `0` | `${u64}×8`:`systems, edges, skipped, max_id`(`null`=`u64` 最大),`index_ptr, table_ptr, bound, module_base` |
+| `C5GraphDrainInto` | `out: [*]u8` | 行数 / `0xFFFF_FFFF` | 每行 4 B(`u16 a`,`u16 b`),`a<b`,按 `(a,b)` 升序;缓冲不足整块拒写 |
+| `C5GraphReset` | — | — | 清上一发的 stats 与行数(本模块无 hook) |
+| `C5GraphMutateAdd` | `pair: u64`(低 32 = from,高 32 = to) | `0` / `-1` / `-2` / `-3` | 转调 `0x8BBAA0` **两次**(两个方向);`-1`/`-2` = from/to 解析失败,`-3` = id 超出 u16 空间 |
+| `C5GraphMutateRemove` | 同上 | 同上 | 转调 `0x8BBC20` 两次(各带 `&other_id` / `&self_id`) |
+
+两参导出之所以收**一个 u64**:`call_remote_with_arg` 只设 `rcx`(`CreateRemoteThread` 的 lpParameter),
+第二个寄存器不可达 —— 这是通道的硬约束,不是设计选择。
+
+### §6.2 两发判决词
+
+| 发 | 命令要点 | 判决词 |
+|---|---|---|
+| 1(只读,pid 23640,`sqjs_g1`) | `--expect-systems 787 --expect-edges 1217 --edges-file <2231 表>` | artifact `graph_live_read_disagree`;对**同期**存档(`autosave_2260.01.01.sav`)口径 = **`graph_live_read_named`** |
+| 2(改边,同 pid,`sqjs_g2`) | `--mutate 5,9 --kill-after` | **`graph_mutation_recompute_named`**(`1219 → 1220 → 1219`,主机侧重算 400/788 变) |
+
+### §6.3 `graph_live_read_named` 证明了什么
+
+1. **容器偏移在活体成立**:`+0x588` 容器的 `+0x590`/`+0x598`/`+0x59c`、步长 `0x20`、元素 `+8` 一处没错;
+   `layout` 八格与 `offsets.graph` 逐格相等。
+2. **索引对象形状在活体成立**:`[module_base+0x3260B98]` 非空,`+0x18` 表指针 / `+0x20` 界(`bound=1024`)
+   可用,记录 16 B、指针在 `+8`;`max_id` 来自表项自证(`787`),不是 `bound-1`。
+3. **两侧独立解析器给出同一张图**:读图器(`ReadProcessMemory` + 引擎容器)与存档解析器
+   (`save_hypergraph.py`,ZIP + Clausewitz tokenizer)**双向零差**(1,219/1,219)。
+
+### §6.4 `mutation_verdict`(`graph_mutation_recompute_named`)证明了什么
+
+1. **引擎自己的加/删边例程可从外部驱动**:一次 `0x8BBAA0` 调用让**两端**容器都多出对方 id,
+   一次 `0x8BBC20` 让它们回到基线;集合层面闭合(不是「计数回去了但边不对」)。
+2. **图一变,重算的分数就变**:400/788 个系统的 betweenness 改变,最大三处正是新捷径的两端
+   (`5: 4→233`、`9: 34→253`)与 `337: 34→210`。
+3. **改动是可撤销的**:`base == remove`(集合与 sha256 都相等),进程随后被 `taskkill /F`,未存档。
+
+### §6.5 新增的三条「不能说」(与 §3.6 并列,不替代)
+
+1. **样本只有一场战役、一版 exe**:`_1474567734`(会话内从 787 长到 788 系统)、stellaris.exe 4.4.4。
+   换战役的第一件事是**重新取同期 oracle**,不是复用 `c5_campaign_edges_4_4_4.tsv`。
+2. **读一致性只证了两次**:同一进程内连读两次相等;跨帧/跨月/暂停-恢复后是否一致**没测**。
+3. **运行时内重算未验证**:§5.3 的分数是主机 Python 算的;引擎在边变更后是否立刻让缓存失效、
+   按什么粒度重算,一格都没测 —— 这是 M5 的输入,不是本计划的结论。
