@@ -675,9 +675,9 @@ vtable 槽派发)。**报「词」不报「槽号」**:静态无法确定引擎�
 ### §3.5 `galaxy_graph` 合成围栏(Task 6)
 
 `src/dll/c2/galaxy_graph.zig` 只经注入的 `Memory.read` 触碰内存(**文件里没有一个 `@ptrFromInt`**),
-测试侧接合成字节镜像(`c2_tests.zig`),生产侧将来接真内存。围栏 = `c2_tests.zig` 里 **16** 条
-`galaxy_graph:` 测试(`chokepoint_dynamic:` 另有 **7** 条,合计 **23** 条命名测试;
-`zig test --test-filter "galaxy_graph"` 报 **17** 是因为它还带上了根 `test_0`):
+测试侧接合成字节镜像(`c2_tests.zig`),生产侧将来接真内存。围栏 = `c2_tests.zig` 里 **18** 条
+`galaxy_graph:` 测试(`chokepoint_dynamic:` 另有 **7** 条,合计 **25** 条命名测试;
+`zig test --test-filter "galaxy_graph"` 报 **19** 是因为它还带上了根 `test_0`):
 
 1. `galaxy_graph: three systems, two edges, read out of a synthetic mirror`
 2. `galaxy_graph: an unreadable neighbour id is skipped, not fatal`
@@ -695,10 +695,23 @@ vtable 槽派发)。**报「词」不报「槽号」**:静态无法确定引擎�
 14. `galaxy_graph: a table entry pointer near maxInt is skipped, not an overflow`
 15. `galaxy_graph: an edge-data pointer near maxInt is skipped, not an overflow`
 16. `galaxy_graph: a galaxy address near maxInt is UnreadableIndex, not an overflow`
+17. `galaxy_graph: a slot bound above the u16 id space is error.UnreadableIndex`
+18. `galaxy_graph: a slot id above the u16 range is skipped, not admitted`
 
 每条镜像都按 §1.11 的 **16 B 记录**布(指针在记录 `+8`),并专门埋「诱饵位」`table + slot*8 + 8`,
 用第 8 条盯住 —— 步长写成 8 B 会**静默读到别的对象**而不报错。第 4 条钉「无跨调用缓存」
-(两次调用之间改图,第二次必须读到新边;Review Focus #3)。全套 Zig 测试 = **889 passed**。
+(两次调用之间改图,第二次必须读到新边;Review Focus #3)。全套 Zig 测试 = **891 passed**。
+
+**2026-11-03 的两处收紧(读图器行为,不是读数)**:
+
+- **u16 门取代 24 位掩码**:被承认的系统 id 必须 `id <= 0xFFFF`(端点是 u16)⇒ 引擎那个
+  `id & 0xFFFFFF` 对被承认的 id **恒等**。实现改成「先判 `id > 0xFFFF` 跳过,再判 `id != slot`
+  跳过」,两条路都是「计入 `skipped` 后 continue」⇒ **`skipped` 计数与旧顺序逐项相等**,
+  哪些表项被承认也不变。第 18 条钉住「超 u16 的表项被跳过」。
+- **槽数上限从 `2^20` 收到 `2^16`**(`offsets.graph.MAX_TABLE_SLOTS`):活着的槽号恒 `< 2^16`,
+  所以更大的槽表里不可能有第二个被承认的系统。**已知取舍**:引擎的槽空间是 24 位的,
+  真实索引对象的 `+0x20` **可能**大于 65536 —— 那时读图器判 `error.UnreadableIndex`
+  而不是「只扫前 2^16 个槽」;这比严格必要**更严**,方向是 fail-closed。第 17 条钉住这条门。
 
 ### §3.6 三条「不能说」(本计划的诚实边界)
 

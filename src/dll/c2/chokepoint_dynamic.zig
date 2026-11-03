@@ -290,6 +290,10 @@ fn edgeLess(_: void, l: Edge, r: Edge) bool {
 }
 
 /// `round(1000 * normalized)` 的 Python 语义:非负、half-to-even、夹到 u16。
+/// **夹到 `>= 65535.0` 是**死路径**(2026-11-03 记,仅注记、不改代码)**:唯一调用点传的是
+/// `1000.0 * normalized`(上文第 216 行),而 `normalized ∈ [0,1]` ⇒ 结果 ≤ 1000,
+/// **永远够不到 65535**。这两行留着当**护栏**:万一以后有人改了归一化(或换了乘数),
+/// 分数不会静默回绕成 u16 里的一个小数。它不是活路径,不覆盖它也不丢行为。
 fn roundScore(x: f64) u16 {
     const fl = @floor(x);
     const frac = x - fl;

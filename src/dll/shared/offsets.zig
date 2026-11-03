@@ -354,6 +354,10 @@ pub const graph = struct {
     pub const EDGE_DATA_OFF: usize = 0x590;
     /// `0x8cf8ef mov ecx, dword ptr [rcx + 0x10]` — 容量;`rcx` = 边容器基址(系统对象 +0x588),
     /// 故系统对象偏移 = 0x588 + 0x10。base = 边容器基址。
+    /// **单位未决(2026-11-03 记)**:字节级证据只钉住了「容器 `+0x10` 是那个 dword」
+    /// (同卷 §1.3),**没钉住它是元素数还是字节数**。本模块按**元素数**读;两种口径下
+    /// 「`count > capacity` ⇒ 整段跳过」这个守卫都**安全**(字节口径下容量恒 ≥ 元素数 ⇒
+    /// 不误伤;元素口径下正是要的检查),所以这个未决项**不阻塞**读图。单位在 M4 接真内存时确认。
     pub const EDGE_CAPACITY_OFF: usize = 0x598;
     /// `0xa6aaea movsxd r9, dword ptr [rdi + 0x59c]`(§2.2;§2.3 `0x8cc034`、§2.4 `0x1b86f5d` 同)
     /// — 元素计数(dword;引擎按有符号读,本模块按无符号读并对 0..=MAX_EDGE_COUNT 设防)。
@@ -368,8 +372,24 @@ pub const graph = struct {
     pub const MAX_EDGE_COUNT: usize = 4096;
     /// 本模块的**防御性**上限,不是引擎常量:索引对象 `+0x20` 的槽数超过它,
     /// 判头部损坏(`error.UnreadableIndex`),不逐槽扫 2^32 次。
-    pub const MAX_TABLE_SLOTS: usize = 1 << 20;
+    ///
+    /// **上界 = u16 id 空间(2^16)而不是更大的数(2026-11-03 改)**:被读图器**承认**的
+    /// 系统 id 必须 `id <= 0xFFFF`(`Edge` 的端点是 u16),而引擎的槽号 = `id & 0xFFFFFF`
+    /// 在这个范围内**恒等** ⇒ 活着的槽号恒 `< 2^16`。更大的槽表里不可能有第二个被承认的
+    /// 系统,扫它只是白扫。
+    /// **已知取舍**:引擎的槽空间是 24 位的(`id & 0xFFFFFF`),所以真实索引对象的 `+0x20`
+    /// **可能**大于 65536;那时本模块判 `error.UnreadableIndex` 而不是「只扫前 2^16 个槽」。
+    /// 这比严格必要**更严**,但方向是 **fail-closed**(宁可报错,不可静默读错对象);
+    /// 真实战役的槽数与系统数同量级(787 系统的存档远小于此)。
+    pub const MAX_TABLE_SLOTS: usize = 1 << 16;
 };
+
+comptime {
+    // 读图器按 `@sizeOf(usize)` 读指针(`galaxy_graph.readPtr`),而本组偏移全是
+    // 64 位进程里的位移。32 位构建会**静默读错指针**(4 字节 vs 8 字节)——
+    // 编译期拦住,而不是等实机读出一堆垃圾。
+    if (@sizeOf(usize) != 8) @compileError("graph offsets assume a 64-bit target: pointers are 8 bytes wide");
+}
 
 /// CEffect object offsets.
 /// [FALSIFIED 3.x] 4.4.4 has NO central dispatch switch — effects are polymorphic
@@ -699,5 +719,7 @@ test "graph: §1/§2 read-path offsets are pinned to the disasm sites" {
     try std.testing.expectEqual(@as(usize, 0x3260BB0), graph.RVA_SYSTEM_INDEX_GLOBAL + graph.INDEX_TABLE_OFF);
     try std.testing.expect(graph.RVA_SYSTEM_INDEX_GLOBAL != keyword_reg.RVA_GALAXY_MAP_DB);
     try std.testing.expectEqual(@as(usize, 4096), graph.MAX_EDGE_COUNT);
-    try std.testing.expectEqual(@as(usize, 1 << 20), graph.MAX_TABLE_SLOTS);
+    // The slot bound is capped at the u16 id space: every admitted system id is
+    // <= 0xFFFF (the edge endpoints are u16), so a live slot index is < 2^16.
+    try std.testing.expectEqual(@as(usize, 1 << 16), graph.MAX_TABLE_SLOTS);
 }

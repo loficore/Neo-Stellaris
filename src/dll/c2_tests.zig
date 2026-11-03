@@ -214,7 +214,8 @@ const Mirror = struct {
     const SIZE: usize = 0x4_0000;
     /// 索引对象:`+0x18` 槽表指针、`+0x20` 槽数上界。
     const GALAXY: usize = BASE + 0x0000;
-    /// 槽表:表头 8 字节(不是槽),之后每槽一个 qword。
+    /// 槽表:每槽一条 **16 B 记录**(§1.11),**系统对象指针在记录的 `+8`**;
+    /// 没有表头,槽 `k` 的记录在 `TABLE + k*16`。
     const TABLE: usize = BASE + 0x0100;
     /// 每个槽一份系统对象(要盖到 `+0x588` 的边容器)。
     const SYSOBJ: usize = BASE + 0x1000;
@@ -663,5 +664,43 @@ test "galaxy_graph: a galaxy address near maxInt is UnreadableIndex, not an over
         std.math.maxInt(usize) - 0x10,
         &out,
     ));
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: a slot bound above the u16 id space is error.UnreadableIndex" {
+    var m = Mirror{};
+    // 65537 个槽 > u16 id 空间(65536)。引擎的槽空间是 `id & 0xFFFFFF` 的 24 位空间,
+    // 但**被本模块承认**的系统 id 必须 ≤ 0xFFFF(端点是 u16)⇒ 活着的槽号恒 < 2^16,
+    // 所以更大的槽表里不可能有第二个被承认的系统 ⇒ 头部判损坏(fail-closed),
+    // 而不是逐槽扫 65537 次。
+    setGalaxy(&m, 65537, Mirror.TABLE);
+    var out: [8]gg.Edge = undefined;
+    try std.testing.expectError(error.UnreadableIndex, gg.readGraph(
+        mirrorMemory(&m),
+        Mirror.GALAXY,
+        &out,
+    ));
+    // 头部就判掉 —— 那张表一个字节都没读。
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: a slot id above the u16 range is skipped, not admitted" {
+    var m = Mirror{};
+    setGalaxy(&m, 2, Mirror.TABLE);
+    // 槽 0 上的表项 id = 0x10000(65536):装不进 u16 端点,不是活着的系统。
+    setSystem(&m, 0, 0x10000, &.{});
+    // 槽 1 是正常的:id == 槽号。
+    setSystem(&m, 1, 1, &.{});
+
+    var out: [8]gg.Edge = undefined;
+    const stats = try gg.readGraph(mirrorMemory(&m), Mirror.GALAXY, &out);
+
+    // 超 u16 的表项被跳过(计入 skipped),正常的那个被承认。
+    // 门序(u16 门先于可达性不变量)换了也**不改变**这两个计数:
+    // 旧序先判 `(id & 0xFFFFFF) != slot` 也一样跳过 —— 这条测试钉的是「跳过」这件事。
+    try std.testing.expectEqual(@as(usize, 1), stats.systems);
+    try std.testing.expectEqual(@as(usize, 0), stats.edges);
+    try std.testing.expectEqual(@as(usize, 1), stats.skipped);
+    try std.testing.expectEqual(@as(?u16, 1), stats.max_id);
     try std.testing.expect(!m.escaped);
 }

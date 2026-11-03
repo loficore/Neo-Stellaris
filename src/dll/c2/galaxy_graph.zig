@@ -33,6 +33,12 @@
 // 所以本模块**从不把系统 id 当槽位下标**(也不把槽位下标当系统 id);邻居 id 也是经同一次
 // 表查核对(§2.2 的 `0xa6ab3b cmp dword ptr [rax+8], r8d`),而不是伪造端点。
 //
+// **u16 门取代 24 位掩码(2026-11-03)**:引擎的槽号是 `id & 0xFFFFFF`,而本模块只承认
+// `id <= 0xFFFF`(端点是 u16)⇒ 对被承认的 id,那个掩码是**恒等**的。所以实现里把槽号
+// 直接取成 `id`,并把 **u16 门排在可达性不变量之前**:先判 `id > 0xFFFF` 跳过,再判
+// `id != slot` 跳过。两条路都是「计入 `skipped` 后 continue」,所以 `skipped` 的计数
+// 与旧顺序**逐项相等**;哪些表项被承认的结论也**不变**。
+//
 // 读出来的边与 Task 5 的 `chokepoint_dynamic` 同口径:无向、规范化成 `a < b`、去自环、去重。
 // 本模块**不做任何跨调用缓存** —— 不存指针、不存结果,每次调用都从 `galaxy` 重走一遍,
 // 所以调用方可以在两次调用之间改图(Review Focus #3,见 c2_tests 的 no-cache 测试)。
@@ -46,8 +52,9 @@
 // 契约是 **`system_count = max_id + 1`**,`max_id` 由 `ReadStats.max_id` 给出:
 //   * `max_id` = 被承认的系统里最大的引擎 id;**没有系统被承认时是 `null`**;
 //   * 每个被发射的端点都经 `resolves` 的表查核对(§1.2 的 `entry+8 == id`),
-//     而表查核对的槽号 = `id & 0xFFFFFF`,且表项要满足 `(id & 0xFFFFFF) == slot`
-//     ⇒ 被承认的 id 满足 `id & 0xFFFFFF == 槽号`,它的邻居 id 同理 ——
+//     而表查核对的槽号 = `id`(引擎那个 `id & 0xFFFFFF` 对 u16 内的 id **恒等**),
+//     且表项要满足 `id == slot`
+//     ⇒ 被承认的 id 满足 `id == 槽号`,它的邻居 id 同理 ——
 //     所以每个发射端点都 `<= max_id`,`max_id + 1` 足够装下所有端点;
 //   * id **不保证稠密**:0..max_id 之间可能有空洞(孤立系统照样进分母、拿 score 0),
 //     这与 `chokepoint_dynamic` 的 `n = caller's system_count` 口径一致。
@@ -109,9 +116,8 @@ pub const Error = error{
     UnreadableIndex,
 };
 
-/// `id & 0xFFFFFF`(§1.2 `0x393a20 and ecx, 0xffffff`)。
-const MASK24: u32 = 0xFFFFFF;
-/// `Edge` 的端点宽度(Task 5 复用)。
+/// `Edge` 的端点宽度(Task 5 复用)。引擎的槽号是 `id & 0xFFFFFF`,但被承认的 id
+/// 必须过这道门 ⇒ 对被承认的 id,那个 24 位掩码是**恒等**的(见文件头 2026-11-03 段)。
 const MAX_ID: u32 = std.math.maxInt(u16);
 
 /// 枚举 `galaxy` 指向的系统索引,把唯一的无向边写进 `out`。
@@ -156,12 +162,15 @@ pub fn readGraph(mem: Memory, galaxy: usize, out: []Edge) Error!ReadStats {
             stats.skipped += 1;
             continue;
         };
-        // 可达性不变量:表项只有 (id & 0xFFFFFF) == slot 才可能被引擎自己的 lookup 命中。
-        if ((id & MASK24) != @as(u32, @intCast(slot))) {
+        // u16 门**先走**:端点是 u16(`Edge.a/.b`),装不下的 id 直接丢。过了这道门,
+        // 引擎那个 `id & 0xFFFFFF` 对被承认的 id 就是**恒等**的(id <= 0xFFFF < 2^24),
+        // 所以下面的可达性不变量退化成 `id == slot`。
+        if (id > MAX_ID) {
             stats.skipped += 1;
             continue;
         }
-        if (id > MAX_ID) { // Edge.a/.b 是 u16,装不下
+        // 可达性不变量:表项只有 id == slot 才可能被引擎自己的 lookup 命中(§1.2)。
+        if (id != @as(u32, @intCast(slot))) {
             stats.skipped += 1;
             continue;
         }
@@ -270,8 +279,9 @@ fn readSystemEdges(
 /// 引擎自己的查表形状(§1.2;步长见 §1.11):`id & 0xFFFFFF` 定槽,
 /// `entry = qword[表 + slot*16 + 8]`,槽表项非空且 `entry_id == id`。
 /// 这不是「按 id 取第几个系统」——槽位是算出来的,而且必须被表项自己确认。
+/// 调用方已经过 u16 门(`id <= 0xFFFF`)⇒ 引擎的 24 位掩码恒等,**槽号就是 id**。
 fn resolves(mem: Memory, table: usize, bound: u32, id: u32) bool {
-    const slot = id & MASK24;
+    const slot = id;
     if (slot >= bound) return false;
     const entry = readSlot(mem, table, slot) orelse return false;
     if (entry == 0) return false;
