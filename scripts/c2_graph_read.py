@@ -343,6 +343,23 @@ def build_meta(values):
     return lines
 
 
+def read2_meta(stats2, rc2):
+    """The `read2_*` keys, or `{}` when the shot had no second read.
+
+    The mutation shot reads three times (base / after add / after remove) — none of them
+    is "read2", and emitting a duplicate of the base under that name would make the
+    artifact claim a second read that never happened. Absent keys are the honest shape.
+    """
+    if stats2 is None:
+        return {}
+    return {
+        "read2_edges": stats2["edges"],
+        "read2_rc": rc2,
+        "read2_systems": stats2["systems"],
+        "read2_skipped": stats2["skipped"],
+    }
+
+
 def format_layout(words):
     return ",".join(f"{word:#x}" for word in parse_layout(words))
 
@@ -555,8 +572,8 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
                 step_lines.append(f"step=remove_read edges={stats_rm['edges']} rc={read_rc_rm}")
 
         write_edge_snapshots(out_path, rows1, rows_add, rows_rm)
-        stats2 = stats1
-        rc2 = rc1
+        stats2 = None          # three snapshots, not a "read2" — see `read2_meta`
+        rc2 = None
 
     try:
         harness.assert_game_alive(pid)
@@ -597,16 +614,13 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
         "edges": stats1["edges"],
         "skipped": stats1["skipped"],
         "max_id": "null" if stats1["max_id"] is None else stats1["max_id"],
-        "read2_edges": stats2["edges"],
         "layout": format_layout(layout),
         "host_alive": int(alive),
         "gate": "operator_override" if allow_window else "world_state",
         "read1_rc": rc1,
-        "read2_rc": rc2,
-        "read2_systems": stats2["systems"],
-        "read2_skipped": stats2["skipped"],
         "detail": detail,
     }
+    meta.update(read2_meta(stats2, rc2))
     if mutate is not None:
         meta["mutation"] = f"{min(mutate)}-{max(mutate)}"
         meta["mutation_steps"] = "|".join(step_lines)

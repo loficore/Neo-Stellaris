@@ -171,3 +171,12 @@ def test_mutation_with_a_nonzero_export_code_is_dirty():
         seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)])
     assert verdict == "mutation_left_dirty"
     assert "add" in detail
+
+
+def test_a_mutation_shot_has_no_read2_keys():
+    # 改边发是三个快照(base/add/remove),没有「第二次读」。把 base 复制成 read2_* 会让
+    # artifact 声称一次没发生过的复读 —— 证据里最不该有的东西。
+    assert mod.read2_meta(None, None) == {}
+    fields = mod.read2_meta(stats(788, 1219), 0)
+    assert fields == {"read2_edges": 1219, "read2_rc": 0, "read2_systems": 788,
+                      "read2_skipped": 0}
