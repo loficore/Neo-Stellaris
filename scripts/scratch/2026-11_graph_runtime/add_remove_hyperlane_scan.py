@@ -15,7 +15,11 @@ id→系统对象解析器与边存储的离线复现(Task 2,零 shot)。
     指令;本探针把「写入该寄存器的那条指令」+「它前面那条 call」一起打出来,读数
     不靠位移猜;
   * 同位移在别处也出现(§87 口径)—— 探针数一遍 `.text` 里 `+0x590` / `+0x59c` /
-    `+0x588` 这三个 disp32 的字节模式命中数,证明**位移本身不能识别容器**。
+    `+0x588` 这三个 disp32 的字节模式命中数,证明**位移本身不能识别容器**;
+  * rip 相对目标(元素 vtable `0x8bbb42`、两侧脏/世代位全局 `0x8bbb85` / `0x8bbd65`)
+    **由字节解出**,再与计划期常量比对 —— 不是把常量写进结论;
+  * 解析器读的两个全局(`0x3260b98` / `0x325d880`)与脏位全局(`0x296cc68`)的**文件字节**
+    也读出来:BSS/未初始化 与 file-init 由字节区分。
 
 用法:
     python3 scripts/scratch/2026-11_graph_runtime/add_remove_hyperlane_scan.py
@@ -69,8 +73,13 @@ ELEM_STRIDE = 0x20           # 元素步长
 
 REGISTRY_GLOBAL = 0x3260B98  # 解析器读的系统索引全局
 FALLBACK_GLOBAL = 0x325D880  # 解析器失败时的默认对象
-DIRTY_GLOBAL = 0x296CC68     # 边集合脏标志
+DIRTY_GLOBAL = 0x296CC68     # 脏/世代位掩码字(广义,不是边专属)
 ELEM_VTABLE = 0x24B5480      # 边元素的 vtable(在 .rdata)
+
+# 三个 rip 目标**由字节解出**,不断言:解出的值与上面的常量比对。
+ELEM_VTABLE_SITE = 0x8BBB42      # edge_add 装元素 vtable 的 lea
+DIRTY_FLAG_ADD_SITE = 0x8BBB85   # edge_add 的 or [rip+..],1
+DIRTY_FLAG_REM_SITE = 0x8BBD65   # edge_remove 的 or [rip+..],1
 
 # (标签, 函数起, 站点 rva, "助记符 操作数") —— 逐字比对 capstone 的输出
 EXPECTED_SITES: list[tuple[str, int, int, str]] = [
@@ -100,18 +109,49 @@ EXPECTED_SITES: list[tuple[str, int, int, str]] = [
     ("remove_hyperlane", REMOVE_EXEC, 0x1874CD2, "mov eax, dword ptr [rbx + 8]"),
     ("remove_hyperlane", REMOVE_EXEC, 0x1874CE2, "mov rcx, rdi"),
     ("remove_hyperlane", REMOVE_EXEC, 0x1874CE5, "call 0x1408bbc20"),
-    # ---- 解析器 -----------------------------------------------------------
+    # ---- 解析器(**全 24 条**,一条都不许漏) ------------------------------
+    # id 的来源链:`cmp [rcx+8],0x80` 判 scope 类型 -> `mov eax,[rcx+0x10]`
+    # 取 id -> `mov [rsp+8],eax` 落到栈局部 -> `lea rcx,[rsp+8]` 让 rcx 指向
+    # **局部** -> `mov edx,[rcx]` 读的是局部。scope+0 全程没被读过。
     ("resolver", RESOLVER, 0x3939F0, "cmp qword ptr [rcx + 8], 0x80"),
+    ("resolver", RESOLVER, 0x3939F8, "jne 0x140393a03"),
     ("resolver", RESOLVER, 0x3939FA, "mov eax, dword ptr [rcx + 0x10]"),
+    ("resolver", RESOLVER, 0x3939FD, "mov dword ptr [rsp + 8], eax"),
+    ("resolver", RESOLVER, 0x393A01, "jmp 0x140393a0b"),
+    ("resolver", RESOLVER, 0x393A03, "mov dword ptr [rsp + 8], 0xffffffff"),
     ("resolver", RESOLVER, 0x393A0B, "mov rax, qword ptr [rip + 0x2ecd186]"),
+    ("resolver", RESOLVER, 0x393A12, "lea rcx, [rsp + 8]"),
+    ("resolver", RESOLVER, 0x393A17, "test rax, rax"),
+    ("resolver", RESOLVER, 0x393A1A, "je 0x140393a41"),
+    ("resolver", RESOLVER, 0x393A1C, "mov edx, dword ptr [rcx]"),
+    ("resolver", RESOLVER, 0x393A1E, "mov ecx, edx"),
+    ("resolver", RESOLVER, 0x393A20, "and ecx, 0xffffff"),
     ("resolver", RESOLVER, 0x393A26, "cmp ecx, dword ptr [rax + 0x20]"),
+    ("resolver", RESOLVER, 0x393A29, "jae 0x140393a41"),
     ("resolver", RESOLVER, 0x393A2B, "mov rax, qword ptr [rax + 0x18]"),
+    ("resolver", RESOLVER, 0x393A2F, "add rcx, rcx"),
     ("resolver", RESOLVER, 0x393A32, "mov rax, qword ptr [rax + rcx*8 + 8]"),
+    ("resolver", RESOLVER, 0x393A37, "test rax, rax"),
+    ("resolver", RESOLVER, 0x393A3A, "je 0x140393a41"),
     ("resolver", RESOLVER, 0x393A3C, "cmp dword ptr [rax + 8], edx"),
+    ("resolver", RESOLVER, 0x393A3F, "je 0x140393a48"),
     ("resolver", RESOLVER, 0x393A41, "mov rax, qword ptr [rip + 0x2ec9e38]"),
+    ("resolver", RESOLVER, 0x393A48, "ret"),
     # ---- 边增包装 ---------------------------------------------------------
     ("edge_add", EDGE_ADD, 0x8BBAAF, "mov rsi, rdx"),
     ("edge_add", EDGE_ADD, 0x8BBAB2, "mov rdi, rcx"),
+    # 坐标来自 `[system+0x28]` 的 vtable 槽 +8 返回的**子对象**,不是系统对象本身
+    ("edge_add", EDGE_ADD, 0x8BBAB5, "lea rcx, [rdx + 0x28]"),
+    ("edge_add", EDGE_ADD, 0x8BBAB9, "mov rax, qword ptr [rcx]"),
+    ("edge_add", EDGE_ADD, 0x8BBABC, "call qword ptr [rax + 8]"),
+    ("edge_add", EDGE_ADD, 0x8BBABF, "mov rbx, rax"),
+    ("edge_add", EDGE_ADD, 0x8BBAC2, "lea rcx, [rdi + 0x28]"),
+    ("edge_add", EDGE_ADD, 0x8BBAC6, "mov r8, qword ptr [rcx]"),
+    ("edge_add", EDGE_ADD, 0x8BBAC9, "call qword ptr [r8 + 8]"),
+    ("edge_add", EDGE_ADD, 0x8BBACD, "mov rcx, qword ptr [rbx + 0x10]"),
+    ("edge_add", EDGE_ADD, 0x8BBAD1, "sub rcx, qword ptr [rax + 0x10]"),
+    ("edge_add", EDGE_ADD, 0x8BBAD5, "mov r8, qword ptr [rbx + 8]"),
+    ("edge_add", EDGE_ADD, 0x8BBAD9, "sub r8, qword ptr [rax + 8]"),
     ("edge_add", EDGE_ADD, 0x8BBB42, "lea rcx, [rip + 0x1bf9937]"),
     ("edge_add", EDGE_ADD, 0x8BBB53, "lea rcx, [rdi + 0x588]"),
     ("edge_add", EDGE_ADD, 0x8BBB5F, "mov edx, dword ptr [rcx + 0x14]"),
@@ -124,14 +164,45 @@ EXPECTED_SITES: list[tuple[str, int, int, str]] = [
     ("edge_remove", EDGE_REMOVE, 0x8BBC3F, "mov r11, qword ptr [rcx + 0x590]"),
     ("edge_remove", EDGE_REMOVE, 0x8BBC51, "cmp dword ptr [rax + 8], r10d"),
     ("edge_remove", EDGE_REMOVE, 0x8BBC5D, "add rax, 0x20"),
+    # 末元素 -> 命中槽的搬运在**虚析构之前**
+    ("edge_remove", EDGE_REMOVE, 0x8BBC71, "shl r9, 5"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBC86, "mov eax, dword ptr [r9 + r11 - 0x18]"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBC8F, "mov dword ptr [rcx + r11 + 8], eax"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBC94, "mov rax, qword ptr [r9 + r11 - 0x10]"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBC99, "mov qword ptr [rcx + r11 + 0x10], rax"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBC9E, "movzx eax, byte ptr [r9 + r11 - 8]"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBCA4, "mov byte ptr [rcx + r11 + 0x18], al"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBCF7, "call qword ptr [r8]"),
     ("edge_remove", EDGE_REMOVE, 0x8BBD1D, "mov dword ptr [rdi + 0x59c], eax"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBD53, "mov byte ptr [rdi + 0x137d], al"),
+    ("edge_remove", EDGE_REMOVE, 0x8BBD65, "or dword ptr [rip + 0x20b0efc], 1"),
     # ---- 通用 vector push_back ------------------------------------------
     ("vec_insert", VEC_INSERT, 0x8CF8E8, "movsxd rax, dword ptr [rcx + 0x14]"),
     ("vec_insert", VEC_INSERT, 0x8CF8EF, "mov ecx, dword ptr [rcx + 0x10]"),
     ("vec_insert", VEC_INSERT, 0x8CF93E, "shl rdi, 5"),
     ("vec_insert", VEC_INSERT, 0x8CF942, "lea rax, [rip + 0x1be5b37]"),
+    # 容器 vtable 在容器基址 +0:读 vtable 后调它的 +0x18 槽
+    ("vec_insert", VEC_INSERT, 0x8CF9B1, "mov rax, qword ptr [r14]"),
+    ("vec_insert", VEC_INSERT, 0x8CF9B4, "mov rcx, r14"),
+    ("vec_insert", VEC_INSERT, 0x8CF9B7, "call qword ptr [rax + 0x18]"),
     ("vec_insert", VEC_INSERT, 0x8CF9E0, "add rcx, qword ptr [r14 + 8]"),
     ("vec_insert", VEC_INSERT, 0x8CFA02, "inc dword ptr [r14 + 0x14]"),
+]
+
+# §1.8 的排除项:自带区间(不在本探针的函数表里),逐字比对 capstone 的输出
+LOOKALIKE_SITES: list[tuple[str, int, int, int, str]] = [
+    # 别的 vector:元素 0x48 字节
+    ("lookalike_vec_0x48", 0x34C9A0, 0x34C9E0, 0x34C9AB, "mov eax, 0x48"),
+    ("lookalike_vec_0x48", 0x34C9A0, 0x34C9E0, 0x34C9C3, "call 0x14218525c"),
+    ("lookalike_vec_0x48", 0x34C9A0, 0x34C9E0, 0x34C9C8, "lea rdi, [rbx + rbx*8]"),
+    ("lookalike_vec_0x48", 0x34C9A0, 0x34C9E0, 0x34C9D2, "lea rbx, [rax + rdi*8]"),
+    # 别的 vector:元素 0x38 字节
+    ("lookalike_vec_0x38", 0x34CB20, 0x34CB50, 0x34CB33, "call 0x14218525c"),
+    ("lookalike_vec_0x38", 0x34CB20, 0x34CB50, 0x34CB38, "imul rdi, rbx, 0x38"),
+    ("lookalike_vec_0x38", 0x34CB20, 0x34CB50, 0x34CB42, "lea rbx, [rdi + rax]"),
+    # rsp 基址的 +0x590(栈帧/栈展开,不是容器)
+    ("lookalike_stack", 0x531630, 0x531660, 0x53163F, "movaps xmmword ptr [rsp + 0x590], xmm6"),
+    ("lookalike_stack", 0x54D540, 0x54D560, 0x54D54D, "lea r11, [rsp + 0x590]"),
 ]
 
 
@@ -295,6 +366,27 @@ def main() -> int:
     print(f"  {len(EXPECTED_SITES)} 个站点逐字核对 —— "
           + ("全部相等 OK" if ok else "**存在不一致**"))
 
+    # §1.8 的排除项:同位移、不同对象的站点(各自带区间),同样逐字核对 ——
+    # 排除结论必须建立在**读到的字节**上,不能只写在文档里。
+    print(f"\n[2b] §1.8 同位移排除站点逐字核对({len(LOOKALIKE_SITES)} 个)")
+    look_ok = True
+    _bodies = {}
+    for label, lo, hi, site, want in LOOKALIKE_SITES:
+        if (lo, hi) not in _bodies:
+            _bodies[(lo, hi)] = disasm(lo, hi)
+        got_ins = next((i for i in _bodies[(lo, hi)] if i.address - BASE == site), None)
+        if got_ins is None:
+            print(f"  MISMATCH {label} 0x{site:x}: 站点不在区间 0x{lo:x}..0x{hi:x}")
+            look_ok = False
+            continue
+        got = text(got_ins)
+        if got != want:
+            print(f"  MISMATCH {label} 0x{site:x}: '{got}' != '{want}'")
+            look_ok = False
+    print(f"  {len(LOOKALIKE_SITES)} 个排除站点逐字核对 —— "
+          + ("全部相等 OK" if look_ok else "**存在不一致**"))
+    ok = ok and look_ok
+
     # ---- 3. add / remove 的写路径站点与基址来源 --------------------------
     for label, fn in (("add_hyperlane", ADD_EXEC), ("remove_hyperlane", REMOVE_EXEC)):
         lo, hi = bounds[label]
@@ -339,6 +431,16 @@ def main() -> int:
     if reg_global != REGISTRY_GLOBAL or fallback_global != FALLBACK_GLOBAL:
         ok = False
 
+    # 两个全局在文件里的字节:**空 = BSS/未初始化**(它们保存运行时填充的指针,
+    # 不是 file-init 数据)——由字节判定,不是断言。
+    for name, g in (("系统索引全局", REGISTRY_GLOBAL), ("失败回退对象", FALLBACK_GLOBAL)):
+        b, sec = disrva.rd(g, 8)
+        if not b:
+            print(f"  0x{g:x} {name} 文件字节:空({sec},BSS/未初始化)  OK")
+        else:
+            print(f"  0x{g:x} {name} 文件字节:{b.hex()}({sec})  **MISMATCH(应为 BSS)**")
+            ok = False
+
     # ---- 5. 边容器布局 ----------------------------------------------------
     print(f"\n[5] 边容器 = 系统对象 + 0x{CONTAINER_OFF:x}"
           f"(数据 +0x{DATA_OFF:x} / 容量 +0x{CAP_OFF:x} / 计数 +0x{COUNT_OFF:x})")
@@ -346,10 +448,40 @@ def main() -> int:
           f"rdi = 解析器返回的系统对象")
     print(f"  元素步长 = 0x{ELEM_STRIDE:x}(删除侧 0x8bbc5d `add rax, 0x20`;"
           f"插入侧 0x8cf93e `shl rdi, 5` = 32)")
+
+    # rip 目标**由字节解出**:元素 vtable、脏标志全局 —— 不是断言,是推导。
+    print("  rip 目标解析(从字节解出,再与常量比对):")
+    rip_ok = True
+    for label, site, want, what in (
+        ("edge_add", ELEM_VTABLE_SITE, ELEM_VTABLE, "元素 vtable"),
+        ("edge_add", DIRTY_FLAG_ADD_SITE, DIRTY_GLOBAL, "脏标志(add 侧)"),
+        ("edge_remove", DIRTY_FLAG_REM_SITE, DIRTY_GLOBAL, "脏标志(remove 侧)"),
+    ):
+        insns = bodies.get(label) or disasm(*bounds[label])
+        ins = next((i for i in insns if i.address - BASE == site), None)
+        tgt = rip_target(ins) if ins is not None else None
+        if tgt is None:
+            print(f"    0x{site:x} {what}: **MISMATCH(站点不在函数体里)**")
+            rip_ok = False
+            continue
+        mark = "OK" if tgt == want else "**MISMATCH**"
+        print(f"    0x{site:x} {text(ins)} -> 0x{tgt:x}(期望 0x{want:x})  {mark}")
+        if tgt != want:
+            rip_ok = False
+    ok = ok and rip_ok
+
     print(f"  元素布局: +0x00 vtable(0x{ELEM_VTABLE:x}) / +0x08 id(dword) /"
           f" +0x10 距离(qword) / +0x18 标志(byte)")
-    print(f"  边集合脏标志全局 = 0x{DIRTY_GLOBAL:x}"
-          f"(0x8bbb85 `or dword ptr [rip + 0x20b10dc], 1`)")
+    print(f"  脏/世代位掩码全局 = 0x{DIRTY_GLOBAL:x}"
+          f"(add 侧 0x8bbb85 `or dword ptr [rip + 0x20b10dc], 1`;"
+          f"remove 侧 0x8bbd65 `or dword ptr [rip + 0x20b0efc], 1` —— 两侧同址)")
+    db, dsec = disrva.rd(DIRTY_GLOBAL, 4)
+    if db == b"\x01\x00\x00\x00":
+        print(f"    文件字节 {db.hex()}({dsec})=> file-init dword = 1(**不是 BSS**)  OK")
+    else:
+        print(f"    文件字节 {db.hex() or '(空)'}({dsec})"
+              f"  **MISMATCH(期望 01000000)**")
+        ok = False
 
     # ---- 6. 同位移排除 ----------------------------------------------------
     print("\n[6] 同位移在别处也出现(§87 口径)—— 位移本身不能识别容器")
