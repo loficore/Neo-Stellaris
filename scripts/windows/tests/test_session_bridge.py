@@ -41,6 +41,21 @@ def test_shim_is_ascii_and_echoes_the_exit_code_after_the_command():
     assert text.count("EXIT=") == 1
 
 
+def test_the_task_never_schedules_a_second_run():
+    """A +120 s one-shot fired a second copy while the first was still running.
+
+    2026-11-03: the bridge created the task at ``now + 120 s`` and also fired it
+    with ``/run``; a long probe (or a racing delete) let the scheduled copy run
+    the shim again.  For ``--launch`` that is a second game.  The start must be
+    a time already past so only ``/run`` can fire it.
+    """
+    args = bridge.task_create_args(bridge.TASK_NAME, r"C:\temp\x.cmd", r"BOX\user")
+    assert args[0] == "schtasks"
+    assert args[args.index("/sc") + 1] == "once"
+    assert args[args.index("/st") + 1] == bridge.PAST_START
+    assert bridge.PAST_START == "00:00"
+
+
 def test_shim_without_args_still_forms_a_runnable_command():
     text = bridge.shim_text(
         r"C:\Python\pythonw.exe", r"C:\temp\ns_world.py", "", r"C:\temp\out.txt"

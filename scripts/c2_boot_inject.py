@@ -43,6 +43,11 @@ EXIT_FAILED = 2
 
 DEFAULT_DLL = r"C:\temp\sqjs_c20.dll"
 
+#: Wait this long after the process appears, before injecting.  50 ms injection
+#: crashed one launch before ``setup.log`` (2026-11-03); 5 s landed cleanly, and
+#: the script parser does not run until ~30 s after launch, so T1 still holds.
+DEFAULT_SETTLE_S = 5.0
+
 #: Every export this driver indexes.  Missing any of them means the bytes on the
 #: box are not this build's — refuse **before** injecting (2026-11-02 review I-2:
 #: `C2NeoSetRule`/`C2NeoUninstall` were called but unlisted, so a stale DLL gave a
@@ -169,7 +174,7 @@ def launch(exe_path: str, extra_args: str = "") -> int:
 
 def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
          rule: str = "1:0", act: str = "log", launch_exe: str | None = None,
-         launch_args: str = "", settle_s: float = 0.0) -> int:
+         launch_args: str = "", settle_s: float = DEFAULT_SETTLE_S) -> int:
     import c2_harness as harness
 
     dll_name = os.path.basename(dll_path.replace("\\", "/"))
@@ -317,8 +322,9 @@ def main(argv=None) -> int:
                         help="path to stellaris.exe: start it ourselves before polling")
     parser.add_argument("--launch-args", default="",
                         help="arguments for --launch, e.g. --continuelastsave")
-    parser.add_argument("--settle-s", type=float, default=0.0,
-                        help="sleep after the process appears, before injecting (default 0)")
+    parser.add_argument("--settle-s", type=float, default=DEFAULT_SETTLE_S,
+                        help=f"sleep after the process appears, before injecting (default {DEFAULT_SETTLE_S:g}; "
+                             "5 s clears the early loader, parser runs ~30 s in)")
     parser.add_argument("--log", default=None,
                         help="with --stats: also print this log's current byte offset")
     args = parser.parse_args(argv)

@@ -92,3 +92,13 @@ def test_a_bad_rule_is_a_usage_error_not_a_traceback():
     with pytest.raises(SystemExit) as exc:
         mod.main(["--rule", "x:y", "--stats"])
     assert exc.value.code == 2
+
+
+def test_settle_default_waits_past_the_early_loader():
+    """50 ms injection crashed the game once; 5 s landed and parsed much later.
+
+    2026-11-03: the first launch died before ``setup.log``; the same DLL with
+    ``--settle-s 5`` worked, and the script parser runs ~30 s after launch.
+    """
+    assert mod.DEFAULT_SETTLE_S >= 5.0
+    assert mod.boot.__kwdefaults__["settle_s"] == mod.DEFAULT_SETTLE_S

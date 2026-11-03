@@ -382,21 +382,29 @@ def resolve_pid(process_name: str) -> int:
     raise RuntimeError(f"{process_name!r} is not running")
 
 
+def base_lookup_command(pid: int, dll_filename: str) -> str:
+    """PowerShell that reads the module base **from this pid only**.
+
+    Name-keyed lookup (``Get-Process stellaris``) becomes ambiguous the moment a
+    second game exists: 2026-11-03 the bridge's double-fire launched one, and the
+    driver refused with ``appears 2 times``.  Two copies inside one process are
+    still an error — that is a real double load.
+    """
+    return (
+        f"Get-Process -Id {int(pid)} | Select-Object -ExpandProperty Modules | "
+        f"Where-Object {{ $_.ModuleName -eq '{dll_filename}' }} | "
+        "Select-Object -ExpandProperty BaseAddress"
+    )
+
+
 def resolve_base_address(pid: int, dll_filename: str) -> int:
-    """Full 64-bit module base via PowerShell, keyed on the DLL *filename*.
+    """Full 64-bit module base via PowerShell, keyed on the pid and DLL filename.
 
     Raises ``RuntimeError`` if the DLL is not loaded or if its filename appears
     more than once (two loaded copies would make the lookup ambiguous — ruling
     P8).
     """
-    # Query by process name (the C2 target is always "stellaris"); pid is kept
-    # in the signature for the harness contract and for future filtering.
-    del pid  # filename-keyed lookup; process name comes from Get-Process below
-    ps_cmd = (
-        "Get-Process stellaris | Select-Object -ExpandProperty Modules | "
-        f"Where-Object {{ $_.ModuleName -eq '{dll_filename}' }} | "
-        "Select-Object -ExpandProperty BaseAddress"
-    )
+    ps_cmd = base_lookup_command(pid, dll_filename)
     try:
         out = subprocess.check_output(["powershell", "-Command", ps_cmd]).decode("utf-8", errors="replace")
     except (subprocess.SubprocessError, OSError) as exc:

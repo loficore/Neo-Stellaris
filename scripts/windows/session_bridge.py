@@ -46,6 +46,24 @@ TASK_NAME = "NSWorldOneShot"
 SHIM_PATH = r"C:\temp\ns_world_oneshot.cmd"
 OUT_PATH = r"C:\temp\ns_world_oneshot.txt"
 
+#: ``/sc once`` needs a start time.  Use one already in the past so **only**
+#: ``/run`` can fire the task: a leaked or racing definition then cannot run the
+#: shim a second time.  2026-11-03: a ``now + 120 s`` start let the scheduled
+#: copy fire while the first probe was still running — for ``--launch`` that was
+#: a second game process.
+PAST_START = "00:00"
+
+
+def task_create_args(task_name: str, shim: str, owner: str) -> list[str]:
+    """``schtasks /create`` argv for the one-shot interactive task.
+
+    Pure so the fence can pin the start time: ``/st`` must be ``PAST_START``,
+    never a time computed from ``now``.
+    """
+    return ["schtasks", "/create", "/tn", task_name, "/tr", shim,
+            "/sc", "once", "/st", PAST_START, "/ru", owner, "/rl", "highest",
+            "/f"]
+
 #: How long to wait for the sentinel.  Generous: ``/run /I`` waits for the
 #: Task Scheduler to pick the task up, and the task itself may take seconds.
 DEFAULT_TIMEOUT_S = 120.0
@@ -100,10 +118,8 @@ def run_interactive(script: str, args: str = "", *,
         pass
 
     owner = f"{os.environ.get('COMPUTERNAME', '')}\\{os.environ.get('USERNAME', '')}"
-    start = time.strftime("%H:%M", time.localtime(time.time() + 120))
-    subprocess.run(["schtasks", "/create", "/tn", TASK_NAME, "/tr", SHIM_PATH,
-                    "/sc", "once", "/st", start, "/ru", owner, "/rl", "highest",
-                    "/f"], check=True, capture_output=True, text=True)
+    subprocess.run(task_create_args(TASK_NAME, SHIM_PATH, owner),
+                   check=True, capture_output=True, text=True)
     try:
         subprocess.run(["schtasks", "/run", "/tn", TASK_NAME, "/I"],
                        check=True, capture_output=True, text=True)
