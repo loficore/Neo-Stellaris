@@ -19,8 +19,10 @@ test:
 # `test_hook_teardown.py` is here because `test_scripts_layout.py` does not read Zig
 # sources: without this line the "never free a trampoline" invariant is tested only
 # when someone remembers to run it (2026-10-28 review M-2).
+# `test_graph_fixture_emit.py` is here for the same reason: `graph-fixture-check`
+# runs only the emitter's `--check` drift, never its unit tests (2026-11-03 review C).
 fence:
-    python3 -m pytest scripts/test_scripts_layout.py scripts/test_hook_teardown.py -q
+    python3 -m pytest scripts/test_scripts_layout.py scripts/test_hook_teardown.py scripts/test_graph_fixture_emit.py -q
 
 host-tests:
     cd scripts/windows && python3 -m pytest tests -q

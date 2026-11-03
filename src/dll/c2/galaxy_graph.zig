@@ -37,6 +37,21 @@
 // 本模块**不做任何跨调用缓存** —— 不存指针、不存结果,每次调用都从 `galaxy` 重走一遍,
 // 所以调用方可以在两次调用之间改图(Review Focus #3,见 c2_tests 的 no-cache 测试)。
 //
+// **适配器契约(读图器 → `chokepoint_dynamic.analyze`)**:
+// `analyze` 要求每个端点 `< system_count`,并把三片输出都定长成 `system_count`。
+// 本模块发射的 `Edge.a/.b` 是**引擎 id**,不是稠密的槽下标 —— 引擎的 id 空间只增不减,
+// 稀疏是常态(787 个系统的战役里,活着的 id 常常只占一小段)。
+// 所以 `system_count` **不能**用 `ReadStats.systems`(那是「活着的系统数」,不是 id 上界):
+// 用它做分母会把 Brandes 的分母 `(n-1)(n-2)/2` 悄悄改小,每个分数被重新标定。
+// 契约是 **`system_count = max_id + 1`**,`max_id` 由 `ReadStats.max_id` 给出:
+//   * `max_id` = 被承认的系统里最大的引擎 id;**没有系统被承认时是 `null`**;
+//   * 每个被发射的端点都经 `resolves` 的表查核对(§1.2 的 `entry+8 == id`),
+//     而表查核对的槽号 = `id & 0xFFFFFF`,且表项要满足 `(id & 0xFFFFFF) == slot`
+//     ⇒ 被承认的 id 满足 `id & 0xFFFFFF == 槽号`,它的邻居 id 同理 ——
+//     所以每个发射端点都 `<= max_id`,`max_id + 1` 足够装下所有端点;
+//   * id **不保证稠密**:0..max_id 之间可能有空洞(孤立系统照样进分母、拿 score 0),
+//     这与 `chokepoint_dynamic` 的 `n = caller's system_count` 口径一致。
+//
 // `skipped` = 因内存不可读或取值不可用而**丢弃**的枚举项数,逐项列举:
 //   * 槽表项 qword 读失败;
 //   * 表项的系统 id 读失败;
@@ -45,6 +60,9 @@
 //   * 容器计数读失败,或计数 > `MAX_EDGE_COUNT`,或计数 > 0 而数据指针为空;
 //   * 容器容量读失败,或 `count > capacity`(容器头与分配不自洽,拒绝走过分配边界);
 //   * 邻居元素 id 读失败,或超出 u16,或经表查核对不上(`entry_id == id` 不成立)。
+// 上面每一条的「读失败」都含**地址算术溢出**:所有内存派生的地址(表项、系统对象、
+// 边数据、元素)都走检查过的加/乘加(`addAddr`/`elemAddr`),回绕一律当读不到 ——
+// 回绕后的地址不是真实对象,而 Debug 构建里未检查的 `+`/`*` 会 panic(约束 8)。
 // 空槽位**不算**丢弃项(那是稀疏索引表的正常形态);自环与重复无向对是**过滤**、不计入。
 //
 // 短 `out`:唯一的多余错误是 `error.BufferTooSmall`。首次写不下时立刻返回,`out[0..k]` 是
@@ -69,7 +87,18 @@ pub const Memory = struct {
     read: *const fn (ctx: *anyopaque, addr: usize, len: usize, buf: []u8) bool,
 };
 
-pub const ReadStats = struct { systems: usize, edges: usize, skipped: usize };
+pub const ReadStats = struct {
+    /// 被承认的(well-formed)系统数 —— 通过了表项存活 + 可达性不变量 + u16 三项检查。
+    systems: usize,
+    /// 写进 `out` 的唯一无向边数。
+    edges: usize,
+    /// 因不可读/不可用而丢弃的枚举项数(口径见文件头)。
+    skipped: usize,
+    /// **id 上界证据**:被承认的系统里最大的引擎 id;没有系统被承认时为 `null`。
+    /// 调用方按下面的适配器契约给 `analyze` 定长 —— `system_count = max_id + 1`。
+    /// 是 `null` 而非 0,因为 0 是一个**合法**的系统 id:拿 0 当「没有系统」会伪造一个系统。
+    max_id: ?u16 = null,
+};
 
 pub const Error = error{
     /// `out` 装不下唯一边集;`out[0..k]` 是枚举序的确定性前缀(见文件头)。
@@ -87,18 +116,27 @@ const MAX_ID: u32 = std.math.maxInt(u16);
 
 /// 枚举 `galaxy` 指向的系统索引,把唯一的无向边写进 `out`。
 /// 返回 `systems` = 表里活着的系统数,`edges` = 写进 `out` 的唯一边数,
-/// `skipped` = 被丢弃的枚举项数(口径见文件头)。
+/// `skipped` = 被丢弃的枚举项数(口径见文件头),`max_id` = 被承认系统的 id 上界
+/// (没有系统则为 null;`system_count = max_id + 1` 的适配器契约见文件头)。
 pub fn readGraph(mem: Memory, galaxy: usize, out: []Edge) Error!ReadStats {
     // 空指针不是「空图」:判头部失败,别把「读不到」伪装成「没有边」(I1)。
     if (galaxy == 0) return error.UnreadableIndex;
-    const bound = readDword(mem, galaxy + graph.INDEX_BOUND_OFF) orelse return error.UnreadableIndex;
+    // 头部地址是内存派生指针(index 对象地址 + 字段偏移),做检查加法:溢出的地址
+    // 不是可读地址,判索引读不到,绝不回绕后拿去读。
+    const bound = readDword(
+        mem,
+        addAddr(galaxy, graph.INDEX_BOUND_OFF) orelse return error.UnreadableIndex,
+    ) orelse return error.UnreadableIndex;
     // 槽数为 0 只能是「头部读到了但内容不像索引对象」——同样按读不到处理(I2)。
     if (bound == 0) return error.UnreadableIndex;
     if (bound > graph.MAX_TABLE_SLOTS) return error.UnreadableIndex;
-    const table = readPtr(mem, galaxy + graph.INDEX_TABLE_OFF) orelse return error.UnreadableIndex;
+    const table = readPtr(
+        mem,
+        addAddr(galaxy, graph.INDEX_TABLE_OFF) orelse return error.UnreadableIndex,
+    ) orelse return error.UnreadableIndex;
     if (table == 0) return error.UnreadableIndex;
 
-    var stats = ReadStats{ .systems = 0, .edges = 0, .skipped = 0 };
+    var stats = ReadStats{ .systems = 0, .edges = 0, .skipped = 0, .max_id = null };
 
     const slots: usize = bound;
     var slot: usize = 0;
@@ -108,7 +146,13 @@ pub fn readGraph(mem: Memory, galaxy: usize, out: []Edge) Error!ReadStats {
             continue;
         };
         if (entry == 0) continue; // 空槽:稀疏索引表的正常形态,不是丢弃项
-        const id = readDword(mem, entry + graph.SYSTEM_ID_OFF) orelse {
+        const id = readDword(
+            mem,
+            addAddr(entry, graph.SYSTEM_ID_OFF) orelse {
+                stats.skipped += 1;
+                continue;
+            },
+        ) orelse {
             stats.skipped += 1;
             continue;
         };
@@ -122,6 +166,10 @@ pub fn readGraph(mem: Memory, galaxy: usize, out: []Edge) Error!ReadStats {
             continue;
         }
         stats.systems += 1;
+        // id 上界证据:承认后立刻并进去(即便这个系统的边容器随后被跳过,
+        // 它仍是一个存在、可能被别的系统引用的端点)。
+        const admitted: u16 = @intCast(id);
+        stats.max_id = if (stats.max_id) |m| @max(m, admitted) else admitted;
         try readSystemEdges(mem, table, bound, entry, id, out, &stats);
     }
     return stats;
@@ -137,7 +185,13 @@ fn readSystemEdges(
     out: []Edge,
     stats: *ReadStats,
 ) Error!void {
-    const count = readDword(mem, system + graph.EDGE_COUNT_OFF) orelse {
+    const count = readDword(
+        mem,
+        addAddr(system, graph.EDGE_COUNT_OFF) orelse {
+            stats.skipped += 1;
+            return;
+        },
+    ) orelse {
         stats.skipped += 1;
         return;
     };
@@ -150,7 +204,13 @@ fn readSystemEdges(
     // 此时**不许**按 count 走 —— 那会走过分配边界。整段跳过并计数。
     // 口径注记:容量按**元素数**读;若引擎那边其实是字节口径,健康向量恒有
     // `capacity >= count`,本检查同样不会误伤。
-    const capacity = readDword(mem, system + graph.EDGE_CAPACITY_OFF) orelse {
+    const capacity = readDword(
+        mem,
+        addAddr(system, graph.EDGE_CAPACITY_OFF) orelse {
+            stats.skipped += 1;
+            return;
+        },
+    ) orelse {
         stats.skipped += 1;
         return;
     };
@@ -158,7 +218,13 @@ fn readSystemEdges(
         stats.skipped += 1;
         return;
     }
-    const data = readPtr(mem, system + graph.EDGE_DATA_OFF) orelse {
+    const data = readPtr(
+        mem,
+        addAddr(system, graph.EDGE_DATA_OFF) orelse {
+            stats.skipped += 1;
+            return;
+        },
+    ) orelse {
         stats.skipped += 1;
         return;
     };
@@ -170,7 +236,15 @@ fn readSystemEdges(
     const n: usize = count;
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        const neighbour = readDword(mem, data + i * graph.EDGE_STRIDE + graph.EDGE_ID_OFF) orelse {
+        // 元素地址由内存派生(`data` 是读出来的指针):乘加都要检查,
+        // 任何一步回绕都当读不到 ⇒ 这一项计入 skipped。
+        const neighbour = readDword(
+            mem,
+            elemAddr(data, i, graph.EDGE_STRIDE, graph.EDGE_ID_OFF) orelse {
+                stats.skipped += 1;
+                continue;
+            },
+        ) orelse {
             stats.skipped += 1;
             continue;
         };
@@ -201,15 +275,20 @@ fn resolves(mem: Memory, table: usize, bound: u32, id: u32) bool {
     if (slot >= bound) return false;
     const entry = readSlot(mem, table, slot) orelse return false;
     if (entry == 0) return false;
-    const entry_id = readDword(mem, entry + graph.SYSTEM_ID_OFF) orelse return false;
+    const entry_id = readDword(
+        mem,
+        addAddr(entry, graph.SYSTEM_ID_OFF) orelse return false,
+    ) orelse return false;
     return entry_id == id;
 }
 
 /// 读第 `slot` 号表项里的系统对象指针。
 /// **表项步长是 16 B**(`0x393a2f add rcx,rcx` → `0x393a32 mov rax,[rax+rcx*8+8]`),
 /// 指针在记录的 `+8` —— 不是一个 8 字节的 qword 数组(§1.11 勘误)。
+/// 地址算术检查过:表指针是内存派生值,乘加回绕就不是可读地址。
 fn readSlot(mem: Memory, table: usize, slot: usize) ?usize {
-    const addr = table + slot * graph.TABLE_RECORD_SIZE + graph.TABLE_SLOT_PTR_OFF;
+    const addr = elemAddr(table, slot, graph.TABLE_RECORD_SIZE, graph.TABLE_SLOT_PTR_OFF) orelse
+        return null;
     return readPtr(mem, addr);
 }
 
@@ -218,6 +297,21 @@ fn pairPresent(existing: []const Edge, a: u16, b: u16) bool {
         if (e.a == a and e.b == b) return true;
     }
     return false;
+}
+
+/// 内存派生地址的**检查加法**:`base + off` 溢出不回绕,直接给 `null`。
+/// 回绕后的地址不是任何真实对象 —— 拿它去读只会越界;而 Debug 构建里未检查的 `+`
+/// 会 panic,出货 DLL 就是 Debug(AGENTS 约束 8:一次 trip → `abort()` → 退出码 3)。
+fn addAddr(base: usize, off: usize) ?usize {
+    return std.math.add(usize, base, off) catch null;
+}
+
+/// 内存派生地址的**检查乘加**:`base + idx * stride + off`,乘法与两次加法都不回绕。
+/// 溢出的任何一步都化作 `null`,调用方当「读不到」处理(逐项 `skipped`)。
+fn elemAddr(base: usize, idx: usize, stride: usize, off: usize) ?usize {
+    const scaled = std.math.mul(usize, idx, stride) catch return null;
+    const rel = std.math.add(usize, scaled, off) catch return null;
+    return std.math.add(usize, base, rel) catch null;
 }
 
 fn readDword(mem: Memory, addr: usize) ?u32 {

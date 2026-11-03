@@ -548,3 +548,115 @@ test "galaxy_graph: a count beyond the container capacity is skipped, never walk
     try std.testing.expectEqual(@as(usize, 0), stats.edges);
     try std.testing.expect(!m.escaped);
 }
+
+test "galaxy_graph: sparse ids carry the max id, and the adapter sizes the graph from it" {
+    var m = Mirror{};
+    // 稀疏表:id 是引擎 id(只增不减),不保证稠密。0-7-42 一条链。
+    setGalaxy(&m, 43, Mirror.TABLE);
+    setSystem(&m, 0, 0, &.{7});
+    setSystem(&m, 7, 7, &.{ 0, 42 });
+    setSystem(&m, 42, 42, &.{7});
+
+    var out: [8]gg.Edge = undefined;
+    const stats = try gg.readGraph(mirrorMemory(&m), Mirror.GALAXY, &out);
+
+    try std.testing.expectEqual(@as(usize, 3), stats.systems);
+    try std.testing.expectEqual(@as(usize, 2), stats.edges);
+    // A:读图器必须把 id 上界告诉调用方,否则调用方只能拿 systems=3 去喂 analyze
+    // (那是错的:43 个 id 槽,3 个活着)。
+    try std.testing.expectEqual(@as(?u16, 42), stats.max_id);
+
+    // 适配器契约:`system_count = max_id + 1`。每个被发射的端点都经 `resolves` 核对过,
+    // 所以都 <= max_id;id 不稠密不影响这个上界。切片按它来定长。
+    const system_count: usize = @as(usize, stats.max_id.?) + 1;
+    try std.testing.expectEqual(@as(usize, 43), system_count);
+    var scores: [43]u16 = undefined;
+    var art: [43]u8 = undefined;
+    var bri: [43]u8 = undefined;
+    try cd.analyze(std.testing.allocator, out[0..stats.edges], system_count, .{
+        .scores = &scores,
+        .articulation = &art,
+        .bridge_endpoint = &bri,
+    });
+
+    // 手算(并用 scripts/chokepoint_scores.py 以同样的 43 节点/两条边交叉核对过):
+    // 43 个节点、边 0-7 与 7-42。唯一跨过 7 的无序对是 {0,42};
+    // 分母 (43-1)(43-2)/2 = 861。score[7] = round(1000 * 1/861) = round(1.1614) = 1。
+    // 其余节点介数为 0 ⇒ score 0。若调用方错用 system_count=3,分母会变成 1,
+    // 每个分数被静默重标定 —— 正是这条契约要挡住的事(§2.5 / spec 裁定⑤)。
+    try std.testing.expectEqual(@as(u16, 1), scores[7]);
+    for (scores, 0..) |s, i| {
+        if (i != 7) try std.testing.expectEqual(@as(u16, 0), s);
+    }
+    // 7 是唯一割点;两条桥(0-7、7-42)的三个端点都标桥端点,节点 1 不是。
+    try std.testing.expectEqual(@as(u8, 1), art[7]);
+    try std.testing.expectEqual(@as(u8, 0), art[0]);
+    try std.testing.expectEqual(@as(u8, 0), art[42]);
+    try std.testing.expectEqual(@as(u8, 1), bri[0]);
+    try std.testing.expectEqual(@as(u8, 0), bri[1]);
+    try std.testing.expectEqual(@as(u8, 1), bri[7]);
+    try std.testing.expectEqual(@as(u8, 1), bri[42]);
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: an empty galaxy reports max_id == null, not a zero id" {
+    var m = Mirror{};
+    // 索引对象在、槽数合法,但三个槽全是空槽:存在的银河,里面没有系统。
+    setGalaxy(&m, 3, Mirror.TABLE);
+    var out: [8]gg.Edge = undefined;
+    const stats = try gg.readGraph(mirrorMemory(&m), Mirror.GALAXY, &out);
+
+    try std.testing.expectEqual(@as(usize, 0), stats.systems);
+    try std.testing.expectEqual(@as(usize, 0), stats.edges);
+    // null 而不是 0:0 是**一个**合法系统 id,拿它当「没有系统」会伪造出一个系统。
+    try std.testing.expectEqual(@as(?u16, null), stats.max_id);
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: a table entry pointer near maxInt is skipped, not an overflow" {
+    var m = Mirror{};
+    setGalaxy(&m, 1, Mirror.TABLE);
+    // 表项 qword 本身在镜像里、读得到,但它指向的「系统对象」地址几乎顶到 usize 上限:
+    // `entry + 8`(读系统 id)会溢出。未检查的算术在 Debug 里 panic → 出货 DLL abort
+    // (AGENTS 约束 8);正确实现把它当读不到 ⇒ 计入 skipped。
+    putQword(&m, slotAddr(0), std.math.maxInt(usize) - 4);
+
+    var out: [8]gg.Edge = undefined;
+    const stats = try gg.readGraph(mirrorMemory(&m), Mirror.GALAXY, &out);
+
+    try std.testing.expectEqual(@as(usize, 0), stats.systems);
+    try std.testing.expectEqual(@as(usize, 1), stats.skipped);
+    try std.testing.expectEqual(@as(?u16, null), stats.max_id);
+    // 溢出在地址算术处被拦下,绝不拿回绕后的地址去读 ⇒ 没有越界读。
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: an edge-data pointer near maxInt is skipped, not an overflow" {
+    var m = Mirror{};
+    setGalaxy(&m, 1, Mirror.TABLE);
+    setSystem(&m, 0, 0, &.{1});
+    // 容器头在镜像里(count=1/capacity=1),但数据指针几乎顶到 usize 上限:
+    // 元素 id 的地址 `data + 0*0x20 + 8` 会溢出。
+    putQword(&m, objAddr(0) + gg_off.EDGE_DATA_OFF, std.math.maxInt(usize) - 4);
+
+    var out: [8]gg.Edge = undefined;
+    const stats = try gg.readGraph(mirrorMemory(&m), Mirror.GALAXY, &out);
+
+    try std.testing.expectEqual(@as(usize, 1), stats.systems);
+    try std.testing.expectEqual(@as(usize, 0), stats.edges);
+    try std.testing.expectEqual(@as(usize, 1), stats.skipped);
+    try std.testing.expect(!m.escaped);
+}
+
+test "galaxy_graph: a galaxy address near maxInt is UnreadableIndex, not an overflow" {
+    var m = Mirror{};
+    var out: [8]gg.Edge = undefined;
+    // 地址算术先于任何读:顶到上限的 `galaxy + 0x20` 会溢出。溢出回绕后若拿去读,
+    // 就会落到镜像之外的任意地址;正确实现直接判索引读不到。
+    try std.testing.expectError(error.UnreadableIndex, gg.readGraph(
+        mirrorMemory(&m),
+        std.math.maxInt(usize) - 0x10,
+        &out,
+    ));
+    try std.testing.expect(!m.escaped);
+}
