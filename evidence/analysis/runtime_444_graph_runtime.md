@@ -749,3 +749,96 @@ vtable 槽派发)。**报「词」不报「槽号」**:静态无法确定引擎�
 (`offsets.graph.TABLE_RECORD_SIZE = 16` / `TABLE_SLOT_PTR_OFF = 8`);§1.2 其余结论(id 来自 scope
 `+0x10`、边界 `[对象+0x20]`、表指针 `[对象+0x18]`、命中条件 `entry+8 == id`、回退 `0x325d880`)全部
 照旧,§1.3 的边容器字段表不受影响。
+
+## §4 实机读一发(2026-11-04):容器偏移在活体成立;离线 oracle 差的是**一条新系统**,不是偏移
+
+**授权级**:点名 ×1(计划 `2026-11-03-runtime-graph-live` Task 3,2 发预算里的第一发)。
+**只读**:探针没有任何 hook(无 detour、无 trampoline、无引擎字节改动),读路径只经
+`ReadProcessMemory`;两个改边导出**一次都没调**。
+
+### §4.1 命令与真实输出
+
+```
+just win "python C:/temp/session_bridge.py C:/temp/c2_graph_read.py C:/temp/sqjs_g1.dll \
+  --expect-systems 787 --expect-edges 1217 --save-name autosave_2258.07.01 \
+  --edges-file C:/temp/c5_campaign_edges_4_4_4.tsv --out C:/temp/c5_graph_read.tsv"
+```
+
+```
+[graph] dll=C:/temp/sqjs_g1.dll sha256=012c460e1d23f9cb3c35598ec7ce200fd536c332dca05277b27b9dc7d252e1a3
+[graph] pid=23640 dll=C:/temp/sqjs_g1.dll
+[graph] sqjs_g1.dll base: 0x7ff82a180000
+[graph] C2Sanity == 42, game alive ?? read authorized
+[graph] verdict=graph_live_read_disagree  systems=788 edges=1219 vs expect systems=787 edges=1217; (315, 787) in read1 only
+[graph] artifact=C:/temp/c5_graph_read.tsv
+```
+
+`#meta` 全文 = `evidence/logs/c5_graph_live_read_4_4_4.log` 的 26 行 meta(artifact 是驱动原样输出,
+1,242 行 = 26 meta + 1,219 边行,写盘时刻 `2026-11-04 00:37:49`)。关键格:
+
+| 键 | 值 | 键 | 值 |
+|---|---|---|---|
+| `module_base` | `0x7ff78c120000`(**stellaris.exe** 的基址) | `index_ptr` | `0x16c355838` |
+| `table_ptr` | `0x1ca587180` | `bound` | **1024** |
+| `systems` | **788** | `max_id` | **787** |
+| `edges` | **1219** | `skipped` | **0** |
+| `read2_systems` | 788 | `read2_edges` | **1219** |
+| `read1_rc` / `read2_rc` | 0 / 0 | `read2_skipped` | 0 |
+| `layout` | `0x1,0x3260b98,0x18,0x20,0x10,0x8,0x59c,0x20` | `host_alive` | 1 |
+
+`layout` 八格与 `offsets.graph` 逐格相等(**字 4 = `0x10` = 16 B 记录步长**,不是 8)⇒ 仪器对账过。
+`bound=1024` 而 `max_id=787` 是 Review Focus #2 要的形状:上界来自**表项自证**(`max_id`),不是
+`bound-1`;788 个活系统 id 唯一且 `<= 787` ⇒ 覆盖恰为 `0..787`(稠密,无空洞)。
+
+### §4.2 判决词:**对旧 oracle 是 `disagree`,对同期 oracle 是 `named`**
+
+- `overall_verdict=graph_live_read_disagree`(artifact 原样)= 对 `c5_campaign_edges_4_4_4.tsv`
+  (由**已不存在的** `autosave_2231.07.01.sav` 烘出)的口径。**不是** `instrument_broken`:
+  layout 全中、`skipped=0`、两次读相等(判词先判 `unstable`,没走到那一档)、宿主存活。
+- **同期 oracle = `autosave_2260.01.01.sav`**(写于 `00:37:34`,比 artifact 早 **15 s**;读发生在
+  它之后)⇒ 边集与本次读数**双向零差**,判词按同一 `classify` 规则应为 `graph_live_read_named`。
+
+### §4.3 差分:两个 oracle 把「偏移漂了」与「战役往前走了」分开
+
+| oracle | 来源 | 边 | live-only | oracle-only |
+|---|---|---|---|---|
+| `c5_campaign_edges_4_4_4.tsv` | `autosave_2231.07.01.sav`(已退役,sha `32413c3e…`) | 1,217 | `(315,787)`、`(575,787)` | **∅** |
+| `autosave_2259.07.01.sav` | 同战役,`2026-11-04 00:34:36` 写盘 | 1,217 | `(315,787)`、`(575,787)` | **∅** |
+| `autosave_2260.01.01.sav` | 同战役,`2026-11-04 00:37:34` 写盘 | 1,219 | **∅** | **∅** |
+
+即:**离线表 1,217 条一条不少地读回来了**(oracle-only 恒 ∅),live 多出的两条都挂在 **id 787** 上 ——
+那是 `0..786` 之后的下一个 id,出现在 `2259.07.01` 与 `2260.01.01` 两份存档之间(游戏内同一次读档会话里
+从 2259 跑到 2260,月速最快档)。两次之间的窗里只多了一个系统,与「事件生成新星系」的形状一致
+(该战役当时正在跑 `风信子号` 调查链)。
+
+**因此这句判词必须写清**:`disagree` 记的是「活体与 2231 的离线表不相等」这一事实,**不是**「偏移错了」。
+把 live 与同期存档逐项对齐后差集为空 ⇒ 容器(`+0x588/+0x590/+0x598/+0x59c`)、解析器(`0x3939f0` 的
+表形状)、16 B 记录步长、u16 端点这一整条链在活体里**成立**。
+
+### §4.4 这一发**已能说**(三条)
+
+1. **容器偏移在活体里成立**:1,219 条边 × 两个端点全部按 `+0x590`/`+0x59c`/步长 `0x20`/元素 `+8` 读出,
+   `skipped=0`,且同一份数据在存档侧由**完全独立的解析器**(`scripts/save_hypergraph.py`,ZIP +
+   Clausewitz tokenizer)逐项复现 ⇒ 两侧 1,219/1,219 相等。
+2. **id 覆盖 `0..787`**:788 个系统、id 唯一、`max_id=787`、`bound=1024` ⇒ 覆盖稠密且上界来自表项自证。
+3. **边集与离线表的关系是「包含 + 两条新边」**:1,217 条旧边**逐项相等**(差集为空),多出的两条是
+   id 787 的两条 hyperlane;不是漏读、不是错位、不是去重口径变了。
+
+### §4.5 这一发**仍不能说**(三条)
+
+1. **没证明每次读都一致**:只测了同一进程内的**两次**连续读(相等),没有跨帧/跨月/跨暂停的重复读,
+   也没有对同一容器做并发读。`graph_live_read_unstable` 这一档存在,但本发没触发,等于**没测到**它。
+2. **没证明图变更后引擎会重算**:本发只读;`add_hyperlane`/`remove_hyperlane` 的写路径仍未实机调用,
+   §3.6 第 3 条的边界原样保留。
+3. **只在这一场战役、这一版 exe 上**:`_1474567734`(788 系统 / 1,219 边)、stellaris.exe 4.4.4、
+   且 oracle 是**同一次会话内**的存档;换战役、换版本、换读档时机都要重测。
+
+### §4.6 操作侧的两条环境档(不算读数,记在这里因为下次一定还会踩)
+
+1. **SSH 直跑驱动会永远被门挡住**:`ssh` 落在 **session 0**,`EnumWindows` 看不到游戏窗口 ⇒
+   `gate_install` 以 `no game window` 拒装(exit 2,未注入、未耗预算)。所有要过门的驱动必须经
+   `session_bridge.py`(`schtasks /run /I` 落到交互会话)。
+2. **事件窗会把游戏按暂停,`install` 只认 `IN_GAME_RUNNING`**:本发第一次经 bridge 跑时读到
+   `IN_GAME_PAUSED_CLEAN`(exit 2,同样不算读数);用桌面通道(`win-desktop` `Shortcut "enter"` 答掉
+   默认选项)恢复运行后立刻重打才通过。**这不是 `--allow-window` 的用途** —— 那一档只给「状态机与
+   屏幕矛盾且人当场确认」。
