@@ -58,6 +58,14 @@
 | `chokepoint_scores.py` | 只读边表,算 degree / Brandes betweenness / 割点 / 桥,输出按 `system_id` 升序的七列分数表;`--top N` 打前 N 行 | 已有边表、要给 C4 试点排交通要道时;`system_id` 是存档局部 id |
 | `chokepoints_emit.py` | 把七列分数表编译成 `src/dll/c2/chokepoint_table.zig` 的 787 项 `u16` 与 save sha;`--check` 是漂移围栏 | 分数表变了、或换存档后重新生成时;改了 TSV 不重生会让围栏红 |
 | `c5_variable_probe.py` | 解 `.sav`、读 `gamestate`,从 `galactic_object` 每个系统块的 `variables={}` 里取一个变量的值(`--name`),或数带某个 star flag 的系统(`--flag`,`--all` 打全量 id) | C5-WRITE/SCORE 判据:窗口后对存档逐项验值/验 flag;数值是 1e-5 定点,id 是存档局部 id |
+| `graph_fixture_emit.py` | 把 `save_hypergraph.py` 的边表 + `chokepoint_scores.py` 的七列表编译成 `src/dll/c2/graph_fixture.zig`(787 系统 / 1,217 边 + 三个 `expected_*` 数组);`--check` 是漂移围栏(退出 1) | 边表或分数表变了、或换存档后重生成时;改了 TSV 不重生会让 `just graph-fixture-check` 红 |
+
+**Zig 侧(图运行时,全部离线、零 shot)**:`src/dll/c2/graph_fixture.zig` 是上面生成器的产物(数据,
+不手改);`src/dll/c2/chokepoint_dynamic.zig` 是纯函数度量(CSR + Brandes + Tarjan),`c2_tests.zig` 里
+**7** 条 `chokepoint_dynamic:` 围栏(含「synthetic fixture matches the offline scores」= 787/787 × 三数组全等);
+`src/dll/c2/galaxy_graph.zig` 是只读读图器(只经注入的 `Memory.read`,文件里零 `@ptrFromInt`),
+**11** 条 `galaxy_graph:` 合成镜像围栏(16 B 记录步长、稀疏 id 经表解析、无跨调用缓存、越界计数不遍历)。
+合计 **18** 条命名测试。判决词与三条「不能说」见 `evidence/analysis/runtime_444_graph_runtime.md` §3。
 
 ## 实机注入通道：C1（已完成）
 
