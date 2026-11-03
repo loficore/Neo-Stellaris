@@ -15,6 +15,9 @@ create)、factory 反汇编到第一个 `ret` 得到的 vtable、以及 vtable �
 **只有与计划期 Expected 表逐项核对通过时才落盘**:任一不等 → `exit 1`、不写文件,避免从一次
 失败的探针里产出一份好看的证据表。
 
+失败路径一律 **fail-closed**:推导不出 vtable(ProbeError)、Expected 表缺条目(ProbeError)、
+交叉核对不等 —— 三种情况都走 stderr + `exit 1`,**绝不写出半份证据文件**。
+
 vtable 判定口径(为什么不是简报里那句字面启发式):
     简报写的是「`lea rax,[rip+X]` 后紧跟 `mov [rbx],rax`」。字面照搬会**错两处**,
     这两处都记录在 Task 1 报告里:
@@ -32,6 +35,7 @@ exe 路径走 `disrva.resolve_exe()` 的候选链(`NS_STELLARIS_EXE` 优先),不
 """
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import re
 import struct
@@ -46,6 +50,24 @@ BASE = disrva.BASE
 OPERATOR_NEW_RVA = 0x2185218
 SLOT_OFFSETS = (0x20, 0x28, 0x48, 0x80)
 DISASM_WINDOW = 0x400  # 每条 factory 取这么多字节,遇到第一个 ret 停
+
+# exe 的版本标签是**人工维护**的常量:exe 里没有可直接读出的版本串,本探针也不从
+# 命令行/环境里读版本(那样会把「这次读的是哪个拷贝」变成隐式输入)。它是写进
+# `--emit-c` 头部的文献标签,不是从镜像字节推导出来的读数。
+GAME_VERSION = "4.4.4"
+
+
+class ProbeError(RuntimeError):
+    """探针自身推导失败(推导不出 vtable / Expected 表缺条目)。"""
+
+
+def _file_sha256(path: pathlib.Path) -> str:
+    """按 1 MiB 分块流式算 sha256(不把整个 exe 读进内存)。"""
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 CASES = [
     ("add_hyperlane",        0x260D4E0),
@@ -130,8 +152,12 @@ def _object_registers(insns) -> list[str]:
     return regs
 
 
-def _find_vtable(insns, obj_regs) -> tuple[int | None, list[tuple[int, int]]]:
-    """对象寄存器偏移 0 上**最后**一次 `lea rax,[rip+X]; mov [reg],rax` 的 X。"""
+def _find_vtable(insns, obj_regs, keyword: str) -> tuple[int, list[tuple[int, int]]]:
+    """对象寄存器偏移 0 上**最后**一次 `lea rax,[rip+X]; mov [reg],rax` 的 X。
+
+    推导不出(该 factory 里没有对象寄存器偏移 0 的 vtable 写入)时抛 `ProbeError`
+    并点名 keyword —— 直接退出,不写任何文件。
+    """
     pairs = []
     for i, (ins, _n) in enumerate(insns):
         if ins.mnemonic != "lea" or not ins.op_str.startswith("rax, [rip"):
@@ -151,7 +177,10 @@ def _find_vtable(insns, obj_regs) -> tuple[int | None, list[tuple[int, int]]]:
         target = ins.address + ins.size + int(m.group(1), 16) - BASE
         pairs.append((target, ins.address - BASE))
     if not pairs:
-        return None, pairs
+        raise ProbeError(
+            f"{keyword}: factory 里找不到对象寄存器"
+            f"({', '.join(obj_regs) or '-'})偏移 0 的 vtable 写入"
+            f"(`lea rax,[rip+X]; mov [reg],rax`)—— 推导不出 vtable")
     return pairs[-1][0], pairs
 
 
@@ -173,18 +202,17 @@ def analyse() -> list[dict]:
         factory = _qword(ci + 8)
         insns = _disasm_to_ret(factory)
         obj_regs = _object_registers(insns)
-        vtable, pairs = _find_vtable(insns, obj_regs)
+        vtable, pairs = _find_vtable(insns, obj_regs, keyword)
         slots = {}
-        if vtable is not None:
-            for off in SLOT_OFFSETS:
-                target = _qword(vtable + off)
-                slots[off] = {"rva": target, "sec": _section(target),
-                              "thunk": _direct_target(target)}
+        for off in SLOT_OFFSETS:
+            target = _qword(vtable + off)
+            slots[off] = {"rva": target, "sec": _section(target),
+                          "thunk": _direct_target(target)}
         rows.append({
             "keyword": keyword, "class_info": ci, "ci_sec": _section(ci),
             "deleter": deleter, "factory": factory,
             "factory_sec": _section(factory), "obj_regs": obj_regs,
-            "vtable": vtable, "vtable_sec": _section(vtable) if vtable else "?",
+            "vtable": vtable, "vtable_sec": _section(vtable),
             "vtable_pairs": pairs, "insns": insns, "slots": slots,
         })
     return rows
@@ -201,7 +229,7 @@ def print_table(rows) -> None:
             s = r["slots"].get(off)
             cells.append(f"0x{s['rva']:x}" if s else "-")
         print(f"{r['keyword']:<22} 0x{r['class_info']:x}  0x{r['factory']:x}   "
-              f"{('0x%x' % r['vtable']) if r['vtable'] is not None else '-':<10} "
+              f"{'0x%x' % r['vtable']:<10} "
               + " ".join(f"{c:<10}" for c in cells))
     print()
     for r in rows:
@@ -238,13 +266,16 @@ def print_check(rows) -> bool:
 
 
 def render_c(rows) -> str:
-    exe = disrva.resolve_exe()
-    size = pathlib.Path(exe).stat().st_size
+    exe = pathlib.Path(disrva.resolve_exe())
+    size = exe.stat().st_size
+    sha256 = _file_sha256(exe)
     lines = [
         "; graph_keywords_4_4_4.c — 图相关 keyword 的「执行体/求值槽」锚点表(Task 1,零 shot 静态 RE)",
         ";",
-        "; exe        : stellaris.exe 4.4.4 (46,253,688 bytes; sha256",
-        ";              9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56)",
+        f"; exe        : stellaris.exe {GAME_VERSION} ({size:,} bytes; sha256",
+        f";              {sha256})",
+        "; 版本        : GAME_VERSION 常量人工维护(**不从 exe 字节里读版本串**);exe 大小与",
+        ";             sha256 是本次实际读取的文件算出来的(1 MiB 分块流式 sha256)。",
         "; image base : 0x140000000 (ASLR on) —— 下表中每个数都是 module-base-relative RVA",
         "; exe path   : 走 disrva.resolve_exe() 候选链(NS_STELLARIS_EXE 优先)",
         ";",
@@ -252,9 +283,8 @@ def render_c(rows) -> str:
         ";   python3 scripts/scratch/2026-11_graph_runtime/graph_keyword_bodies.py \\",
         ";       --emit-c evidence/disasm/graph_keywords_4_4_4.c",
         ";",
-        "; 校验(简报 Step 4 的原命令;这一行里的 0x1A92450 是命令的模式串本身,",
-        ";       数据行按本仓库约定一律写小写 0x1a92450):",
-        ";   grep -E \"add_hyperlane|0x1874540|0x1A92450\" evidence/disasm/graph_keywords_4_4_4.c",
+        "; 校验(简报 Step 4 的原命令):",
+        ";   grep -E \"add_hyperlane|0x1874540|0x1a92450\" evidence/disasm/graph_keywords_4_4_4.c",
         ";",
         "; 口径:class_info 是 .rdata 里 16 B 的记录 {+0x00 deleter, +0x08 factory/create}。",
         "; factory 反汇编到第一个 ret;vtable = factory 对**对象寄存器**(call operator_new",
@@ -272,15 +302,18 @@ def render_c(rows) -> str:
         for off in SLOT_OFFSETS:
             s = r["slots"].get(off)
             cells.append(f"0x{s['rva']:x}" if s else "-")
-        vt = f"0x{r['vtable']:x}" if r["vtable"] is not None else "-"
         lines.append(f"; {r['keyword']:<22} 0x{r['class_info']:x}  0x{r['factory']:x}   "
-                     f"{vt:<10} " + " ".join(f"{c:<10}" for c in cells))
+                     f"{'0x%x' % r['vtable']:<10} " + " ".join(f"{c:<10}" for c in cells))
     lines.append(";")
     lines.append("; 执行/求值槽(简报 Expected 表点名的那些;**值全部由上面的读数格式化**,"
                  "不是手写常量):")
     for r in rows:
         parts = []
-        for off in sorted(EXPECTED[r["keyword"]]["slots"]):
+        exp = EXPECTED.get(r["keyword"])
+        if exp is None:
+            # fail-closed:Expected 表是这份证据的骨架,缺一条就整份不写。
+            raise ProbeError(f"Expected 表里没有 {r['keyword']!r} 的条目 —— 拒绝落盘")
+        for off in sorted(exp["slots"]):
             s = r["slots"].get(off)
             if s is None:
                 parts.append(f"+0x{off:02x} = -")
@@ -300,17 +333,15 @@ def render_c(rows) -> str:
         lines.append(f"; {r['keyword']}  (class_info 0x{r['class_info']:x} @ {r['ci_sec']})")
         lines.append(f";   +0x00 deleter = 0x{r['deleter']:x} @ {_section(r['deleter'])}")
         lines.append(f";   +0x08 factory = 0x{r['factory']:x} @ {r['factory_sec']}")
-        lines.append(f";   vtable        = "
-                     f"{('0x%x' % r['vtable']) if r['vtable'] is not None else '-'} @ {r['vtable_sec']}"
+        lines.append(f";   vtable        = 0x{r['vtable']:x} @ {r['vtable_sec']}"
                      f"  (对象寄存器 {', '.join(r['obj_regs']) or '-'})")
-        if r["vtable"] is not None:
-            for off in SLOT_OFFSETS:
-                s = r["slots"][off]
-                thunk = f"  (thunk -> 0x{s['thunk']:x})" if s["thunk"] is not None else ""
-                lines.append(f";     vtable+0x{off:02x} = 0x{s['rva']:x} @ {s['sec']}{thunk}")
-            extra = [p for p in r["vtable_pairs"][:-1]]
-            for target, site in extra:
-                lines.append(f";     (被覆盖的 vtable 候选:较前写于 0x{site:x} -> 0x{target:x})")
+        for off in SLOT_OFFSETS:
+            s = r["slots"][off]
+            thunk = f"  (thunk -> 0x{s['thunk']:x})" if s["thunk"] is not None else ""
+            lines.append(f";     vtable+0x{off:02x} = 0x{s['rva']:x} @ {s['sec']}{thunk}")
+        extra = [p for p in r["vtable_pairs"][:-1]]
+        for target, site in extra:
+            lines.append(f";     (被覆盖的 vtable 候选:较前写于 0x{site:x} -> 0x{target:x})")
         lines.append(f"; factory 0x{r['factory']:x} 反汇编到第一个 ret:")
         for ins, note in r["insns"]:
             lines.append(f"  {ins.address - BASE:08x}  {ins.mnemonic:<7} {ins.op_str}{note}")
@@ -339,7 +370,12 @@ def main(argv: list[str]) -> int:
         return 2
 
     print(f"exe = {disrva.resolve_exe()}")
-    rows = analyse()
+    try:
+        rows = analyse()
+    except ProbeError as exc:
+        # fail-closed:推导失败 —— 不落盘、不出半份表。
+        print(f"[graph_keyword_bodies] 推导失败: {exc}", file=sys.stderr)
+        return 1
     print_table(rows)
     ok = print_check(rows)
 
@@ -348,9 +384,14 @@ def main(argv: list[str]) -> int:
             # 交叉校验没过 —— 绝不落盘:否则一份「好看」的证据文件会来自一次失败的探针。
             print("[emit-c] 交叉校验失败 —— 拒绝落盘(不写文件)", file=sys.stderr)
             return 1
+        try:
+            text = render_c(rows)
+        except ProbeError as exc:
+            print(f"[emit-c] 生成失败 —— 拒绝落盘(不写文件): {exc}", file=sys.stderr)
+            return 1
         out = pathlib.Path(emit_c)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(render_c(rows), encoding="utf-8")
+        out.write_text(text, encoding="utf-8")
         print(f"[emit-c] 写入 {out} ({out.stat().st_size} bytes)")
     return 0 if ok else 1
 

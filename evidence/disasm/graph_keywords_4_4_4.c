@@ -2,6 +2,8 @@
 ;
 ; exe        : stellaris.exe 4.4.4 (46,253,688 bytes; sha256
 ;              9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56)
+; 版本        : GAME_VERSION 常量人工维护(**不从 exe 字节里读版本串**);exe 大小与
+;             sha256 是本次实际读取的文件算出来的(1 MiB 分块流式 sha256)。
 ; image base : 0x140000000 (ASLR on) —— 下表中每个数都是 module-base-relative RVA
 ; exe path   : 走 disrva.resolve_exe() 候选链(NS_STELLARIS_EXE 优先)
 ;
@@ -9,9 +11,8 @@
 ;   python3 scripts/scratch/2026-11_graph_runtime/graph_keyword_bodies.py \
 ;       --emit-c evidence/disasm/graph_keywords_4_4_4.c
 ;
-; 校验(简报 Step 4 的原命令;这一行里的 0x1A92450 是命令的模式串本身,
-;       数据行按本仓库约定一律写小写 0x1a92450):
-;   grep -E "add_hyperlane|0x1874540|0x1A92450" evidence/disasm/graph_keywords_4_4_4.c
+; 校验(简报 Step 4 的原命令):
+;   grep -E "add_hyperlane|0x1874540|0x1a92450" evidence/disasm/graph_keywords_4_4_4.c
 ;
 ; 口径:class_info 是 .rdata 里 16 B 的记录 {+0x00 deleter, +0x08 factory/create}。
 ; factory 反汇编到第一个 ret;vtable = factory 对**对象寄存器**(call operator_new
