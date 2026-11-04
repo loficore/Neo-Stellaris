@@ -380,7 +380,8 @@ def main(argv=None) -> int:
     if args.uninstall:
         return uninstall(args.dll)
     return boot(args.dll, timeout_s=args.timeout_s, allow_window=args.allow_window,
-                rule=args.rule, act=args.act, launch_exe=args.launch,
+                rule=args.rule, act=args.act, score_source=args.score_source,
+                launch_exe=args.launch,
                 launch_args=args.launch_args, settle_s=args.settle_s)
 
 
