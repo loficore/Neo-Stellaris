@@ -56,21 +56,47 @@ def test_tier_counts_is_the_name_less_path_and_says_so():
     assert "T2=1" in detail and "T1=1" in detail and "T0=1" in detail
 
 
-def test_a_coverage_gap_is_partial_not_a_disagreement():
-    """The engine log only carries the systems whose name it could print.
+def test_a_coverage_gap_is_partial_and_counts_every_deficit():
+    """The engine logs only the systems whose name it could print.
 
-    Measured 2026-11-04: 788 systems run the effect every month, 785 emit a
-    receipt.  Three systems per month produce no line at all, so the host side
-    always has three more systems than the engine side.  That is a coverage
-    difference, not a tier disagreement — calling it `tiers_disagree` would trip
-    the plan's stop rule on an instrument gap.
+    Measured 2026-11-04: 788 systems run the effect every month, 784-785 emit a
+    receipt (3 systems have no printable name, and one display name is shared by
+    two systems, so the name-keyed map collapses it).  Coverage can only *lose*
+    systems, so a window where the engine reports more systems in a tier than
+    the host has is impossible — that is the falsifier below.
     """
     live = {"甲": "T2", "乙": "T0"}
-    host = {1: "T2", 2: "T0", 3: "T0"}
+    host = {1: "T2", 2: "T0", 3: "T0", 4: "T0"}
     verdict, detail = mod.compare_counts(live, host)
     assert verdict == "tiers_partial"
-    assert "coverage" in detail
-    assert "live=2" in detail and "host=3" in detail
+    assert "gap 2" in detail
+    assert "T0" in detail
+
+
+def test_coverage_can_only_remove_systems_so_a_higher_live_tier_is_a_disagreement():
+    """The reachable failure: the engine put a system in a tier the host did not.
+
+    Without this branch the driver could never emit `tiers_disagree` (the
+    receipts never cover every system) and its exit code would mean nothing.
+    """
+    live = {"甲": "T2", "乙": "T0", "丙": "T0"}
+    host = {1: "T0", 2: "T0", 3: "T0", 4: "T0"}
+    verdict, detail = mod.compare_counts(live, host)
+    assert verdict == "tiers_disagree"
+    assert "T2" in detail
+
+
+def test_the_counts_path_can_disagree_even_with_equal_totals():
+    live = {"甲": "T2", "乙": "T0"}
+    host = {1: "T0", 2: "T0"}
+    verdict, detail = mod.compare_counts(live, host)
+    assert verdict == "tiers_disagree"
+    assert "T2" in detail
+
+
+def test_more_live_systems_than_the_host_has_is_an_instrument_problem():
+    verdict, _ = mod.compare_counts({"甲": "T2", "乙": "T0"}, {1: "T2"})
+    assert verdict == "tiers_partial"
 
 
 def test_tier_counts_disagree_when_the_distribution_moves():
@@ -144,4 +170,39 @@ def test_the_cli_is_exit_0_unless_a_disagreement_was_recorded(tmp_path):
                    "--scores-dir", str(scores_dir)])
     # no name map ⇒ counts path; two systems, two edges of one node ⇒ whatever the
     # tiers are, the run must produce a verdict line and a defined exit code.
+    assert rc in (0, 1)
+
+
+def _run_cli(tmp_path, windows_doc, argv_extra=()):
+    log = tmp_path / "game.log"
+    log.write_text("NEO_T2 甲\n", encoding="utf-8")
+    edges = tmp_path / "e.tsv"
+    edges.write_text("1\t2\t1\n", encoding="utf-8")
+    windows = tmp_path / "w.json"
+    windows.write_text(json.dumps(windows_doc), encoding="utf-8")
+    scores_dir = tmp_path / "scores"
+    scores_dir.mkdir(exist_ok=True)
+    return mod.main(["--log", str(log), "--windows", str(windows),
+                     "--edges-base", str(edges), "--edges-add", str(edges),
+                     "--scores-dir", str(scores_dir), *argv_extra])
+
+
+def test_a_third_window_without_its_own_snapshot_is_refused(tmp_path):
+    """`base / add / remove` is the shot's documented shape; mapping the third
+    window to the *add* snapshot would score the removal against a graph that
+    no longer exists and invent a disagreement."""
+    with pytest.raises(SystemExit) as exc:
+        _run_cli(tmp_path, [{"name": "base", "start": 0, "end": 5},
+                            {"name": "add", "start": 5, "end": 10},
+                            {"name": "remove", "start": 10, "end": 15}])
+    assert exc.value.code == 2
+
+
+def test_a_window_may_name_its_own_edge_snapshot(tmp_path):
+    edges = tmp_path / "own.tsv"
+    edges.write_text("1\t2\t1\n", encoding="utf-8")
+    rc = _run_cli(tmp_path, [{"name": "base", "start": 0, "end": 5},
+                             {"name": "add", "start": 5, "end": 10},
+                             {"name": "remove", "start": 10, "end": 15,
+                              "edges": str(edges)}])
     assert rc in (0, 1)

@@ -115,6 +115,18 @@ test "graph_trigger: the same edge set hashes the same twice" {
     try std.testing.expectEqual(gt.hashEdges(&rows), gt.hashEdges(&rows));
 }
 
+test "graph_trigger: the edge hash does not depend on the order rows arrive in" {
+    // `graph_probe.rows()` returns the container in slot-enumeration order; a
+    // neighbour list rewritten by the engine (add one edge, remove it) can
+    // enumerate the SAME set in a different order.  A hash over the sequence
+    // would then report "the graph changed" on an identical edge set.
+    const forward = [_]Edge{ .{ .a = 1, .b = 2 }, .{ .a = 3, .b = 4 }, .{ .a = 5, .b = 9 } };
+    const reversed = [_]Edge{ .{ .a = 5, .b = 9 }, .{ .a = 3, .b = 4 }, .{ .a = 1, .b = 2 } };
+    const shuffled = [_]Edge{ .{ .a = 3, .b = 4 }, .{ .a = 5, .b = 9 }, .{ .a = 1, .b = 2 } };
+    try std.testing.expectEqual(gt.hashEdges(&forward), gt.hashEdges(&reversed));
+    try std.testing.expectEqual(gt.hashEdges(&forward), gt.hashEdges(&shuffled));
+}
+
 test "graph_trigger: the edge hash is undirected, so (a,b) equals (b,a)" {
     const ab = [_]Edge{.{ .a = 5, .b = 9 }};
     const ba = [_]Edge{.{ .a = 9, .b = 5 }};

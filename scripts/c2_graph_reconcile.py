@@ -99,28 +99,49 @@ def compare_tiers(live, host, *, appeared=frozenset(), vanished=frozenset()):
 def compare_counts(live, host):
     """``(verdict, detail)`` when there is no id↔name map: tier counts only.
 
-    Equal counts are consistent with the engine's per-system tiers, and differ
-    only if the two sides disagree about how many systems sit in a tier.  They
-    cannot catch two systems swapping tiers — that limitation is in the verdict
-    string so a reader never mistakes this for the per-name check.
+    Coverage can only *lose* systems: the engine emits a receipt only for
+    systems whose name it could print, and the name-keyed map collapses a shared
+    display name (both measured 2026-11-04).  So the honest check is one-sided —
+    the host may have **more** systems in a tier, never fewer:
+
+    * ``host[t] < live[t]`` for any tier ⇒ ``tiers_disagree``.  This is the
+      reachable failure mode, and the one that matters: if the engine scored a
+      system into a tier the independent recompute does not put it in, the gap
+      has to show up as a surplus on the engine's side (the totals are pinned by
+      the same systems, so it cannot hide).
+    * totals equal and every tier equal ⇒ ``tiers_counts``.
+    * otherwise ⇒ ``tiers_partial``, with the per-tier deficits written out so
+      the reader sees exactly how much coverage is missing where.
+
+    It is still not the per-name check: equal counts cannot see two systems swap
+    the same tier.  That limitation is in the verdict string.
     """
     if not live or not host:
         return "tiers_partial", f"window empty (live={len(live)} host={len(host)})"
     lc, hc = tier_counts(live), tier_counts(host)
     table = " ".join(f"{t}: live={lc.get(t, 0)} host={hc.get(t, 0)}" for t in TIERS)
     live_n, host_n = sum(lc.values()), sum(hc.values())
-    if live_n != host_n:
-        # The engine's receipt only exists for systems whose name it could
-        # print (measured 2026-11-04: 788 systems run, 785 emit a line), so the
-        # host side legitimately has more systems.  A coverage gap is not a
-        # disagreement about a tier.
+    gap = host_n - live_n
+    if gap < 0:
+        # The engine logged more systems than the host has: the two sides are
+        # not even looking at the same graph, so no tier verdict is meaningful.
         return "tiers_partial", (
-            f"coverage differs: live={live_n} host={host_n} — {table}")
-    if lc == hc:
-        return "tiers_counts", (
-            "tiers_counts (no name map): " +
-            " ".join(f"{t}={lc.get(t, 0)}" for t in TIERS))
-    return "tiers_disagree", "counts differ (no name map): " + table
+            f"live has more systems than host ({-gap}) — {table}")
+    surplus = [t for t in TIERS if lc.get(t, 0) > hc.get(t, 0)]
+    if surplus:
+        return "tiers_disagree", (
+            f"engine reports more systems than the host in {surplus} "
+            f"(coverage can only remove) — {table}")
+    if gap == 0:
+        if lc == hc:
+            return "tiers_counts", (
+                "tiers_counts (no name map): " +
+                " ".join(f"{t}={lc.get(t, 0)}" for t in TIERS))
+        return "tiers_disagree", "counts differ (no name map): " + table
+    deficits = " ".join(f"{t}={hc.get(t, 0) - lc.get(t, 0)}" for t in TIERS)
+    return "tiers_partial", (
+        f"gap {gap} (no receipt: no printable name / shared display name), "
+        f"deficits {deficits} — {table}")
 
 
 def tier_of(score: int) -> str:
@@ -144,8 +165,11 @@ def windows_from_json(path) -> list[dict]:
                 raise ValueError(f"window entry missing {key!r}: {item!r}")
         if int(item["end"]) < int(item["start"]):
             raise ValueError(f"window {item['name']!r}: end < start")
-        out.append({"name": str(item["name"]), "start": int(item["start"]),
-                    "end": int(item["end"])})
+        entry = {"name": str(item["name"]), "start": int(item["start"]),
+                 "end": int(item["end"])}
+        if "edges" in item:
+            entry["edges"] = str(item["edges"])
+        out.append(entry)
     return out
 
 
@@ -197,10 +221,23 @@ def main(argv=None) -> int:
     name_map = read_name_map(args.name_map) if args.name_map else None
 
     lines = []
-    for window in windows:
+    for index, window in enumerate(windows):
         text = window_text(data, window)
         live = parse_tiers(text)
-        edges = args.edges_base if window["name"] == windows[0]["name"] else args.edges_add
+        edges = window.get("edges")
+        if edges is None:
+            if index == 0:
+                edges = args.edges_base
+            elif index == 1:
+                edges = args.edges_add
+            else:
+                # `base / add / remove` is the shot's documented shape.  Mapping
+                # a third window onto the *add* snapshot would score the removal
+                # against a graph that no longer exists and invent a verdict, so
+                # the window has to name its own snapshot.
+                print(f"window {window['name']!r} (#{index + 1}) has no \"edges\" entry: "
+                      "give it one, or pass only the base/add windows", file=sys.stderr)
+                raise SystemExit(2)
         scores_path = pathlib.Path(args.scores_dir) / f"{window['name']}.scores.tsv"
         rc = cs.main([str(edges), "--out", str(scores_path)])
         if rc != 0:

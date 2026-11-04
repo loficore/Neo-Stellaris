@@ -171,6 +171,9 @@ pub const EDGE_HASH_PRIME: u64 = 0x100000001b3;
 /// 空边集(读成功、零条边)的哈希。**不是 0** —— 0 是"没读到"的哨兵。
 pub const EMPTY_EDGE_HASH: u64 = EDGE_HASH_OFFSET;
 
+/// 排序暂存(见 `hashEdges`)。大小与读图器的边表上限同一个常量。
+var hash_scratch: [graph_probe.MAX_EDGES]u32 = undefined;
+
 /// 一条边的规范词 `min<<16 | max`:无向图里 `(a,b)` 与 `(b,a)` 是同一条边。
 pub fn edgeWord(a: u16, b: u16) u32 {
     const lo: u32 = @min(a, b);
@@ -189,10 +192,19 @@ fn absorbWord(acc: u64, word: u32) u64 {
     return h;
 }
 
-/// 边集哈希。行必须来自同一趟读(调用方保证);`(min,max)` 归一化让顺序无关。
+/// 边集哈希。行必须来自同一趟读(调用方保证);`(min,max)` 归一化让方向无关,
+/// **排序**让枚举顺序无关 —— `graph_probe.rows()` 给的是容器的槽枚举顺序,引擎改过
+/// 邻居表之后同一张图可以换顺序枚举出来(否则"加一条再删一条"会让哈希假报变化)。
+///
+/// 暂存是模块级静态:边数上限与读图器同一个常量,所以不存在"装不下"的输入;
+/// 调用方与 `liveScore` 同线程(单写者),与 `live_scores` 等静态缓冲同一条纪律。
 pub fn hashEdges(rows: []const Edge) u64 {
+    const n = @min(rows.len, hash_scratch.len);
+    for (rows[0..n], 0..) |e, i| hash_scratch[i] = edgeWord(e.a, e.b);
+    const words = hash_scratch[0..n];
+    std.mem.sort(u32, words, {}, std.sort.asc(u32));
     var h = EDGE_HASH_OFFSET;
-    for (rows) |e| h = absorbWord(h, edgeWord(e.a, e.b));
+    for (words) |word| h = absorbWord(h, word);
     return h;
 }
 
