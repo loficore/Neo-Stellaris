@@ -2130,7 +2130,7 @@ RPC 只调 `ExecHookLayout` / `ExecHookHistogram` 两个导出(`scripts/execspy.
 5. **包着它跑的那个 `.cmd` 必须是纯 ASCII**。2026-10-28 的第一次复采就是死在包装上:10-27 备好的
    `census_run.cmd` 带 UTF-8 中文 `rem` 行,cp936 的 `cmd.exe` 把那些字节当命令执行
    (`'…顺序纪律…docs' 不是内部或外部命令`),python 一次都没起来。用 `census_run_ascii.cmd`;
-   这与 `session_bridge.shim_text()` 里 `text.encode("ascii")` 挡的是同一个失败,只是那份 `.cmd` 没走那个函数。
+   这与 `session_bridge.vbs_text()` 里 `text.encode("ascii")` 挡的是同一个失败,只是那份 `.cmd` 没走那个函数。
 
 **通道与时序**:本工具**不需要** `session_bridge`(它只 attach 进程,不读窗口)。时序是**三方**的:
 人(或 `just game`)先 `pause` 给静默窗 → 驱动装 → 驱动打印 `RESUME THE GAME NOW` → 人 `unpause` →
@@ -2377,6 +2377,10 @@ just win "python C:/temp/ns_world.py pull"     # 把 C:/temp/ns_world.jsonl 拉�
    星图 `gold_px 5737..5755 / rows 12..13 / options 8`,真事件窗 `gold_px 2108..2337 / rows 4..5 /
    options 0`;#31 自己那组(2160x1440)恰好相反(窗 1847、星图 1314)⇒ **任何单一指标/单调阈值都
    分不开两种分辨率**,所以**没有**加 `choice_no_bbox` 这一档(计划停止规则 2)。
+
+**状态含义的边界**:`IN_GAME_PAUSED_CLEAN` 的 `reason` 现在写「no window (instrument-visible
+only)」—— 它只说**仪器没看见窗**,不说屏幕上没有窗(带外的 modal 与洁净星盘在带内同形)。下游任何判据
+都不许把它当成「屏幕是干净的」的证据。
 
 **这条修正修的是假阳性,不是 #31 的盲区。** 实测那个 `diplomatic.14` 窗的选项行落在
 `y≈0.95h` —— 在 `read_window` 采样的 `0.15h..0.85h` 之外,带宽内**没有任何**信号能把它与星图分开

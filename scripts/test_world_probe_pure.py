@@ -128,3 +128,14 @@ def test_the_probe_classifies_at_the_reference_size():
 
     assert verdict("starmap_1440x960_1") == "none"
     assert verdict("event_first_contact_2160x1440") in ("dialog", "choice")
+
+
+def test_option_count_is_the_number_the_daemon_clicks_among():
+    """One N, not two: the daemon publishes ``len(rows)`` for ``option_count``
+    and ``choose_row`` picks among **all** of them, so a second "option row"
+    notion inside the probe was a silent unit mismatch (issue #31 diagnosed the
+    same drift in the other direction, between the probe and the classifier).
+    """
+    rows = [{"x0": 100, "x1": 200}, {"x0": 1849, "x1": 1943}]
+    assert world_probe.option_count_from_rows(rows) == 2
+    assert world_probe.option_count_from_rows([]) == 0

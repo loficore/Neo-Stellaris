@@ -137,21 +137,20 @@ def window_kind_from_rows(rows, bbox, gold) -> str:
 
 
 def option_count_from_rows(rows) -> int:
-    """How many option rows the classifier saw — the N of spec §5.
+    """The N of spec §5: how many rows the tick offers to choose among.
 
-    The row thresholds are **reused**, not copied: the same
-    ``CHOICE_ROW_LEFT_MIN`` / ``CHOICE_ROW_RIGHT_MIN`` that decide
-    ``classify_window`` decide which rows count as options.  Two notions of
-    "an option row" would drift, and the drift would only show up as a
-    ``WINDOW_EVENT`` whose N is not the N the classifier used.
+    Deliberately **the same number the daemon publishes** --
+    ``state["probe"]["window"]["option_count"] = len(nrows)`` in ``serve`` -- and
+    the same set ``choose_row`` picks from.  The probe used to count only the
+    rows that satisfy the right-column rule (``CHOICE_ROW_LEFT_MIN`` /
+    ``CHOICE_ROW_RIGHT_MIN``), i.e. the rows that would make it a ``choice``;
+    that is a *different* question, and two quantities under one name is exactly
+    the drift issue #31 had to untangle between the probe and the classifier.
 
     ``rows`` is the **normalised** geometry (``_norm_geometry``'s output) —
-    the same rows ``classify_window`` is given.
+    the rows ``classify_window`` and ``choose_row`` are given.
     """
-    from game_supervisor import CHOICE_ROW_LEFT_MIN, CHOICE_ROW_RIGHT_MIN
-    return sum(1 for row in rows
-               if row.get("x0", 0) >= CHOICE_ROW_LEFT_MIN
-               and row.get("x1", 0) >= CHOICE_ROW_RIGHT_MIN)
+    return len(rows)
 
 
 def probe(hwnd: int, pid: int) -> dict:
