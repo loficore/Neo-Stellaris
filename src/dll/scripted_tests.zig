@@ -33,9 +33,15 @@ test {
 
 const gt = graph_trigger;
 
-test "graph_trigger: the fingerprint is a count sum, order independent, empty is zero" {
+test "graph_trigger: the fingerprint is position sensitive, so a degree migration is visible" {
+    // 空切片仍是 0(0 保留给「这一趟没读到」)。
     try std.testing.expectEqual(@as(u64, 0), gt.fingerprint(&[_]u32{}));
-    try std.testing.expectEqual(gt.fingerprint(&[_]u32{ 3, 0, 4 }), gt.fingerprint(&[_]u32{ 3, 4, 0 }));
+    // 同一张图两次 ⇒ 同一个指纹(确定性,缓存才可能命中)。
+    try std.testing.expectEqual(gt.fingerprint(&[_]u32{ 3, 0, 4 }), gt.fingerprint(&[_]u32{ 3, 0, 4 }));
+    // 度在槽之间迁移:总和同为 7,分布不同 ⇒ 必须不同。旧的「求和」实现会漏掉这一类
+    // (issue #46 的表:同一窗口里 A 少一条、B 多一条)。
+    try std.testing.expect(gt.fingerprint(&[_]u32{ 3, 0, 4 }) != gt.fingerprint(&[_]u32{ 3, 4, 0 }));
+    try std.testing.expect(gt.fingerprint(&[_]u32{ 2, 0 }) != gt.fingerprint(&[_]u32{ 1, 1 }));
     try std.testing.expect(gt.fingerprint(&[_]u32{ 1, 2 }) != gt.fingerprint(&[_]u32{ 1, 3 }));
 }
 
