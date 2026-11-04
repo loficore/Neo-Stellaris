@@ -1,0 +1,100 @@
+# C5 §7.7 逐系统分数对账 — 2026-11-04 (P1, Task 4)
+
+一次实机对账发(计划授权的 1 发)。判词 **`tiers_partial`**,不是 `tiers_disagree`:
+两个窗的档位分布在 `T1`/`T2` 上与主机侧逐项相等,差异全部落在**仪器覆盖**上,
+不是分数本身(下面「不能说」第 1、2 条)。
+
+## 这一发的事实
+
+| 项 | 值 |
+|---|---|
+| 时间 | 2026-11-04 15:49:57 启动,15:56:57 加边,15:57:48 删边,16:00 收尾(主机本地时) |
+| 进程 | pid 13948,`stellaris.exe`(T1:进程一出现就注入,`install_rc=0`,`alive=1`) |
+| DLL | `sqjs_p1.dll`,sha256 前缀 `8489161680706319`(P1 内容哈希那一版) |
+| 战役 | `--continuelastsave`,日志里覆盖 2264.8.1 – 2266.9.1(26 个月) |
+| 注入模式 | `--act write --score-source 1`(写 `neo_mark`/`neo_score`,分数来自活体重算) |
+| 引擎计数 | `calls=14184 matched=14184 writes=14184 score_writes=14184 score_skipped=0 skipped=0 installed=1` |
+| 内容哈希 | `hash_rc=16 neo_hash=46f76122d529552d neo_edges=1219`(C2NeoLiveHashInto,新增) |
+| 边集 | `sig.base` = 1219 边 / `sig.add` = 1220 边 / 删回后 1219(`C5Graph*` 只读快照) |
+| 卸载 | `UNINSTALL rc=0 verify=0 alive=1`(只拆 detour,不 `FreeLibrary`) |
+
+`neo_action` 的 mod 侧写法这一发修正过:`neo_action = yes` 在注入成功后会被解析器拒绝
+(`effect.cpp:437: Expected "neo_action = {", but got "neo_action = yes"`,15:50:11),
+改成 `neo_action = { }` 之后同一次战役里生效。修正后 `error.log` 里**没有任何**指向
+`events/neo_ps_probe_events.txt` 的行(检查命令见下)。
+
+## 两个窗(字节偏移来自当时的 game.log)
+
+```
+[
+ {"name": "base", "start": 2047858, "end": 2302727},   # 2265.4,加边之前
+ {"name": "add",  "start": 2302925, "end": 3322503}    # 2265.5-2265.8,加边之后
+]
+```
+
+驱动与判词(命令逐字):
+
+```
+python3 scripts/c2_graph_reconcile.py --log game.log --windows windows.json \
+    --edges-base sig.base --edges-add sig.add --scores-dir .
+```
+
+```
+window=base live=784 host=788 verdict=tiers_partial detail=coverage differs: live=784 host=788
+  — T0: live=715 host=718 T1: live=54 host=55 T2: live=15 host=15
+window=add live=784 host=788 verdict=tiers_partial detail=coverage differs: live=784 host=788
+  — T0: live=734 host=738 T1: live=35 host=35 T2: live=15 host=15
+```
+
+删边之后的窗(2265.9,手工核对,同一进程同一图):
+
+```
+engine  T0=715 T1=55 T2=15  (785 行)
+base    T0=718 T1=55 T2=15  (主机侧 788 个系统)
+```
+
+即**删回之后档位回到加边之前**,与 `sig.base` 的主机侧一致。
+
+## 结论(按计划 Step 5 的口径)
+
+1. `T2`(≥200)两个窗都是 15/15,**逐档相等**;`T1` 在加边窗 35/35 相等,在 base 窗
+   54/55 —— 少的那一个是**同名系统**(见下),不是分数不同。
+2. 加一条边 `(5,9)` 让 **20 个系统从 T1 落到 T0**(引擎侧计 19,主机侧计 20,差的 1 个
+   仍是同名/无回执那批),`T2` 一个没变。删回之后两侧同时回到基准值。
+3. 因此判词停在 `tiers_partial`,而不是 `tiers_disagree`:计划 Step 5 的停止条件没有触发,
+   但也**没有**拿到 `tiers_named`。
+
+## 三条「不能说」
+
+1. **不是逐名对账。** 引擎回执只有 `[This.GetName]`,仓库里没有 id↔名字的产物
+   (`save_hypergraph.py` 只出边表)。所以驱动走的是 `tiers_counts`:分布相等能证明两侧
+   在同一窗口里给出同样的档位结构,不能证明**同名系统各自**对得上。
+2. **同名星系真实存在。** 这一发的日志里 `常陈四` 出现两次(两个系统一个显示名),
+   `parse_tiers` 按名字去重后 785 行 → 784 个键。任何按名字的对账都必须在这一点上
+   声明歧义,否则会把同名当成"少了系统"。
+3. **每月有 3–4 个系统没有回执。** 788 个系统每月都跑到我们的 effect
+   (`calls` 每月 788),但只有 785 行 `NEO_T*`;哪些系统、为什么没有行,这一发没有定位。
+   覆盖差 3–4/788 是 `tiers_partial` 的唯一来源。
+
+## 复现(下一发要用时)
+
+```
+# 1) 启动 + T1 注入
+python C:/temp/session_bridge.py --timeout-s 280 C:/temp/c2_boot_inject.py C:/temp/sqjs_p1.dll \
+    --launch D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe \
+    --launch-args=--continuelastsave --allow-window --act write --score-source 1
+# 2) 让游戏跑起来(空格),每 12 s 一个月的爆发行可在 game.log 里看到
+# 3) 记窗口 → 加边 → 记窗口 → 删边
+python C:/temp/session_bridge.py C:/temp/ns_mutate.py add 5 9
+python C:/temp/session_bridge.py C:/temp/ns_graph_snapshot.py base C:/temp/sig.base
+# 4) 读回
+python C:/temp/session_bridge.py C:/temp/c2_boot_inject.py C:/temp/sqjs_p1.dll --stats
+# 5) 收尾
+python C:/temp/session_bridge.py C:/temp/c2_boot_inject.py C:/temp/sqjs_p1.dll --uninstall
+```
+
+`error.log` 的检查(修正 mod 之后应为空):
+
+```
+Select-String -Path "...\logs\error.log" -Pattern "neo_ps_probe|Unexpected token|Invalid scripted"
+```
