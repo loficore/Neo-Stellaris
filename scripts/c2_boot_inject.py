@@ -62,6 +62,8 @@ NEEDED = (
     "C2NeoInstall",
     "C2NeoSetRule",
     "C2NeoSetAct",
+    "C2NeoScoreSource",
+    "C2NeoLiveReset",
     "C2NeoUninstall",
     "C2NeoVerify",
     "C2NeoStatsInto",
@@ -189,7 +191,8 @@ def launch(exe_path: str, extra_args: str = "") -> int:
 
 
 def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
-         rule: str = "1:0", act: str = "log", launch_exe: str | None = None,
+         rule: str = "1:0", act: str = "log", score_source: int = 0,
+         launch_exe: str | None = None,
          launch_args: str = "", settle_s: float = DEFAULT_SETTLE_S) -> int:
     import c2_harness as harness
 
@@ -255,6 +258,11 @@ def boot(dll_path: str, *, timeout_s: float = 30.0, allow_window: bool = False,
         elif step == "arm_act":
             # C5-WRITE:`write` = 日志 + 系统变量;默认 `log` 保持 C5-ADD 的行为不变。
             harness.call_remote_with_arg(pid, base, exports["C2NeoSetAct"], pack_act(act))
+            if score_source:
+                # M5:`neo_score` 改由活体图算。先清缓存 —— 不清的话第一发会命中安装前的
+                # 旧指纹,把"没重算"读成"重算过了"。
+                harness.call_remote(pid, base, exports["C2NeoLiveReset"])
+                harness.call_remote_with_arg(pid, base, exports["C2NeoScoreSource"], score_source)
         else:
             harness.call_remote(pid, base, exports["C2NeoUninstall"])
 
@@ -340,6 +348,8 @@ def main(argv=None) -> int:
                         help="operator-declared premise: skip gate_install")
     parser.add_argument("--rule", default="1:0",
                         help="MOD:REM armed after install; 1:0 = every id, 0:0 = off")
+    parser.add_argument("--score-source", type=int, default=0, choices=(0, 1),
+                        help="neo_score 的来源:0 = 烘焙表(原行为),1 = 活体重算(M5)")
     parser.add_argument("--act", default="log", choices=("log", "write"),
                         help="log = 只写日志(C5-ADD);write = 日志 + 写 neo_mark 与 neo_score")
     parser.add_argument("--stats", action="store_true",
@@ -370,7 +380,8 @@ def main(argv=None) -> int:
     if args.uninstall:
         return uninstall(args.dll)
     return boot(args.dll, timeout_s=args.timeout_s, allow_window=args.allow_window,
-                rule=args.rule, act=args.act, launch_exe=args.launch,
+                rule=args.rule, act=args.act, score_source=args.score_source,
+                launch_exe=args.launch,
                 launch_args=args.launch_args, settle_s=args.settle_s)
 
 

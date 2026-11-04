@@ -137,3 +137,11 @@ def test_settle_default_waits_past_the_early_loader():
     """
     assert mod.DEFAULT_SETTLE_S >= 5.0
     assert mod.boot.__kwdefaults__["settle_s"] == mod.DEFAULT_SETTLE_S
+
+
+def test_the_cli_forwards_score_source_into_boot():
+    """M5: the flag has to reach `boot()` — a parsed-but-dropped argument is the failure
+    mode this fence exists for (it read 0 for two shots before anyone noticed)."""
+    import inspect
+    src = inspect.getsource(mod.main)
+    assert "score_source=args.score_source" in src.replace("\n", "").replace("  ", "")
