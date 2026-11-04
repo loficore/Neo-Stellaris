@@ -23,6 +23,24 @@ CLOSE_INSET = (96, 51)
 CENTRAL_X1 = (0.30, 0.70)
 OUTLINER_X0 = 0.70
 
+# Where an option row sits **vertically**, as a fraction of the window height.
+#
+# Measured 2026-11-04 on two real frames at 1440x960 (fixtures in
+# ``tests/fixtures/windows/``):
+#   * the first-contact window's options are at y = 0.55-0.63h;
+#   * a clean starmap's HUD is at 0.16-0.21h (fleet icons, top-left) and
+#     0.83-0.84h (map labels, bottom), and both land inside CENTRAL_X1.
+# Without a vertical gate the horizontal band alone counted the HUD as options,
+# so every clean campaign screen classified as ``dialog`` (a permanent false
+# positive on the install gate). The band is the discriminator; ``row_count``
+# is not (the starmap has more rows and more gold than the window).
+OPTION_Y0 = (0.45, 0.75)
+
+
+def in_option_band(row, h: int) -> bool:
+    """``True`` when the row's top edge is in the vertical option band."""
+    return OPTION_Y0[0] * h <= row.get("y0", 0) <= OPTION_Y0[1] * h
+
 
 def is_outliner_row(row, w: int) -> bool:
     """``True`` for a row that starts in the right-edge outliner band."""
@@ -30,18 +48,19 @@ def is_outliner_row(row, w: int) -> bool:
 
 
 def row_kind(rows, w: int, h: int) -> str:
-    """``"outliner" | "central" | "empty"`` by horizontal band, not by width.
+    """``"outliner" | "central" | "empty"`` by band, not by width.
 
     ``w``/``h`` are the window size (rows are absolute screen coordinates;
-    only the x fractions are used).  ``central`` needs at least two rows whose
-    right edge lands inside ``[0.30w, 0.70w]`` -- the first-contact window's
-    option circle and option text both do.  ``h`` is accepted for callers
-    that also scale vertically; the band itself is horizontal.
+    only the x/y fractions are used).  ``central`` needs at least two rows whose
+    right edge lands inside ``[0.30w, 0.70w]`` **and** whose top edge is in
+    ``OPTION_Y0`` — a golden HUD line at the top or bottom of the screen is not
+    an option, no matter where its right edge falls (2026-11-04 fixtures).
     """
     if not rows:
         return "empty"
     lo, hi = CENTRAL_X1[0] * w, CENTRAL_X1[1] * w
-    central = [r for r in rows if lo <= r.get("x1", 0) <= hi]
+    central = [r for r in rows
+               if lo <= r.get("x1", 0) <= hi and in_option_band(r, h)]
     if len(central) >= 2:
         return "central"
     if any(is_outliner_row(r, w) for r in rows):

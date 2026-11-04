@@ -118,6 +118,24 @@ def console_state_of(seen) -> str:
     return "undecided"
 
 
+def window_kind_from_rows(rows, bbox, gold) -> str:
+    """The window verdict on **normalised** rows (2160x1440 reference space).
+
+    ``probe`` normalises with the same ``_norm_geometry`` the daemon uses, so
+    the row-band rule has to be asked at the reference size as well: a
+    three-argument ``classify_window`` never sees it, which is how the
+    2026-10-29 first-contact window read ``none`` in the probe while the
+    daemon's reading of the same screen said ``dialog`` (issue #31).
+
+    One consequence is deliberate and stays: a window whose option rows fall
+    outside ``read_window``'s band is still invisible here.  That limitation is
+    written into issue #31 with the 2026-11-04 fixtures; it is not something a
+    threshold in this function can fix.
+    """
+    import game_supervisor as gs
+    return gs.classify_window_at_reference(rows, bbox, gold)
+
+
 def option_count_from_rows(rows) -> int:
     """How many option rows the classifier saw — the N of spec §5.
 
@@ -159,7 +177,7 @@ def probe(hwnd: int, pid: int) -> dict:
     rect = gs.window_rect(hwnd)
     rows, bbox, gold = gs._norm_geometry(stats["rows"], stats["bbox"],
                                          stats["gold"], rect)
-    window_kind = gs.classify_window(rows, bbox, gold)
+    window_kind = window_kind_from_rows(rows, bbox, gold)
     option_count = option_count_from_rows(rows)
 
     evidence = build_evidence(

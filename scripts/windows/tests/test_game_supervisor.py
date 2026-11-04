@@ -886,6 +886,79 @@ def test_one_option_row_plus_the_outliner_is_still_a_dialog():
     assert gs.classify_window_at_reference(rows, [880, 450, 1420, 940], 2846) == "dialog"
 
 
+# ---------------------------------------------------------------------------
+# 2026-11-04 fixtures (P0/P1 plan, Task 2): real frames, two states, labelled.
+#
+# What the fixtures are FOR: the 2026-10-29 "central band" rule was calibrated
+# on one window and had no counter-example.  These frames are that
+# counter-example — a clean campaign screen whose HUD text sits inside the same
+# horizontal band.  Readings are game_supervisor.read_window + _norm_geometry,
+# so the rows are already in the 2160x1440 reference space every classifier
+# call in `serve` uses.
+# ---------------------------------------------------------------------------
+
+FIXTURE_DIR = pathlib.Path(__file__).resolve().parent / "fixtures" / "windows"
+
+
+def _fixture(name: str) -> dict:
+    return json.loads((FIXTURE_DIR / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def test_every_window_fixture_carries_the_fields_the_classifier_reads():
+    names = sorted(p.stem for p in FIXTURE_DIR.glob("*.json"))
+    assert len(names) >= 7, names
+    for name in names:
+        fx = _fixture(name)
+        assert fx["label"] in ("window", "no_window"), name
+        assert isinstance(fx["rows"], list) and fx["rows"], name
+        for row in fx["rows"]:
+            assert {"x0", "x1", "y0", "y1"} <= set(row), name
+        assert (fx["w"], fx["h"]) == (2160, 1440), name
+
+
+def test_a_clean_campaign_screen_is_not_a_window():
+    """The HUD is inside the "central" band; the starmap still has no window.
+
+    Measured 2026-11-04 at 1440x960: the top-left fleet icons (y ~ 0.16-0.21h)
+    and the bottom map labels (y ~ 0.83h) are golden rows whose x1 lands in the
+    central band, so the 2026-10-29 rule called every clean map a ``dialog``.
+    On the install gate that is a permanent false positive: it refuses to
+    install when nothing is on screen at all.
+    """
+    names = sorted(p.stem for p in FIXTURE_DIR.glob("starmap_*.json"))
+    assert len(names) >= 3, names
+    for name in names:
+        fx = _fixture(name)
+        got = gs.classify_window(fx["rows"], fx["bbox"], fx["gold_px"], fx["w"], fx["h"])
+        assert got == "none", f"{name}: gold={fx['gold_px']} rows={fx['row_count']} -> {got}"
+
+
+def test_the_first_contact_window_fixture_is_still_a_window():
+    """The tightening must not swallow the window the rule was built for."""
+    fx = _fixture("event_first_contact_2160x1440")
+    got = gs.classify_window(fx["rows"], fx["bbox"], fx["gold_px"], fx["w"], fx["h"])
+    assert got in ("dialog", "choice"), got
+
+
+def test_a_window_whose_options_sit_outside_the_band_is_a_known_blind_spot():
+    """Issue #31, 2026-11-04: the band, not the thresholds, is the limit.
+
+    These four frames are a real modal (``diplomatic.14``) at 1440x960 whose
+    option rows sit at y ~ 0.95h — **below** the 0.85h bottom edge of the box
+    ``read_window`` samples.  Nothing in the band distinguishes them from the
+    starmap frames, and the starmap has *more* gold and *more* rows, so no
+    threshold on these counts can separate the two states across resolutions.
+    This test exists so a later change that claims to detect them has to come
+    with a new fixture set (and an update to #31) instead of a tuned number.
+    """
+    names = sorted(p.stem for p in FIXTURE_DIR.glob("event_diplomatic14_*.json"))
+    assert len(names) >= 3, names
+    for name in names:
+        fx = _fixture(name)
+        got = gs.classify_window(fx["rows"], fx["bbox"], fx["gold_px"], fx["w"], fx["h"])
+        assert got == "none", f"{name} -> {got}"
+
+
 def test_console_open_needs_the_panels_own_density():
     # §54.10 measured the open panel at 2315 bright px in three separate reads
     # (its text is static) and the closed panel at 0/2.  A mid-bright frame is
