@@ -7,10 +7,13 @@
 // 全部是纯函数(没有 `@ptrFromInt`,没有 `ReadProcessMemory`):谓词体只做参数解包与调用,
 // 于是"重算/缓存/fail-closed"这三件事能在 Linux 上被测死。
 //
-// **缓存键是容器指纹,不是时间**(计划 Review Focus #1):指纹 = 每个活槽 `+0x59C` 的
-// dword **和**。它便宜(788 次 4 B 读,亚毫秒),而且**顺序无关**。已知盲点:同一次 tick 里
-// 先加边再删同一条边,和会回到原值 ⇒ 缓存不被刷新。这条盲点写进 `reason` 之外的
-// detail(驱动侧),**不许**用 TTL 掩盖 —— 时间缓存会把"没重算"伪装成"重算了"。
+// **缓存键是容器指纹,不是时间**(计划 Review Focus #1):指纹 = `Σ(count[slot] × mix(slot))`,
+// 每个活槽一次 4 B 读(788 次,亚毫秒)。**按槽号加权**而不是直接求和,是为了让"度在系统之间
+// 迁移"也能被看见 —— 纯求和时 A 少一条、B 多一条会抵消(issue #46 的表)。
+//
+// 它仍然**不是哈希**:同一系统内部换邻居(度不变、邻居变了)照样漏。真保证只有"读出边集再
+// 对内容做哈希",代价是整趟读。这一层只为挡住绝大多数"没变",盲点写进 §7 的"不能说",
+// **不许**用 TTL 掩盖 —— 时间缓存会把"没重算"伪装成"重算了"。
 //
 // **fail-closed**:读失败(`read_ok == false`)返回 false 且 `score = 0`,但**不清空**分数
 // 数组 —— 清空会让下一次求值把"这一次读失败"读成"全图零分"。调用方只在 `shouldRecompute`
@@ -56,12 +59,30 @@ pub const Snapshot = struct {
     recomputed: bool = false,
 };
 
-/// 容器指纹:每个活槽 `+0x59C` 的 dword 和(wrapping)。
-/// 顺序无关、空切片 = 0;比按槽序拼接更稳(槽序在两次读之间不应改变,但没必要依赖它)。
+/// 每个槽号的权重:64 位 splitmix 的常量混合,结果强制为奇数。
+/// 只要 `counts` 的下标语义是"槽号",权重就随机但**确定**——两次求值对同一个槽拿到同一个数。
+pub fn mixWeight(slot: usize) u64 {
+    var x: u64 = @as(u64, @intCast(slot)) +% 0x9E3779B97F4A7C15;
+    x ^= x >> 30;
+    x *%= 0xBF58476D1CE4E5B9;
+    x ^= x >> 27;
+    x *%= 0x94D049BB133111EB;
+    x ^= x >> 31;
+    return x | 1;
+}
+
+/// 逐个累加:`acc + count[slot] × mixWeight(slot)`(wrapping)。
+/// 活体路径用它避免为 1,024 个槽再开一块缓冲。
+pub fn accumulate(acc: u64, slot: usize, edges: u32) u64 {
+    return acc +% mixWeight(slot) *% @as(u64, edges);
+}
+
+/// 容器指纹:`Σ(count[slot] × mixWeight(slot))`,空切片 = 0。
+/// **按槽号加权**,所以"度在系统之间迁移"不会再抵消;同一系统内部换邻居仍看不见(见文件头)。
 pub fn fingerprint(counts: []const u32) u64 {
-    var sum: u64 = 0;
-    for (counts) |c| sum +%= c;
-    return sum;
+    var acc: u64 = 0;
+    for (counts, 0..) |c, slot| acc = accumulate(acc, slot, c);
+    return acc;
 }
 
 /// `now == 0` 表示这一趟没读到指纹 ⇒ 不重算(保留上一份分数,fail-closed)。
@@ -177,7 +198,7 @@ pub fn liveScore(id: u32) ?u16 {
         return null;
     }
 
-    // 指纹:每个活槽的系统对象 `+0x59C` 之和。**任何一个槽读不到**就把指纹打成 0
+    // 指纹:`Σ(count[slot] × mixWeight(slot))`。**任何一个槽读不到**就把指纹打成 0
     // (= 「这一趟没读到」),于是 `shouldRecompute` 为假、上一份分数保留 —— fail-closed。
     var sum: u64 = 0;
     var unreadable = false;
@@ -198,7 +219,7 @@ pub fn liveScore(id: u32) ?u16 {
             unreadable = true;
             break;
         };
-        sum +%= edges_here;
+        sum = accumulate(sum, slot, edges_here);
     }
     const now: u64 = if (unreadable) 0 else sum;
 
