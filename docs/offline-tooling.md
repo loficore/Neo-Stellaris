@@ -1665,6 +1665,15 @@ drain → `Uninstall` + `Verify` + settle + `assert_game_alive` → 写 artifact
 判读纯函数由 `python3 -m pytest scripts/test_c2_per_system_probe.py -q` 覆盖(**45 条**),
 无游戏、无 Windows API。
 
+### M5 的 `--score-source`(`c2_boot_inject.py`)
+
+`--score-source 1` 把 `neo_score` 的供给换成**活体重算**:effect 体内先算容器指纹(所有活槽
+`+0x59C` 的 dword 和),变了才 `readAt` + `chokepoint_dynamic.analyze`,否则命中缓存;读失败
+fail-closed(保留旧分数)且**不回落烘焙表**。判读三条:①`evaluated` 只数真的走到判据的求值;
+②`recomputed` 只在指纹变化时 +1(它才是「重算发生了」的证据,`score_writes` 不是);
+③注册必须**早于脚本解析**,否则 `Invalid scripted effect: neo_action` —— 用 `--launch <exe>`
+配 `--allow-window`(主菜单本来就不是 `IN_GAME_RUNNING`,这一档是结构性例外,§7.1)。
+
 ### `scripts/c2_graph_read.py [dll] --expect-systems N --expect-edges N --save-name NAME [--edges-file PATH] [--mutate FROM,TO] [--kill-after] [--out C:/temp/c5_graph_read.tsv]`
 
 **M4 的实机读图通道。** 不挂钩子:只读段只经 `ReadProcessMemory` 走 `C5GraphRead`→`StatsInto`→
