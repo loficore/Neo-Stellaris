@@ -32,6 +32,18 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 import disrva  # noqa: E402
+
+# Byte pins against the *real* PE need a copy of it, so they can only run where
+# one exists (`NS_STELLARIS_EXE`, or the two checkout paths `disrva` knows).
+# CI has no game binary and must not grow one — the shipped bytes are the
+# artifact under test, not an input.  Skipping stays explicit and visible
+# (`pytest -rs`), rather than deselecting the test everywhere, because on a
+# machine that does have the exe these are the pins that catch a wrong target.
+requires_exe = pytest.mark.skipif(
+    disrva.resolve_exe() is None,
+    reason="needs stellaris.exe: pins prologue bytes against the real PE "
+           "(set NS_STELLARIS_EXE)",
+)
 import c2_donor_probe as donor  # noqa: E402
 from c2_donor_probe import (  # noqa: E402
     VERDICTS,
@@ -136,6 +148,7 @@ def test_donor_family_vtables_match_evidence_volume():
     assert zig_array_literal(src, "FAMILY_VTABLES") == evidence_family_vtables()
 
 
+@requires_exe
 def test_donor_prologue_bytes_match_the_exe():
     src = (REPO / "src/dll/c2/donor_exec_probe.zig").read_text(encoding="utf-8")
     want = zig_array_literal(src, "EXPECTED_CODE")

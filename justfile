@@ -14,7 +14,11 @@ build:
     zig build
 
 test:
-    zig build test
+    # `--summary all` on purpose: without it a green run prints nothing, so a CI
+    # log would show "step succeeded" with no evidence of what ran.  The judge is
+    # still the exit code (see docs/offline-tooling.md: the step count only grows,
+    # so never pin it as a threshold).
+    zig build test --summary all
 
 # `test_hook_teardown.py` is here because `test_scripts_layout.py` does not read Zig
 # sources: without this line the "never free a trampoline" invariant is tested only
@@ -36,6 +40,10 @@ graph-fixture-check:
     python3 scripts/graph_fixture_emit.py --edges evidence/xrefs/c5_campaign_edges_4_4_4.tsv --scores evidence/xrefs/chokepoint_scores_4_4_4.tsv --out src/dll/c2/graph_fixture.zig --check
 
 check: build test fence host-tests chokepoints-check graph-fixture-check
+
+# CI 门：check + scripts/ 全量（check 只覆盖 418/1,461 条 python 测试）
+check-full: check
+    python3 -m pytest scripts -q -rs
 
 # NOTE: the world-state machine is TWO files and they must travel together with
 # its Windows halves — world_state.py is the pure machine (one directory up in

@@ -29,7 +29,22 @@ def find_exe():
     sys.exit('stellaris.exe not found — set NS_STELLARIS_EXE')
 
 
-EXE = find_exe()
+_EXE = None
+
+
+def exe():
+    """Lazily resolved path, never resolved at import.
+
+    `test_rttibatch.py` is a pure-function suite ("no game, no disk" — its own
+    docstring), but resolving at import made the *whole* `pytest scripts`
+    collection die with `SystemExit` on any machine without the game binary —
+    i.e. on every CI runner.  The path is only needed by the `__main__` paths
+    below, so ask for it there.
+    """
+    global _EXE
+    if _EXE is None:
+        _EXE = find_exe()
+    return _EXE
 
 
 class Image:
@@ -351,11 +366,11 @@ def _targets_from(tokens):
 def main():
     args = [a for a in sys.argv[1:] if a != '--stdin']
     if '--col' in args:
-        img = Image(open(EXE, 'rb').read())
+        img = Image(open(exe(), 'rb').read())
         col_census(img)
         return
     if '--strings' in args:
-        img = Image(open(EXE, 'rb').read())
+        img = Image(open(exe(), 'rb').read())
         for token in args[args.index('--strings') + 1:]:
             rva = int(token, 16)
             try:
@@ -370,7 +385,7 @@ def main():
                 print('  (no rip-relative strings in the first 0x400 bytes)')
         return
     if '--effects' in args:
-        img = Image(open(EXE, 'rb').read())
+        img = Image(open(exe(), 'rb').read())
         rows = effects(img)
         print(f'# {len(rows)} vtables whose slot[1] is base Execute '
               f'({img.image_base + RVA_BASE_EXECUTE:#x})')
@@ -382,7 +397,7 @@ def main():
             print(f'vtable {vt:#010x}  slot0 {slot0:#010x}  ExecuteActual(slot2) {slot2:#010x}')
         return
     if '--all-vtables' in args:
-        img = Image(open(EXE, 'rb').read())
+        img = Image(open(exe(), 'rb').read())
         min_run = 3
         if '--min-run' in args:
             min_run = int(args[args.index('--min-run') + 1])
@@ -400,7 +415,7 @@ def main():
             path = args[args.index('--candidates') + 1]
         with open(path, encoding='utf-8') as f:
             candidates = parse_candidate_lines(f.read())
-        img = Image(open(EXE, 'rb').read())
+        img = Image(open(exe(), 'rb').read())
         hits = slot_hits(img, targets, candidates)
         slots_hit = physical_slots(hits)
         print(f'# {len(targets)} target RVAs {sorted(targets)}, '
@@ -417,14 +432,14 @@ def main():
         return
     if '--who-lea' in args:
         target = int(args[args.index('--who-lea') + 1], 16)
-        img = Image(open(EXE, 'rb').read())
+        img = Image(open(exe(), 'rb').read())
         sites = lea_sites_to(img, target)
         print(f'# {len(sites)} RIP-relative load sites of {target:#x} in .text')
         for site in sites:
             print(f'site {site:#010x}')
         return
     if '--dump' in args:
-        img = Image(open(EXE, 'rb').read())
+        img = Image(open(exe(), 'rb').read())
         for token in args[args.index('--dump') + 1:]:
             dump(img, int(token, 16))
         return
@@ -432,7 +447,7 @@ def main():
         args = [t for line in sys.stdin for t in line.split()]
     if not args:
         sys.exit(__doc__)
-    img = Image(open(EXE, 'rb').read())
+    img = Image(open(exe(), 'rb').read())
     print(f'# image base {img.image_base:#x}, {len(img.secs)} sections')
     for token in args:
         rva = int(token, 16)
