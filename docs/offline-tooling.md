@@ -1709,6 +1709,26 @@ fail-closed(保留旧分数)且**不回落烘焙表**。判读三条:①`evaluat
 判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖(**17 条**):八档读判词 +
 五条改边判词 + `parse_artifact` 两条,无游戏、无 Windows API。
 
+### `scripts/c2_graph_reconcile.py --log PATH --windows PATH --edges-base PATH --edges-add PATH [--name-map PATH] [--scores-dir DIR]`
+
+§7.7 的**唯一**同时看见两边的程序:引擎侧读 mod 的分档回执(`NEO_T0/T1/T2 [This.GetName]`),
+主机侧用 `chokepoint_scores` 对两份边快照各算一次档位。两边**不读对方的中间结果**。
+
+`--windows` 是这一发的窗口表,一个 JSON 列表 `[{"name","start","end"}]`;**字节**偏移(不是行号,
+窗口期间日志还在长),第一个窗对应 `--edges-base`,其余对应 `--edges-add`。
+
+判词:有 `--name-map`(`id<TAB>name`)时是计划的 `tiers_named` / `tiers_disagree` / `tiers_partial`;
+没有时退到 `tiers_counts`(分布相等)**而且绝不说 `tiers_named`** —— 仓库里没有 id↔名字 的产物
+(`save_hypergraph.py` 只出边表),所以逐名对账在这一发是**做不到**的,不是没做。
+
+**判读陷阱**(2026-11-04 实测):(1) 引擎回执只覆盖**能打印名字**的系统 —— 788 个系统每月都跑到
+effect,只有 785 行,所以两侧总数天然差 3–4,**覆盖差要判 `tiers_partial`,不是 `tiers_disagree`**
+(否则计划的停止规则会被一个仪器缺口触发);(2) 同名星系真实存在(那一发 `常陈四` 出现两次),
+按名字去重会少一个键,任何按名的结论都要先声明这条歧义;(3) 退出码 `1` 只在真的写了
+`tiers_disagree` 时出现,`tiers_partial` 是 `0`。
+
+围栏 `python3 -m pytest scripts/test_c2_graph_reconcile.py -q`(15 条,零游戏)。
+
 ### `scripts/c2_exec_caller_probe.py [dll] --systems N --save-name NAME [--poll-s 120] [--out C:/temp/c5_exec_caller.tsv] [--allow-window]`
 
 **第八把 guard:C5 缺的那一格「谁在逐系统派发」+ 星系 id(§90.4 定的锚)。** 靶 = `log` 效果的实现
@@ -2343,6 +2363,26 @@ just win "python C:/temp/ns_world.py pull"     # 把 C:/temp/ns_world.jsonl 拉�
    30 秒后每个动作都被这条"常驻指控"挡住。看到 `RESTORE_INCOMPLETE` 先查 `armed[]`,不要先怀疑探针。
 3. **`abort` 不是解封。** 它只写一行记录。唯一的解封入口是 `unblock --evidence`,而那份证据必须由
    `probe --out` 产生:带完整读数(六个原始计数)**且**带那次阻塞的 nonce、且 mtime 晚于阻塞时刻。
+
+**窗口判据的两处 2026-11-04 修正(#31)**
+
+1. **探针改成在参考尺寸上分类。** `probe` 先把 rows 用 `_norm_geometry` 归一到 2160x1440,而
+   `classify_window` 的**行带规则要靠 w/h 才生效**;过去探针调的是三参数版本,所以同一块屏幕
+   daemon 读 `dialog`、探针读 `none`。现在统一走 `world_probe.window_kind_from_rows`
+   →`classify_window_at_reference`(`test_the_probe_classifies_at_the_reference_size`)。
+2. **选项行加了纵向带 `popup_geometry.OPTION_Y0 = (0.45, 0.75)`。** 2026-10-29 的规则只看
+   「金色行右缘落在 `[0.30w, 0.70w]`」,而**洁净星图的 HUD 正落在带里**:舰队图标在 `y≈0.16-0.21h`、
+   地图标签在 `y≈0.83h`,于是每一块普通战役屏幕都被读成 `dialog` —— 在 install 门上是一个永久的
+   假阳性(什么都没弹也拒装)。夹具量到的两组读数(`tests/fixtures/windows/`,7 份):
+   星图 `gold_px 5737..5755 / rows 12..13 / options 8`,真事件窗 `gold_px 2108..2337 / rows 4..5 /
+   options 0`;#31 自己那组(2160x1440)恰好相反(窗 1847、星图 1314)⇒ **任何单一指标/单调阈值都
+   分不开两种分辨率**,所以**没有**加 `choice_no_bbox` 这一档(计划停止规则 2)。
+
+**这条修正修的是假阳性,不是 #31 的盲区。** 实测那个 `diplomatic.14` 窗的选项行落在
+`y≈0.95h` —— 在 `read_window` 采样的 `0.15h..0.85h` 之外,带宽内**没有任何**信号能把它与星图分开
+(星图的金色像素与行数都更多)。要看见它得改采样带或换 OCR/窗口类名,结论已写进 issue #31;
+`test_a_window_whose_options_sit_outside_the_band_is_a_known_blind_spot` 把这一点钉成一个
+「下次要动就必须带新夹具来」的变更探测器,而不是一个可以拧的阈值。
    手写或 `touch` 出来的文件必然缺 nonce —— 这是设计要的,不是麻烦。
 
 **黄金集读数**:`evidence/logs/world_state_labels_4_4_4.jsonl` 本版**未采集**(采集器
@@ -2429,11 +2469,27 @@ just win "python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_scope_prob
 `--timeout-s` 是 2026-10-28 补的:默认 120 s 与 scope shot 的 `--poll-s 120` 相等,哨兵必然迟到,
 而桥的超时语义是「**不知道**发生了什么」—— 一个 120 s 的 shot 不许读成超时。缺省仍 120 s。
 
-它写一个 **ASCII** 的 `.cmd`(cp936 的 `cmd.exe` 按控制台代码页解析 `.cmd`,非 ASCII 路径
-会让任务在运行时静默死掉,所以在这里就抛),把命令输出重定向到文件、把 `EXIT=` 哨兵追加在
-最后,`/run /I` 点火,等哨兵、删任务、打印输出与退出码。哨兵在输出之后,所以读的时候按
-**最后一个** `EXIT=` 切分,不会被命令自己打印的内容骗到;拿不到哨兵返回 4(**不知道**
-发生了什么,不是成功)。
+**任务动作是一个隐藏窗口的启动器(2026-11-04,#32)。** 它写一个 **ASCII** 的 `.vbs`,
+`schtasks /tr` 指向 `wscript.exe //B //Nologo <脚本>`,里面
+`sh = CreateObject("WScript.Shell")` + `sh.Run "<命令>", 0, True` —— 窗口样式 `0` = **不建窗口**,
+第三个参数 `True` = 等它跑完,所以 `EXIT=` 哨兵照旧出现在输出文件末尾。
+
+为什么必须换掉 `.cmd`:用 `/run /I` 跑一个 `.cmd` 会在交互桌面上开一个控制台窗口,它抢走前台,
+而 Stellaris **失焦自暂停**(#32 的三条机制)—— 于是每一次 shot 都跑在一个刚被自己的仪器按停的
+游戏上,而且 `SendInput` 会打到错误的窗口。实机量过一次(2026-11-04,pid 4536):`session_bridge`
+经 session 1 跑一条 20 s 的探针,进程内读到 `CONSOLE_VISIBLE=0`(自己的控制台句柄
+`GetConsoleWindow` + `IsWindowVisible`),前台 hwnd 从头到尾没变(`EXIT=0` 也照常送到)。
+
+**.vbs 的引号要过两道解析器**,看起来会多一层:VBScript 先把 `""` 折成 `"`,然后 `cmd /c` 再按
+它自己的引号规则去掉最外一层。命令因此写成**一个括号组**:
+`cmd /v:on /c "( "python" "script" args 2>&1 & echo EXIT=!ERRORLEVEL! ) > "out"` ——
+一次重定向同时覆盖输出与哨兵(`out_path` 只出现一次),`!ERRORLEVEL!` 配 `/v:on` 才是**命令之后**的
+退出码;单行的 `%ERRORLEVEL%` 会在执行前就被展开,拿到的是上一次的值。`vbs_text` 是纯函数,
+`test_the_launched_command_keeps_stdout_and_the_exit_sentinel` 把这两层解析都建模后钉住。
+
+**ASCII 是硬要求**(cp936 的宿主按控制台代码页处理这些文件,非 ASCII 路径会让任务在运行时静默
+死掉,所以在这里就抛 `UnicodeEncodeError`)。`task_create_args` 里 `/tr` 必须走 `wscript.exe`
+这一点由 `test_the_task_starts_a_hidden_launcher_not_a_console` 钉住。
 
 **一次性任务的 `/st` 固定成 `00:00`(已过时间)。** 2026-11-03 之前它排到 `now + 120 s` 又同时
 `/run`;对跑得久一点的探针(或删除竞争),排定的那份会再跑一次 shim —— 对 `--launch` 命令就是
