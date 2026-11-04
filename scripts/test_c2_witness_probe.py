@@ -35,6 +35,14 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 import disrva  # noqa: E402
+
+# See the same note in `test_c2_donor_probe.py`: the prologue pins compare
+# against the real PE, so they skip loudly (never silently) where it is absent.
+requires_exe = pytest.mark.skipif(
+    disrva.resolve_exe() is None,
+    reason="needs stellaris.exe: pins prologue bytes against the real PE "
+           "(set NS_STELLARIS_EXE)",
+)
 import c2_witness_probe as witness  # noqa: E402
 from c2_witness_probe import (  # noqa: E402
     VERDICTS,
@@ -151,6 +159,7 @@ def test_witness_family_vtables_match_evidence_volume():
     assert zig_array_literal(src, "FAMILY_VTABLES") == evidence_family_vtables()
 
 
+@requires_exe
 def test_witness_prologue_bytes_match_the_exe():
     src = ZIG_MODULE.read_text(encoding="utf-8")
     want = zig_array_literal(src, "EXPECTED_CODE")
@@ -444,6 +453,7 @@ def test_build_meta_records_entries_error_and_partitions():
         assert key in without
 
 
+@requires_exe
 def test_prologue_bytes_pinned():
     """Task 1 的转录本身也要被钉住:三方(exe / Zig 模块 / 本文件的字面量)一字不差。
 

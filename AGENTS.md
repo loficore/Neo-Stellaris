@@ -94,6 +94,8 @@ All analysis artifacts go to `evidence/` at project root:
   `scripts/test_c2_harness.py` 用裸名 import 它们、按「上两级」定位 `zig-out/` 的 DLL —— 这一族既不能改名,
   也不能下沉一级目录。
 - **根目录 `justfile` 只做薄索引**(`just --list`);`just check` 一次跑构建 + 两套测试 + 布局围栏,它不实现逻辑。
+  `just check-full` = `check` + `scripts/` 全量 python 测试,是 **CI(`.gitea/workflows/ci.yml`)跑的那一条**;
+  `check` 只覆盖 418/1,461 条,别拿它当「本地绿 = CI 绿」。
 
 **围栏的口径边界**(读报错前先核这几条,否则会把合规读成缺陷):`R-env` 只管**从磁盘读 `stellaris.exe`**
 的脚本(带 `CreateRemoteThread` 的实机脚本被排除),候选链旁的 `D:\SteamLibrary\…` fallback 合规;
