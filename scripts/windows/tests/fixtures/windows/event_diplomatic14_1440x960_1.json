@@ -1,0 +1,42 @@
+{
+ "label": "window",
+ "state": "paused by the modal 'diplomatic.14' event window",
+ "captured": "2026-11-04 15:37 local, pid 14156, hwnd 198154",
+ "native_window": [
+  1440,
+  960
+ ],
+ "w": 2160,
+ "h": 1440,
+ "gold_px": 2288,
+ "row_count": 4,
+ "option_count": 0,
+ "bbox": null,
+ "rows": [
+  {
+   "y0": 228,
+   "y1": 232,
+   "x0": 591,
+   "x1": 662
+  },
+  {
+   "y0": 256,
+   "y1": 284,
+   "x0": 584,
+   "x1": 828
+  },
+  {
+   "y0": 1191,
+   "y1": 1196,
+   "x0": 921,
+   "x1": 1010
+  },
+  {
+   "y0": 1208,
+   "y1": 1209,
+   "x0": 858,
+   "x1": 885
+  }
+ ],
+ "note": "the window's option rows are at y~0.95h, i.e. OUTSIDE read_window's band (0.15h..0.85h); the rows here are the HUD icons and map labels that the band does see"
+}

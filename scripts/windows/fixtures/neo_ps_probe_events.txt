@@ -1,0 +1,49 @@
+# Neo PS probe - M5 monthly driver.
+#
+# 4.4.4 on_action bodies only accept `events` / `random_events`, so the effect
+# lives in a hidden event. `every_system` from a no-scope event iterates once
+# (2026-11-01), so a system scope is entered first.
+#
+# M5 (2026-11-04): each system now also runs `neo_action` (our effect), which
+# writes `neo_mark`/`neo_score`. With --score-source 1 the score comes from the
+# LIVE graph (read + chokepoint_dynamic inside the game process), not the baked
+# table. The PS_HIT line stays as the independent receipt that the loop ran.
+#
+# P1 (2026-11-04): the engine's own view of the tier is logged per system on the
+# same pass that writes it (NEO_T2 >= 200, NEO_T1 >= 100, else NEO_T0). These
+# lines are the engine-side half of the §7.7 reconcile: the host side computes
+# its own tiers from the edge snapshots and the two sets are compared by name.
+# They are read-only receipts - nothing here branches on them.
+
+namespace = neo_ps
+
+event = {
+	id = neo_ps.1
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		random_system = {
+			every_system = {
+				# The registered effect's class parses an assignment BLOCK, not a
+				# bare flag: `neo_action = yes` is rejected at parse time with
+				# 'Expected "neo_action = {", but got "neo_action = yes"'
+				# (live 2026-11-04).  The body is empty -- the write happens in
+				# the effect itself.
+				neo_action = { }
+				if = {
+					limit = { check_variable = { which = neo_score value >= 200 } }
+					log = "NEO_T2 [This.GetName]"
+				}
+				else_if = {
+					limit = { check_variable = { which = neo_score value >= 100 } }
+					log = "NEO_T1 [This.GetName]"
+				}
+				else = {
+					log = "NEO_T0 [This.GetName]"
+				}
+				log = "PS_HIT [This.GetName]"
+			}
+		}
+	}
+}

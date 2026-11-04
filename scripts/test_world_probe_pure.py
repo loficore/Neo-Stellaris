@@ -107,3 +107,35 @@ def test_import_has_no_side_effects(tmp_path):
     assert os.listdir(tmp_path) == [], (
         "importing the probe wrote into the working directory: "
         f"{os.listdir(tmp_path)}")
+
+
+def test_the_probe_classifies_at_the_reference_size():
+    """Rows are normalised to 2160x1440 before classification, so the row-band
+    rule has to be asked at **that** size.
+
+    A three-argument ``classify_window`` never sees the rule: it is how the
+    2026-10-29 first-contact window read ``none`` in the probe while the
+    daemon's own reading of the same screen was ``dialog`` (issue #31).  The
+    fixtures are the two states measured 2026-11-04 (``tests/fixtures/windows/``).
+    """
+    import json
+
+    fixtures = WINDOWS_DIR / "tests" / "fixtures" / "windows"
+
+    def verdict(name):
+        doc = json.loads((fixtures / f"{name}.json").read_text(encoding="utf-8"))
+        return world_probe.window_kind_from_rows(doc["rows"], doc["bbox"], doc["gold_px"])
+
+    assert verdict("starmap_1440x960_1") == "none"
+    assert verdict("event_first_contact_2160x1440") in ("dialog", "choice")
+
+
+def test_option_count_is_the_number_the_daemon_clicks_among():
+    """One N, not two: the daemon publishes ``len(rows)`` for ``option_count``
+    and ``choose_row`` picks among **all** of them, so a second "option row"
+    notion inside the probe was a silent unit mismatch (issue #31 diagnosed the
+    same drift in the other direction, between the probe and the classifier).
+    """
+    rows = [{"x0": 100, "x1": 200}, {"x0": 1849, "x1": 1943}]
+    assert world_probe.option_count_from_rows(rows) == 2
+    assert world_probe.option_count_from_rows([]) == 0

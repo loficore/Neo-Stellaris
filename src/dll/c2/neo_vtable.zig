@@ -133,6 +133,11 @@ pub fn liveSnapshot() @TypeOf(graph_trigger.liveSnapshot()) {
     return graph_trigger.liveSnapshot();
 }
 
+/// 边集内容哈希(16 B 导出的取值面):哈希 + 这一趟读到的边数。
+pub fn liveHashSnapshot() @TypeOf(graph_trigger.liveHashSnapshot()) {
+    return graph_trigger.liveHashSnapshot();
+}
+
 pub fn resetLiveSource() void {
     graph_trigger.resetLive();
 }

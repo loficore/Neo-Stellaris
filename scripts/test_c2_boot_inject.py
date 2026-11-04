@@ -145,3 +145,25 @@ def test_the_cli_forwards_score_source_into_boot():
     import inspect
     src = inspect.getsource(mod.main)
     assert "score_source=args.score_source" in src.replace("\n", "").replace("  ", "")
+
+
+def test_the_hash_receipt_names_hash_and_edge_count():
+    """P1/Task 5: content hash is the correctness half of the cache verdict."""
+    line = mod.hash_line(16, 0xCBf29CE484222325, 1219)
+    assert line.startswith("hash_rc=16")
+    assert "neo_hash=cbf29ce484222325" in line
+    assert "neo_edges=1219" in line
+    assert "\n" not in line
+
+
+def test_a_zero_hash_is_the_never_read_sentinel():
+    """`0` must stay distinguishable from "read, zero edges" (that is FNV's basis)."""
+    assert "neo_hash=0000000000000000" in mod.hash_line(16, 0, 0)
+
+
+def test_the_hash_export_is_needed_and_read_by_the_stats_path():
+    import inspect
+    assert "C2NeoLiveHashInto" in mod.NEEDED
+    src = inspect.getsource(mod.stats)
+    assert 'exports["C2NeoLiveHashInto"]' in src
+    assert "hash_line(" in src

@@ -349,8 +349,15 @@ def infer_state(probe: dict) -> tuple[str, dict]:
         state = "CONSOLE_OPEN"
         reason = "the console is open"
     elif pause_state == "paused":
+        # "no window" is what the **instrument** saw, not a claim about the
+        # screen: a modal whose option rows render outside ``read_window``'s
+        # sampling band (0.15h..0.85h) is indistinguishable from a clean
+        # campaign screen inside the band, so this state can be reached while a
+        # window is up (issue #31, fixtures in
+        # ``scripts/windows/tests/fixtures/windows``).  Nothing downstream may
+        # read this state as proof that the screen is clear.
         state = "IN_GAME_PAUSED_CLEAN"
-        reason = "paused, console closed, no window"
+        reason = "paused, console closed, no window (instrument-visible only)"
     else:
         state = "IN_GAME_RUNNING"
         reason = "running, console closed, no window"

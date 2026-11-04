@@ -154,6 +154,61 @@ const gg = @import("../c2/galaxy_graph.zig");
 const graph = @import("../shared/offsets.zig").graph;
 const windows = @import("../hooking/windows.zig");
 
+// ---------------------------------------------------------------------------
+// 边集内容哈希(issue #46 方案 3)
+//
+// 指纹(`fingerprint`)回答"总数/度分布变没变",只配当**成本**开关;它抓不到
+// "同一窗口里 A 少一条、B 多一条"这类度数抵消。哈希回答的是**正确性**:
+// 这一趟读出来的边集逐条相同吗。输入必须是同一趟读的结果(Review Focus #5)。
+//
+// 0 保留给"这个进程还没成功读过一次图",所以空边集是 FNV-1a 的初值,不是 0。
+// ---------------------------------------------------------------------------
+
+pub const Edge = cd.Edge;
+
+pub const EDGE_HASH_OFFSET: u64 = 0xcbf29ce484222325;
+pub const EDGE_HASH_PRIME: u64 = 0x100000001b3;
+/// 空边集(读成功、零条边)的哈希。**不是 0** —— 0 是"没读到"的哨兵。
+pub const EMPTY_EDGE_HASH: u64 = EDGE_HASH_OFFSET;
+
+/// 排序暂存(见 `hashEdges`)。大小与读图器的边表上限同一个常量。
+var hash_scratch: [graph_probe.MAX_EDGES]u32 = undefined;
+
+/// 一条边的规范词 `min<<16 | max`:无向图里 `(a,b)` 与 `(b,a)` 是同一条边。
+pub fn edgeWord(a: u16, b: u16) u32 {
+    const lo: u32 = @min(a, b);
+    const hi: u32 = @max(a, b);
+    return (lo << 16) | hi;
+}
+
+/// FNV-1a(64)吸一个 4 字节词,小端序。
+fn absorbWord(acc: u64, word: u32) u64 {
+    var h = acc;
+    var shift: u6 = 0;
+    while (shift < 32) : (shift += 8) {
+        h ^= (word >> @intCast(shift)) & 0xff;
+        h *%= EDGE_HASH_PRIME;
+    }
+    return h;
+}
+
+/// 边集哈希。行必须来自同一趟读(调用方保证);`(min,max)` 归一化让方向无关,
+/// **排序**让枚举顺序无关 —— `graph_probe.rows()` 给的是容器的槽枚举顺序,引擎改过
+/// 邻居表之后同一张图可以换顺序枚举出来(否则"加一条再删一条"会让哈希假报变化)。
+///
+/// 暂存是模块级静态:边数上限与读图器同一个常量,所以不存在"装不下"的输入;
+/// 调用方与 `liveScore` 同线程(单写者),与 `live_scores` 等静态缓冲同一条纪律。
+pub fn hashEdges(rows: []const Edge) u64 {
+    const n = @min(rows.len, hash_scratch.len);
+    for (rows[0..n], 0..) |e, i| hash_scratch[i] = edgeWord(e.a, e.b);
+    const words = hash_scratch[0..n];
+    std.mem.sort(u32, words, {}, std.sort.asc(u32));
+    var h = EDGE_HASH_OFFSET;
+    for (words) |word| h = absorbWord(h, word);
+    return h;
+}
+
+
 /// `neo_score` 的两个来源。0 = 烘焙表(C5-SCORE 原行为),1 = 活体重算(本计划)。
 pub const SCORE_SOURCE_TABLE: u32 = 0;
 pub const SCORE_SOURCE_LIVE: u32 = 1;
@@ -163,8 +218,28 @@ var live_art: [MAX_SYSTEMS]u8 = undefined;
 var live_bridge: [MAX_SYSTEMS]u8 = undefined;
 var live_count: usize = 0;
 var live_fingerprint: u64 = 0;
+/// 上一趟成功读到的边集的哈希与条数。`hash == 0` = 本进程还没成功读过。
+var live_hash: u64 = 0;
+var live_edge_count: u32 = 0;
 /// live 源自己的计数(与烘焙表的计数器分开:混在一起会分不清是哪条路写进去的)。
 pub var live_stats: Stats = .{};
+
+pub const HashSnapshot = struct {
+    hash: u64 = 0,
+    edges: u32 = 0,
+};
+
+pub fn liveHashSnapshot() HashSnapshot {
+    return .{ .hash = live_hash, .edges = live_edge_count };
+}
+
+/// 记下"这一趟读出来的边集":哈希 + 条数。只在 `readAt` 成功后调用 ——
+/// 跨两次读拼出来的哈希没有意义(计划 Review Focus #5),所以读失败时**不更新**
+/// (上一份描述的是上一次成功读,0 表示一次都没读过)。
+pub fn recordEdges(rows: []const Edge) void {
+    live_hash = hashEdges(rows);
+    live_edge_count = @intCast(rows.len);
+}
 
 /// 活体分数。`null` = 这一趟拿不到(读失败/越界/空图),调用方按 `score_skipped` 处理 ——
 /// **绝不**回退到烘焙表:两条源混用会让 §7 的判词失去意义。
@@ -255,6 +330,8 @@ pub fn liveScore(id: u32) ?u16 {
 
     live_count = n;
     live_fingerprint = now;
+    // 哈希与分数取自**同一次** `readAt`:跨两次读拼接出来的边集从未同时存在过。
+    recordEdges(graph_probe.rows());
     live_stats.evaluated +%= 1;
     live_stats.recomputed +%= 1;
     return if (id < n) live_scores[id] else null;
@@ -267,6 +344,8 @@ pub fn liveSnapshot() struct { count: usize, fingerprint: u64, stats: Stats } {
 pub fn resetLive() void {
     live_count = 0;
     live_fingerprint = 0;
+    live_hash = 0;
+    live_edge_count = 0;
     live_stats = .{};
 }
 

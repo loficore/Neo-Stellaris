@@ -118,22 +118,39 @@ def console_state_of(seen) -> str:
     return "undecided"
 
 
-def option_count_from_rows(rows) -> int:
-    """How many option rows the classifier saw — the N of spec §5.
+def window_kind_from_rows(rows, bbox, gold) -> str:
+    """The window verdict on **normalised** rows (2160x1440 reference space).
 
-    The row thresholds are **reused**, not copied: the same
-    ``CHOICE_ROW_LEFT_MIN`` / ``CHOICE_ROW_RIGHT_MIN`` that decide
-    ``classify_window`` decide which rows count as options.  Two notions of
-    "an option row" would drift, and the drift would only show up as a
-    ``WINDOW_EVENT`` whose N is not the N the classifier used.
+    ``probe`` normalises with the same ``_norm_geometry`` the daemon uses, so
+    the row-band rule has to be asked at the reference size as well: a
+    three-argument ``classify_window`` never sees it, which is how the
+    2026-10-29 first-contact window read ``none`` in the probe while the
+    daemon's reading of the same screen said ``dialog`` (issue #31).
+
+    One consequence is deliberate and stays: a window whose option rows fall
+    outside ``read_window``'s band is still invisible here.  That limitation is
+    written into issue #31 with the 2026-11-04 fixtures; it is not something a
+    threshold in this function can fix.
+    """
+    import game_supervisor as gs
+    return gs.classify_window_at_reference(rows, bbox, gold)
+
+
+def option_count_from_rows(rows) -> int:
+    """The N of spec §5: how many rows the tick offers to choose among.
+
+    Deliberately **the same number the daemon publishes** --
+    ``state["probe"]["window"]["option_count"] = len(nrows)`` in ``serve`` -- and
+    the same set ``choose_row`` picks from.  The probe used to count only the
+    rows that satisfy the right-column rule (``CHOICE_ROW_LEFT_MIN`` /
+    ``CHOICE_ROW_RIGHT_MIN``), i.e. the rows that would make it a ``choice``;
+    that is a *different* question, and two quantities under one name is exactly
+    the drift issue #31 had to untangle between the probe and the classifier.
 
     ``rows`` is the **normalised** geometry (``_norm_geometry``'s output) —
-    the same rows ``classify_window`` is given.
+    the rows ``classify_window`` and ``choose_row`` are given.
     """
-    from game_supervisor import CHOICE_ROW_LEFT_MIN, CHOICE_ROW_RIGHT_MIN
-    return sum(1 for row in rows
-               if row.get("x0", 0) >= CHOICE_ROW_LEFT_MIN
-               and row.get("x1", 0) >= CHOICE_ROW_RIGHT_MIN)
+    return len(rows)
 
 
 def probe(hwnd: int, pid: int) -> dict:
@@ -159,7 +176,7 @@ def probe(hwnd: int, pid: int) -> dict:
     rect = gs.window_rect(hwnd)
     rows, bbox, gold = gs._norm_geometry(stats["rows"], stats["bbox"],
                                          stats["gold"], rect)
-    window_kind = gs.classify_window(rows, bbox, gold)
+    window_kind = window_kind_from_rows(rows, bbox, gold)
     option_count = option_count_from_rows(rows)
 
     evidence = build_evidence(

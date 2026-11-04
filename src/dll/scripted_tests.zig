@@ -97,3 +97,67 @@ test "graph_trigger: counters separate the four fates the verdict reads" {
     try std.testing.expectEqual(@as(u64, 1), stats.out_of_range);
     try std.testing.expectEqual(@as(u64, 1), stats.read_failed);
 }
+
+// ---------------------------------------------------------------------------
+// graph_trigger: 边集内容哈希(issue #46 方案 3)
+//
+// 指纹回答"边条目总数 / 度分布变没变"(成本开关),哈希回答"边集是否逐条相同"
+// (正确性)。四条判据来自计划:同图两次相等、换一条边必变、(a,b)==(b,a)、
+// 空集是常量且不为 0(0 保留给"这一趟没读到")。
+// ---------------------------------------------------------------------------
+
+const Edge = gt.Edge;
+
+test "graph_trigger: the same edge set hashes the same twice" {
+    const rows = [_]Edge{ .{ .a = 5, .b = 9 }, .{ .a = 1, .b = 2 } };
+    const rows_again = [_]Edge{ .{ .a = 5, .b = 9 }, .{ .a = 1, .b = 2 } };
+    try std.testing.expectEqual(gt.hashEdges(&rows), gt.hashEdges(&rows_again));
+    try std.testing.expectEqual(gt.hashEdges(&rows), gt.hashEdges(&rows));
+}
+
+test "graph_trigger: the edge hash does not depend on the order rows arrive in" {
+    // `graph_probe.rows()` returns the container in slot-enumeration order; a
+    // neighbour list rewritten by the engine (add one edge, remove it) can
+    // enumerate the SAME set in a different order.  A hash over the sequence
+    // would then report "the graph changed" on an identical edge set.
+    const forward = [_]Edge{ .{ .a = 1, .b = 2 }, .{ .a = 3, .b = 4 }, .{ .a = 5, .b = 9 } };
+    const reversed = [_]Edge{ .{ .a = 5, .b = 9 }, .{ .a = 3, .b = 4 }, .{ .a = 1, .b = 2 } };
+    const shuffled = [_]Edge{ .{ .a = 3, .b = 4 }, .{ .a = 5, .b = 9 }, .{ .a = 1, .b = 2 } };
+    try std.testing.expectEqual(gt.hashEdges(&forward), gt.hashEdges(&reversed));
+    try std.testing.expectEqual(gt.hashEdges(&forward), gt.hashEdges(&shuffled));
+}
+
+test "graph_trigger: the edge hash is undirected, so (a,b) equals (b,a)" {
+    const ab = [_]Edge{.{ .a = 5, .b = 9 }};
+    const ba = [_]Edge{.{ .a = 9, .b = 5 }};
+    try std.testing.expectEqual(gt.hashEdges(&ab), gt.hashEdges(&ba));
+}
+
+test "graph_trigger: one changed edge changes the hash" {
+    const before = [_]Edge{ .{ .a = 5, .b = 9 }, .{ .a = 1, .b = 2 } };
+    // 端点换了 / 少一条 / 多一条 —— 三种都是"图变了",指纹里的和可能都是 0 差。
+    const reconnected = [_]Edge{ .{ .a = 5, .b = 10 }, .{ .a = 1, .b = 2 } };
+    const dropped = [_]Edge{.{ .a = 5, .b = 9 }};
+    const added = [_]Edge{ .{ .a = 5, .b = 9 }, .{ .a = 1, .b = 2 }, .{ .a = 3, .b = 4 } };
+    try std.testing.expect(gt.hashEdges(&before) != gt.hashEdges(&reconnected));
+    try std.testing.expect(gt.hashEdges(&before) != gt.hashEdges(&dropped));
+    try std.testing.expect(gt.hashEdges(&before) != gt.hashEdges(&added));
+}
+
+test "graph_trigger: an empty edge set is a constant, and it is not zero" {
+    // 0 是"这一趟没读到"的哨兵,所以"读到了、零条边"必须是另一个值。
+    try std.testing.expectEqual(gt.EMPTY_EDGE_HASH, gt.hashEdges(&[_]Edge{}));
+    try std.testing.expect(gt.EMPTY_EDGE_HASH != 0);
+}
+
+test "graph_trigger: the live hash follows the read that produced it" {
+    gt.resetLive();
+    try std.testing.expectEqual(@as(u64, 0), gt.liveHashSnapshot().hash); // 没读过
+    try std.testing.expectEqual(@as(u32, 0), gt.liveHashSnapshot().edges);
+    const rows = [_]Edge{ .{ .a = 7, .b = 3 }, .{ .a = 2, .b = 8 } };
+    gt.recordEdges(&rows);
+    try std.testing.expectEqual(gt.hashEdges(&rows), gt.liveHashSnapshot().hash);
+    try std.testing.expectEqual(@as(u32, 2), gt.liveHashSnapshot().edges);
+    gt.resetLive();
+    try std.testing.expectEqual(@as(u64, 0), gt.liveHashSnapshot().hash);
+}

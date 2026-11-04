@@ -67,6 +67,8 @@ NEEDED = (
     "C2NeoUninstall",
     "C2NeoVerify",
     "C2NeoStatsInto",
+    "C2NeoLiveStatsInto",
+    "C2NeoLiveHashInto",
     "C4PredStatsInto",  # --pred; same DLL, C4-era
 )
 
@@ -317,6 +319,18 @@ def pred_stats(dll_path: str) -> int:
     return 0
 
 
+def hash_line(rc: int, hash64: int, edges: int) -> str:
+    """The live edge-set hash as one receipt line.
+
+    ``neo_hash=0`` means this process has not completed a graph read yet: ``0``
+    is the "never read" sentinel, while a successful read of an empty graph is
+    FNV-1a's basis (``cbf29ce484222325``), so "no reading" and "zero edges" stay
+    distinguishable. The pair describes the **same** read (Review Focus #5).
+    """
+    return (f"hash_rc={rc} neo_hash={hash64 & 0xFFFFFFFFFFFFFFFF:016x} "
+            f"neo_edges={edges}")
+
+
 def stats(dll_path: str, *, game_log: str | None = None) -> int:
     """Read the `C2NeoStatsInto` line (and optionally the log's byte offset) from a live pid."""
     import c2_harness as harness
@@ -331,6 +345,13 @@ def stats(dll_path: str, *, game_log: str | None = None) -> int:
     harness.call_remote_with_arg(pid, base, exports["C2NeoStatsInto"], buf)
     text = harness.read_memory(pid, buf, 512).split(b"\0", 1)[0].decode("ascii", "replace")
     print(text.rstrip("\r\n"))
+    # The content hash rides its own 16 B export so the 8-word stats contract
+    # stays byte-identical for every existing reader.
+    hbuf = harness.remote_alloc(pid, 24)
+    hash_rc = _signed32(
+        harness.call_remote_with_arg(pid, base, exports["C2NeoLiveHashInto"], hbuf))
+    hash64, edges = struct.unpack_from("<QQ", harness.read_memory(pid, hbuf, 16), 0)
+    print(hash_line(hash_rc, hash64, edges))
     if game_log:
         try:
             print(f"log_bytes={os.path.getsize(os.path.expanduser(game_log))}")

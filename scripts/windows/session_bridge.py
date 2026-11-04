@@ -17,10 +17,19 @@ game window.  This tool is the same mechanism, generalised to one command:
     python C:/temp/session_bridge.py C:/temp/ns_world.py assert-ready \
         --action install --guard shim
 
-It writes an ASCII ``.cmd`` shim, registers a one-shot task that runs it with
-output redirected to a file, fires it with ``/run /I``, waits for the
-``EXIT=`` sentinel, deletes the task and prints what the command printed plus
-its exit code.
+It writes an ASCII ``.vbs`` launcher, registers a one-shot task that runs it
+with ``wscript.exe``, fires it with ``/run /I``, waits for the ``EXIT=``
+sentinel, deletes the task and prints what the command printed plus its exit
+code.
+
+**Why a ``.vbs`` and not a ``.cmd``** (issue #32): a ``.cmd`` task fired with
+``/run /I`` opens a console window on the interactive desktop, that console
+takes the foreground, and Stellaris **self-pauses on focus loss** — so every
+shot ran under a game that had just been paused by its own instrument, and
+``SendInput`` went to the wrong window.  WSH's ``Run`` with window style ``0``
+starts the same command with no window at all, and its third argument ``True``
+still makes it wait, so the ``EXIT=`` sentinel keeps arriving where the reader
+expects it.
 
 **It is a channel, not a policy.** It runs what you tell it to run, in the
 session where the game lives.  Nothing here decides anything; the judgement
@@ -43,7 +52,7 @@ import time
 #: The scheduled task this tool owns.  Distinct from the launcher's and the
 #: supervisor's names so firing one never disturbs the others.
 TASK_NAME = "NSWorldOneShot"
-SHIM_PATH = r"C:\temp\ns_world_oneshot.cmd"
+SHIM_PATH = r"C:\temp\ns_world_oneshot.vbs"
 OUT_PATH = r"C:\temp\ns_world_oneshot.txt"
 
 #: ``/sc once`` needs a start time.  Use one already in the past so **only**
@@ -57,10 +66,16 @@ PAST_START = "00:00"
 def task_create_args(task_name: str, shim: str, owner: str) -> list[str]:
     """``schtasks /create`` argv for the one-shot interactive task.
 
-    Pure so the fence can pin the start time: ``/st`` must be ``PAST_START``,
-    never a time computed from ``now``.
+    Two things are pinned here because both are one-character regressions with
+    an invisible failure mode:
+
+    * ``/st`` must be ``PAST_START``, never a time computed from ``now``;
+    * ``/tr`` must go through ``wscript.exe`` — pointing it at a ``.cmd`` puts a
+      console on the interactive desktop, which steals the foreground and makes
+      the game pause itself (issue #32).
     """
-    return ["schtasks", "/create", "/tn", task_name, "/tr", shim,
+    return ["schtasks", "/create", "/tn", task_name,
+            "/tr", f"wscript.exe //B //Nologo {shim}",
             "/sc", "once", "/st", PAST_START, "/ru", owner, "/rl", "highest",
             "/f"]
 
@@ -81,20 +96,41 @@ def _open_file(path, mode, **kwargs):
         raise type(exc)(f"{path}: cannot open ({exc})") from exc
 
 
-def shim_text(python: str, script: str, args: str, out_path: str) -> str:
-    """The ASCII ``.cmd`` that runs one command and records its exit code.
+def vbs_text(python: str, script: str, args: str, out_path: str) -> str:
+    """The ASCII ``.vbs`` that runs one command hidden and records its exit code.
+
+    ``WScript.Shell.Run <command>, 0, True`` — window style ``0`` never creates
+    a console (the whole point: see the module docstring), ``True`` waits for
+    the command so the exit code is the one this run produced.
+
+    The command is built for **two** parsers, which is why it looks over-quoted:
+    VBScript collapses every doubled quote, then ``cmd /c`` strips the outer
+    pair, leaving
+
+        ( "python" "script" args 2>&1 & echo EXIT=!ERRORLEVEL! ) > "out"
+
+    One redirect over the whole group keeps ``out_path`` in a single place while
+    putting the sentinel *after* the command's own output.  ``!ERRORLEVEL!``
+    with ``/v:on`` is deliberate: a one-line ``%ERRORLEVEL%`` would be expanded
+    before the command ran and report the *previous* exit code.
 
     ASCII on purpose (the same reason ``game_supervisor.task_shim_text`` is):
-    a cp936 ``cmd.exe`` parses ``.cmd`` files in the console code page, so a
-    non-ASCII path would produce a task that dies silently at run time instead
-    of failing here.
+    the host executes this in a cp936 locale, so a non-ASCII path would produce
+    a task that dies silently at run time instead of failing here.  Same
+    caveat as any ``cmd`` one-liner: ``!`` or ``(``/``)`` inside ``args`` would
+    be parsed by ``cmd``; this channel's arguments are file paths and numbers.
+
+    It is a launcher, not a policy: the wait covers the sentinel only.
     """
     command = f'"{python}" "{script}"'
     if args:
         command += f" {args}"
-    text = ("@echo off\r\n"
-            f'{command} > "{out_path}" 2>&1\r\n'
-            f'echo EXIT=%ERRORLEVEL% >> "{out_path}"\r\n')
+    inner = f'( {command} 2>&1 & echo EXIT=!ERRORLEVEL! ) > "{out_path}"'
+    value = f'cmd /v:on /c "{inner}"'
+    literal = '"' + value.replace('"', '""') + '"'
+    text = ("' session_bridge one-shot: run one command hidden, then delete me.\r\n"
+            'Set sh = CreateObject("WScript.Shell")\r\n'
+            f"sh.Run {literal}, 0, True\r\n")
     text.encode("ascii")          # raises here rather than on the box
     return text
 
@@ -109,7 +145,7 @@ def run_interactive(script: str, args: str = "", *,
     """
     python = python or sys.executable
     with _open_file(SHIM_PATH, "w", encoding="ascii", newline="") as fh:
-        fh.write(shim_text(python, script, args, OUT_PATH))
+        fh.write(vbs_text(python, script, args, OUT_PATH))
     # A leftover sentinel would let this call read the PREVIOUS run's exit code,
     # which is the one way this channel could report a result nobody produced.
     try:
