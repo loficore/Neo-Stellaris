@@ -260,6 +260,19 @@ export fn C2NeoLiveStatsInto(out: [*]u8) callconv(.c) i32 {
 export fn C2NeoLiveReset() callconv(.c) void {
     c2_neo_vtable.resetLiveSource();
 }
+
+/// 边集内容哈希:16 B = `[hash u64][edge count u64]`。
+///
+/// 与 `C2NeoLiveStatsInto` 分开是为了不动那份 8 词的契约(驱动按 64 B 解析)。
+/// `hash == 0` = 这个进程还没成功读过一次图;空图是 `EMPTY_EDGE_HASH`(非 0),
+/// 所以"零条边"与"没读到"不会同形。哈希描述的是**上一次成功读**的那趟边集 ——
+/// 读失败时它不更新,调用方要判新鲜度请连 `C2NeoLiveStatsInto` 的 `read_failed` 一起看。
+export fn C2NeoLiveHashInto(out: [*]u8) callconv(.c) i32 {
+    const snap = c2_neo_vtable.liveHashSnapshot();
+    std.mem.writeInt(u64, out[0..8], snap.hash, .little);
+    std.mem.writeInt(u64, out[8..16], snap.edges, .little);
+    return 16;
+}
 const c2_neo_dispatch = @import("c2/neo_dispatch.zig");
 const c2_neo_effect = @import("c2/neo_effect.zig");
 const c = @import("quickjs/bindings.zig");
