@@ -35,3 +35,22 @@ def test_the_export_documents_the_action_codes():
     src = (REPO / "src/dll/exports.zig").read_text(encoding="utf-8")
     block = src.split("export fn C2NeoSetAct", 1)[1].split("}", 1)[0]
     assert "c2_neo_vtable.setAct" in block
+
+
+# --- Part A Task 4: verify 通路的两个计数 -------------------------------------
+
+
+def test_verify_stats_export_exists():
+    src = (REPO / "src/dll/exports.zig").read_text(encoding="utf-8")
+    assert "export fn C2NeoVerifyStatsInto" in src
+
+
+def test_verify_stats_is_listed_in_the_drivers_needed_tuple():
+    src = (REPO / "scripts/c2_boot_inject.py").read_text(encoding="utf-8")
+    assert '"C2NeoVerifyStatsInto"' in src.split("NEEDED = (", 1)[1].split(")", 1)[0]
+
+
+def test_the_verify_line_prints_both_counters_in_order():
+    src = (REPO / "scripts/c2_boot_inject.py").read_text(encoding="utf-8")
+    body = src.split("def verify_line", 1)[1]
+    assert body.index("verified={") < body.index("verify_failed={")

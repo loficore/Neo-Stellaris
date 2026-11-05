@@ -69,6 +69,7 @@ NEEDED = (
     "C2NeoStatsInto",
     "C2NeoLiveStatsInto",
     "C2NeoLiveHashInto",
+    "C2NeoVerifyStatsInto",
     "C4PredStatsInto",  # --pred; same DLL, C4-era
 )
 
@@ -331,6 +332,17 @@ def hash_line(rc: int, hash64: int, edges: int) -> str:
             f"neo_edges={edges}")
 
 
+def verify_line(verified: int, verify_failed: int) -> str:
+    """The verify-path counters as one receipt line.
+
+    ``verified`` counts scheduled content-hash checks that found the same edge set;
+    ``verify_failed`` counts checks whose full read failed (fail-closed: the previous
+    scores and hash stay put).  They ride their own 16 B export so the 8-word stats
+    contract stays byte-identical for every existing reader.
+    """
+    return f"live_verify verified={verified} verify_failed={verify_failed}"
+
+
 def stats(dll_path: str, *, game_log: str | None = None) -> int:
     """Read the `C2NeoStatsInto` line (and optionally the log's byte offset) from a live pid."""
     import c2_harness as harness
@@ -352,6 +364,11 @@ def stats(dll_path: str, *, game_log: str | None = None) -> int:
         harness.call_remote_with_arg(pid, base, exports["C2NeoLiveHashInto"], hbuf))
     hash64, edges = struct.unpack_from("<QQ", harness.read_memory(pid, hbuf, 16), 0)
     print(hash_line(hash_rc, hash64, edges))
+    # verify 的两个计数走第三个 16 B 导出(不复用 hbuf:那是哈希对的缓冲)。
+    vbuf = harness.remote_alloc(pid, 16)
+    harness.call_remote_with_arg(pid, base, exports["C2NeoVerifyStatsInto"], vbuf)
+    verified, verify_failed = struct.unpack_from("<QQ", harness.read_memory(pid, vbuf, 16), 0)
+    print(verify_line(verified, verify_failed))
     if game_log:
         try:
             print(f"log_bytes={os.path.getsize(os.path.expanduser(game_log))}")
