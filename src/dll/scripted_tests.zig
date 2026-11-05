@@ -184,3 +184,30 @@ test "graph_trigger: verify every 0 disables the scheduled verify entirely" {
     try std.testing.expectEqual(gt.CacheAction.reuse, gt.chooseAction(false, 10_000, 0));
     try std.testing.expect(!gt.shouldVerify(10_000, 0));
 }
+
+// ---------------------------------------------------------------------------
+// graph_trigger: live 源的三支结局与计数(Task 2)
+//
+// 计数器是判词面:`recomputed` 是我们真的跑了 analyze,`verified` 是核对通过、
+// `cached_hits` 是连核对都没做。`verify_failed` 只属于「核对这一趟读失败」。
+// ---------------------------------------------------------------------------
+
+test "graph_trigger: the four live fates are counted separately" {
+    var s = gt.Stats{};
+    gt.recordLiveFate(&s, .reuse, false);
+    gt.recordLiveFate(&s, .verify, true);
+    gt.recordLiveFate(&s, .verify, false);
+    gt.recordLiveFate(&s, .recompute, false);
+    try std.testing.expectEqual(@as(u64, 1), s.cached_hits);
+    try std.testing.expectEqual(@as(u64, 1), s.verified);
+    try std.testing.expectEqual(@as(u64, 2), s.recomputed);
+    try std.testing.expectEqual(@as(u64, 0), s.verify_failed);
+}
+
+test "graph_trigger: resetLive clears the cached hash and the new counters" {
+    gt.resetLive();
+    try std.testing.expectEqual(@as(u64, 0), gt.liveHashSnapshot().hash);
+    try std.testing.expectEqual(@as(u32, 0), gt.liveHashSnapshot().edges);
+    try std.testing.expectEqual(@as(u64, 0), gt.liveSnapshot().stats.verified);
+    try std.testing.expectEqual(@as(u64, 0), gt.liveSnapshot().stats.verify_failed);
+}
