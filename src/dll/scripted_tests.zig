@@ -211,3 +211,29 @@ test "graph_trigger: resetLive clears the cached hash and the new counters" {
     try std.testing.expectEqual(@as(u64, 0), gt.liveSnapshot().stats.verified);
     try std.testing.expectEqual(@as(u64, 0), gt.liveSnapshot().stats.verify_failed);
 }
+
+// ---------------------------------------------------------------------------
+// graph_trigger: #46 的验收夹具 —— 度相同、图不同
+//
+// 指纹按槽号加权,所以「度在系统之间迁移」可见;但同一组槽内部换邻居仍然看不见
+// (度序列完全相同)。这一格只有内容哈希能判 —— 下面的夹具就是 issue #46 表里
+// 「总和相同、图不同」那一行。
+// ---------------------------------------------------------------------------
+
+test "graph_trigger: a rewiring that preserves every degree is still visible to the hash" {
+    // 两条互不相邻的边 vs 一个四元环的一半:A-D 度序列完全相同({1,1,1,1}),
+    // 但边集不同。
+    const matching = [_]Edge{ .{ .a = 1, .b = 2 }, .{ .a = 3, .b = 4 } };
+    const crossed = [_]Edge{ .{ .a = 1, .b = 3 }, .{ .a = 2, .b = 4 } };
+    const counts_matching = [_]u32{ 0, 1, 1, 1, 1 };
+    const counts_crossed = [_]u32{ 0, 1, 1, 1, 1 };
+    try std.testing.expectEqual(gt.fingerprint(&counts_matching), gt.fingerprint(&counts_crossed));
+    try std.testing.expect(gt.hashEdges(&matching) != gt.hashEdges(&crossed));
+}
+
+test "graph_trigger: the same picture twice is a cache hit, never a recompute" {
+    const before = [_]Edge{ .{ .a = 1, .b = 2 }, .{ .a = 2, .b = 3 } };
+    const h = gt.hashEdges(&before);
+    try std.testing.expectEqual(gt.CacheAction.reuse, gt.chooseAction(false, 0, 256));
+    try std.testing.expectEqual(h, gt.hashEdges(&before));
+}
