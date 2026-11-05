@@ -69,8 +69,16 @@ zig build test
 
 ### CI
 
-CI runs on the local Gitea act_runner (`git.dell.home.arpa`), not on a hosted runner:
-`.gitea/workflows/ci.yml`. It runs the **same command you do locally**, `just check-full`.
+CI runs on **GitHub-hosted runners** (`.github/workflows/ci.yml`, `ubuntu-latest`). The repo is
+public, so standard-runner minutes are free and unmetered — there is no reason to spend a
+self-hosted runner slot. It runs the **same command you do locally**, `just check-full`.
+
+`.gitea/workflows/ci.yml` is a **manual-dispatch-only** copy for the local Gitea act_runner
+(`git.dell.home.arpa`, label `ns-ci`, image from `ci/runner/Dockerfile`): it exists for when GitHub
+is unreachable. It is dispatch-only by decision: a fallback pipeline that also fires
+automatically would run every gate twice for no added signal. (Measured 2026-11-05 on Gitea
+28.2.0: a push carrying `.github/workflows/ci.yml` with `on: push:` produced no Gitea run, so today
+the two directories are not redundant — the rule above keeps that from mattering.)
 
 - **Runs** — `just check` (cross-compile the DLL + `inject.exe`, 31 Zig test roots, the
   `scripts/` layout fences, both drift `--check`s) plus `pytest scripts` in full, then asserts the
@@ -83,14 +91,16 @@ CI runs on the local Gitea act_runner (`git.dell.home.arpa`), not on a hosted ru
 - **Never runs** — any `c1_*`/`c2_*` live shot, `game_supervisor.py`, the popup/OCR family, or
   IDA. `docs/roadmap.md` §2 records the live-detour gate as 「只在点名时」 with a per-plan shot
   budget, so wiring one into CI would bypass the authorization gate instead of exercising it.
+  `scripts/test_ci_workflows.py` pins both that rule and the "Gitea copy stays manual" one.
 - **Therefore no Windows capacity is needed**: the shipped artifacts cross-compile on Linux and are
   never executed there. The runner must be **glibc** (Alpine/musl fails `zig build test` for
   QuickJS allocator reasons documented at `build.zig:44-47`).
-- Toolchain pins (zig 0.16.0, just) live at the top of the workflow and are sha256-verified.
+- Toolchain pins (zig 0.16.0, just) live at the top of both workflows and are sha256-verified.
   `zig build abi-probe` is non-default and costs ~72 s cold, so it only runs on manual dispatch.
 - **Remotes** — `origin` carries two push URLs (GitHub `loficore/Neo-Stellaris` **and** the local
-  Gitea), so a single `git push` lands on both; CI only ever runs on the Gitea copy. A fresh clone
-  has to restore that, since it is local git config and not part of the tree:
+  Gitea), so a single `git push` lands on both. GitHub is the one that matters: PRs and merges
+  happen there, and Gitea is a mirror. A fresh clone has to restore the second URL, since it is
+  local git config and not part of the tree:
   ```bash
   git remote set-url --add --push origin git@github.com:loficore/Neo-Stellaris.git
   git remote set-url --add --push origin ssh://git@git.dell.home.arpa:2222/lofibass/Neo-Stellaris.git
