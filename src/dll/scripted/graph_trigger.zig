@@ -208,7 +208,6 @@ pub fn hashEdges(rows: []const Edge) u64 {
     return h;
 }
 
-
 /// `neo_score` 的两个来源。0 = 烘焙表(C5-SCORE 原行为),1 = 活体重算(本计划)。
 pub const SCORE_SOURCE_TABLE: u32 = 0;
 pub const SCORE_SOURCE_LIVE: u32 = 1;

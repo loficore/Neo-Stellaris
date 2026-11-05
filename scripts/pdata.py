@@ -1,7 +1,10 @@
 """x64 .pdata (RUNTIME_FUNCTION) table -> exact function bounds, no analysis needed.
 usage: pdata.py [query_rva ...]   # no args: print count + widest functions
 """
-import sys, struct, bisect, os
+import sys
+import struct
+import bisect
+import os
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 EXE = os.environ.get('NS_STELLARIS_EXE',
                      '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe')

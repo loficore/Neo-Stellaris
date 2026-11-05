@@ -77,9 +77,12 @@ def test_pack_spec_round_trips_direct_and_deref():
         unpack_spec(1 << 63)
 
 def test_decode_records_rejects_trailing_bytes():
-    ctx = bytearray(944); _put32(ctx, 0x38, 5)
-    a3 = bytearray(256); _put32(a3, 0x10, 9)
-    window = bytearray(256); _put32(window, 0x20, 7)
+    ctx = bytearray(944)
+    _put32(ctx, 0x38, 5)
+    a3 = bytearray(256)
+    _put32(a3, 0x10, 9)
+    window = bytearray(256)
+    _put32(window, 0x20, 7)
     raw = _make_record(3, ctx, a3, (0x200000,), (window,))
     [rec] = decode_records(raw)
     assert (rec["valid"], rec["token"], rec["serial"]) == (1, 4242, 3)
@@ -146,7 +149,8 @@ def test_column_sequences_maps_pointer_windows_to_source_offsets():
         _put32(ctx, 0x38, value)
         _put64(ctx, 0x10, 0x200000)
     w0, w1 = bytearray(256), bytearray(256)
-    _put32(w0, 0x20, 7); _put32(w1, 0x20, 8)
+    _put32(w0, 0x20, 7)
+    _put32(w1, 0x20, 8)
     records = decode_records(b"".join([
         _make_record(0, ctx0, targets=(0x200000,), windows=(w0,)),
         _make_record(1, ctx1, targets=(0x200000,), windows=(w1,)),
@@ -195,18 +199,22 @@ def test_find_scope_column_accepts_the_unique_exact_column():
 def test_find_scope_column_rejects_permutation_and_ambiguity():
     reversed_records = []
     for i, value in enumerate(reversed(range(787))):
-        ctx = bytearray(944); _put32(ctx, 0x38, value)
+        ctx = bytearray(944)
+        _put32(ctx, 0x38, value)
         reversed_records.append(_make_record(i, ctx))
     assert find_scope_column(decode_records(b"".join(reversed_records)))["status"] == "permutation"
     two = []
     for i in range(787):
-        ctx = bytearray(944); _put32(ctx, 0x38, i); _put32(ctx, 0x40, i)
+        ctx = bytearray(944)
+        _put32(ctx, 0x38, i)
+        _put32(ctx, 0x40, i)
         two.append(_make_record(i, ctx))
     assert find_scope_column(decode_records(b"".join(two)))["status"] == "ambiguous_column"
     assert find_scope_column(_linear_records(786))["status"] == "count_mismatch"
     none_records = []
     for i in range(787):
-        ctx = bytearray(944); _put32(ctx, 0x39, i & 0xFF)  # 非 4 对齐,且不构成 plausible qword
+        ctx = bytearray(944)
+        _put32(ctx, 0x39, i & 0xFF)  # 非 4 对齐,且不构成 plausible qword
         none_records.append(_make_record(i, ctx))
     assert find_scope_column(decode_records(b"".join(none_records)))["status"] == "none"
 

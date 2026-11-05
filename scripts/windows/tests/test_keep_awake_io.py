@@ -58,7 +58,7 @@ def test_serve_logs_exactly_one_line_per_desktop_change(monkeypatch, tmp_path):
     monkeypatch.setattr(ka, "read_command", lambda p, s: next(cmds))
     assert ka.serve(types.SimpleNamespace(interval=0.0, assert_every=0.0,
                                           stop_after_s=0.0)) == 0
-    lines = [json.loads(l) for l in open(ka.LOG_PATH, encoding="utf-8")]
+    lines = [json.loads(ln) for ln in open(ka.LOG_PATH, encoding="utf-8")]
     assert [x["event"] for x in lines] == ["desktop_change", "desktop_change"]
     assert [x["desktop"] for x in lines] == ["locked", "unlocked"]
     assert ka.read_status()["note"] == "quit"

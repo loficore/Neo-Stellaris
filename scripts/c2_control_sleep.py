@@ -40,9 +40,7 @@ import time
 import psutil
 
 from c2_harness import (
-    resolve_pid, resolve_base_address, inject_dll, list_exports, remote_alloc,
-    read_memory, call_remote, assert_game_alive, dispatch_watching_buffer,
-    dispatch_watching_buffer,
+    call_remote, assert_game_alive, dispatch_watching_buffer,
     inject_dll,
     kernel32_call_address,
     list_exports,

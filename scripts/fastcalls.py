@@ -5,7 +5,11 @@ function. No full linear disassembly, so it runs in seconds: it matches the
 
 usage: fastcalls.py <target_rva_hex> [--section .text]
 """
-import sys, struct, bisect, os, re
+import sys
+import struct
+import bisect
+import os
+import re
 from collections import defaultdict
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64

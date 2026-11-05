@@ -5,7 +5,9 @@ static table keyed by a token id is findable offline. Two probes per id:
   2. code sites with the id as an immediate operand (cmp/mov) outside the driver
 usage: idscan.py <id_hex> [<id_hex> ...]
 """
-import sys, os, struct
+import sys
+import os
+import struct
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_IMM
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')

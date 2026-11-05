@@ -7,7 +7,9 @@ boundary heuristic). Emits a per-anchor caller-function histogram.
 
 usage: python scan444.py <pid> [js_path]
 """
-import sys, json, frida
+import sys
+import json
+import frida
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 

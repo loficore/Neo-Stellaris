@@ -225,8 +225,7 @@ test "ProtectGuard enum values" {
 test "win32 wrappers are inert off Windows" {
     if (comptime builtin.os.tag == .windows) return;
     var dummy: usize = 0;
-    try std.testing.expectError(error.VirtualProtectFailed,
-        ProtectGuard.change(@ptrCast(&dummy), 4096, .execute_readwrite));
+    try std.testing.expectError(error.VirtualProtectFailed, ProtectGuard.change(@ptrCast(&dummy), 4096, .execute_readwrite));
     try std.testing.expectError(error.VirtualFreeFailed, freeMem(@ptrCast(&dummy)));
     flushInstructionCache(@ptrCast(&dummy), 4096);
     try std.testing.expect(!isCommitted(@intFromPtr(&dummy)));

@@ -18,7 +18,12 @@ Caveats this encodes deliberately:
 
 usage: riprefs.py <rva_hex> [more...] [--verify] [--section .text]
 """
-import sys, os, struct, re, bisect, argparse
+import sys
+import os
+import struct
+import re
+import bisect
+import argparse
 from collections import defaultdict
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64

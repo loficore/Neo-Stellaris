@@ -93,7 +93,7 @@ All analysis artifacts go to `evidence/` at project root:
 - **`c1_*`/`c2_*` 的文件名还是 scp 到 `C:/temp/<name>.py` 的线上契约**(裁定 P5),且
   `scripts/test_c2_harness.py` 用裸名 import 它们、按「上两级」定位 `zig-out/` 的 DLL —— 这一族既不能改名,
   也不能下沉一级目录。
-- **根目录 `justfile` 只做薄索引**(`just --list`);`just check` 一次跑构建 + 两套测试 + 布局围栏,它不实现逻辑。
+- **根目录 `justfile` 只做薄索引**(`just --list`);`just check` 一次跑 lint(`zig fmt --check` + `ruff check`)+ 构建 + 两套测试 + 布局围栏,它不实现逻辑。
   `just check-full` = `check` + `scripts/` 全量 python 测试,是 **CI(`.github/workflows/ci.yml`,GitHub 托管)跑的那一条**;
   `check` 只覆盖 418/1,461 条,别拿它当「本地绿 = CI 绿」。`.gitea/workflows/ci.yml` 是同一道门的**手动**副本
   (本地 act_runner),**永不随 push 触发**(2026-11-05 实测:Gitea 28.2.0 不读 `.github/workflows/`,带

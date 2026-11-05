@@ -20,7 +20,10 @@ below (memcpy, the cstr reserve); both writers are asserted not to need the heap
 usage: emu_desc.py static-dynamic          ; diff the two paths for one sample
        emu_desc.py oracle [tsv] [out]      ; emit the per-entry oracle table
 """
-import sys, os, struct, hashlib
+import sys
+import os
+import struct
+import hashlib
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_64, UC_PROT_ALL, UC_HOOK_CODE
 from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX
 
@@ -97,7 +100,8 @@ class Engine:
             self.touched.update(range(rcx, rcx + r8))
             uc.mem_write(rcx, src)
             self.memcpys += 1
-            self._ret(); return
+            self._ret()
+            return
         if off == RVA_RESERVE:
             rcx, rdx = (uc.reg_read(uc_reg(r)) for r in ('RCX', 'RDX'))
             cap = struct.unpack('<I', bytes(uc.mem_read(rcx + 0x10, 4)))[0]
@@ -105,7 +109,8 @@ class Engine:
                 raise RuntimeError('reserve wants %d > cap %d — name too long for inline'
                                    % (rdx, cap))
             self.reserves += 1
-            self._ret(); return
+            self._ret()
+            return
         if addr in self.heap:                      # an unimplemented call target
             raise RuntimeError('unhandled call to 0x%x' % (addr - BASE))
 
@@ -131,7 +136,7 @@ class Engine:
         raise RuntimeError('did not return from 0x%x' % rva)
 
 from unicorn.x86_const import (UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8,
-                               UC_X86_REG_R9, UC_X86_REG_RAX as _RAX)
+                               UC_X86_REG_R9)
 def uc_reg(n):
     return {'RCX': UC_X86_REG_RCX, 'RDX': UC_X86_REG_RDX,
             'R8': UC_X86_REG_R8, 'R9': UC_X86_REG_R9}[n]

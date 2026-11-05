@@ -4,7 +4,9 @@ descriptor array 0x337B400 + 0x120*n. Buckets by field offset within the
 
 usage: descscan.py [d0_rva] [count]
 """
-import sys, os, struct
+import sys
+import os
+import struct
 from collections import Counter, defaultdict
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_REG_RIP

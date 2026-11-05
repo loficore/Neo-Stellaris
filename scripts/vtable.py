@@ -13,7 +13,12 @@ which is why `--first` is what trims them, not the code check.
 
 usage: vtable.py <data_rva_hex> [--slots N] [--callers] [--first]
 """
-import sys, os, struct, bisect, re, argparse
+import sys
+import os
+import struct
+import bisect
+import re
+import argparse
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_MEM, X86_REG_RIP

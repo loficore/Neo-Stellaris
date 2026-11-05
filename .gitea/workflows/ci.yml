@@ -66,14 +66,16 @@ jobs:
             tar -xzf /tmp/just.tar.gz -C /usr/local/bin just
           fi
 
-          if ! python3 -c 'import pytest, capstone, pefile, psutil' >/dev/null 2>&1; then
+          if ! python3 -c 'import pytest, capstone, pefile, psutil' >/dev/null 2>&1 \
+             || ! command -v ruff >/dev/null 2>&1; then
             python3 -m pip install -q --disable-pip-version-check \
-              'pytest==8.4.2' 'capstone==5.0.7' 'pefile==2024.8.26' psutil
+              'pytest==8.4.2' 'capstone==5.0.7' 'pefile==2024.8.26' psutil 'ruff==0.17.3'
           fi
 
           zig version
           just --version
           python3 -m pytest --version
+          ruff --version
 
       - name: "just check-full (same gate as .github/workflows/ci.yml)"
         run: just check-full

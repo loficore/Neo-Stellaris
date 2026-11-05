@@ -325,7 +325,7 @@ def test_game_input_verbs_invalidate_the_console_belief(monkeypatch, tmp_path):
     for verb, cmd in (("speed", {"verb": "speed", "direction": "up"}),
                       ("click", {"verb": "click", "x": 10, "y": 20}),
                       ("dismiss", {"verb": "dismiss"})):
-        sent = _input_stub(monkeypatch, tmp_path)
+        _input_stub(monkeypatch, tmp_path)
         action = "click_option" if verb == "click" else "unpause"
         state = _armed_state(tmp_path, action,
                              last_bbox=(100, 100, 200, 200), paused="paused")
@@ -478,7 +478,7 @@ def test_dismiss_logs_the_point_and_whether_the_window_survived(monkeypatch, tmp
 
 
 def test_dismiss_reports_no_effect_when_the_window_is_still_there(monkeypatch, tmp_path):
-    sent = _input_stub(monkeypatch, tmp_path)
+    _input_stub(monkeypatch, tmp_path)
     monkeypatch.setattr(gs, "read_window",
                         lambda hwnd: {"bright": 0.4, "gold": 10, "rows": [],
                                       "bbox": [1000, 466, 1939, 840]})

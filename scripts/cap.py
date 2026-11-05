@@ -1,4 +1,6 @@
-import sys, os, struct
+import sys
+import os
+import struct
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 
@@ -20,18 +22,17 @@ for i in range(nsec):
     secs.append((nm, va, vs, praw))
 def rd(rva, n):
     for nm, va, vs, praw in secs:
-        if va <= rva < va + vs: return f[praw + rva - va: praw + rva - va + n]
+        if va <= rva < va + vs:
+            return f[praw + rva - va: praw + rva - va + n]
     return b''
 md = Cs(CS_ARCH_X86, CS_MODE_64)
 md.detail = True
 BASE = 0x140000000
 def dis(rva, n, label=None):
-    if label: print(f'\n== {label} @{rva:x} ==')
+    if label:
+        print(f'\n== {label} @{rva:x} ==')
     code = rd(rva, n*16)
     for ins in md.disasm(code, BASE + rva):
-        extra = ''
-        if ins.mnemonic in ('call','lea','jmp','jcc') and ins.operands and ins.operands[-1].type == 4:
-            pass
         mark = ''
         if '[rip' in ins.op_str:
             import re as _re
@@ -43,11 +44,14 @@ def dis(rva, n, label=None):
         elif ins.mnemonic == 'call':
             try:
                 t = int(ins.op_str, 16)
-                if t > BASE: mark = f'   -> imgrel {t-BASE:x}'
-            except ValueError: pass
+                if t > BASE:
+                    mark = f'   -> imgrel {t-BASE:x}'
+            except ValueError:
+                pass
         print(f'{ins.address-BASE:x}: {ins.mnemonic} {ins.op_str}{mark}')
         n -= 1
-        if n <= 0: break
+        if n <= 0:
+            break
 dis(0xD150A0, 55, 'register_fn')
 dis(0xD152C0, 30, 'caller context in master init')
 dis(0xD15175, 90, 'register_fn body cont')

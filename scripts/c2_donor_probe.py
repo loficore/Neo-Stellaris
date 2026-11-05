@@ -111,7 +111,6 @@ from c2_harness import (
     resolve_pid, resolve_base_address, inject_dll,
     list_exports, call_remote, call_remote_with_arg,
     remote_alloc, read_memory, assert_game_alive,
-    open_process_handle, close_handle,
 )
 
 DEFAULT_DLL = r"C:\temp\sqjs_c4.dll"

@@ -127,8 +127,7 @@ test "slot2 stats blob is 16 bytes: calls then target" {
     var out: [vtable.SLOT2_STATS_SIZE]u8 = undefined;
     try std.testing.expect(vtable.slot2StatsInto(out[0..]));
     try std.testing.expectEqual(@as(u64, 1), std.mem.readInt(u64, out[0..8], .little));
-    try std.testing.expectEqual(
-        @intFromPtr(&fakeSlot2), std.mem.readInt(u64, out[8..16], .little));
+    try std.testing.expectEqual(@intFromPtr(&fakeSlot2), std.mem.readInt(u64, out[8..16], .little));
 }
 
 test "buildFromSlots rejects a short donor and a bad Execute slot" {
@@ -726,11 +725,11 @@ test "donor EXPECTED_CODE is the prologue bytes read from 0x3AFD30" {
         0x48, 0x89, 0x5C, 0x24, 0x10, // mov [rsp+0x10], rbx
         0x48, 0x89, 0x74, 0x24, 0x18, // mov [rsp+0x18], rsi
         0x48, 0x89, 0x7C, 0x24, 0x20, // mov [rsp+0x20], rdi
-        0x55,                         // push rbp
-        0x41, 0x54,                   // push r12
-        0x41, 0x55,                   // push r13
-        0x41, 0x56,                   // push r14
-        0x41, 0x57,                   // push r15
+        0x55, // push rbp
+        0x41, 0x54, // push r12
+        0x41, 0x55, // push r13
+        0x41, 0x56, // push r14
+        0x41, 0x57, // push r15
     };
     try std.testing.expectEqual(@as(usize, 24), donor_probe.EXPECTED_CODE.len);
     try std.testing.expectEqualSlices(u8, &expect, &donor_probe.EXPECTED_CODE);

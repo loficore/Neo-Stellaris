@@ -19,7 +19,11 @@ encoding (`REX? FF /2 08`) are decoded at all.
 
 usage: createsites.py [--gap 8] [--list 40]
 """
-import sys, os, struct, re, argparse
+import sys
+import os
+import struct
+import re
+import argparse
 from collections import defaultdict
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64

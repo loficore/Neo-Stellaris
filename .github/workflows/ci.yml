@@ -86,7 +86,8 @@ jobs:
           tar -xzf /tmp/just.tar.gz -C /usr/local/bin just
 
           # pytest + the two pinned offline-PE decoders (imported at module level
-          # by the tools their tests cover) + psutil (windows-subpackage tests).
+          # by the tools their tests cover) + psutil (windows-subpackage tests)
+          # + ruff (the `just lint` step of `just check-full`).
           # `unicorn` is deliberately absent: only scripts/emu_desc.py needs it
           # and its artifacts are checked in, so the oracle is not a CI step.
           #
@@ -95,12 +96,13 @@ jobs:
           # the working-tree check at the end of this job.
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install -q --disable-pip-version-check \
-            'pytest==8.4.2' 'capstone==5.0.7' 'pefile==2024.8.26' psutil
+            'pytest==8.4.2' 'capstone==5.0.7' 'pefile==2024.8.26' psutil 'ruff==0.17.3'
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
           zig version
           just --version
           "$RUNNER_TEMP/venv/bin/python" -m pytest --version
+          "$RUNNER_TEMP/venv/bin/ruff" --version
 
       - name: "just check-full (build + 31 zig test roots + fences + drift + 1,461 python tests)"
         # `just check` alone covers only 418 of the 1,461 python tests: it runs

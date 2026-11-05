@@ -227,8 +227,7 @@ pub fn recordCall(caller: usize, self: usize, scope: usize) u32 {
     }
     const id = readU32(scope, SCOPE_ID_OFF);
     if (ruleMatches(id)) recordRuleHit(id);
-    recordSample(caller_rva, id, readU32(scope, SCOPE_MASK_OFF),
-                 @intCast(self), @intCast(scope));
+    recordSample(caller_rva, id, readU32(scope, SCOPE_MASK_OFF), @intCast(self), @intCast(scope));
     return id;
 }
 
@@ -489,8 +488,7 @@ test "bounded capture records the first RING_CAP calls and then closes" {
     // The closed recorder returns before touching any counter: `dropped` only counts a
     // sample that raced past the cap on another thread, so a single-threaded run leaves 0.
     try std.testing.expectEqual(@as(u64, 0), s.dropped);
-    try std.testing.expectEqual(@as(u32, 0x1D08520),
-        @atomicLoad(u32, &stats.last_caller, .monotonic));
+    try std.testing.expectEqual(@as(u32, 0x1D08520), @atomicLoad(u32, &stats.last_caller, .monotonic));
 
     setDrainCap(RING_CAP * @sizeOf(Entry));
     var buf: [RING_CAP * @sizeOf(Entry)]u8 align(8) = undefined;
@@ -551,7 +549,7 @@ test "act suppression is armed only by mode 1 and only with a rule" {
     setRule(0, 0);
     setAct(1);
     try std.testing.expect(suppresses());
-    try std.testing.expect(!ruleIsArmed());      // no rule -> nothing to suppress
+    try std.testing.expect(!ruleIsArmed()); // no rule -> nothing to suppress
     setRule(100, 0);
     try std.testing.expect(ruleIsArmed());
     try std.testing.expect(ruleMatches(200));

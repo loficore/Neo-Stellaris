@@ -471,8 +471,8 @@ test "statsInto writes one k=v line with all eight keys" {
     const n = statsInto(&buf);
     const line = buf[0..n];
     for ([_][]const u8{
-        "calls=",         "token_matched=", "samples=", "x_null=",
-        "patch_size=",    "installed=",     "verify=",  "last_token=",
+        "calls=",      "token_matched=", "samples=", "x_null=",
+        "patch_size=", "installed=",     "verify=",  "last_token=",
     }) |k| {
         try std.testing.expect(std.mem.indexOf(u8, line, k) != null);
     }

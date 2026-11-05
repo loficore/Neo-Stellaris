@@ -12,7 +12,7 @@
 //     position: {x, y}       — screen position (optional)
 //     draggable: bool        — can user drag window
 //     movable: bool          — alias for draggable
-//     
+//
 //   instantTextBoxType — text display element
 //     name: string           — element identifier
 //     text: string           — display text (localization key or literal)

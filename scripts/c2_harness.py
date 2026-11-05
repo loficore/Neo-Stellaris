@@ -1072,8 +1072,14 @@ def capture_thread_state(thread_handle, process_handle) -> dict:
 
     # Times first and without suspension: they are the primary discriminator, so
     # they must survive a failed or refused context read.
-    tk = _FILETIME(0); tu = _FILETIME(0); _tc = _FILETIME(0); _te = _FILETIME(0)
-    pk = _FILETIME(0); pu = _FILETIME(0); _pc = _FILETIME(0); _pe = _FILETIME(0)
+    tk = _FILETIME(0)
+    tu = _FILETIME(0)
+    _tc = _FILETIME(0)
+    _te = _FILETIME(0)
+    pk = _FILETIME(0)
+    pu = _FILETIME(0)
+    _pc = _FILETIME(0)
+    _pe = _FILETIME(0)
     if not k32.GetThreadTimes(thread_handle, ctypes.byref(_tc), ctypes.byref(_te),
                               ctypes.byref(tk), ctypes.byref(tu)):
         state["times_err"] = f"GetThreadTimes gle={_gle()}"

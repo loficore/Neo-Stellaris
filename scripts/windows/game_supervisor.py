@@ -794,7 +794,6 @@ def _panel_bbox(luma):
     explicit ``dismiss`` and never to decide that a choice window exists.
     The three gates live in ``popup_geometry.panel_bbox``.
     """
-    import numpy as np
     mask = luma > 120
     return panel_bbox([int(n) for n in mask.sum(axis=1)],
                       [int(n) for n in mask.sum(axis=0)])

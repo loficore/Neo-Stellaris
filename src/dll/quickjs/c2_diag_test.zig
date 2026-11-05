@@ -232,7 +232,7 @@ test "C2WriteQuickJSPointersInto returns rt/ctx bit-identical to C2GetQuickJSPoi
     try std.testing.expect(ctx != null);
 
     const rt_bits = std.mem.bytesToValue(usize, out16[0..@sizeOf(usize)]);
-    const ctx_bits = std.mem.bytesToValue(usize, out16[@sizeOf(usize).. @sizeOf(usize) * 2]);
+    const ctx_bits = std.mem.bytesToValue(usize, out16[@sizeOf(usize) .. @sizeOf(usize) * 2]);
     try std.testing.expectEqual(@intFromPtr(rt), rt_bits);
     try std.testing.expectEqual(@intFromPtr(ctx), ctx_bits);
 }
@@ -259,7 +259,7 @@ test "C2WriteQuickJSPointersInto writes exactly 16 bytes and nothing outside" {
     var ctx: ?*anyopaque = null;
     C2GetQuickJSPointers(&rt, &ctx);
     const rt_bits = std.mem.bytesToValue(usize, buf[0..@sizeOf(usize)]);
-    const ctx_bits = std.mem.bytesToValue(usize, buf[@sizeOf(usize).. @sizeOf(usize) * 2]);
+    const ctx_bits = std.mem.bytesToValue(usize, buf[@sizeOf(usize) .. @sizeOf(usize) * 2]);
     try std.testing.expectEqual(@intFromPtr(rt), rt_bits);
     try std.testing.expectEqual(@intFromPtr(ctx), ctx_bits);
 }
@@ -642,8 +642,8 @@ test "C2ExecStats renders every key exactly once" {
     const n = C2ExecStats(&buf, @intCast(buf.len));
     const text = buf[0..@intCast(n)];
     for ([_][]const u8{
-        "armed",       "token",    "budget_left", "calls",     "skip",      "busy",
-        "js_calls",    "js_ok",    "js_err",      "mismatch",  "last_rc",   "last_token",
+        "armed",      "token", "budget_left", "calls",    "skip",    "busy",
+        "js_calls",   "js_ok", "js_err",      "mismatch", "last_rc", "last_token",
         "last_value",
     }) |key| {
         try std.testing.expectEqual(@as(usize, 1), countExactKey(text, key));
@@ -724,9 +724,9 @@ test "the shared sequence tags every step before the runtime exists" {
     const log = std.mem.span(@as([*:0]const u8, @ptrCast(&buf)));
 
     const markers = [_][]const u8{
-        "enter ",     "heap_ok ",   "alloc_ok ",  "free_ok ",
-        "new_rt ",    "rt=",        "opaque_ok ", "limits_ok ",
-        "new_raw ",   "raw_ok ",    "new_diag ",  "diag_rc=0",
+        "enter ",   "heap_ok ", "alloc_ok ",  "free_ok ",
+        "new_rt ",  "rt=",      "opaque_ok ", "limits_ok ",
+        "new_raw ", "raw_ok ",  "new_diag ",  "diag_rc=0",
     };
     var prev: ?usize = null;
     for (markers) |marker| {
@@ -736,8 +736,7 @@ test "the shared sequence tags every step before the runtime exists" {
         };
         if (prev) |p| {
             if (at <= p) {
-                std.debug.print("marker {s} at {d} is not after the previous at {d}: {s}\n",
-                               .{ marker, at, p, log });
+                std.debug.print("marker {s} at {d} is not after the previous at {d}: {s}\n", .{ marker, at, p, log });
                 return error.StepMarkersOutOfOrder;
             }
         }
@@ -805,8 +804,7 @@ test "a completed heap_malloc always closes its M marker (offline no-dangling-M)
         if (i + 1 >= between.len) return error.DanglingMallocMarker;
         const nxt = between[i + 1];
         if (nxt != 'm' and nxt != '!') {
-            std.debug.print("M at {d} followed by '{c}', expected m or !: {s}\n",
-                            .{ i, nxt, between });
+            std.debug.print("M at {d} followed by '{c}', expected m or !: {s}\n", .{ i, nxt, between });
             return error.MallocMarkerNotClosed;
         }
     }
