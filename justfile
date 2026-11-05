@@ -39,7 +39,19 @@ chokepoints-check:
 graph-fixture-check:
     python3 scripts/graph_fixture_emit.py --edges evidence/xrefs/c5_campaign_edges_4_4_4.tsv --scores evidence/xrefs/chokepoint_scores_4_4_4.tsv --out src/dll/c2/graph_fixture.zig --check
 
-check: build test fence host-tests chokepoints-check graph-fixture-check
+check: lint build test fence host-tests chokepoints-check graph-fixture-check
+
+# Lint gates.  Two things are pinned here and nowhere else matters:
+#   * zig  — `zig fmt` is the compiler's own formatter, so the zig version pin
+#            (0.16.0, in the workflow and ci/runner/Dockerfile) covers it.
+#   * ruff — pinned 0.17.3 (scripts/requirements.txt + both CI install lists),
+#            configured in ruff.toml.  Local prerequisite:
+#            `uv tool install ruff==0.17.3` (or `pip install ruff==0.17.3`).
+# `--check` means "would reformat", so both are read-only: the tree must come
+# out of this recipe exactly as it went in.
+lint:
+    zig fmt --check .
+    ruff check .
 
 # CI 门：check + scripts/ 全量（check 只覆盖 418/1,461 条 python 测试）
 check-full: check

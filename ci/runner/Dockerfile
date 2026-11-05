@@ -62,7 +62,7 @@ RUN set -eux; \
 RUN set -eux; \
     python3 -m venv /opt/py; \
     /opt/py/bin/pip install --no-cache-dir -q \
-      'pytest==8.4.2' 'capstone==5.0.7' 'pefile==2024.8.26' psutil; \
+      'pytest==8.4.2' 'capstone==5.0.7' 'pefile==2024.8.26' psutil 'ruff==0.17.3'; \
     /opt/py/bin/python -m pytest --version; \
     /opt/py/bin/python -c 'import capstone, pefile, psutil'
 

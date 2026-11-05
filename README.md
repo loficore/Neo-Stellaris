@@ -80,10 +80,14 @@ automatically would run every gate twice for no added signal. (Measured 2026-11-
 28.2.0: a push carrying `.github/workflows/ci.yml` with `on: push:` produced no Gitea run, so today
 the two directories are not redundant — the rule above keeps that from mattering.)
 
-- **Runs** — `just check` (cross-compile the DLL + `inject.exe`, 31 Zig test roots, the
-  `scripts/` layout fences, both drift `--check`s) plus `pytest scripts` in full, then asserts the
-  working tree is untouched. `just check` on its own covers only 418 of the 1,461 Python tests;
-  the rest are the `test_c2_*_probe.py` / `test_c2_harness.py` contract layers.
+- **Runs** — `just check` (lint: `zig fmt --check` + `ruff check`; cross-compile the DLL +
+  `inject.exe`; 31 Zig test roots; the `scripts/` layout fences; both drift `--check`s) plus
+  `pytest scripts` in full, then asserts the working tree is untouched. `just check` on its own
+  covers only 418 of the 1,461 Python tests; the rest are the `test_c2_*_probe.py` /
+  `test_c2_harness.py` contract layers.
+- **Lint is a gate, and both halves are pinned** — ruff 0.17.3 (`ruff.toml` states its `select`
+  explicitly so the rule list cannot move under us) and `zig fmt` (the compiler's own formatter,
+  covered by the zig pin). `scripts/scratch/` is excluded: those files are frozen evidence.
 - **Skips without the game binary, loudly** — eight tests pin bytes against the real
   `stellaris.exe`, so on a runner that has no copy they report `SKIPPED … set NS_STELLARIS_EXE`
   instead of being deselected (that run is 1,101 passed / 8 skipped). They still bite on a machine

@@ -8,11 +8,37 @@
 # evidence-attached code has, and rewriting them would put unrelated churn
 # into a diff whose subject is something else.
 #
-# The rules that DO bite are kept: unused imports (F401), unsorted import
-# blocks that ruff can fix without reformatting the house style, and the
-# file-context rules the World-State work introduced.
+# 2026-11-05: this file became a *gate* (`just lint`, run by CI) instead of a
+# wish list, which forced two decisions to be written down:
+#
+# 1. `select` is explicit and the ruff version is pinned (0.17.3, in
+#    scripts/requirements.txt and both CI install lists).  Inheriting ruff's
+#    default set meant the effective rule list moved under us whenever ruff
+#    shipped; now a ruff upgrade is a deliberate edit in three places.
+# 2. `scripts/scratch/` is excluded.  Those files are frozen evidence
+#    (AGENTS.md: 原件冻结留档) and `evidence/` cites them by basename — a
+#    reformat would rewrite history that nothing can re-derive.
+#
+# Scope note: the selected set is the high-signal one (pyflakes + statement and
+# comparison level).  The wider families (SIM/PL/RUF/FURB/BLE/TRY, ~130 hits on
+# the maintained tree at the time of writing) are *known debt*, not enabled —
+# turning them on first would mean a 130-file style diff riding along with
+# whatever research change is in flight.  Widen `select` deliberately, in its
+# own commit.
+# top-level (not `[lint]`): ruff only accepts `exclude`/`extend-exclude` at the root.
+extend-exclude = ["scripts/scratch"]
+
 [lint]
+select = ["E4", "E7", "E9", "F", "W"]
 ignore = [
+    # `sys.path.insert(0, ...)` / `sys.stdout.reconfigure(...)` before the
+    # imports they exist for is the house pattern in most tools and every test
+    # file here.  Moving the imports above them would break the code, and a
+    # per-file `# noqa` on 40 sites would be noise.
+    "E402",
+    # The four below are the pre-existing house-style decisions from the
+    # original file; they are inert while their families are unselected, and
+    # stay here so the ruling survives whoever widens `select`.
     "I001",    # import block is un-sorted or un-formatted
     "UP031",   # printf-string-formatting
     "B904",    # raise ... from err inside an except clause

@@ -11,3 +11,8 @@
 capstone==5.0.7
 pefile==2024.8.26
 unicorn==2.1.4
+
+# Lint gate (`just lint`, run by CI).  Pinned because a new ruff release can add
+# rules and turn a green tree red without a code change; bumping this is a
+# deliberate edit together with ruff.toml's `select`.
+ruff==0.17.3
