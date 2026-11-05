@@ -35,7 +35,8 @@ OUT_DEFAULT = 'evidence/xrefs/class_info_census_4_4_4.tsv'
 BASE = 0x140000000
 OPERATOR_NEW = 0x2185218
 
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 no = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]
 secs = []
@@ -191,47 +192,47 @@ def classify(rva):
 # init arrays (db_global None), and those records are a different shape — including them made
 # 6 "factories" look like they consumed a parameter when they are in fact class vtables.
 KEYWORD_DBS = ('0x33746e8', '0x32611c8')
-rows = [r for r in csv.DictReader(open(REG_TSV), delimiter='\t')
-        if r['field0_rva'] not in ('', 'None', None) and r['db_global_rva'] in KEYWORD_DBS]
+with open(REG_TSV) as _reg:
+    rows = [r for r in csv.DictReader(_reg, delimiter='\t')
+            if r['field0_rva'] not in ('', 'None', None) and r['db_global_rva'] in KEYWORD_DBS]
 addrs = sorted({int(r['field0_rva'], 16) for r in rows})
 out_path = sys.argv[1] if len(sys.argv) > 1 else OUT_DEFAULT
-out = open(out_path, 'w')
-out.write('class_info_rva\tfield0_rva\tfactory_rva\tfactory_arg_reads\twhich_args\tnew_sizes\t'
-          'callees\tpublished_rvas\n')
+with open(out_path, 'w') as out:
+    out.write('class_info_rva\tfield0_rva\tfactory_rva\tfactory_arg_reads\twhich_args\tnew_sizes\t'
+              'callees\tpublished_rvas\n')
 
-f0 = Counter()
-arguse = Counter()
-callee_sets = Counter()
-newsize = Counter()
-whichkind = Counter()
-fail = 0
-for a in addrs:
-    d0, d1 = qword(a), qword(a + 8)
-    if d0 is None or d1 is None or not (BASE <= d1 < BASE + 0x2392000):
-        fail += 1
-        continue
-    info = classify(d1 - BASE)
-    if info is None:
-        fail += 1
-        continue
-    f0[hex(d0 - BASE)] += 1
-    arguse[info['arg_reads']] += 1
-    if info['arg_reads']:
-        whichkind['param register' if any(not r.startswith('[rsp') for r in info['read_regs'])
-                  else 'stack slot'] += 1
-    for s in dict.fromkeys(info['new_sizes']):
-        newsize[hex(s)] += 1
-    callee_sets[tuple(dict.fromkeys('indirect' if c is None else ('operator_new' if c == OPERATOR_NEW
-                                                                  else hex(c))
-                                    for c in info['callees']))] += 1
-    out.write('%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
-        hex(a), hex(d0 - BASE), hex(d1 - BASE), info['arg_reads'],
-        ' '.join(info['read_regs']),
-        ' '.join(hex(s) for s in dict.fromkeys(info['new_sizes'])),
-        ' '.join('indirect' if c is None else ('operator_new' if c == OPERATOR_NEW else hex(c))
-                 for c in info['callees']),
-        ' '.join(hex(p) for p in dict.fromkeys(info['published']))))
-out.close()
+    f0 = Counter()
+    arguse = Counter()
+    callee_sets = Counter()
+    newsize = Counter()
+    whichkind = Counter()
+    fail = 0
+    for a in addrs:
+        d0, d1 = qword(a), qword(a + 8)
+        if d0 is None or d1 is None or not (BASE <= d1 < BASE + 0x2392000):
+            fail += 1
+            continue
+        info = classify(d1 - BASE)
+        if info is None:
+            fail += 1
+            continue
+        f0[hex(d0 - BASE)] += 1
+        arguse[info['arg_reads']] += 1
+        if info['arg_reads']:
+            whichkind['param register' if any(not r.startswith('[rsp') for r in info['read_regs'])
+                      else 'stack slot'] += 1
+        for s in dict.fromkeys(info['new_sizes']):
+            newsize[hex(s)] += 1
+        callee_sets[tuple(dict.fromkeys('indirect' if c is None else ('operator_new' if c == OPERATOR_NEW
+                                                                      else hex(c))
+                                        for c in info['callees']))] += 1
+        out.write('%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (
+            hex(a), hex(d0 - BASE), hex(d1 - BASE), info['arg_reads'],
+            ' '.join(info['read_regs']),
+            ' '.join(hex(s) for s in dict.fromkeys(info['new_sizes'])),
+            ' '.join('indirect' if c is None else ('operator_new' if c == OPERATOR_NEW else hex(c))
+                     for c in info['callees']),
+            ' '.join(hex(p) for p in dict.fromkeys(info['published']))))
 
 print('class_info pairs censused:', len(addrs) - fail, ' skipped:', fail)
 print('field0 (the shared function):', f0.most_common(8))

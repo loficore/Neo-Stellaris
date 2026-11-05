@@ -331,7 +331,7 @@ def refuse_if_resident(dll_name, resident_base):
     upload under a new name (the §76.7 `sqjs_c5.dll` trick) or shoot in a new process.
     """
     if resident_base is None:
-        return None
+        return
     print(
         f"[trigpred] {dll_name} is already mapped at 0x{resident_base:x} — LoadLibraryA "
         "would reuse that image, so the sha256 recorded for this shot would attest a file "

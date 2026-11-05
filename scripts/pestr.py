@@ -6,7 +6,8 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 _cands = [os.environ.get('NS_STELLARIS_EXE'),
           '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe']
 EXE = next((c for c in _cands if c and os.path.exists(c)), None)
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 no = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]
 nsec = struct.unpack_from('<H', f, mz + 6)[0]

@@ -14,7 +14,8 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 EXE = os.environ.get('NS_STELLARIS_EXE',
                      '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe')
 TSV = 'evidence/xrefs/keyword_registration_table_4_4_4.tsv'
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 no = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]
 BASE = 0x140000000
@@ -28,14 +29,15 @@ for i in range(struct.unpack_from('<H', f, mz + 6)[0]):
 
 by_id = defaultdict(list)
 rows = 0
-for ln in open(TSV):
-    if ln.startswith('#'):
-        continue
-    p = ln.rstrip('\n').split('\t')
-    if len(p) < 5 or p[0] == '-':
-        continue
-    by_id[int(p[0])].append(p[2])
-    rows += 1
+with open(TSV) as _fh:
+    for ln in _fh:
+        if ln.startswith('#'):
+            continue
+        p = ln.rstrip('\n').split('\t')
+        if len(p) < 5 or p[0] == '-':
+            continue
+        by_id[int(p[0])].append(p[2])
+        rows += 1
 want = set(by_id)
 print(f'{rows} ids, {len(want)} distinct', flush=True)
 
@@ -82,15 +84,14 @@ per_fn = defaultdict(list)
 for s in sites:
     per_fn[s[5][0] if s[5] else 0].append(s)
 
-out = open('evidence/xrefs/token_id_use_sites_4_4_4.tsv', 'w')
-out.write('# func_start\tfunc_end\tsite_rva\tsection\tmnemonic\toperands'
-          '\ttoken_id\tkeyword\n')
-for fs in sorted(per_fn):
-    e = next((x[1] for x in funcs if x[0] == fs), 0)
-    for irva, nm, mn, ops, imm, fx in sorted(per_fn[fs], key=lambda s: s[0]):
-        out.write(f'0x{fs:x}\t0x{e:x}\t0x{irva:x}\t{nm}\t{mn}\t{ops}\t'
-                  f'{imm}\t{",".join(by_id[imm])}\n')
-out.close()
+with open('evidence/xrefs/token_id_use_sites_4_4_4.tsv', 'w') as out:
+    out.write('# func_start\tfunc_end\tsite_rva\tsection\tmnemonic\toperands'
+              '\ttoken_id\tkeyword\n')
+    for fs in sorted(per_fn):
+        e = next((x[1] for x in funcs if x[0] == fs), 0)
+        for irva, nm, mn, ops, imm, fx in sorted(per_fn[fs], key=lambda s: s[0]):
+            out.write(f'0x{fs:x}\t0x{e:x}\t0x{irva:x}\t{nm}\t{mn}\t{ops}\t'
+                      f'{imm}\t{",".join(by_id[imm])}\n')
 
 print(f'\n{len(sites)} sites in {len(per_fn)} functions')
 rank = sorted(per_fn.items(), key=lambda kv: len(kv[1]), reverse=True)

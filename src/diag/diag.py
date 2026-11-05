@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import frida
+import contextlib
 
 
 def get_device(host: str | None = None) -> frida.core.Device:
@@ -307,10 +308,8 @@ def cmd_monitor_effects(
 
     import time
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         time.sleep(args.duration)
-    except KeyboardInterrupt:
-        pass
 
     return format_response("monitor_effects", True, **script.exports_sync.collect())
 

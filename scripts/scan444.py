@@ -27,7 +27,8 @@ ANCHORS = [
     'CScriptedTriggerTemplateDatabase',
 ]
 
-js = open(JS_PATH, encoding='utf-8').read()
+with open(JS_PATH, encoding='utf-8') as _fh:
+    js = _fh.read()
 dev = frida.get_local_device()
 sess = dev.attach(PID)
 script = sess.create_script(js)

@@ -29,7 +29,8 @@ EXE = os.environ.get('NS_STELLARIS_EXE',
 BASE = 0x140000000
 MINLEN = int(sys.argv[1]) if len(sys.argv) > 1 else 40
 
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 no = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]
 secs = []
@@ -91,12 +92,13 @@ for nm, va, rsz, rp in secs:
 print(f'{len(arrays)} pointer arrays >= {MINLEN}', flush=True)
 
 name_by_id = defaultdict(list)
-for ln in open('evidence/xrefs/keyword_registration_table_4_4_4.tsv'):
-    if ln.startswith('#'):
-        continue
-    p = ln.rstrip('\n').split('\t')
-    if len(p) >= 5 and p[0] != '-':
-        name_by_id[int(p[0])].append(p[2])
+with open('evidence/xrefs/keyword_registration_table_4_4_4.tsv') as _fh:
+    for ln in _fh:
+        if ln.startswith('#'):
+            continue
+        p = ln.rstrip('\n').split('\t')
+        if len(p) >= 5 and p[0] != '-':
+            name_by_id[int(p[0])].append(p[2])
 
 md = Cs(CS_ARCH_X86, CS_MODE_64)
 md.detail = True
@@ -160,23 +162,22 @@ for nm, addr, n, dbs, nrec in summ:
     print(f'{nm+" 0x"+format(addr,"x"):<22} {n:>5} {nrec:>5}  ' +
           ', '.join(f'0x{d:x}x{c}' for d, c in dbs))
 
-out = open('evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv', 'w')
-out.write('# array_rva\tindex\tthunk_rva\tdb_global_rva\ttoken_id\tkeywords'
-          '\tfield0_rva\tfield0_target\tfield8_doc_rva\tdoc_first_line'
-          '\tinsert_fn_rva\n')
-for addr, i, t, db, tid, a, b, ins in sorted(rows):
-    tgt = '?'
-    if a is not None:
-        q = rd(a, 8)
-        if len(q) == 8:
-            v = struct.unpack('<Q', q)[0]
-            tgt = f'0x{v - BASE:x}' if v > BASE else repr(v)
-    doc = cstr(b, 200).split('\n')[0] if b else ''
-    out.write(f'0x{addr:x}\t{i}\t0x{t:x}\t{db and hex(db)}\t'
-              f'{tid}\t{",".join(name_by_id.get(tid, ["?"]))}\t'
-              f'{a and hex(a)}\t{tgt}\t{b and hex(b)}\t{doc}\t'
-              f'{ins and hex(ins)}\n')
-out.close()
+with open('evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv', 'w') as out:
+    out.write('# array_rva\tindex\tthunk_rva\tdb_global_rva\ttoken_id\tkeywords'
+              '\tfield0_rva\tfield0_target\tfield8_doc_rva\tdoc_first_line'
+              '\tinsert_fn_rva\n')
+    for addr, i, t, db, tid, a, b, ins in sorted(rows):
+        tgt = '?'
+        if a is not None:
+            q = rd(a, 8)
+            if len(q) == 8:
+                v = struct.unpack('<Q', q)[0]
+                tgt = f'0x{v - BASE:x}' if v > BASE else repr(v)
+        doc = cstr(b, 200).split('\n')[0] if b else ''
+        out.write(f'0x{addr:x}\t{i}\t0x{t:x}\t{db and hex(db)}\t'
+                  f'{tid}\t{",".join(name_by_id.get(tid, ["?"]))}\t'
+                  f'{a and hex(a)}\t{tgt}\t{b and hex(b)}\t{doc}\t'
+                  f'{ins and hex(ins)}\n')
 known = sum(1 for r in rows if r[4] in name_by_id)
 print(f'\n{len(rows)} records, {known} with a token id present in the '
       f'keyword table')

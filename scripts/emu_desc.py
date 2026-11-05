@@ -29,7 +29,8 @@ from unicorn.x86_const import UC_X86_REG_RIP, UC_X86_REG_RSP, UC_X86_REG_RAX
 
 EXE = os.environ.get('NS_STELLARIS_EXE',
                      '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe')
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 no = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]
 BASE = 0x140000000
@@ -231,11 +232,12 @@ def main():
         golden = sys.argv[4] if len(sys.argv) > 4 else \
             'src/dll/scripted/keyword_registry_golden.zig'
         rows = []
-        for line in open(tsv):
-            if line.startswith('#'):
-                continue
-            p = line.rstrip('\n').split('\t')
-            rows.append((int(p[0]), p[2]))
+        with open(tsv) as _fh:
+            for line in _fh:
+                if line.startswith('#'):
+                    continue
+                p = line.rstrip('\n').split('\t')
+                rows.append((int(p[0]), p[2]))
         by_len = {}
         extra = set()
         for tid, name in rows:

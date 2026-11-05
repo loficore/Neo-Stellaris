@@ -34,7 +34,8 @@ _cands = [os.environ.get('NS_STELLARIS_EXE'),
 EXE = next((c for c in _cands if c and os.path.exists(c)), None)
 if EXE is None:
     sys.exit('stellaris.exe not found - set NS_STELLARIS_EXE')
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 nsec = struct.unpack_from('<H', f, mz + 6)[0]
 nopt = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]
@@ -64,7 +65,8 @@ funcs.sort()
 md = Cs(CS_ARCH_X86, CS_MODE_64)
 md.detail = True
 census = sys.argv[1] if len(sys.argv) > 1 else 'evidence/xrefs/class_info_census_4_4_4.tsv'
-rows = list(csv.DictReader(open(census), delimiter='\t'))
+with open(census) as _fh:
+    rows = list(csv.DictReader(_fh, delimiter='\t'))
 by_begin = {b: e for b, e in funcs}
 
 out = collections.Counter()

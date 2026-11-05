@@ -1108,10 +1108,9 @@ def capture_thread_state(thread_handle, process_handle) -> dict:
             state["rip"] = ctx.Rip
             state["rsp"] = ctx.Rsp
     finally:
-        if suspended != 0xFFFFFFFF:
-            if k32.ResumeThread(thread_handle) == 0xFFFFFFFF:
-                state["context_err"] = (state["context_err"] or "") + (
-                    f" ResumeThread gle={_gle()}")
+        if suspended != 0xFFFFFFFF and k32.ResumeThread(thread_handle) == 0xFFFFFFFF:
+            state["context_err"] = (state["context_err"] or "") + (
+                f" ResumeThread gle={_gle()}")
 
     return state
 

@@ -22,13 +22,12 @@ def get_device(host: str = "127.0.0.1", port: int = 27042) -> frida.core.Device:
             device = frida.get_local_device()
             print(f"[+] Local device: {device.name}")
             return device
-        else:
-            # Remote connection
-            print(f"[*] Connecting to remote device at {host}:{port}...")
-            manager = frida.get_device_manager()
-            device = manager.add_remote_device(f"{host}:{port}")
-            print(f"[+] Remote device: {device.name}")
-            return device
+        # Remote connection
+        print(f"[*] Connecting to remote device at {host}:{port}...")
+        manager = frida.get_device_manager()
+        device = manager.add_remote_device(f"{host}:{port}")
+        print(f"[+] Remote device: {device.name}")
+        return device
     except Exception as e:
         print(f"[-] Failed to get device: {e}")
         print("[!] Ensure frida-server is running and accessible.")

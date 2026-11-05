@@ -105,12 +105,8 @@ print(f'String size: {size}')
 
 # Read the chars
 if size > 0 and size < 1000:  # sanity check
-    if cap < 0x10:
-        # SSO: read from string_addr
-        name_data = read_mem(string_addr, size)
-    else:
-        # Heap: read from chars_addr
-        name_data = read_mem(chars_addr, size)
+    # SSO reads from string_addr, heap strings from chars_addr.
+    name_data = read_mem(string_addr, size) if cap < 0x10 else read_mem(chars_addr, size)
 
     if name_data:
         # Remove null terminator if present

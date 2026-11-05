@@ -58,6 +58,7 @@ import os
 import re
 import struct
 import collections
+import contextlib
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -143,7 +144,8 @@ def corpus_files():
 
 
 def main():
-    data = open(EXE, 'rb').read()
+    with open(EXE, 'rb') as _fh:
+        data = _fh.read()
     exe_strings = standalone_strings(data, sections(data))
 
     # ---------------- (a) id agreement ----------------
@@ -179,10 +181,8 @@ def main():
         if len(r) < 6 or r[3] not in (EFFECT_DB, TRIGGER_DB):
             continue
         reg_rows += 1
-        try:
+        with contextlib.suppress(ValueError):
             reg[r[5]].add(int(r[4]))
-        except ValueError:
-            pass
     agree = [n for n, ids in reg.items() if ids == {lookup(n)[0]}]
     disagree = [n for n, ids in reg.items() if lookup(n)[0] is not None and n not in agree]
     absent = [n for n in reg if lookup(n)[0] is None]
@@ -203,7 +203,8 @@ def main():
     for path in corpus_files():
         nfiles += 1
         try:
-            raw = open(path, 'rb').read()
+            with open(path, 'rb') as _fh:
+                raw = _fh.read()
         except OSError as e:
             print('unreadable', path, e)
             continue

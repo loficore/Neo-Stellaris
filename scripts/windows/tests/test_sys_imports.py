@@ -17,9 +17,8 @@ def _imports_sys(tree: ast.AST) -> bool:
         if isinstance(node, ast.Import):
             if any(alias.name == "sys" for alias in node.names):
                 return True
-        elif isinstance(node, ast.ImportFrom):
-            if node.module == "sys":
-                return True
+        elif isinstance(node, ast.ImportFrom) and node.module == "sys":
+            return True
     return False
 
 

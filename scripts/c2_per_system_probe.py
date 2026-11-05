@@ -616,7 +616,8 @@ def run(dll_path, out_path, *, systems, save_name, script_file=None, game_log=No
                 hits = marker_hits_since(resolve_game_log(game_log), offset, marker)
                 print(f"[persystem] marker={marker} hits={hits}")
         else:
-            script = open(script_file, encoding="utf-8").read().strip().splitlines()[0]
+            with open(script_file, encoding="utf-8") as _fh:
+                script = _fh.read().strip().splitlines()[0]
             sends = 1
             delivered, hits = send_script(cmd_file, script, game_log, script_wait_s)
             print(f"[persystem] script delivered={delivered} hits={hits}")

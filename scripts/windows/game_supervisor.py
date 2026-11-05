@@ -31,6 +31,7 @@ from popup_geometry import (option_rows, panel_bbox, row_kind,
                             window_enum_record)
 from popup_guard import bump, count_attempt, decide_action
 from popup_identity import fingerprint, geometry_signature, load_allowlist
+import contextlib
 
 CMD_PATH = r"C:\temp\ns_game_cmd.txt"
 CMD_SEEN_PATH = r"C:\temp\ns_game_cmd.seen"
@@ -516,10 +517,8 @@ def _user32():
 
 
 def _be_dpi_aware() -> None:
-    try:
+    with contextlib.suppress(Exception):
         _user32().SetProcessDPIAware()
-    except Exception:
-        pass
 
 
 def window_candidates(pid: int) -> list:
@@ -538,12 +537,12 @@ def window_candidates(pid: int) -> list:
     def cb(hwnd, _):
         wpid = wt.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
-        if wpid.value == pid and user32.IsWindowVisible(hwnd):
-            if user32.GetWindowTextLengthW(hwnd):
-                try:
-                    cands.append((int(hwnd), window_rect(hwnd)))
-                except OSError:
-                    cands.append((int(hwnd), None))
+        if (wpid.value == pid and user32.IsWindowVisible(hwnd)
+                and user32.GetWindowTextLengthW(hwnd)):
+            try:
+                cands.append((int(hwnd), window_rect(hwnd)))
+            except OSError:
+                cands.append((int(hwnd), None))
         return True
 
     user32.EnumWindows(cb, 0)
@@ -1138,10 +1137,8 @@ def _log(rec: dict) -> None:
 def _write_status(rec: dict) -> None:
     rec["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     rec["epoch"] = round(time.time(), 3)
-    try:
+    with contextlib.suppress(OSError):
         atomic_write_json(STATUS_PATH, rec)
-    except OSError:
-        pass
 
 
 def _read_status():
@@ -1562,15 +1559,12 @@ def serve(args, once: bool = False) -> int:
                 except OSError as e:
                     note = f"choice_click_failed: {e}"
         elif action == "handle_dialog":
-            if stats["bbox"]:
-                if not crop_to_png(hwnd, stats["bbox"], POPUP_LIVE_PATH):
-                    # A failed capture must not leave last tick's frame for OCR
-                    # to read: no file means no text means geometry-only means
-                    # hold.  Stale pixels can mean clicking the wrong dialog.
-                    try:
-                        os.remove(POPUP_LIVE_PATH)
-                    except OSError:
-                        pass
+            if stats["bbox"] and not crop_to_png(hwnd, stats["bbox"], POPUP_LIVE_PATH):
+                # A failed capture must not leave last tick's frame for OCR
+                # to read: no file means no text means geometry-only means
+                # hold.  Stale pixels can mean clicking the wrong dialog.
+                with contextlib.suppress(OSError):
+                    os.remove(POPUP_LIVE_PATH)
             got = popup_tick(hwnd, POPUP_LIVE_PATH, nbbox, len(nrows), state,
                               ocr, ocr_enabled=not args.no_ocr,
                               allow_path=args.popup_allowlist)

@@ -142,7 +142,7 @@ def test_run_interactive_reads_the_sentinel_back(tmp_path, monkeypatch):
     def fake_run(argv, **kwargs):
         if "/run" in argv:
             out.write_text("hello\r\nEXIT=0\r\n", encoding="utf-8")
-        return None
+        return
 
     monkeypatch.setattr(bridge.subprocess, "run", fake_run)
 

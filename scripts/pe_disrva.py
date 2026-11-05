@@ -61,6 +61,7 @@ import sys
 
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64, CS_OP_MEM
 from capstone.x86 import X86_REG_RIP
+import contextlib
 
 IMAGE_SCN_MEM_EXECUTE = 0x20000000
 DEFAULT_COUNT = 64
@@ -124,10 +125,8 @@ def _annotations(ins, image_base: int):
     """``  #0x<rva>`` notes for direct call/jmp targets and rip+disp operands."""
     notes = []
     if ins.mnemonic in ("call", "jmp") and ins.op_str.startswith("0x"):
-        try:
+        with contextlib.suppress(ValueError):
             notes.append(f"#0x{int(ins.op_str, 16) - image_base:x}")
-        except ValueError:
-            pass
     for op in ins.operands:
         if op.type == CS_OP_MEM and op.mem.base == X86_REG_RIP:
             target = ins.address + ins.size + op.mem.disp

@@ -58,7 +58,8 @@ def test_serve_logs_exactly_one_line_per_desktop_change(monkeypatch, tmp_path):
     monkeypatch.setattr(ka, "read_command", lambda p, s: next(cmds))
     assert ka.serve(types.SimpleNamespace(interval=0.0, assert_every=0.0,
                                           stop_after_s=0.0)) == 0
-    lines = [json.loads(ln) for ln in open(ka.LOG_PATH, encoding="utf-8")]
+    with open(ka.LOG_PATH, encoding="utf-8") as _fh:
+        lines = [json.loads(ln) for ln in _fh]
     assert [x["event"] for x in lines] == ["desktop_change", "desktop_change"]
     assert [x["desktop"] for x in lines] == ["locked", "unlocked"]
     assert ka.read_status()["note"] == "quit"
@@ -135,7 +136,8 @@ def test_start_launches_the_task_when_nothing_is_ticking(monkeypatch, tmp_path):
     assert ka.cmd_start(types.SimpleNamespace(timeout_s=10.0, interval=5.0,
                                               assert_every=25.0, pythonw="")) == 0
     assert [c[1] for c in argv] == ["/create", "/run"]
-    assert "serve" in open(ka.TASK_SHIM, encoding="utf-8").read()
+    with open(ka.TASK_SHIM, encoding="utf-8") as _fh:
+        assert "serve" in _fh.read()
 
 
 def test_stop_writes_quit_and_deletes_the_task(monkeypatch, tmp_path):

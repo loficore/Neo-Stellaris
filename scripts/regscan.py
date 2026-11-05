@@ -107,21 +107,20 @@ for st, c in fc.most_common(12):
     fx = pdata.func_of(st + 1) if st < 0 else None
     print(f'  func {st and hex(st) or "??"}  {c} calls')
 
-out = open('evidence/xrefs/keyword_registration_table_4_4_4.tsv', 'w')
-out.write('# id\tname_rva\tname\tdescriptor_rva\tcall_site_rva\t'
-          'registrar_rva=0x1d15270\n')
+with open('evidence/xrefs/keyword_registration_table_4_4_4.tsv', 'w') as out:
+    out.write('# id\tname_rva\tname\tdescriptor_rva\tcall_site_rva\t'
+              'registrar_rva=0x1d15270\n')
 
 
-def cstr(rva, cap=128):
-    b = rd(rva, cap)
-    return b.split(b'\0')[0].decode('utf-8', 'replace')
+    def cstr(rva, cap=128):
+        b = rd(rva, cap)
+        return b.split(b'\0')[0].decode('utf-8', 'replace')
 
 
-for i, (tid, name, desc, site) in enumerate(rows):
-    out.write(f'{tid if tid is not None else "-"}\t'
-              f'{name and hex(name)}\t{cstr(name) if name else "?"}\t'
-              f'{desc and hex(desc)}\t{site:#x}\n')
-out.close()
+    for i, (tid, name, desc, site) in enumerate(rows):
+        out.write(f'{tid if tid is not None else "-"}\t'
+                  f'{name and hex(name)}\t{cstr(name) if name else "?"}\t'
+                  f'{desc and hex(desc)}\t{site:#x}\n')
 print('\nfirst 12 rows:')
 for r in rows[:12]:
     print(f'  id={r[0] and hex(r[0])}  name={cstr(r[1])!r:<34} '

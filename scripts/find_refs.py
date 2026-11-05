@@ -21,7 +21,8 @@ EXE = next((c for c in _cands if c and os.path.exists(c)), None)
 if EXE is None:
     sys.exit('stellaris.exe not found - set NS_STELLARIS_EXE')
 
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 nsec = struct.unpack_from('<H', f, mz + 6)[0]
 nsec_off = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]

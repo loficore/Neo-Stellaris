@@ -26,6 +26,7 @@ usage: c1_preflight.py <candidate_name> [--db trigger|effect]
 """
 import sys
 import os
+import contextlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 XREFS = os.path.join(ROOT, 'evidence', 'xrefs')
@@ -55,10 +56,8 @@ def names():
                 continue
             p = line.rstrip('\n').split('\t')
             if len(p) >= 2:
-                try:
+                with contextlib.suppress(ValueError):
                     desc[p[1]] = int(p[0])
-                except ValueError:
-                    pass
     kw = {}
     with open(REG, encoding='utf-8', errors='replace') as f:
         for line in f:
@@ -67,10 +66,8 @@ def names():
             p = line.rstrip('\n').split('\t')
             if len(p) < 6 or p[3] not in ('0x33746e8', '0x32611c8'):
                 continue
-            try:
+            with contextlib.suppress(ValueError):
                 kw[p[5]] = int(p[4])
-            except ValueError:
-                pass
     return desc, kw
 
 

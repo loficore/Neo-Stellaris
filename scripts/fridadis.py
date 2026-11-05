@@ -25,7 +25,9 @@ if not args:
 dev = frida.get_local_device()
 pid = next(p.pid for p in dev.enumerate_processes() if p.name.lower() == 'stellaris.exe')
 sess = dev.attach(pid)
-script = sess.create_script(open(JS, encoding='utf-8').read())
+with open(JS, encoding='utf-8') as _fh:
+    js_source = _fh.read()
+script = sess.create_script(js_source)
 script.on('message', lambda m, d: print('MSG:', json.dumps(m)[:300]))
 script.load()
 api = script.exports_sync
