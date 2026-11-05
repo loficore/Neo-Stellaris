@@ -30,7 +30,7 @@ for i in range(nsec):
     ch = struct.unpack_from('<I', f, o + 36)[0]
     secs.append((nm, va, vs, rsz, rp, ch))
 
-RIP = re.compile(rb'\[(?:rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', re.I)
+RIP = re.compile(rb'\[(?:rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', re.IGNORECASE)
 lo = int(sys.argv[1], 16) if len(sys.argv) > 2 else 0x247f480
 hi = int(sys.argv[2], 16) if len(sys.argv) > 2 else 0x2494070
 print(f'{os.path.basename(EXE)}  target range [{lo:#x}, {hi:#x})', flush=True)

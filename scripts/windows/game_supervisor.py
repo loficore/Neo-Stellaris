@@ -936,9 +936,10 @@ def crop_to_png(hwnd: int, bbox, out_path: str) -> bool:
     """
     try:
         grab_box(tuple(bbox)).save(out_path)
-        return True
     except (OSError, ValueError):
         return False
+    else:
+        return True
 
 
 def save_popup_evidence(hwnd: int, bbox, out_path: str, popup_id: str):
@@ -1168,9 +1169,10 @@ def _consume(state: dict, lease_id: str, now: float | None = None) -> bool:
             used = world_state.consume(store, lease_id, stamp)
             if used:
                 store.save()
-        return used
     except (OSError, ValueError, TimeoutError):
         return False
+    else:
+        return used
 
 
 def acquire_or_refuse(state: dict, action: str, *, guard: str | None = None,

@@ -335,8 +335,7 @@ def gate_module(pid, dll_path, needed, allow_window=False):
 def _write_artifact(out_path, meta_lines, rows):
     with open(out_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(meta_lines) + "\n")
-        for row in rows:
-            handle.write(row + "\n")
+        handle.writelines(row + "\n" for row in rows)
 
 
 def build_meta(**kwargs):

@@ -67,7 +67,7 @@ md.detail = True
 census = sys.argv[1] if len(sys.argv) > 1 else 'evidence/xrefs/class_info_census_4_4_4.tsv'
 with open(census) as _fh:
     rows = list(csv.DictReader(_fh, delimiter='\t'))
-by_begin = {b: e for b, e in funcs}
+by_begin = dict(funcs)
 
 out = collections.Counter()
 detail = {}

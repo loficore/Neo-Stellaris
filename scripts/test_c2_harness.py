@@ -610,7 +610,7 @@ def _patch_watch_dispatch(monkeypatch, chunks, exit_code=3, finish_after=None,
             "wrote_addr": None, "read_addr": None,
             "witness_reads": {}}
     wait_state = {"index": 0}
-    witness_state = {addr: 0 for addr in (witnesses or {})}
+    witness_state = dict.fromkeys(witnesses or {}, 0)
 
     def next_item(addr, bucket):
         table = witnesses[addr]

@@ -196,7 +196,7 @@ def parse_probe_caller_rows(path):
     `ret = key + 5` 且 `assumed=True`(站点最终由本工具反解,估值只用于对账)。
     """
     rows = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
             if line.startswith("#") or not line.strip():
                 continue
@@ -256,15 +256,12 @@ def write_sites_tsv(path, framed, rows, meta):
     with open(path, "w", encoding="utf-8") as f:
         f.write("# ret_rva\tcount\tsite_rva\tform\tinsn\tfunc_start\tfunc_end"
                 "\tcensus_origin\tsite_in_census\n")
-        for r in framed:
-            f.write("\t".join([_hx(r["ret"]), str(r["count"]), _hx(r["site"]), r["form"],
+        f.writelines("\t".join([_hx(r["ret"]), str(r["count"]), _hx(r["site"]), r["form"],
                                r["insn"] or "-", _hx(r["func_start"]), _hx(r["func_end"]),
-                               r["census_origin"], str(r["site_in_census"])]) + "\n")
+                               r["census_origin"], str(r["site_in_census"])]) + "\n" for r in framed)
         f.write("# kind\tkey\tvalue\tdetail\n")
-        for key in ("resolved", "ambiguous", "none", "mem_form", "assumed"):
-            f.write(f"meta\t{key}\t{counts[key]}\t-\n")
-        for key, value in meta.items():
-            f.write(f"meta\t{key}\t{value}\t-\n")
+        f.writelines(f"meta\t{key}\t{counts[key]}\t-\n" for key in ("resolved", "ambiguous", "none", "mem_form", "assumed"))
+        f.writelines(f"meta\t{key}\t{value}\t-\n" for key, value in meta.items())
     return counts
 
 
@@ -281,7 +278,7 @@ def _load_census(path):
 def _load_call_census_local(path):
     """同款 6 列 TSV 解析:{site: {"func": int|None, "origin": str}}(跳注释/空行/坏行)。"""
     out = {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue

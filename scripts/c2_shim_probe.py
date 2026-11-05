@@ -431,15 +431,12 @@ def write_tsv(path, rows, meta=None):
             f.write(f"#meta {pairs}\n")
             f.write("kind\tvalid\tmatched\ttable_index\ttable_rva\t"
                     "self_vtable_rva\tcaller_rva\tself_ptr\tctx_ptr\ta3\ta4\n")
-            for entry in rows:
-                f.write(
-                    f"entry\t{entry['valid']}\t{entry['matched']}\t"
-                    f"{'-' if entry['table_index'] is None else entry['table_index']}\t"
-                    f"{_hex_or_dash(entry['table_rva'])}\t"
-                    f"0x{entry['self_vtable_rva']:x}\t0x{entry['caller_rva']:x}\t"
-                    f"0x{entry['self_ptr']:x}\t0x{entry['ctx_ptr']:x}\t"
-                    f"0x{entry['a3']:x}\t0x{entry['a4']:x}\n"
-                )
+            f.writelines(f"entry\t{entry['valid']}\t{entry['matched']}\t"
+                f"{'-' if entry['table_index'] is None else entry['table_index']}\t"
+                f"{_hex_or_dash(entry['table_rva'])}\t"
+                f"0x{entry['self_vtable_rva']:x}\t0x{entry['caller_rva']:x}\t"
+                f"0x{entry['self_ptr']:x}\t0x{entry['ctx_ptr']:x}\t"
+                f"0x{entry['a3']:x}\t0x{entry['a4']:x}\n" for entry in rows)
     except OSError as exc:
         raise SystemExit(f"cannot write {path}: {exc}") from exc
     return len(rows)

@@ -260,7 +260,7 @@ def _check_offsets(blob, deref, off_a, off_b):
 def pack_spec(blob, deref, off_a, off_b):
     if not isinstance(blob, int) or not isinstance(deref, int):
         # The callers pin ValueError for a malformed spec, so it stays one.
-        raise ValueError("blob/deref must be integers")
+        raise ValueError("blob/deref must be integers")  # noqa: TRY004 — callers pin ValueError
     _check_offsets(blob, deref, off_a, off_b)
     return blob | (deref << 8) | (off_a << 16) | (off_b << 32)
 

@@ -124,13 +124,13 @@ def poll_report_lines(rc: int, report: dict) -> list[str]:
     one it is would be the loudest error this probe could make.
     """
     lines = [
-        f"primed={report.get('primed_bytes')} reads={report.get('reads')} "
+        (f"primed={report.get('primed_bytes')} reads={report.get('reads')} "
         f"failures={report.get('read_failures')} "
         f"first_read_ms={report.get('first_read_ms')} "
-        f"first_failure_ms={report.get('first_failure_ms')}",
-        f"thread exit code={report.get('thread_exit_code')} "
+        f"first_failure_ms={report.get('first_failure_ms')}"),
+        (f"thread exit code={report.get('thread_exit_code')} "
         f"process exit code={_hex_or_none(report.get('process_exit_code'))} "
-        f"thread_returned_while_alive={report.get('thread_returned_while_alive')}",
+        f"thread_returned_while_alive={report.get('thread_returned_while_alive')}"),
     ]
     if not report.get("thread_returned_while_alive"):
         lines.append(
@@ -394,9 +394,10 @@ def clear_diag_file(path: str) -> bool:
     """
     try:
         os.remove(path)
-        return True
     except FileNotFoundError:
         return False
+    else:
+        return True
 
 
 def read_diag_file(path: str) -> str:

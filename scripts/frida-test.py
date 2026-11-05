@@ -27,11 +27,12 @@ def get_device(host: str = "127.0.0.1", port: int = 27042) -> frida.core.Device:
         manager = frida.get_device_manager()
         device = manager.add_remote_device(f"{host}:{port}")
         print(f"[+] Remote device: {device.name}")
-        return device
     except Exception as e:  # noqa: BLE001 — print-and-exit is this demo script's contract
         print(f"[-] Failed to get device: {e}")
         print("[!] Ensure frida-server is running and accessible.")
         sys.exit(1)
+    else:
+        return device
 
 
 def find_stellaris(device: frida.core.Device) -> int | None:
@@ -63,7 +64,6 @@ def attach_to_process(device: frida.core.Device, pid: int) -> frida.core.Session
         session = device.attach(pid)
         print("[+] Attached successfully!")
         print(f"    Session ID: {session.pid}")
-        return session
     except frida.ProcessNotFoundError:
         print(f"[-] Process {pid} not found (may have exited)")
         sys.exit(1)
@@ -73,6 +73,8 @@ def attach_to_process(device: frida.core.Device, pid: int) -> frida.core.Session
     except Exception as e:  # noqa: BLE001 — print-and-exit is this demo script's contract
         print(f"[-] Attach failed: {e}")
         sys.exit(1)
+    else:
+        return session
 
 
 def test_injection(session: frida.core.Session) -> bool:
@@ -105,10 +107,11 @@ def test_injection(session: frida.core.Session) -> bool:
 
         script.unload()
         print("[+] Injection test passed!")
-        return True
     except Exception as e:  # noqa: BLE001 — the boolean result is the reading
         print(f"[-] Injection test failed: {e}")
         return False
+    else:
+        return True
 
 
 def main():

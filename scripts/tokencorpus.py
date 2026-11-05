@@ -81,7 +81,7 @@ ANYEQ = re.compile(rb'(?:^|[\s{}])([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*')
 # id in events/). Those are keys of a string-indexed db, not keywords -- no token involved. Note the
 # discriminator is the INDENT: a keyword head is always nested inside something, a db entry head is
 # what the file is a list OF, so it starts the line.
-TOPLEVEL = re.compile(rb'^([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*\{', re.M)
+TOPLEVEL = re.compile(rb'^([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*\{', re.MULTILINE)
 TEMPLATE_DIRS = ('scripted_effects', 'scripted_triggers', 'scripted_loc', 'scripted_actions',
                  'scripted_governments', 'scripted_names')
 ITER_PREFIX = re.compile(r'^(any_|every_|all_|ordered_|random_|count_|per_)')
@@ -299,7 +299,7 @@ def main():
         print(f'      top UNEXPLAINED ({len(un)} distinct):')
         for w, c in un.most_common(30):
             inexe = 'EXE-STRING' if w in exe_strings else 'no exe string'
-            print(f'        {w:44} {c:7} {inexe:11} {sorted(files_seen[w])[0]}')
+            print(f'        {w:44} {c:7} {inexe:11} {min(files_seen[w])}')
 
     with open(OUT, 'w', encoding='utf-8') as f:
         f.write('# word\toccurrences\tfiles\ttoken_id\tclass\tmatched_as\tin_exe_as_standalone_string\n')

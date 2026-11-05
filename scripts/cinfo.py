@@ -184,8 +184,8 @@ def classify(rva):
                 frame -= ops[1].imm
         if ins.mnemonic == 'ret':
             break
-    return dict(arg_reads=arg_reads, read_regs=sorted(read_regs), new_sizes=new_sizes,
-                callees=callees, published=published)
+    return {'arg_reads': arg_reads, 'read_regs': sorted(read_regs), 'new_sizes': new_sizes,
+                'callees': callees, 'published': published}
 
 
 # Only the two keyword dbs. The same producer tsv also carries 2,160 rows from the type-registry

@@ -22,7 +22,7 @@ DEFAULT_INSN = 80        # 无第二参时的指令条数(历史默认值)
 INSN_MAX = 15            # x86-64 一条指令的最长编码(前缀+opcode+modrm+sib+disp+imm)
 FETCH_PER_INSN = 16      # 历史每条取 16 字节,原样保留 => 旧读数逐字节可复现
 
-RIP = re.compile(r'\[(?:rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', re.I)
+RIP = re.compile(r'\[(?:rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', re.IGNORECASE)
 
 CANDIDATES = [os.environ.get('NS_STELLARIS_EXE'),
               '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe',

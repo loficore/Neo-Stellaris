@@ -204,8 +204,7 @@ def key_lines_in(stdout: str):
     """
     found = []
     for line in (stdout or "").splitlines():
-        if line.startswith("[repro] "):
-            line = line[len("[repro] "):]
+        line = line.removeprefix("[repro] ")
         head = line.split(" ", 1)[0].rstrip(":")
         if head in KEY_LINES:
             found.append(head)

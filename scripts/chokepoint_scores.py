@@ -23,7 +23,7 @@ import argparse
 import pathlib
 import sys
 from collections import deque
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 HEADER = (
     "system_id\tdegree\tbetweenness\tbetweenness_norm\tscore"
@@ -50,13 +50,13 @@ def build_adjacency(
 
 def betweenness(adjacency: dict[int, dict[int, float]]) -> dict[int, float]:
     nodes = sorted(adjacency)
-    scores = {node: 0.0 for node in nodes}
+    scores = dict.fromkeys(nodes, 0.0)
     for source in nodes:
         stack: list[int] = []
         predecessors: dict[int, list[int]] = {node: [] for node in nodes}
-        paths = {node: 0.0 for node in nodes}
+        paths = dict.fromkeys(nodes, 0.0)
         paths[source] = 1.0
-        distance = {node: -1 for node in nodes}
+        distance = dict.fromkeys(nodes, -1)
         distance[source] = 0
         queue = deque([source])
         while queue:
@@ -69,7 +69,7 @@ def betweenness(adjacency: dict[int, dict[int, float]]) -> dict[int, float]:
                 if distance[neighbour] == distance[node] + 1:
                     paths[neighbour] += paths[node]
                     predecessors[neighbour].append(node)
-        dependency = {node: 0.0 for node in nodes}
+        dependency = dict.fromkeys(nodes, 0.0)
         while stack:
             node = stack.pop()
             for previous in predecessors[node]:
@@ -88,7 +88,7 @@ def _tarjan(
 ) -> tuple[set[int], set[tuple[int, int]]]:
     discovered: dict[int, int] = {}
     low: dict[int, int] = {}
-    parent: dict[int, Optional[int]] = {}
+    parent: dict[int, int | None] = {}
     points: set[int] = set()
     bridge_set: set[tuple[int, int]] = set()
     clock = 0
@@ -220,7 +220,7 @@ def _format_row(row: dict) -> str:
     )
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("edges", help="edge TSV produced by save_hypergraph.py")
     parser.add_argument("--out", required=True, help="output score TSV")

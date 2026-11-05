@@ -903,10 +903,11 @@ def launcher_click(hwnd: int, pid: int | None = None) -> int:
                 return EXIT_OK
         log_event("LAUNCHER_CLICK", step="diagnosis",
                   diagnosis=click_diagnosis(traces))
-        return EXIT_LAUNCHER_NO_ADVANCE
     except OSError as e:
         log_event("LAUNCHER_CLICK", step="click_blocked", error=repr(e))
         return EXIT_LAUNCHER_NO_FOCUS
+    else:
+        return EXIT_LAUNCHER_NO_ADVANCE
 
 
 def launcher_handoff(timeout_s: int) -> int | None:
@@ -966,10 +967,11 @@ def _top_windows() -> list[tuple[int, str]]:
         if skipped:
             log_event("GAME_WINDOWS", step="scan_complete", windows=len(out),
                       skipped=skipped)
-        return out
     except Exception as e:  # noqa: BLE001 — "nothing observable", retried by the caller
         log_event("GAME_WINDOWS", error=repr(e))
         return []
+    else:
+        return out
 
 
 def _is_jit_dialog_visible() -> bool:
@@ -1487,8 +1489,7 @@ def _write_marker(marker: str, code: int, pid: int | None = None,
     """
     try:
         with open(marker, "w", encoding="utf-8") as f:
-            for line in timeline:
-                f.write(f"{_MARKER_LOG_PREFIX}{line}\n")
+            f.writelines(f"{_MARKER_LOG_PREFIX}{line}\n" for line in timeline)
             if pid is not None:
                 f.write(f"PID:{pid}\n")
             f.write(f"DONE:{code}\n")
@@ -1637,7 +1638,6 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
             # caller — empty stdout, then a ValueError — so stderr is where the
             # distinction goes.
             log_event("BRIDGE", result="no_pid_in_marker", dry_run=args.dry_run)
-        return code
     except Exception as e:  # noqa: BLE001 — the outer needs a blanket guard too
         # A3: session detection and the shim path pre-flight are outside this
         # try, but a missing schtasks, an unwritable tempdir, or any OSError out
@@ -1650,6 +1650,8 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
             with contextlib.suppress(OSError):
                 _delete_bridge_task(task_name)
         return EXIT_INTERNAL
+    else:
+        return code
     finally:
         # Runs on every path, including the except above. The shim and lease are
         # the outer's own files; the timeout path in particular must drop the

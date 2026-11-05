@@ -18,7 +18,7 @@ import frida
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 JS = r'C:\ns\dis.js'
-args = [a for a in sys.argv[1:]]
+args = list(sys.argv[1:])
 if not args:
     sys.exit(__doc__)
 

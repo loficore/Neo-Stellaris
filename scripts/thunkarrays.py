@@ -112,7 +112,7 @@ def parse_thunk(t):
     insert = None
     for ins in insns:
         o = ins.operands
-        if ins.mnemonic in ('mov',) and len(o) == 2 and o[0].type == X86_OP_REG \
+        if ins.mnemonic == 'mov' and len(o) == 2 and o[0].type == X86_OP_REG \
                 and o[1].type == X86_OP_MEM and o[1].mem.base == X86_REG_RIP:
             if ins.reg_name(o[0].reg) in ('rbx', 'r14', 'rdi', 'rsi'):
                 db = ins.address + ins.size + o[1].mem.disp - BASE
@@ -124,7 +124,7 @@ def parse_thunk(t):
                 and ins.reg_name(o[0].reg) == 'edx' and o[1].type == X86_OP_IMM:
             tid = o[1].imm
         elif ins.mnemonic == 'mov' and len(o) == 2 and o[0].type == X86_OP_MEM \
-                and o[0].mem.base in (X86_REG_RIP,) and o[1].type == X86_OP_REG:
+                and o[0].mem.base == X86_REG_RIP and o[1].type == X86_OP_REG:
             pass
         elif ins.mnemonic == 'mov' and len(o) == 2 and o[0].type == X86_OP_MEM \
                 and o[1].type == X86_OP_REG:

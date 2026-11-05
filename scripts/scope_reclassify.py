@@ -51,7 +51,7 @@ def _int_or_none(text):
 def _read_text(path):
     """Read a text input; a missing/unreadable file is a usage error, not a crash."""
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             return f.read()
     except OSError as exc:
         raise SystemExit(f'cannot read {path}: {exc}') from exc

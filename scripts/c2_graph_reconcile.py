@@ -157,7 +157,9 @@ def windows_from_json(path) -> list[dict]:
     """The window table: ``[{name, start, end}, ...]`` with byte offsets."""
     doc = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
     if not isinstance(doc, list):
-        raise ValueError("--windows must be a JSON list of {name,start,end}")
+        # The module's tested contract is ValueError for any malformed window spec
+        # (test_c2_graph_reconcile.py pins both this and the end<start case).
+        raise ValueError("--windows must be a JSON list of {name,start,end}")  # noqa: TRY004
     out = []
     for item in doc:
         for key in ("name", "start", "end"):

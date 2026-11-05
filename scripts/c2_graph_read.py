@@ -297,8 +297,8 @@ def classify(stats, rows, expected, layout_words, env, again=None, rows_complete
         return "graph_live_read_partial", "counts match, debt: " + ", ".join(debt)
 
     observed = f"systems={stats['systems']} edges={stats['edges']}"
-    detail = f"{observed} vs expect systems={env.get('expect_systems')} " \
-             f"edges={env.get('expect_edges')}"
+    detail = (f"{observed} vs expect systems={env.get('expect_systems')} "
+              f"edges={env.get('expect_edges')}")
     diff = first_difference(rows, expected) if expected is not None else None
     if diff:
         detail += f"; {diff}"
@@ -424,10 +424,8 @@ def format_layout(words):
 def write_artifact(path, meta_lines, rows):
     """Meta first, then rows: the artifact is what survives a lost stdout."""
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        for line in meta_lines:
-            handle.write(f"#meta {line}\n")
-        for a, b in rows:
-            handle.write(f"{a}\t{b}\n")
+        handle.writelines(f"#meta {line}\n" for line in meta_lines)
+        handle.writelines(f"{a}\t{b}\n" for a, b in rows)
 
 
 def write_edge_snapshots(out_path, base_rows, add_rows, remove_rows):
@@ -440,8 +438,7 @@ def write_edge_snapshots(out_path, base_rows, add_rows, remove_rows):
     """
     for suffix, rows in (("base", base_rows), ("add", add_rows), ("remove", remove_rows)):
         with open(f"{out_path}.{suffix}", "w", encoding="utf-8", newline="\n") as handle:
-            for a, b in rows:
-                handle.write(f"{a}\t{b}\t1\n")
+            handle.writelines(f"{a}\t{b}\t1\n" for a, b in rows)
 
 
 def kill_game(pid):

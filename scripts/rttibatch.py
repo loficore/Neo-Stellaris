@@ -80,10 +80,8 @@ def class_name(img, vtable_rva):
     td_rva = img.u32(col + 0x10)
     raw = img.read(td_rva + 0x10, 128).split(b'\0')[0]
     name = raw.decode('utf-8', 'replace')
-    if name.startswith('.?AV'):
-        name = name[4:]
-    if name.endswith('@@'):
-        name = name[:-2]
+    name = name.removeprefix('.?AV')
+    name = name.removesuffix('@@')
     return name, f'col={col:#x} td={td_rva:#x}'
 
 

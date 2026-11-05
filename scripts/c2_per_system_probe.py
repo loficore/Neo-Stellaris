@@ -415,10 +415,8 @@ def _signed32(value):
 def _write_artifact(path, meta, rows):
     """Meta first, then rows: the artifact is what survives a lost stdout."""
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        for line in meta:
-            handle.write(f"#meta {line}\n")
-        for line in rows:
-            handle.write(line + "\n")
+        handle.writelines(f"#meta {line}\n" for line in meta)
+        handle.writelines(line + "\n" for line in rows)
 
 
 def read_container(pid, exe_base):

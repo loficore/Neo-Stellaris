@@ -281,10 +281,8 @@ def write_tsv(path, rows, meta):
         os.makedirs(directory, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="") as f:
-        for key, value in meta.items():
-            f.write(f"# {key}\t{value}\n")
-        for row in rows:
-            f.write(row + "\n")
+        f.writelines(f"# {key}\t{value}\n" for key, value in meta.items())
+        f.writelines(row + "\n" for row in rows)
     os.replace(tmp, path)
 
 

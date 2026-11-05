@@ -233,7 +233,7 @@ def test_prologue_triangulation_pins_the_evidence_volume():
     """
     text = EVIDENCE_VOLUME.read_text(encoding="utf-8")
     section = text[text.index("## §71 "):]
-    match = re.search(r"^\| 24 B 前序 \| `([0-9a-f ]+)`", section, re.M)
+    match = re.search(r"^\| 24 B 前序 \| `([0-9a-f ]+)`", section, re.MULTILINE)
     assert match is not None, "§71.1 表里没有 24 B 前序行"
     covered = [int(tok, 16) for tok in match.group(1).split()]
     assert covered == TASK1_PROLOGUE

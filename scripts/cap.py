@@ -37,7 +37,7 @@ def dis(rva, n, label=None):
         mark = ''
         if '[rip' in ins.op_str:
             import re as _re
-            m = _re.search(r'\[(rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', ins.op_str, _re.I)
+            m = _re.search(r'\[(rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', ins.op_str, _re.IGNORECASE)
             if m:
                 d = int(m.group(3), 16)
                 t = ins.address + ins.size + (d if m.group(2) == '+' else -d)

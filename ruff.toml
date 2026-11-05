@@ -19,18 +19,25 @@
 #    (AGENTS.md: 原件冻结留档) and `evidence/` cites them by basename — a
 #    reformat would rewrite history that nothing can re-derive.
 #
-# Scope note: the selected set is the high-signal one (pyflakes + statement and
-# comparison level).  The wider families (SIM/PL/RUF/FURB/BLE/TRY, ~130 hits on
-# the maintained tree at the time of writing) are *known debt*, not enabled —
-# turning them on first would mean a 130-file style diff riding along with
-# whatever research change is in flight.  Widen `select` deliberately, in its
-# own commit.
+# Scope note: every wide family is enabled as of 2026-11-05 (one commit per
+# family: SIM/RET/PIE, PLW1510, BLE/S110, RUF, then FURB/UP/ISC/TRY/C4).  The
+# final `select` is the list below.  The only rules left out are in `ignore`
+# with a written reason: TRY003 (312 raise sites; built-in exceptions with
+# messages are these tools' house style) and RUF001/002/003 (this tree's
+# documentation is Chinese, so full-width punctuation is style, not ambiguity).
+# A future widening is still a deliberate edit here, not a default change.
 # top-level (not `[lint]`): ruff only accepts `exclude`/`extend-exclude` at the root.
 extend-exclude = ["scripts/scratch"]
 
+# The Windows host runs CPython 3.9 (the tree's byte-cache is `cpython-39`), and the
+# plan's floor is 3.9+.  Declaring it keeps ruff from suggesting 3.10+/3.11+ idioms
+# (`datetime.UTC`, un-quoted `X | None` without `from __future__ import annotations`)
+# that would fail on the box the offline tools actually run on.
+target-version = "py39"
+
 [lint]
 select = ["E4", "E7", "E9", "F", "W", "SIM", "RET", "PIE", "PLW1510", "BLE", "S110",
-          "RUF"]
+          "RUF", "FURB", "UP", "ISC", "TRY", "C4"]
 ignore = [
     # `sys.path.insert(0, ...)` / `sys.stdout.reconfigure(...)` before the
     # imports they exist for is the house pattern in most tools and every test
@@ -52,4 +59,10 @@ ignore = [
     "RUF001",
     "RUF002",
     "RUF003",
+    # TRY003 (raise-vanilla-args) would require a named exception class at every
+    # `raise ValueError("...")` in the offline tools — 312 sites at the time this
+    # family was enabled.  Those tools raise built-ins with an explanatory message
+    # on purpose; introducing 312 one-line classes would be a different change, not
+    # a lint cleanup.  The remaining TRY rules stay enabled.
+    "TRY003",
 ]
