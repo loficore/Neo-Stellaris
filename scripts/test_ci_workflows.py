@@ -122,3 +122,22 @@ def test_fence_bites_on_a_live_mention():
 def test_fence_bites_on_an_automatic_gitea_trigger():
     sample = "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n\njobs:\n"
     assert gitea_trigger_names(sample) != []
+
+
+# --- Part C Task 8: tag 上先跑完整门再发 release ------------------------------
+
+
+def test_release_is_tag_only():
+    """A release is the one side effect that must never fire on a branch push.
+
+    The `if:` has to be in the job header (before `steps:`), so a tag push is the
+    only event that reaches the publish step.
+    """
+    text = _read(GITHUB_WORKFLOW)
+    job = text.split("  release:", 1)[1]
+    assert "startsWith(github.ref, 'refs/tags/')" in job.split("steps:", 1)[0]
+
+
+def test_the_gate_still_runs_on_tags():
+    """Tags must go through the same gate: `release` only `needs: gate`."""
+    assert "tags:" in _trigger_block(_read(GITHUB_WORKFLOW))
