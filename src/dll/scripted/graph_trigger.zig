@@ -90,6 +90,31 @@ pub fn shouldRecompute(last: u64, now: u64) bool {
     return now != 0 and now != last;
 }
 
+/// 每隔多少次求值做一次**内容哈希**核对。
+///
+/// 代价:一次 verify = 一整趟读(约 10⁴ 次 `ReadProcessMemory`),而一次 reuse 只读
+/// 788 个 4 B 计数。787 个星系一次 tick 大约 3 次 verify(787 / 256 ≈ 3.1),所以
+/// 这个数不能更小;再大则「指纹没变、图变了」的漏报窗口按比例变长。
+pub const VERIFY_EVERY: u32 = 256;
+
+/// `every == 0` 关闭定时核对(恒 false)。`since_last >= every` 把「已经攒够」的
+/// 边界放在 inclusive:256 次之后的第 257 次求值会核对。
+pub fn shouldVerify(since_last: u32, every: u32) bool {
+    if (every == 0) return false;
+    return since_last >= every;
+}
+
+/// 一次求值对缓存该做什么。`recompute` 优先于 `verify`:指纹已经说变了,再跑一遍
+/// 哈希核对只会多付一趟读。
+pub const CacheAction = enum { reuse, verify, recompute };
+
+/// 纯决策,不读任何全局:调用方把「指纹变没变」与「距上次核对过了多少次」传进来。
+pub fn chooseAction(fingerprint_changed: bool, since_verify: u32, every: u32) CacheAction {
+    if (fingerprint_changed) return .recompute;
+    if (shouldVerify(since_verify, every)) return .verify;
+    return .reuse;
+}
+
 /// 一次求值的答案。判据顺序即失效顺序:scope 门 → id 门 → 读门 → 查表。
 pub fn decide(
     scope_kind: u32,

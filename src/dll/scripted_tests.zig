@@ -161,3 +161,26 @@ test "graph_trigger: the live hash follows the read that produced it" {
     gt.resetLive();
     try std.testing.expectEqual(@as(u64, 0), gt.liveHashSnapshot().hash);
 }
+
+// ---------------------------------------------------------------------------
+// graph_trigger: 缓存策略的选择(issue #46 方案 3)
+//
+// 「指纹变了就重算」是成本开关;「每 N 次求值核对一次内容哈希」是正确性通路。
+// 两者合成一个三分支决策,全部纯函数 —— 调度行为在这里被测死,liveScore 只照做。
+// ---------------------------------------------------------------------------
+
+test "graph_trigger: chooseAction prefers a changed fingerprint over a scheduled verify" {
+    try std.testing.expectEqual(gt.CacheAction.recompute, gt.chooseAction(true, 0, 256));
+    try std.testing.expectEqual(gt.CacheAction.recompute, gt.chooseAction(true, 999, 256));
+}
+
+test "graph_trigger: chooseAction schedules a verify even when the fingerprint matches" {
+    try std.testing.expectEqual(gt.CacheAction.verify, gt.chooseAction(false, 256, 256));
+    try std.testing.expectEqual(gt.CacheAction.verify, gt.chooseAction(false, 300, 256));
+    try std.testing.expectEqual(gt.CacheAction.reuse, gt.chooseAction(false, 255, 256));
+}
+
+test "graph_trigger: verify every 0 disables the scheduled verify entirely" {
+    try std.testing.expectEqual(gt.CacheAction.reuse, gt.chooseAction(false, 10_000, 0));
+    try std.testing.expect(!gt.shouldVerify(10_000, 0));
+}
