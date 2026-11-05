@@ -180,3 +180,18 @@ def test_a_mutation_shot_has_no_read2_keys():
     fields = mod.read2_meta(stats(788, 1219), 0)
     assert fields == {"read2_edges": 1219, "read2_rc": 0, "read2_systems": 788,
                       "read2_skipped": 0}
+
+
+# --- Part A Task 5: 同窗加删(加与删之间不夹读) --------------------------------
+
+
+def test_collide_steps_put_no_read_between_add_and_remove():
+    steps = mod.collide_steps(5, 9)
+    assert steps == ["base", "add", "remove", "collide_read"]
+
+
+def test_a_collision_where_the_hash_differs_is_flagged_suspicious():
+    verdict = mod.classify_collision(
+        base_fingerprint=2446, collide_fingerprint=2446,
+        base_hash=0x46F76122D529552D, collide_hash=0x1234)
+    assert verdict == "graph_collision_suspicious"

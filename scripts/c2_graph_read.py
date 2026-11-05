@@ -22,7 +22,12 @@
   * `graph_live_read_unstable` —— 两次读的边集不相等(判负);
   * `graph_live_read_named` —— 两次相等、计数全中、`skipped==0`、且(给了边表时)逐项相等;
   * `graph_live_read_partial` —— 计数相等但有欠账(`skipped>0` 或 `max_id != systems-1`);
-  * `graph_live_read_disagree` —— 其余(判负)。
+  * `graph_live_read_disagree` —— 其余(判负);
+  * `graph_mutation_recompute_named` / `mutation_left_dirty` —— `--mutate` 改一条边再读两次的
+    两个结局(加删都落且回原样 / 有一步没落或没回原样);
+  * `graph_collision_named` / `graph_collision_suspicious` —— `--mutate-collide`:加与删之间
+    **不夹读**,所以指纹回到原值;哈希也相等 ⇒ 图真的原样(named),指纹相等但哈希不等 ⇒
+    这正是旧缓存路径会漏的那一格(issue #46;suspicious)。
 
 **判定口径的两处注记**(裁定见 SDD ledger):
 
@@ -76,6 +81,13 @@ REQUIRED_EXPORTS = (
     "C5GraphMutateRemove",
 )
 
+#: `--mutate-collide` additionally reads the live source's cache keys.  They are checked
+#: only in that branch: a plain graph read must not start refusing because an older DLL
+#: predates the live-source exports.
+COLLIDE_EXPORTS = ("C2NeoLiveStatsInto", "C2NeoLiveHashInto")
+LIVE_STATS_SIZE = 64          # C2NeoLiveStatsInto: u64 x 8 (fingerprint is word 7)
+LIVE_HASH_SIZE = 16           # C2NeoLiveHashInto: [hash u64][edges u64]
+
 #: `#meta` 的固定键序 —— artifact 是给人读的,顺序固定才 diff 得动。
 META_ORDER = (
     "overall_verdict",
@@ -109,6 +121,8 @@ VERDICTS = (
     "graph_live_read_disagree",
     "graph_mutation_recompute_named",
     "mutation_left_dirty",
+    "graph_collision_named",
+    "graph_collision_suspicious",
 )
 EVIDENCE_VERDICTS = (
     "graph_live_read_unstable",
@@ -117,6 +131,8 @@ EVIDENCE_VERDICTS = (
     "graph_live_read_disagree",
     "graph_mutation_recompute_named",
     "mutation_left_dirty",
+    "graph_collision_named",
+    "graph_collision_suspicious",
 )
 
 EXIT_REFUSED = 2        # pre-flight / environment gate refusal (same code as `gate_install`)
@@ -333,6 +349,47 @@ def classify_mutation(seq, x, y, base_rows, added_rows, removed_rows=None):
     )
 
 
+def collide_steps(from_id, to_id):
+    """The `--mutate-collide` step list: add and remove are **adjacent**.
+
+    The point of this shot is the window the fingerprint cannot see: add one edge and
+    remove it again before anything reads the graph, so the per-slot degree counts (and
+    therefore the fingerprint) are back to their base value while the engine's neighbour
+    lists have been rewritten.  Inserting a read between add and remove would let the
+    fingerprint (and the hash) observe the intermediate state and destroy the fixture.
+
+    `from_id`/`to_id` are part of the signature so the caller's intent is explicit; the
+    step names do not depend on them (the pair lives in the artifact's `#meta`).
+    """
+    _ = (from_id, to_id)
+    return ["base", "add", "remove", "collide_read"]
+
+
+def classify_collision(*, base_fingerprint, collide_fingerprint, base_hash, collide_hash):
+    """The `--mutate-collide` verdict (a member of ``VERDICTS``).
+
+    ``0`` is the "this process has not completed a read yet" sentinel for both the
+    fingerprint and the edge hash, so any zero here means the premise of the shot is
+    missing — that is an instrument reading, never a collision.
+
+    A fingerprint that did not come back to its base value means the add/remove pair did
+    not cancel (or the graph changed underneath us); the shot no longer exercises the
+    blind spot, so it is also an instrument reading rather than a verdict about caching.
+
+    The two real outcomes:
+      * hashes equal too  -> ``graph_collision_named``: the picture really is identical;
+      * fingerprint equal but hash differs -> ``graph_collision_suspicious``: this is the
+        exact case the old fingerprint-only cache would reuse a stale score for (#46).
+    """
+    if base_fingerprint == 0 or collide_fingerprint == 0 or base_hash == 0 or collide_hash == 0:
+        return "instrument_broken"
+    if base_fingerprint != collide_fingerprint:
+        return "instrument_broken"
+    if base_hash == collide_hash:
+        return "graph_collision_named"
+    return "graph_collision_suspicious"
+
+
 # --- artifact ---------------------------------------------------------------------
 
 
@@ -433,17 +490,21 @@ def _signed32(value):
 # --- live path (Windows only; not exercised by the host tests) ---------------------
 
 
-def gate_and_inject(pid, dll_path, allow_window=False):
+def gate_and_inject(pid, dll_path, allow_window=False, required_extra=()):
     """Seven exports in the FILE → refuse-if-resident → gate → inject → sanity.
 
     The gate call must stay **before** `inject_dll` in this scope: `scripts/
     test_scripts_layout.py`'s R-inject fence reads exactly that ordering, and a shot
     that injects first has already spent the premise when it finds out.
+
+    `required_extra` lets a branch add exports (the collide shot needs the live cache
+    keys) without weakening the plain graph read's pre-flight.
     """
     import c2_harness as harness
 
     exports = harness.list_exports(dll_path)
-    missing = [name for name in REQUIRED_EXPORTS if name not in exports]
+    needed = REQUIRED_EXPORTS + tuple(required_extra)
+    missing = [name for name in needed if name not in exports]
     if missing:
         print(f"[graph] {dll_path} is missing {missing} — refusing to inject", file=sys.stderr)
         raise SystemExit(EXIT_REFUSED)
@@ -498,12 +559,36 @@ def read_once(pid, base, exports, stats_buf, drain_buf):
     return rc, stats, rows
 
 
+def read_live_pair(pid, base, exports, stats_buf, hash_buf):
+    """`(fingerprint, edge_hash)` from the live source's own cache keys.
+
+    The collision fixture is about the *cache decision*, so it must compare what the
+    cache compares: `C2NeoLiveStatsInto` word 7 (the per-slot weighted fingerprint) and
+    `C2NeoLiveHashInto` word 0 (the sorted edge-set hash).  `0` in either is the
+    "never read" sentinel — `classify_collision` treats it as an instrument reading.
+    """
+    import c2_harness as harness
+
+    harness.call_remote_with_arg(pid, base, exports["C2NeoLiveStatsInto"], stats_buf)
+    words = struct.unpack("<8Q", harness.read_memory(pid, stats_buf, LIVE_STATS_SIZE))
+    fingerprint = words[7]
+
+    harness.call_remote_with_arg(pid, base, exports["C2NeoLiveHashInto"], hash_buf)
+    hash64, _edges = struct.unpack("<QQ", harness.read_memory(pid, hash_buf, LIVE_HASH_SIZE), 0)
+    return fingerprint, hash64
+
+
 def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_file=None,
-        allow_window=False, settle_s=0.0, mutate=None, kill_after=False):
+        allow_window=False, settle_s=0.0, mutate=None, mutate_collide=None,
+        kill_after=False):
     """One shot in one game process. No hook is installed and nothing is unloaded.
 
     `mutate=(x, y)` switches the shot to the three-snapshot form: Read (base) →
     MutateAdd → Read → MutateRemove → Read, and every step goes into `#meta`.
+
+    `mutate_collide=(x, y)` is the four-step form Read → MutateAdd → MutateRemove →
+    Read: no read between add and remove, so the fingerprint must come back to its base
+    value and only the edge-set hash can tell whether the picture was rewired.
     """
     import time
 
@@ -522,7 +607,9 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
         raise SystemExit(EXIT_REFUSED)
 
     expected = read_edge_table(edges_file) if edges_file else None
-    base, exports = gate_and_inject(pid, dll_path, allow_window=allow_window)
+    base, exports = gate_and_inject(
+        pid, dll_path, allow_window=allow_window,
+        required_extra=COLLIDE_EXPORTS if mutate_collide is not None else ())
 
     stats_buf = harness.remote_alloc(pid, STATS_SIZE)
     drain_buf = harness.remote_alloc(pid, DRAIN_BYTES)
@@ -536,10 +623,10 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
         time.sleep(settle_s)
 
     step_lines = []
-    if mutate is None:
+    if mutate is None and mutate_collide is None:
         rc1, stats1, rows1 = read_once(pid, base, exports, stats_buf, drain_buf)
         rc2, stats2, rows2 = read_once(pid, base, exports, stats_buf, drain_buf)
-    else:
+    elif mutate is not None:
         # The mutation sequence is fixed and each step is recorded **before** the next
         # one runs: if a step fails, the artifact still says which one and the rest is
         # never called (Review Focus #5).
@@ -574,6 +661,58 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
         write_edge_snapshots(out_path, rows1, rows_add, rows_rm)
         stats2 = None          # three snapshots, not a "read2" — see `read2_meta`
         rc2 = None
+    else:
+        # Collision: add and remove are adjacent — no read in between.  The live
+        # source's own cache keys (fingerprint word 7, edge-set hash word 0) are
+        # sampled next to each read; comparing them is the whole judgement.
+        steps = collide_steps(mutate_collide[0], mutate_collide[1])
+        x, y = mutate_collide
+        pair = (x << 32) | (y & 0xFFFF_FFFF)
+        live_stats_buf = harness.remote_alloc(pid, LIVE_STATS_SIZE)
+        live_hash_buf = harness.remote_alloc(pid, LIVE_HASH_SIZE)
+
+        rc1, stats1, rows1 = read_once(pid, base, exports, stats_buf, drain_buf)
+        base_fp, base_hash = read_live_pair(pid, base, exports, live_stats_buf, live_hash_buf)
+        step_lines.append(f"step={steps[0]} edges={stats1['edges']} rc={rc1} "
+                          f"fingerprint={base_fp} hash={base_hash:016x}")
+
+        collide_fp, collide_hash = 0, 0
+        read_rc2, stats_c, rows2 = None, None, []
+        add_rc = _signed32(harness.call_remote_with_arg(pid, base, exports["C5GraphMutateAdd"],
+                                                        pair))
+        step_lines.append(f"step={steps[1]} edges=- rc={add_rc}")
+        rm_rc = None
+        if add_rc == 0:
+            rm_rc = _signed32(harness.call_remote_with_arg(pid, base, exports["C5GraphMutateRemove"],
+                                                           pair))
+            step_lines.append(f"step={steps[2]} edges=- rc={rm_rc}")
+            if rm_rc == 0:
+                read_rc2, stats_c, rows2 = read_once(pid, base, exports, stats_buf, drain_buf)
+                collide_fp, collide_hash = read_live_pair(pid, base, exports,
+                                                          live_stats_buf, live_hash_buf)
+                step_lines.append(f"step={steps[3]} edges={stats_c['edges']} rc={read_rc2} "
+                                  f"fingerprint={collide_fp} hash={collide_hash:016x}")
+
+        if rc1 not in (0, -4):
+            verdict = "instrument_broken"
+            detail = f"base read == {rc1}"
+        elif add_rc != 0 or rm_rc != 0:
+            failed = "add" if add_rc != 0 else "remove"
+            verdict = "mutation_left_dirty"
+            detail = f"{failed} step did not land (rc != 0) — the fixture never formed"
+        elif read_rc2 not in (0, -4):
+            verdict = "instrument_broken"
+            detail = f"collide read == {read_rc2}"
+        else:
+            verdict = classify_collision(
+                base_fingerprint=base_fp, collide_fingerprint=collide_fp,
+                base_hash=base_hash, collide_hash=collide_hash)
+            detail = (f"fingerprint {base_fp} -> {collide_fp}; "
+                      f"hash {base_hash:016x} -> {collide_hash:016x}; "
+                      f"edges {stats1['edges']} -> {stats_c['edges']}")
+
+        stats2 = None          # the two reads are base / collide_read, not "read2"
+        rc2 = None
 
     try:
         harness.assert_game_alive(pid)
@@ -581,7 +720,7 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
     except Exception:                    # noqa: BLE001 — a dead host is a reading
         alive = False
 
-    if mutate is None:
+    if mutate is None and mutate_collide is None:
         env = {
             "rc": rc1,
             "gate": "operator_override" if allow_window else "world_state",
@@ -594,10 +733,11 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
         # check that the drain gave back as many rows as the stats claimed.
         verdict, detail = classify(stats1, rows1, expected, layout, env,
                                    again=rows2, rows_complete=(len(rows1) == stats1["edges"]))
-    else:
+    elif mutate is not None:
         verdict, detail = classify_mutation(seq, mutate[0], mutate[1], base_rows=rows1,
                                             added_rows=rows_add,
                                             removed_rows=rows_rm if read_rc_rm is not None else None)
+    # else: the collide branch already set `verdict` / `detail` from its live cache keys.
 
     meta = {
         "overall_verdict": verdict,
@@ -624,6 +764,14 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
     if mutate is not None:
         meta["mutation"] = f"{min(mutate)}-{max(mutate)}"
         meta["mutation_steps"] = "|".join(step_lines)
+    if mutate_collide is not None:
+        meta["step"] = "collide"
+        meta["mutation"] = f"{min(mutate_collide)}-{max(mutate_collide)}"
+        meta["mutation_steps"] = "|".join(step_lines)
+        meta["base_fingerprint"] = base_fp
+        meta["collide_fingerprint"] = collide_fp
+        meta["base_hash"] = f"{base_hash:016x}"
+        meta["collide_hash"] = f"{collide_hash:016x}"
     write_artifact(out_path, build_meta(meta), rows1)
     print(f"[graph] verdict={verdict}  {detail}")
     print(f"[graph] artifact={out_path}")
@@ -636,6 +784,20 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
     if kill_after:
         kill_game(pid)
     return meta, 0
+
+
+def parse_pair(parser, text, flag):
+    """`FROM,TO` -> two distinct ids inside 0..0xFFFF (argparse errors otherwise)."""
+    parts = text.split(",")
+    if len(parts) != 2:
+        parser.error(f"{flag} wants FROM,TO")
+    try:
+        a, b = (int(part) for part in parts)
+    except ValueError:
+        parser.error(f"{flag} wants two integers")
+    if not (0 <= a <= 0xFFFF and 0 <= b <= 0xFFFF) or a == b:
+        parser.error(f"{flag} endpoints must be distinct ids inside 0..65535")
+    return (a, b)
 
 
 def main(argv=None):
@@ -659,6 +821,10 @@ def main(argv=None):
     parser.add_argument("--mutate", default=None, metavar="FROM,TO",
                         help="mutation shot: Read -> MutateAdd -> Read -> MutateRemove -> Read "
                              "on this pair (both within 0..0xFFFF, not an existing edge)")
+    parser.add_argument("--mutate-collide", default=None, metavar="FROM,TO",
+                        help="collision shot: Read -> MutateAdd -> MutateRemove -> Read "
+                             "(no read between add and remove: the fingerprint returns to its "
+                             "base value, so only the edge-set hash can see the rewiring)")
     parser.add_argument("--kill-after", action="store_true",
                         help="after the artifact is written, taskkill the game (no save, no "
                              "menu: the plan's cleanup for a mutation shot)")
@@ -666,21 +832,18 @@ def main(argv=None):
 
     mutate = None
     if args.mutate:
-        parts = args.mutate.split(",")
-        if len(parts) != 2:
-            parser.error("--mutate wants FROM,TO")
-        try:
-            a, b = (int(part) for part in parts)
-        except ValueError:
-            parser.error("--mutate wants two integers")
-        if not (0 <= a <= 0xFFFF and 0 <= b <= 0xFFFF) or a == b:
-            parser.error("--mutate endpoints must be distinct ids inside 0..65535")
-        mutate = (a, b)
+        mutate = parse_pair(parser, args.mutate, "--mutate")
+    mutate_collide = None
+    if args.mutate_collide:
+        mutate_collide = parse_pair(parser, args.mutate_collide, "--mutate-collide")
+    if mutate and mutate_collide:
+        parser.error("--mutate and --mutate-collide are different shots; pick one")
 
     _, code = run(args.dll, args.out, expect_systems=args.expect_systems,
                   expect_edges=args.expect_edges, save_name=args.save_name,
                   edges_file=args.edges_file, allow_window=args.allow_window,
-                  settle_s=args.poll_s, mutate=mutate, kill_after=args.kill_after)
+                  settle_s=args.poll_s, mutate=mutate, mutate_collide=mutate_collide,
+                  kill_after=args.kill_after)
     return code
 
 
