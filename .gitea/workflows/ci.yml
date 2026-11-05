@@ -1,31 +1,31 @@
-# CI gate — runs on the local Gitea act_runner, never on a hosted runner.
+# CI gate — MANUAL ONLY.  The primary pipeline is `.github/workflows/ci.yml`
+# (GitHub-hosted; this repo is public, so those minutes are free and there is no
+# reason to spend a local runner slot on them).
 #
-# RULE: this file only ever runs *offline* gates.  Every `c1_*`/`c2_*` live
-# shot, `scripts/windows/game_supervisor.py`, the popup/OCR family and the IDA
-# sessions stay out on purpose: `docs/roadmap.md` §2 records the live-detour
-# gate as 「只在点名时」 with a per-plan shot budget, so automating one would
-# bypass the authorization gate rather than exercise it.  The corollary is that
-# this pipeline needs no Windows capacity at all — the shipped DLL and
-# `inject.exe` cross-compile on Linux and are never *run* here.
+# This copy exists so the same gate can be run on the local Gitea act_runner
+# when GitHub is unreachable or when a job needs the `ns-ci` image (zig + just +
+# pytest baked in — see `ci/runner/Dockerfile`).  It is dispatch-only by
+# decision: a fallback pipeline that also fires automatically would run every
+# gate twice for no added signal.  (Measured 2026-11-05 on this instance —
+# Gitea 28.2.0 — a push carrying `.github/workflows/ci.yml` with `on: push:`
+# produced no run, so the two directories are not redundant *today*; the fence
+# keeps that from mattering either way.)  `scripts/test_ci_workflows.py` pins
+# the dispatch-only shape.
 #
-# The command list lives in the justfile (`just check-full`), not in this file,
-# so a green local run and a green CI run are the same thing by construction.
+# RULE, identical to the GitHub copy: offline gates only.  Every `c1_*`/`c2_*`
+# live shot, `scripts/windows/game_supervisor.py`, the popup/OCR family and the
+# IDA sessions stay out — `docs/roadmap.md` §2 records the live-detour gate as
+# 「只在点名时」 with a per-plan shot budget, so automating one would bypass the
+# gate instead of exercising it.
 name: ci
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-gitea-${{ github.ref }}
   cancel-in-progress: true
 
-# Pinned, and verified by sha256 before use: the toolchain version is part of
-# what the tree asserts (build.zig.zon requires zig ≥ 0.16.0, and the shipped
-# bytes are Debug-built by that compiler).  Bumping either pin is a deliberate
-# edit here, not a floating tag that moves under us.
 env:
   ZIG_VERSION: 0.16.0
   ZIG_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
@@ -34,13 +34,9 @@ env:
 
 jobs:
   gate:
-    # `ns-ci` is the label registered for the image built from ci/runner/Dockerfile
-    # (zig + just + python deps baked in: ziglang.org measured 50–900 KB/s from
-    # this network, which alone blew the job budget).  A bare `ubuntu-latest`
-    # runner still works — the toolchain step installs whatever is missing — it
-    # is just slower.  Either way it must be glibc: build.zig:44-47 explains
-    # that QuickJS's bundled allocator misbehaves under musl, so the `alpine`
-    # label cannot run `zig build test` for reasons unrelated to any change.
+    # Label registered for the image built from ci/runner/Dockerfile.  Must be
+    # glibc: build.zig:44-47 — QuickJS's bundled allocator misbehaves under musl,
+    # so the `alpine` label cannot run `zig build test` at all.
     runs-on: ns-ci
     timeout-minutes: 20
 
@@ -70,10 +66,6 @@ jobs:
             tar -xzf /tmp/just.tar.gz -C /usr/local/bin just
           fi
 
-          # pytest + the two pinned offline-PE decoders (imported at module level
-          # by the tools their tests cover) + psutil (windows-subpackage tests).
-          # `unicorn` is deliberately absent: only scripts/emu_desc.py needs it
-          # and its artifacts are checked in, so the oracle is not a CI step.
           if ! python3 -c 'import pytest, capstone, pefile, psutil' >/dev/null 2>&1; then
             python3 -m pip install -q --disable-pip-version-check \
               'pytest==8.4.2' 'capstone==5.0.7' 'pefile==2024.8.26' psutil
@@ -83,29 +75,13 @@ jobs:
           just --version
           python3 -m pytest --version
 
-      - name: "just check-full (build + 31 zig test roots + fences + drift + 1,461 python tests)"
-        # `just check` alone covers only 418 of the 1,461 python tests: it runs
-        # three fence files plus the windows subpackage, and never the
-        # `test_c2_*_probe.py` / `test_c2_harness.py` contract layers.  That gap
-        # is the main reason this pipeline exists.
+      - name: "just check-full (same gate as .github/workflows/ci.yml)"
         run: just check-full
-
-      - name: zig build abi-probe (manual dispatch only)
-        # Non-default step, never shipped, and by far the most expensive thing
-        # here: measured 72 s cold vs 24 s for the whole `zig build test`.  Kept
-        # off the per-push path but still exercised, so it cannot rot unnoticed.
-        if: github.event_name == 'workflow_dispatch'
-        run: zig build abi-probe
 
       - name: Artifact fingerprints
         run: sha256sum zig-out/bin/stellaris_quickjs.dll zig-out/bin/inject.exe | tee /tmp/sha256sums.txt
 
       - name: Working tree must be untouched
-        # The two drift fences are `--check`-only today (they regenerate in
-        # memory and compare).  This step makes that a property of the pipeline
-        # rather than a fact about the current generators: the moment someone
-        # makes one of them write to disk, CI goes red instead of silently
-        # committing regenerated bytes.
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             echo "::error::the gate mutated the working tree"

@@ -1,11 +1,13 @@
-# ns-ci — the act_runner image this repo's CI runs in.
+# ns-ci — the act_runner image the *manual* Gitea copy of CI runs in
+# (`.gitea/workflows/ci.yml`, `workflow_dispatch` only; the primary pipeline is
+# `.github/workflows/ci.yml` on GitHub-hosted runners).
 #
 # Why this exists: `docker.gitea.com/runner-images:ubuntu-latest` is a fine base
 # but has no zig, and pulling a ~47 MB zig tarball from ziglang.org on every
 # push measured 50–900 KB/s from this network (6+ minutes, twice timed out at
-# the 20-minute job budget).  Baking the toolchain in turns the per-push cost
-# into zero and makes the run deterministic.  The workflow still installs
-# anything missing, so it degrades to a plain runner instead of breaking.
+# the 20-minute job budget).  Baking the toolchain in turns the per-run cost
+# into zero.  The workflow still installs anything missing, so it degrades to a
+# plain runner instead of breaking.
 #
 # Build (on the host, once; ~2 min for the download):
 #   docker build -t ns-ci:ubuntu-24.04 ci/runner
