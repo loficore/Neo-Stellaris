@@ -514,8 +514,9 @@ def _delete_task() -> None:
     _require_windows()
     for verb in ("/end", "/delete"):
         with open(os.devnull, "w") as devnull:
+            # best-effort cleanup: a missing task is success.
             subprocess.run(["schtasks", verb, "/tn", TASK_NAME, "/f"],
-                           stdout=devnull, stderr=devnull)
+                           stdout=devnull, stderr=devnull, check=False)
 
 
 def build_parser() -> argparse.ArgumentParser:

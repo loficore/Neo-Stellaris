@@ -326,9 +326,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _taskkill(image: str) -> subprocess.CompletedProcess:
+    # check=False: the caller reads taskkill's rc (1 = not running / access denied).
     return subprocess.run(
         ["taskkill", "/F", "/IM", image, "/T"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
 
 
@@ -374,9 +375,10 @@ def steam_spawn(app_id: int, dry_run: bool = False) -> int:
         return EXIT_OK
     uri = f"steam://rungameid/{app_id}"
     # Start-Process goes through ShellExecute, same protocol handler as os.startfile.
+    # check=False: a failed spawn is not fatal here; the observe phase decides.
     subprocess.run(
         ["powershell", "-NoProfile", "-Command", f"Start-Process '{uri}'"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     log_event("STEAM_SPAWN", uri=uri)
     return EXIT_OK
@@ -1234,8 +1236,9 @@ def _delete_bridge_task(task_name: str) -> None:
     """
     for verb in ("/end", "/delete"):
         with contextlib.suppress(OSError):
+            # best-effort cleanup inside contextlib.suppress(OSError).
             subprocess.run(["schtasks", verb, "/tn", task_name, "/f"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, check=False)
 
 
 def _default_marker_path(pid: int) -> str:
@@ -1571,9 +1574,10 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     _create_lease(lease)
     task_scheduled = False
     try:
+        # check=False: the rc is mapped to EXIT_BRIDGE_SCHTASKS_DENIED below.
         create = subprocess.run(
             build_bridge_task_command(task_name, shim_path, st_str, ru),
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         if create.returncode != 0:
             log_event("BRIDGE", step="create", rc=create.returncode,
@@ -1584,8 +1588,9 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
             return EXIT_BRIDGE_SCHTASKS_DENIED
 
         task_scheduled = True
+        # check=False: the rc is mapped to a distinct exit code below.
         run = subprocess.run(build_bridge_run_command(task_name),
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, check=False)
         if run.returncode != 0:
             log_event("BRIDGE", step="run", rc=run.returncode,
                       stderr=run.stderr.strip())

@@ -85,7 +85,9 @@ if not module_loaded():
     print('LoadLibraryW ->', api.load(DLL))
 if not wait_loaded():
     print('frida load did not take, using inject.exe')
-    run = subprocess.run([INJECTOR, str(pid), DLL], capture_output=True, text=True, timeout=60)
+    # check=False: a failed inject is diagnosed by the stdout/stderr print and wait_loaded().
+    run = subprocess.run([INJECTOR, str(pid), DLL], capture_output=True, text=True, timeout=60,
+                         check=False)
     print(run.stdout.strip() or run.stderr.strip())
     if not wait_loaded():
         sys.exit('DLL never loaded into the game process')

@@ -1632,8 +1632,9 @@ def _status_line(rec) -> str:
 def _delete_task() -> None:
     for verb in ("/end", "/delete"):
         with open(os.devnull, "w") as devnull:
+            # best-effort cleanup: a missing task is success.
             subprocess.run(["schtasks", verb, "/tn", TASK_NAME, "/f"],
-                           stdout=devnull, stderr=devnull)
+                           stdout=devnull, stderr=devnull, check=False)
 
 
 def is_new_heartbeat(rec, baseline_epoch: float, now: float,

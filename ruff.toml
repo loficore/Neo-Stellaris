@@ -29,7 +29,7 @@
 extend-exclude = ["scripts/scratch"]
 
 [lint]
-select = ["E4", "E7", "E9", "F", "W", "SIM", "RET", "PIE"]
+select = ["E4", "E7", "E9", "F", "W", "SIM", "RET", "PIE", "PLW1510"]
 ignore = [
     # `sys.path.insert(0, ...)` / `sys.stdout.reconfigure(...)` before the
     # imports they exist for is the house pattern in most tools and every test

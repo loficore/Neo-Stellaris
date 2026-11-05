@@ -448,8 +448,9 @@ def kill_game(pid):
     """Kill the session rather than saving or parking it (the plan's cleanup rule)."""
     import subprocess
 
+    # check=False: taskkill may fail because the process is already gone; the rc is printed.
     result = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, check=False)
     print(f"[graph] taskkill /F /PID {pid} rc={result.returncode} — session not saved")
 
 

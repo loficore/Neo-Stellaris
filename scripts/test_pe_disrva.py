@@ -74,8 +74,9 @@ def trap_span():
 
 
 def _run(argv):
+    # check=False: the caller asserts on returncode/stdout itself.
     return subprocess.run([sys.executable, str(TOOL), *argv],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, check=False)
 
 
 def _disasm(start, end):

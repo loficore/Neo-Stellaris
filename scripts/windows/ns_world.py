@@ -649,8 +649,9 @@ def _fetch_base64(host: str, remote: str, slice_bytes: int = 525) -> bytes:
 
 def _ssh(host: str, command: str) -> str:
     """Run one command on the Windows host and return its stdout."""
+    # check=False: the rc is turned into a typed OSError below.
     result = subprocess.run(["ssh", host, command], capture_output=True,
-                            text=True, timeout=60)
+                            text=True, timeout=60, check=False)
     if result.returncode != 0:
         raise OSError(f"ssh {host} failed ({result.returncode}): "
                       f"{(result.stderr or '').strip()}")
