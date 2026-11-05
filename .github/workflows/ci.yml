@@ -120,7 +120,11 @@ jobs:
         run: zig build abi-probe
 
       - name: Artifact fingerprints
-        run: sha256sum zig-out/bin/stellaris_quickjs.dll zig-out/bin/inject.exe | tee /tmp/sha256sums.txt
+        # Written under zig-out/bin so the upload step has ONE root: upload-artifact
+        # uses the least common ancestor of the search paths as the artifact root, and
+        # a /tmp entry mixed with repo-relative ones would make that root "/" (the
+        # download would then restore a nested tree and `dist/<name>` would not exist).
+        run: sha256sum zig-out/bin/stellaris_quickjs.dll zig-out/bin/inject.exe | tee zig-out/bin/sha256sums.txt
 
       - name: Upload release artifacts
         # Uploaded on every gate run, not only tags: the step stays identical between
@@ -132,7 +136,7 @@ jobs:
           path: |
             zig-out/bin/stellaris_quickjs.dll
             zig-out/bin/inject.exe
-            /tmp/sha256sums.txt
+            zig-out/bin/sha256sums.txt
 
       - name: Working tree must be untouched
         # The two drift fences are `--check`-only today (they regenerate in
@@ -174,4 +178,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
             --generate-notes \
+            --clobber \
             dist/stellaris_quickjs.dll dist/inject.exe dist/sha256sums.txt
