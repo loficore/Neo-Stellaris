@@ -1436,7 +1436,7 @@ def serve(args, once: bool = False) -> int:
             _log({"event": "command", "line": line})
             try:
                 quit_now, one_shot = _handle_command(cmd, hwnd, state)
-            except Exception as e:  # daemon survives one bad command
+            except Exception as e:  # noqa: BLE001 — daemon survives one bad command
                 _log({"event": "command_error", "line": line, "error": repr(e)})
             if quit_now:
                 break

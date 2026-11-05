@@ -127,7 +127,7 @@ def warm() -> str:
     global _LOAD_STATUS
     try:
         _load()
-    except Exception as exc:                # 永不 raise:加载失败只报状态串
+    except Exception as exc:                # noqa: BLE001 — 永不 raise:加载失败只报状态串
         _LOAD_STATUS = _classify(exc)
     return _LOAD_STATUS
 
@@ -208,7 +208,7 @@ def ocr_texts(png_path: str) -> tuple[list[str], str, float]:
     try:
         texts = _predict(png_path)
         status = "ok"
-    except Exception as exc:                # daemon 不许因为 OCR 而死
+    except Exception as exc:                # noqa: BLE001 — daemon 不许因为 OCR 而死
         texts = []
         status = _classify(exc)
     if status == "ok" and key is not None:

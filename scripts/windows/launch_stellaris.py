@@ -636,7 +636,9 @@ def _read_click_trace(hwnd: int, rect: tuple[int, int, int, int],
     foreground_hwnd: int | None = None
     cursor: tuple[int, int] | None = None
     launcher_alive: bool | None = None
-    try:
+    # Click-trace diagnostics only: a failing cursor/foreground probe must not turn
+    # a launch attempt into a traceback.
+    with contextlib.suppress(Exception):
         get_foreground_window, get_cursor_pos = _trace_fns()
         launcher_alive = pid is None or psutil.pid_exists(pid)
         foreground = get_foreground_window()
@@ -645,8 +647,6 @@ def _read_click_trace(hwnd: int, rect: tuple[int, int, int, int],
         point = _POINT()
         if get_cursor_pos(ctypes.byref(point)):
             cursor = (int(point.x), int(point.y))
-    except Exception:
-        pass
     return click_trace(rect, foreground_hwnd, hwnd, cursor, launcher_alive)
 
 

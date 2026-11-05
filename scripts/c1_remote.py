@@ -49,5 +49,5 @@ k32.CloseHandle(hProc)
 try:
     subprocess.check_call(['tasklist', '/FI', f'PID eq {pid_val}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print('Game: still running')
-except Exception:
+except Exception:  # noqa: BLE001 — any failure to query the pid means it is gone
     print('Game: CRASHED')

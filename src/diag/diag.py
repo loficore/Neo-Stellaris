@@ -419,7 +419,7 @@ def main() -> int:
             )
         )
         return 1
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — the CLI's contract is a JSON error, not a traceback
         print(json.dumps(format_response(args.command, False, error=str(e))))
         return 1
 

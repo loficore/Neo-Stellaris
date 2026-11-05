@@ -260,7 +260,7 @@ def test_local_census_fallback_matches_shared_loader(tmp_path):
     }
     try:
         from c2_scope_probe import load_call_census
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — any import failure means "cannot run here"
         pytest.skip(f"本机 import 不了共享 loader(c2_harness 侧依赖):{exc};"
                     "漂移钉要两边都能跑才成立;本地回退的语义已由上面的断言钉住")
     assert load_call_census(str(p)) == local
@@ -297,7 +297,7 @@ def test_main_end_to_end_on_real_bytes(tmp_path):
         pytest.skip("no local exe copy")
     try:
         import pdata  # noqa: F401  —— main 内部延迟 import 它;这里只为把环境缺 exe 变成 skip
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — any import failure means "cannot run here"
         pytest.skip(f"pdata import fails without an exe copy at its own path: {exc}")
     probe = tmp_path / "probe.tsv"
     probe.write_text(
