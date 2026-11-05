@@ -549,7 +549,7 @@ def test_required_exports_add_slot2_stats_only_for_slot2():
     assert "C4Slot2StatsInto" not in mod.required_exports("capture")
     assert "C4Slot2StatsInto" in mod.required_exports("slot2")
     assert mod.required_exports("capture") == mod.REQUIRED_EXPORTS
-    assert mod.required_exports("slot2") == mod.REQUIRED_EXPORTS + ("C4Slot2StatsInto",)
+    assert mod.required_exports("slot2") == (*mod.REQUIRED_EXPORTS, "C4Slot2StatsInto")
 
 
 def _slot2_args(tmp_path):

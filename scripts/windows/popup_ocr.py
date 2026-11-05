@@ -242,7 +242,7 @@ def main(argv=None) -> int:
     else:
         texts, status, ms = ocr_texts(target)
         lines = len(texts)
-    print(f"STATUS={status} MS={int(round(ms))} LINES={lines}")
+    print(f"STATUS={status} MS={round(ms)} LINES={lines}")
     return 0
 
 

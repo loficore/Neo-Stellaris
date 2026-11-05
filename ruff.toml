@@ -29,7 +29,8 @@
 extend-exclude = ["scripts/scratch"]
 
 [lint]
-select = ["E4", "E7", "E9", "F", "W", "SIM", "RET", "PIE", "PLW1510", "BLE", "S110"]
+select = ["E4", "E7", "E9", "F", "W", "SIM", "RET", "PIE", "PLW1510", "BLE", "S110",
+          "RUF"]
 ignore = [
     # `sys.path.insert(0, ...)` / `sys.stdout.reconfigure(...)` before the
     # imports they exist for is the house pattern in most tools and every test
@@ -43,4 +44,12 @@ ignore = [
     "UP031",   # printf-string-formatting
     "B904",    # raise ... from err inside an except clause
     "B905",    # zip() without an explicit strict= parameter
+    # RUF001/002/003 flag every full-width Chinese punctuation mark in comments,
+    # docstrings and strings.  Those marks are this tree's documented house style
+    # (AGENTS.md: 注释与文档写中文), not ambiguity: ~400 hits would all say the
+    # same thing ("this sentence is Chinese").  Kept as an explicit ruling so a
+    # future reader does not read the silence as an oversight.
+    "RUF001",
+    "RUF002",
+    "RUF003",
 ]

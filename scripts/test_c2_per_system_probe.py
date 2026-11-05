@@ -191,13 +191,13 @@ def test_verdict_denominator_mismatch():
 
 
 def test_verdict_ids_not_in_container():
-    container = list(range(1, 787)) + [999]
+    container = [*list(range(1, 787)), 999]
     assert verdict(_stats(), _rows(GALAXY), _container(container), expected=787,
                    script_sends=1, log_hits=787) == "ids_not_in_container"
 
 
 def test_verdict_id_out_of_range():
-    bad = [0] + GALAXY[1:]
+    bad = [0, *GALAXY[1:]]
     assert verdict(_stats(), _rows(bad), _container(GALAXY), expected=787,
                    script_sends=1, log_hits=787) == "ids_out_of_range"
 

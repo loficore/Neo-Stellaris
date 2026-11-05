@@ -170,7 +170,7 @@ def probe(hwnd: int, pid: int) -> dict:
     # read_console answers exactly classify_console(bright_px); the verdict is
     # re-derived from the count so the probe's console word comes from the
     # same classifier the daemon uses.
-    seen, bright_px = gs.read_console(hwnd)
+    _seen, bright_px = gs.read_console(hwnd)
     console_state = console_state_of(gs.classify_console(bright_px))
     stats = gs.read_window(hwnd)
     rect = gs.window_rect(hwnd)

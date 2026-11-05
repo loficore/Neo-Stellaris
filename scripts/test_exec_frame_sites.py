@@ -15,8 +15,8 @@ from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
-import exec_frame_sites  # noqa: E402
-from exec_frame_sites import (  # noqa: E402
+import exec_frame_sites
+from exec_frame_sites import (
     DEFAULT_CENSUS,
     DEFAULT_OUT,
     SITE_WINDOW,

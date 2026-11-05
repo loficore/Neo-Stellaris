@@ -263,7 +263,7 @@ def test_prekill_checks_return_codes_not_localized_text(mock_run):
 def test_steam_spawn_uses_start_process(mock_run):
     mock_run.return_value = MagicMock(returncode=0)
     steam_spawn(281990)
-    args, kwargs = mock_run.call_args
+    args, _kwargs = mock_run.call_args
     cmd = args[0]
     # URI is concatenated with 'Start-Process ...' into one -Command argument;
     # join the list to check for the URI substring (matches the sibling

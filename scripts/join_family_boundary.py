@@ -43,7 +43,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.abspath(os.path.join(_HERE, ".."))
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
 
-from disrva import resolve_exe  # noqa: E402
+from disrva import resolve_exe
 
 BASE = 0x140000000
 CALLERS_TSV = os.path.join(_REPO, "evidence", "xrefs", "exec_frame_callers_4_4_4.tsv")

@@ -105,7 +105,7 @@ fc = Counter(pdata.func_of(site)[0] if pdata.func_of(site) else -1
 print('\ncalls per enclosing function (top 12):')
 for st, c in fc.most_common(12):
     fx = pdata.func_of(st + 1) if st < 0 else None
-    print(f'  func {st and hex(st) or "??"}  {c} calls')
+    print(f'  func {(st and hex(st)) or "??"}  {c} calls')
 
 with open('evidence/xrefs/keyword_registration_table_4_4_4.tsv', 'w') as out:
     out.write('# id\tname_rva\tname\tdescriptor_rva\tcall_site_rva\t'

@@ -241,8 +241,9 @@ class _Timeline:
         """The carried lines, oldest first, with a note if any were dropped."""
         if not self._dropped:
             return list(self._lines)
-        return [f"... {self._dropped} earlier timeline line(s) dropped "
-                f"(cap {_MARKER_TIMELINE_MAX_LINES})"] + list(self._lines)
+        note = (f"... {self._dropped} earlier timeline line(s) dropped "
+                f"(cap {_MARKER_TIMELINE_MAX_LINES})")
+        return [note, *self._lines]
 
 
 # Set by main() while the inner chain runs, so log_event knows to collect.

@@ -64,7 +64,7 @@ def func_at(rva):
     i = bisect.bisect_right(FSTART, rva) - 1
     if i < 0:
         return None
-    b, e, u = funcs[i]
+    b, e, _u = funcs[i]
     return (b, e) if b <= rva < e else None
 
 

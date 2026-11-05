@@ -24,17 +24,17 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
-import disrva  # noqa: E402
-from disrva import parse_range  # noqa: E402
+import disrva
+from disrva import parse_range
 
 
 def test_bare_second_arg_below_ff_is_instruction_count():
-    begin, end, mode = parse_range("0x1D08520", "60")
+    begin, _end, mode = parse_range("0x1D08520", "60")
     assert mode == "count" and begin == 0x1D08520
 
 
 def test_bare_second_arg_above_ff_is_byte_length_not_end_rva():
-    begin, end, mode = parse_range("0x1D092C0", "0x100")
+    _begin, end, mode = parse_range("0x1D092C0", "0x100")
     assert mode == "legacy_len" and end == 0x1D092C0 + 0x100
 
 

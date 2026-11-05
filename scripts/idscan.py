@@ -29,7 +29,7 @@ SEC = {nm: (va, rsz, rp) for nm, va, vs, rsz, rp, ch in secs}
 
 
 def rva_of(nm, off):
-    va, rsz, rp = SEC[nm]
+    va, _rsz, rp = SEC[nm]
     return va + off - rp
 
 

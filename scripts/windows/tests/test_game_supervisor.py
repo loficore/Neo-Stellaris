@@ -180,7 +180,8 @@ def test_grace_reread_returns_the_fresh_reading_only_when_it_applies():
 def _console_tail():
     down, up = 0x0008, 0x000A
     burst = [(0, 0x0E, down, 0.02), (0, 0x0E, up, 0.02)] * gs.BACKSPACE_CLEAR
-    return burst + [
+    return [
+        *burst,
         (0, 0x1D, down, 0.08),
         (0, 0x2F, down, 0.08), (0, 0x2F, up, 0.08),
         (0, 0x1D, up, 0.08),

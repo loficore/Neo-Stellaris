@@ -30,7 +30,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 WINDOWS_DIR = REPO / "scripts" / "windows"
 sys.path.insert(0, str(WINDOWS_DIR))
 
-import world_probe  # noqa: E402  # pyright: ignore[reportMissingImports]
+import world_probe  # pyright: ignore[reportMissingImports]
 
 
 def test_build_evidence_keeps_every_raw_count():

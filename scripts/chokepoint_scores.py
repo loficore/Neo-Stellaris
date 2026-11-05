@@ -167,7 +167,7 @@ def score_rows(adjacency: dict[int, dict[int, float]]) -> list[dict]:
                 "degree": len(adjacency[node]),
                 "betweenness": centrality[node],
                 "betweenness_norm": normalized,
-                "score": int(round(1000 * normalized)),
+                "score": round(1000 * normalized),
                 "is_articulation": node in points,
                 "is_bridge_endpoint": node in bridge_endpoints,
             }

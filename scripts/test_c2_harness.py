@@ -951,7 +951,7 @@ def test_watched_dispatch_records_both_exit_codes_when_the_host_dies(monkeypatch
                           process_gone=True, process_exit_code=3)
     report = {}
 
-    rc, text = dispatch_watching_buffer(
+    rc, _text = dispatch_watching_buffer(
         1, 0x10000, 0x10, 0x2000, 512, poll_ms=1, timeout_ms=0, report=report
     )
 
@@ -968,7 +968,7 @@ def test_watched_dispatch_records_a_thread_that_returned_before_the_host_died(
                           finish_after=0, process_exit_code=0xC0000409)
     report = {}
 
-    rc, text = dispatch_watching_buffer(
+    rc, _text = dispatch_watching_buffer(
         1, 0x10000, 0x10, 0x2000, 512, poll_ms=1, timeout_ms=0, report=report
     )
 
@@ -1178,7 +1178,7 @@ def test_watched_dispatch_drops_a_sampler_raising_an_unexpected_type(monkeypatch
         raise ValueError("unexpected counter")
 
     report = {}
-    rc, text = dispatch_watching_buffer(1, 0x10000, 0x10, 0x2000, 512, poll_ms=1,
+    rc, _text = dispatch_watching_buffer(1, 0x10000, 0x10, 0x2000, 512, poll_ms=1,
                                         report=report, sample_every_ms=0,
                                         sampler=boom)
 
@@ -1787,7 +1787,7 @@ def test_watched_dispatch_drops_a_raising_thread_probe_after_recording_it(monkey
             raise OSError("pid 8288 no longer exists")
         return f"n={len(calls)}"
 
-    rc, text = dispatch_watching_buffer(1, 0x10000, 0x10, 0x2000, 512, poll_ms=1,
+    rc, _text = dispatch_watching_buffer(1, 0x10000, 0x10, 0x2000, 512, poll_ms=1,
                                         report=report, sample_every_ms=0,
                                         thread_probe=probe)
 

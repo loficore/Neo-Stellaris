@@ -31,7 +31,7 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-import disrva  # noqa: E402
+import disrva
 
 # Byte pins against the *real* PE need a copy of it, so they can only run where
 # one exists (`NS_STELLARIS_EXE`, or the two checkout paths `disrva` knows).
@@ -44,8 +44,8 @@ requires_exe = pytest.mark.skipif(
     reason="needs stellaris.exe: pins prologue bytes against the real PE "
            "(set NS_STELLARIS_EXE)",
 )
-import c2_donor_probe as donor  # noqa: E402
-from c2_donor_probe import (  # noqa: E402
+import c2_donor_probe as donor
+from c2_donor_probe import (
     VERDICTS,
     decode_entry,
     decode_layout,
@@ -178,7 +178,7 @@ def test_decode_layout_rejects_wrong_entry_size():
     open: mask is a u64 here, so it occupies two words and a 5-word read would
     silently answer `mask=512` for a mask of `1<<32`.
     """
-    for short in (GOOD_LAYOUT[:5], list(GOOD_LAYOUT) + [0]):
+    for short in (GOOD_LAYOUT[:5], [*list(GOOD_LAYOUT), 0]):
         with pytest.raises(ValueError):
             decode_layout(short)
     for entry in (40, 56, 64):
