@@ -4,7 +4,6 @@
 不能靠肉眼:解析器要能从 `.sav` 的 `gamestate` 里挑出**系统变量**,而不是任意
 同名键。窄解析,够判据 2 用;不冒充通用 Clausewitz 解析器。
 """
-import pathlib
 import zipfile
 
 import pytest

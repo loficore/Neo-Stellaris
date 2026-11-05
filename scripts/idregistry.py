@@ -4,7 +4,9 @@ points: per-keyword metadata/behaviour registries keyed by compile-time ids.
 
 usage: idregistry.py            # reads evidence TSV produced by regscan.py
 """
-import sys, os, struct
+import sys
+import os
+import struct
 from collections import defaultdict
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_IMM

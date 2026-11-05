@@ -12,7 +12,8 @@ string, since they are the same file on the same machine.
 Prints the resolved base, verifies the MZ header there, calls C2Sanity and
 asserts it returns 42, then asserts the game is still alive.
 """
-import sys, os
+import sys
+import os
 from c2_harness import (
     resolve_pid, resolve_base_address, inject_dll,
     list_exports, call_remote, read_memory, assert_game_alive,

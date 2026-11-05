@@ -1,4 +1,6 @@
-import ctypes, sys, time
+import ctypes
+import sys
+import time
 
 pid = int(sys.argv[1])
 dll_path = sys.argv[2]
@@ -20,7 +22,7 @@ import os
 marker_path = r"C:\temp\dll_loaded.txt"
 if os.path.exists(marker_path):
     os.remove(marker_path)
-    print(f"Deleted old marker file")
+    print("Deleted old marker file")
 
 # Step 2: Inject DLL via LoadLibrary
 k32_mod = k32.GetModuleHandleA(b"kernel32.dll")

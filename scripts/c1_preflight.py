@@ -24,7 +24,8 @@ script exists to rule out.
 
 usage: c1_preflight.py <candidate_name> [--db trigger|effect]
 """
-import sys, os
+import sys
+import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 XREFS = os.path.join(ROOT, 'evidence', 'xrefs')
@@ -127,11 +128,11 @@ def main():
 
     print()
     print(f'  predicted id : {max_static + 1} (= [db+0x84] max static {max_static} + [db+0x64] 0 + 1)')
-    print(f'                 a LARGER id is normal: §19, lazy accessors mint during start-up.')
-    print(f'                 a SMALLER id means the §25.5 collision this script just checked for.')
+    print('                 a LARGER id is normal: §19, lazy accessors mint during start-up.')
+    print('                 a SMALLER id means the §25.5 collision this script just checked for.')
     print()
     print(f'  planned sequence for {db} (§19 order, one call sequence, no two-phase wait):')
-    print(f'    1. 0x1D13270(rcx = *NameHolder)                  -> edx = token id')
+    print('    1. 0x1D13270(rcx = *NameHolder)                  -> edx = token id')
     print(f'    2. new(0x10){{ {p["class_info"]}, {p["docstring"]} }}   value record')
     print(f'    3. {p["ensure"]}')
     print(f'    4. {p["insert"]}(rcx = db, edx = id, r8 = value)  walks {p["walk"]}')

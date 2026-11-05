@@ -1,5 +1,7 @@
 """Read bytes / C-strings at RVAs in stellaris.exe. usage: pestr.py rva [len]..."""
-import sys, os, struct
+import sys
+import os
+import struct
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 _cands = [os.environ.get('NS_STELLARIS_EXE'),
           '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe']

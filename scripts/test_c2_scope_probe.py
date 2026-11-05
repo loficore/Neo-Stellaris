@@ -106,7 +106,7 @@ def test_caller_row_key_is_return_rva_and_estimate_is_detail(tmp_path):
     entries = [_entry(caller_rva=0x1C4369E), _entry(caller_rva=0x1C4369E)]
     path = str(tmp_path / "probe.tsv")
     write_tsv(path, summarize(entries, {}, {}, {}, {}), meta={})
-    line = next(l for l in open(path, encoding="utf-8") if l.startswith("caller"))
+    line = next(ln for ln in open(path, encoding="utf-8") if ln.startswith("caller"))
     cols = line.rstrip("\n").split("\t")
     assert cols[1] == "0x1c4369e"                              # 键 = 返回 RVA
     assert "ret=0x1c4369e" in cols[3] and "est_site=0x1c43699" in cols[3]

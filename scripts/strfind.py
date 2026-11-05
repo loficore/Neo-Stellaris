@@ -1,5 +1,7 @@
 """Locate exact C-strings in stellaris.exe by name. usage: strfind.py kw [kw...]"""
-import sys, os, struct
+import sys
+import os
+import struct
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 EXE = os.environ.get('NS_STELLARIS_EXE', '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe')
 f = open(EXE, 'rb').read()

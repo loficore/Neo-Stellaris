@@ -12,7 +12,10 @@ Usage: python scripts/disrva.py <start_rva_hex> [<count>|<length>|--end=<rva>|--
 (`scripts/test_disrva.py` 只要 `import disrva` 就能用纯函数 `parse_range` 与
 `resolve_exe`)。镜像在第一次真要取字节时才打开(`_image()`)。
 """
-import sys, os, struct, re
+import sys
+import os
+import struct
+import re
 
 BASE = 0x140000000
 DEFAULT_INSN = 80        # 无第二参时的指令条数(历史默认值)

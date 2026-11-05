@@ -7,7 +7,9 @@ RIP targets on data globals are therefore found, not just `lea`.
 
 Usage: python scripts/find_refs.py <rva_hex> [more_rvas...]
 """
-import sys, os, struct, re
+import sys
+import os
+import struct
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_REG_RIP

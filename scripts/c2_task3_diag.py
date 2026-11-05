@@ -34,7 +34,8 @@ Gates around the diag dispatch:
     path; Windows `%p` renders NULL as 0000000000000000). An rc==0 without a
     non-NULL ctx is a loud failure, never a PASS line.
 """
-import sys, os
+import sys
+import os
 from c2_harness import (
     resolve_pid, resolve_base_address, inject_dll,
     list_exports, call_remote, call_remote_with_arg, remote_alloc, read_memory,

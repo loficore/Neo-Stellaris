@@ -14,7 +14,9 @@ import popup_ocr
 
 def test_import_never_touches_surya():
     assert "surya" not in sys.modules
-    import popup_ocr                                    # 必须成功
+    # 这一行是断言本身:重新 import 必须成功。`noqa` 是因为 `popup_ocr` 已经在模块
+    # 顶部 import 过,pyflakes 只会看到「重复且未使用」。
+    import popup_ocr  # noqa: F401
 
 def test_a_raising_engine_degrades_to_error_not_an_exception(monkeypatch):
     def boom(path):

@@ -16,7 +16,10 @@ uses the same idiom fall out together.
 
 usage: thunkarrays.py [min_array_len]
 """
-import sys, os, struct, bisect
+import sys
+import os
+import struct
+import bisect
 from collections import Counter, defaultdict
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_IMM, X86_OP_MEM, X86_OP_REG, X86_REG_RIP

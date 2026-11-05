@@ -259,9 +259,9 @@ def lea_record_targets(data: bytes, secs, begin: int, end: int, want_vas):
 def cmd_site(data, image_base, secs, want):
     rows = [r for r in iter_records(data, image_base, secs) if want in r[5]]
     print(f"[ubsan_site] {len(rows)} UBSan check sites for a type containing {want!r}")
-    for rva, f, l, c, k, t in sorted(rows, key=lambda r: (r[1], r[2], r[3])):
+    for rva, f, ln, c, k, t in sorted(rows, key=lambda r: (r[1], r[2], r[3])):
         where = f"record_rva={rva:#x}" if rva is not None else "record_rva=?"
-        print(f"  {f}:{l}:{c} {k} type={t} {where}")
+        print(f"  {f}:{ln}:{c} {k} type={t} {where}")
     return 0 if rows else 1
 
 
@@ -290,18 +290,18 @@ def cmd_func(data, image_base, secs, va):
     print(f"[ubsan_site] function holding {va:#x}: rva {begin:#x}..{end:#x} "
           f"({end - begin} bytes)")
     recs = {}
-    for r, f, l, c, k, t in iter_records(data, image_base, secs):
+    for r, f, ln, c, k, t in iter_records(data, image_base, secs):
         if r is not None:
-            recs[r] = (f, l, c, k, t)
+            recs[r] = (f, ln, c, k, t)
     hits = lea_record_targets(data, secs, begin, end, set(recs))
     if not hits:
         print("[ubsan_site] this function's code references no TypeMismatchData "
               "record (other UBSan record kinds are not decoded)")
         return 1
     for hit_rva in sorted(hits):
-        f, l, c, k, t = recs[hit_rva]
+        f, ln, c, k, t = recs[hit_rva]
         sites = ", ".join(f"{image_base + a:#x}" for a in hits[hit_rva])
-        print(f"  {f}:{l}:{c} {k} type={t} record_rva={hit_rva:#x} loaded_at={sites}")
+        print(f"  {f}:{ln}:{c} {k} type={t} record_rva={hit_rva:#x} loaded_at={sites}")
     return 0
 
 

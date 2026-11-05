@@ -2818,15 +2818,15 @@ def test_launcher_click_logs_one_trace_per_attempt_and_a_diagnosis(
     fake = _FakeTraceUser32(foreground=0x10, cursor=(5, 5))
     _trace.return_value = (fake.get_foreground_window, fake.get_cursor_pos)
     assert launcher_click(0x10, pid=None) == EXIT_LAUNCHER_NO_ADVANCE
-    lines = [l for l in capsys.readouterr().err.splitlines()
-             if "LAUNCHER_CLICK" in l]
-    traces = [l for l in lines if "step=trace" in l]
+    lines = [ln for ln in capsys.readouterr().err.splitlines()
+             if "LAUNCHER_CLICK" in ln]
+    traces = [ln for ln in lines if "step=trace" in ln]
     assert len(traces) == launch_stellaris._CLICK_ATTEMPTS
     for line in traces:
         assert "cursor_at=(5, 5)" in line, line
         assert "owns_foreground=True" in line, line
         assert "rect=" not in line, line          # rect 已在 step=click 那行记过
-    diagnosis = [l for l in lines if "step=diagnosis" in l]
+    diagnosis = [ln for ln in lines if "step=diagnosis" in ln]
     assert len(diagnosis) == 1 and "diagnosis=click_not_delivered" in diagnosis[0]
 
 

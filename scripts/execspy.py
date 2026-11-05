@@ -186,7 +186,7 @@ if rc != '0':
 # report patch_size 16. Either one wrong means the recorder is not sitting where we think.
 print('while installed -> verify:', api.verify(), '(expect -1), stats:', json.loads(api.stats()))
 
-print(f'RESUME THE GAME NOW — waiting for the counter to actually move (300s max)...')
+print('RESUME THE GAME NOW — waiting for the counter to actually move (300s max)...')
 start = time.time()
 seen = calls()
 live = False

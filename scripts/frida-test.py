@@ -62,14 +62,14 @@ def attach_to_process(device: frida.core.Device, pid: int) -> frida.core.Session
     print(f"[*] Attaching to PID {pid}...")
     try:
         session = device.attach(pid)
-        print(f"[+] Attached successfully!")
+        print("[+] Attached successfully!")
         print(f"    Session ID: {session.pid}")
         return session
     except frida.ProcessNotFoundError:
         print(f"[-] Process {pid} not found (may have exited)")
         sys.exit(1)
     except frida.PermissionDeniedError:
-        print(f"[-] Permission denied. Run as Administrator.")
+        print("[-] Permission denied. Run as Administrator.")
         sys.exit(1)
     except Exception as e:
         print(f"[-] Attach failed: {e}")

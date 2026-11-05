@@ -115,7 +115,7 @@ if size > 0 and size < 1000:  # sanity check
     if name_data:
         # Remove null terminator if present
         name = name_data.rstrip(b'\x00').decode('utf-8', errors='replace')
-        print(f'\n=== RESULT ===')
+        print('\n=== RESULT ===')
         print(f'Token id {token_id} = "{name}"')
         if name == "neo_effect":
             print('✓ VERIFIED: reverse table confirms neo_effect at id 68636')

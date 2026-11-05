@@ -58,10 +58,10 @@ print(f'Trigger DB object: 0x{db_ptr:X}')
 # BST root is at [db+0x88] (from §21)
 # MSVC std::_Tree layout: the root node pointer is at a specific offset
 # For simplicity, let's read a chunk of the DB and look for our token id
-print(f'\nReading trigger DB memory around +0x88...')
+print('\nReading trigger DB memory around +0x88...')
 db_data = read_mem(db_ptr + 0x80, 0x100)
 if db_data:
-    print(f'DB+0x80..+0x180 (first 256 bytes):')
+    print('DB+0x80..+0x180 (first 256 bytes):')
     for i in range(0, len(db_data), 16):
         hex_str = ' '.join(f'{b:02x}' for b in db_data[i:i+16])
         print(f'  +{0x80+i:03x}: {hex_str}')
@@ -97,7 +97,7 @@ for start, size in search_ranges:
             context = chunk[context_start:idx+64]
             print(f'  Context: {context.hex()}')
         else:
-            print(f'  Not found')
+            print('  Not found')
 
 k32.CloseHandle(hProc)
 print('\nDone.')

@@ -4,10 +4,12 @@ IDA: the token table owns one copy, effect/factory registration uses another.
 
 usage: strrefs.py <name> [<name> ...]
 """
-import sys, os, struct
+import sys
+import os
+import struct
 from collections import defaultdict
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
-from capstone.x86 import X86_REG_RIP, X86_OP_MEM, X86_OP_IMM, X86_OP_REG
+from capstone.x86 import X86_REG_RIP, X86_OP_MEM, X86_OP_IMM
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 EXE = os.environ.get('NS_STELLARIS_EXE',
                      '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe')

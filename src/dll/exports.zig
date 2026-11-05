@@ -249,8 +249,7 @@ export fn C2NeoScoreSourceGet() callconv(.c) u32 {
 export fn C2NeoLiveStatsInto(out: [*]u8) callconv(.c) i32 {
     const snap = c2_neo_vtable.liveSnapshot();
     const s = snap.stats;
-    const words = [8]u64{ s.evaluated, s.recomputed, s.cached_hits, s.non_system_scope,
-        s.out_of_range, s.read_failed, @intCast(snap.count), snap.fingerprint };
+    const words = [8]u64{ s.evaluated, s.recomputed, s.cached_hits, s.non_system_scope, s.out_of_range, s.read_failed, @intCast(snap.count), snap.fingerprint };
     var i: usize = 0;
     while (i < words.len) : (i += 1) std.mem.writeInt(u64, out[i * 8 ..][0..8], words[i], .little);
     return 64;
@@ -1128,7 +1127,7 @@ export fn C5GraphStatsInto(out: [*]u8) callconv(.c) i32 {
 
 /// 每行 4 B(`u16 a`, `u16 b`),按 `(a, b)` 升序;返回行数。
 export fn C5GraphDrainInto(out: [*]u8) callconv(.c) u32 {
-    return c2_graph_probe.drainSorted(out[0..c2_graph_probe.MAX_EDGES * 4]);
+    return c2_graph_probe.drainSorted(out[0 .. c2_graph_probe.MAX_EDGES * 4]);
 }
 
 /// 清上一发的 stats 与行数(不碰 hook —— 本模块没有 hook)。

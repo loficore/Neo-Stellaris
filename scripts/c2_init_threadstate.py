@@ -64,7 +64,7 @@ from c2_harness import (
     classify_rip,
 )
 from c2_task5_init import (
-    MEM_SAMPLE_EVERY_MS, describe_init_rc, diag_file_path, diag_file_rc,
+    describe_init_rc, diag_file_path, diag_file_rc,
     log_rva_from_truncated, memory_growth_lines, poll_report_lines,
     psutil_memory_sampler, read_diag_file, clear_diag_file, last_diag_line,
 )

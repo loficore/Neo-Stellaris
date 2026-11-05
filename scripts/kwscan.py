@@ -5,7 +5,10 @@ then histogram by 4 KB code page so a registration driver shows up as a dense ru
 
 One full linear capstone decode of .text, ~4.5 min. usage: kwscan.py [lo hi]
 """
-import sys, os, struct, re
+import sys
+import os
+import struct
+import re
 from collections import Counter, defaultdict
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
@@ -80,10 +83,10 @@ with open('evidence/xrefs/keyword_block_ref_sites_4_4_4.txt', 'w') as w:
             f'[0x{lo:x}, 0x{hi:x})\n')
     w.write(f'# {sum(len(v) for v in per_addr.values())} refs at {len(per_addr)} sites'
             f' / {len(tg)} distinct names\n')
-    for pg in sorted(by_page, key=lambda p: -sum(len(l) for _, l in by_page[p])):
+    for pg in sorted(by_page, key=lambda p: -sum(len(refs) for _, refs in by_page[p])):
         sites = sorted(by_page[pg])
         w.write(f'\n--- page 0x{pg:07x}  ({len(sites)} sites, '
-                f'{sum(len(l) for _, l in sites)} refs) ---\n')
+                f'{sum(len(refs) for _, refs in sites)} refs) ---\n')
         for rva, lst in sites:
             for mn, t in lst:
                 w.write(f'  0x{rva:07x}  {mn} -> 0x{t:x}\n')

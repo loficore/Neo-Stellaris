@@ -318,11 +318,11 @@ test "capture marks bad self, bad ctx and the lexer sentinel" {
     f.arm(0, 0);
     const self = @intFromPtr(&f.obj);
     const ctx = @intFromPtr(&f.ctx);
-    capture(self, 0, 0, 0, win + 0x77);                 // bad ctx
-    capture(self, ctx, 0, 0, win + 0x88);               // normal
+    capture(self, 0, 0, 0, win + 0x77); // bad ctx
+    capture(self, ctx, 0, 0, win + 0x88); // normal
     std.mem.writeInt(u32, f.ctx[0x38..][0..4], LEXER_SENTINEL, .little);
-    capture(self, ctx, 0, 0, win + 0x99);               // lexer
-    capture(0, ctx, 0xfeed, 0xf00d, win + 0xAA);        // bad self
+    capture(self, ctx, 0, 0, win + 0x99); // lexer
+    capture(0, ctx, 0xfeed, 0xf00d, win + 0xAA); // bad self
     var buf: [4]Entry = undefined;
     try std.testing.expectEqual(@as(u32, 4), drainInto(@ptrCast(&buf[0])));
     try std.testing.expectEqual(@as(u8, 0), buf[0].valid);
@@ -370,8 +370,9 @@ test "stats text renders every driver key exactly once" {
     const n = statsInto(&buf);
     const text = buf[0..n];
     for ([_][]const u8{
-        "calls", "samples", "invalid_self", "invalid_ctx",
-        "lexer", "x_nonzero", "patch_size", "installed", "verified",
+        "calls",    "samples",   "invalid_self", "invalid_ctx",
+        "lexer",    "x_nonzero", "patch_size",   "installed",
+        "verified",
     }) |key| try std.testing.expectEqual(@as(usize, 1), countExactKey(text, key));
 }
 

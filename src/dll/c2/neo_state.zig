@@ -63,11 +63,9 @@ test "layoutNumber writes any name as an MSVC short string at +0xD0" {
     layoutNumber(&obj, SCORE_NAME, 286);
     try std.testing.expectEqualStrings(SCORE_NAME, obj[NAME_STRING_OFF .. NAME_STRING_OFF + SCORE_NAME.len]);
     // size 在 string 的 +0x10 = 绝对 +0xE0
-    try std.testing.expectEqual(@as(u64, SCORE_NAME.len),
-        std.mem.readInt(u64, obj[NAME_STRING_OFF + 0x10 ..][0..8], .little));
+    try std.testing.expectEqual(@as(u64, SCORE_NAME.len), std.mem.readInt(u64, obj[NAME_STRING_OFF + 0x10 ..][0..8], .little));
     // capacity 在 string 的 +0x18 = 绝对 +0xE8;`0x7EEBF0` 要求它 < 0x10 才走内联
-    try std.testing.expectEqual(@as(u64, 15),
-        std.mem.readInt(u64, obj[NAME_STRING_OFF + 0x18 ..][0..8], .little));
+    try std.testing.expectEqual(@as(u64, 15), std.mem.readInt(u64, obj[NAME_STRING_OFF + 0x18 ..][0..8], .little));
 }
 
 test "encodeNumber scales any script number to the 1e-5 fixed point" {
@@ -81,8 +79,7 @@ test "encodeNumber scales any script number to the 1e-5 fixed point" {
 test "layoutNumber writes the encoded number at +0x310" {
     var obj: [OBJECT_SIZE]u8 = [_]u8{0} ** OBJECT_SIZE;
     layoutNumber(&obj, VAR_NAME, 4242);
-    try std.testing.expectEqual(encodeNumber(4242),
-        std.mem.readInt(u64, obj[VALUE_CELL_OFF..][0..8], .little));
+    try std.testing.expectEqual(encodeNumber(4242), std.mem.readInt(u64, obj[VALUE_CELL_OFF..][0..8], .little));
 }
 
 test "layoutNumber leaves +0x300 and the vtable zero" {
@@ -90,8 +87,7 @@ test "layoutNumber leaves +0x300 and the vtable zero" {
     // 非零就把我们带进「需要 token 流」的解析路径(Risk #1)。
     var obj: [OBJECT_SIZE]u8 = [_]u8{0} ** OBJECT_SIZE;
     layoutNumber(&obj, SCORE_NAME, 7);
-    try std.testing.expectEqual(@as(u64, 0),
-        std.mem.readInt(u64, obj[VALUE_OFF + 0x210 ..][0..8], .little));
+    try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, obj[VALUE_OFF + 0x210 ..][0..8], .little));
     try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, obj[0..8], .little));
 }
 

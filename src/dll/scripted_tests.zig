@@ -83,10 +83,10 @@ test "graph_trigger: counters separate the four fates the verdict reads" {
     var stats = gt.Stats{};
     const scores = [_]u16{300};
     const ok = gt.Snapshot{ .kind_ok = true, .id_in_range = true, .fingerprint = 5, .read_ok = true, .recomputed = true };
-    gt.count(&stats, gt.decide(0x80, 0, ok, &scores, 200));          // evaluated + recomputed
+    gt.count(&stats, gt.decide(0x80, 0, ok, &scores, 200)); // evaluated + recomputed
     gt.count(&stats, gt.decide(0x80, 0, .{ .kind_ok = true, .id_in_range = true, .fingerprint = 5, .read_ok = true }, &scores, 200)); // cached
-    gt.count(&stats, gt.decide(0x40, 0, ok, &scores, 200));          // non_system_scope
-    gt.count(&stats, gt.decide(0x80, 9, ok, &scores, 200));          // out_of_range
+    gt.count(&stats, gt.decide(0x40, 0, ok, &scores, 200)); // non_system_scope
+    gt.count(&stats, gt.decide(0x80, 9, ok, &scores, 200)); // out_of_range
     gt.count(&stats, gt.decide(0x80, 0, .{ .read_ok = false }, &scores, 200)); // read_failed
     // 两次走到判据(一重算一缓存);非 system scope / 越界 / 读失败都不算 `evaluated`,
     // 否则"每系统一次"会被范围外的求值稀释(计划 Review Focus #2)。

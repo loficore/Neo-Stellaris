@@ -1,6 +1,5 @@
 import ctypes
 import subprocess
-import os
 import sys
 
 k32 = ctypes.windll.kernel32
@@ -50,5 +49,5 @@ k32.CloseHandle(hProc)
 try:
     subprocess.check_call(['tasklist', '/FI', f'PID eq {pid_val}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print('Game: still running')
-except:
+except Exception:
     print('Game: CRASHED')

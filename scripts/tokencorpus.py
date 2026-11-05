@@ -53,7 +53,11 @@ Miss classes, in priority order (all derived from data, none guessed per-word):
 
 Usage: python3 scripts/tokencorpus.py [corpus_root ...]
 """
-import sys, os, re, struct, collections
+import sys
+import os
+import re
+import struct
+import collections
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -282,7 +286,7 @@ def main():
     kw_none = sorted(n for n in reg if n.lower() not in anyeq_ci)
     print(f'(c) keyword-db names: as a block head {len(kw_block)}, as any LHS {len(kw_any)}, '
           f'in neither {len(kw_none)}')
-    print(f'    §24 donors (block/LHS): ' + ' '.join(
+    print('    §24 donors (block/LHS): ' + ' '.join(
         f'{d}={counts.get(d, 0)}/{anyeq_ci.get(d.lower(), 0)}'
         for d in ('has_crisis_perk', 'has_menace_perk', 'hidden_effect')))
     print(f'    never-used keyword names: {kw_none[:12]}')
