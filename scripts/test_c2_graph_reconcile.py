@@ -137,9 +137,9 @@ def test_windows_are_byte_ranges_and_are_validated(tmp_path):
 
 
 def test_window_text_slices_the_log_by_byte_offset():
-    data = "HEADNEO_T2 甲\r\nTAIL".encode("utf-8")
-    start = data.index("NEO".encode("utf-8"))
-    end = data.index("TAIL".encode("utf-8"))
+    data = "HEADNEO_T2 甲\r\nTAIL".encode()
+    start = data.index(b"NEO")
+    end = data.index(b"TAIL")
     text = mod.window_text(data, {"name": "w", "start": start, "end": end})
     assert mod.parse_tiers(text) == {"甲": "T2"}
 

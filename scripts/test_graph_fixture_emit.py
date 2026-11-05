@@ -212,12 +212,12 @@ def test_emit_check_detects_drift(tmp_path):
     assert main(argv) == 0
     assert out.exists()
     good = out.read_bytes()
-    assert main(argv + ["--check"]) == 0
+    assert main([*argv, "--check"]) == 0
 
     out.write_bytes(good[:-2] + b"  ")          # corrupt one byte
-    assert main(argv + ["--check"]) != 0
+    assert main([*argv, "--check"]) != 0
     out.write_bytes(good)
-    assert main(argv + ["--check"]) == 0
+    assert main([*argv, "--check"]) == 0
 
 
 def test_main_rejects_a_short_score_table(tmp_path):

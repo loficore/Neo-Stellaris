@@ -131,7 +131,7 @@ def test_budget_ms_is_derived_from_measurement():
     assert new_ms, f"no rows for engine {popup_ocr.ENGINE!r} in {SWAP_ARTIFACT.name}"
     p95 = new_ms[min(len(new_ms) - 1, round(0.95 * (len(new_ms) - 1)))]
 
-    assert gs.POPUP_OCR_BUDGET_MS <= 3 * p95, (
+    assert 3 * p95 >= gs.POPUP_OCR_BUDGET_MS, (
         f"budget {gs.POPUP_OCR_BUDGET_MS} ms is more than 3x the measured p95 "
         f"{p95} ms — re-measure or re-derive it (spec §14.4)")
 

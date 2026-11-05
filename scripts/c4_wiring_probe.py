@@ -102,7 +102,7 @@ def required_exports(mode):
     global would fail the pre-check on a DLL that capture mode can still use.
     """
     if mode == "slot2":
-        return REQUIRED_EXPORTS + ("C4Slot2StatsInto",)
+        return (*REQUIRED_EXPORTS, "C4Slot2StatsInto")
     return REQUIRED_EXPORTS
 
 
@@ -260,7 +260,7 @@ def _check_offsets(blob, deref, off_a, off_b):
 def pack_spec(blob, deref, off_a, off_b):
     if not isinstance(blob, int) or not isinstance(deref, int):
         # The callers pin ValueError for a malformed spec, so it stays one.
-        raise ValueError("blob/deref must be integers")  # noqa: TRY004
+        raise ValueError("blob/deref must be integers")  # noqa: TRY004 — callers pin ValueError
     _check_offsets(blob, deref, off_a, off_b)
     return blob | (deref << 8) | (off_a << 16) | (off_b << 32)
 
@@ -1099,7 +1099,7 @@ def _cleanup(state, result):
     if pid and base:
         # The mode is advisory: a failed arming call is not fatal here, and the
         # disarm path below already treats "still armed" as a handled state.
-        with contextlib.suppress(Exception):  # noqa: BLE001
+        with contextlib.suppress(Exception):
             harness.call_remote_with_arg(
                 pid, base, exports["C4WireSetMode"], 0)
 

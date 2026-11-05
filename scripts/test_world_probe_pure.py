@@ -30,7 +30,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 WINDOWS_DIR = REPO / "scripts" / "windows"
 sys.path.insert(0, str(WINDOWS_DIR))
 
-import world_probe  # noqa: E402  # pyright: ignore[reportMissingImports]
+import world_probe  # pyright: ignore[reportMissingImports]
 
 
 def test_build_evidence_keeps_every_raw_count():
@@ -101,8 +101,9 @@ def test_import_has_no_side_effects(tmp_path):
     code = "import world_probe, game_supervisor"
     env = dict(os.environ)
     env["PYTHONPATH"] = str(WINDOWS_DIR)
+    # check=False: the assertion below reads the rc so it can report stderr.
     result = subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
-                            env=env, capture_output=True, text=True)
+                            env=env, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert os.listdir(tmp_path) == [], (
         "importing the probe wrote into the working directory: "

@@ -43,7 +43,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.abspath(os.path.join(_HERE, ".."))
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
 
-from disrva import resolve_exe  # noqa: E402
+from disrva import resolve_exe
 
 BASE = 0x140000000
 CALLERS_TSV = os.path.join(_REPO, "evidence", "xrefs", "exec_frame_callers_4_4_4.tsv")
@@ -209,7 +209,7 @@ def main(argv):
         slot2_values = set(slot2.values())
         present = [f for f in funcs if f in slot2_values]
         absent = sorted(f for f in funcs if f not in slot2_values)
-        print("")
+        print()
         print("## ① 普查表 func_start 与 map 的 ExecuteActual(slot2) 列")
         print(f"of {len(funcs)} distinct func_start, {len(present)} appear as some vtable's "
               f"slot2; {len(absent)} do not —— 缺席 = 不在**这份静态集合**里,不是「族外」的证明")
@@ -219,7 +219,7 @@ def main(argv):
 
         seven = [(s, v, c) for s, v, c in census if c == SEVEN_SHIM_ROW_COUNT]
         others = [(s, v, c) for s, v, c in census if c != SEVEN_SHIM_ROW_COUNT]
-        print("")
+        print()
         print("## ② §13 七把 shim 的 vtable × 家族五张")
         print(f"family_five={' '.join(fmt_rva(v) for v in FAMILY_FIVE)}")
         print(f"census_rows_with_count_{SEVEN_SHIM_ROW_COUNT}={len(seven)} "
@@ -235,7 +235,7 @@ def main(argv):
         print(f"intersection={shown} EXPECT_EMPTY={not inter}")
         targets = absent
 
-    print("")
+    print()
     print("## ③ §62.2 三口径(8 对齐 qword 命中 / 命中前一槽 == base Execute / "
           "命中-0x10 落进 map)")
     for func in targets:

@@ -31,7 +31,7 @@ DLL = REPO / "zig-out" / "bin" / "stellaris_quickjs.dll"
 # record locations, LEA sites and .pdata function starts. Imported here, in the
 # test, so pe_disrva.py itself stays a single-file tool.
 sys.path.insert(0, str(REPO / "scripts"))
-import dll_ubsan_site  # noqa: E402
+import dll_ubsan_site
 
 
 @functools.lru_cache(maxsize=1)
@@ -74,8 +74,9 @@ def trap_span():
 
 
 def _run(argv):
+    # check=False: the caller asserts on returncode/stdout itself.
     return subprocess.run([sys.executable, str(TOOL), *argv],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, check=False)
 
 
 def _disasm(start, end):

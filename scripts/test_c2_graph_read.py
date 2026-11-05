@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-import c2_graph_read as mod  # noqa: E402
+import c2_graph_read as mod
 
 
 GOOD_LAYOUT = [1, 0x3260B98, 0x18, 0x20, 16, 8, 0x59C, 0x20]
@@ -131,7 +131,7 @@ def test_parse_artifact_refuses_a_short_row():
 def test_mutation_delta_plus_one_then_back():
     seq = [stats(787, 1217), stats(787, 1218), stats(787, 1217)]
     verdict, detail = mod.classify_mutation(
-        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)])
+        seq, x=5, y=9, base_rows=ROWS, added_rows=[*ROWS, (5, 9)])
     assert verdict == "graph_mutation_recompute_named"
     assert "(5, 9)" in detail
 
@@ -139,7 +139,7 @@ def test_mutation_delta_plus_one_then_back():
 def test_mutation_that_leaves_the_graph_dirty_names_the_step():
     seq = [stats(787, 1217), stats(787, 1218), stats(787, 1219)]
     verdict, detail = mod.classify_mutation(
-        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)])
+        seq, x=5, y=9, base_rows=ROWS, added_rows=[*ROWS, (5, 9)])
     assert verdict == "mutation_left_dirty"
     assert "remove" in detail
 
@@ -148,7 +148,7 @@ def test_mutation_whose_add_never_landed_is_dirty_at_add():
     # edges +1 但边集里没有那一对 ⇒ add 没落进容器(或落到了别的系统上)。
     seq = [stats(787, 1217), stats(787, 1218), stats(787, 1217)]
     verdict, detail = mod.classify_mutation(
-        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 10)])
+        seq, x=5, y=9, base_rows=ROWS, added_rows=[*ROWS, (5, 10)])
     assert verdict == "mutation_left_dirty"
     assert "add" in detail
 
@@ -158,7 +158,7 @@ def test_mutation_that_came_back_with_a_different_set_is_dirty():
     other = [(0, 1), (1, 2), (3, 4)]
     seq = [stats(787, 1217), stats(787, 1218), stats(787, 1217)]
     verdict, detail = mod.classify_mutation(
-        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)],
+        seq, x=5, y=9, base_rows=ROWS, added_rows=[*ROWS, (5, 9)],
         removed_rows=other)
     assert verdict == "mutation_left_dirty"
     assert "remove" in detail
@@ -168,7 +168,7 @@ def test_mutation_with_a_nonzero_export_code_is_dirty():
     # 导出返回码非 0(解析失败/越界)⇒ 后面的步骤都不许再调,直接判脏。
     seq = [dict(stats(787, 1217)), dict(stats(787, 1218), rc=-2), stats(787, 1217)]
     verdict, detail = mod.classify_mutation(
-        seq, x=5, y=9, base_rows=ROWS, added_rows=ROWS + [(5, 9)])
+        seq, x=5, y=9, base_rows=ROWS, added_rows=[*ROWS, (5, 9)])
     assert verdict == "mutation_left_dirty"
     assert "add" in detail
 
@@ -180,3 +180,18 @@ def test_a_mutation_shot_has_no_read2_keys():
     fields = mod.read2_meta(stats(788, 1219), 0)
     assert fields == {"read2_edges": 1219, "read2_rc": 0, "read2_systems": 788,
                       "read2_skipped": 0}
+
+
+# --- Part A Task 5: 同窗加删(加与删之间不夹读) --------------------------------
+
+
+def test_collide_steps_put_no_read_between_add_and_remove():
+    steps = mod.collide_steps(5, 9)
+    assert steps == ["base", "add", "remove", "collide_read"]
+
+
+def test_a_collision_where_the_hash_differs_is_flagged_suspicious():
+    verdict = mod.classify_collision(
+        base_fingerprint=2446, collide_fingerprint=2446,
+        base_hash=0x46F76122D529552D, collide_hash=0x1234)
+    assert verdict == "graph_collision_suspicious"

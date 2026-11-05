@@ -22,7 +22,7 @@ DEFAULT_INSN = 80        # 无第二参时的指令条数(历史默认值)
 INSN_MAX = 15            # x86-64 一条指令的最长编码(前缀+opcode+modrm+sib+disp+imm)
 FETCH_PER_INSN = 16      # 历史每条取 16 字节,原样保留 => 旧读数逐字节可复现
 
-RIP = re.compile(r'\[(?:rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', re.I)
+RIP = re.compile(r'\[(?:rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', re.IGNORECASE)
 
 CANDIDATES = [os.environ.get('NS_STELLARIS_EXE'),
               '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe',
@@ -47,7 +47,8 @@ def _image():
         exe = resolve_exe()
         if exe is None:
             return None
-        f = open(exe, 'rb').read()
+        with open(exe, 'rb') as _fh:
+            f = _fh.read()
         mz = struct.unpack_from('<I', f, 0x3c)[0]
         nsec = struct.unpack_from('<H', f, mz + 6)[0]
         nsec_off = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]
@@ -147,8 +148,7 @@ def main():
     from capstone import Cs, CS_ARCH_X86, CS_MODE_64
     md = Cs(CS_ARCH_X86, CS_MODE_64)
     md.detail = True
-    n = 0
-    for ins in md.disasm(code, BASE + start):
+    for n, ins in enumerate(md.disasm(code, BASE + start), 1):
         if cnt is None and ins.address >= BASE + end:
             break
         note = ''
@@ -160,7 +160,6 @@ def main():
         elif ins.mnemonic in ('call', 'jmp') and ins.op_str.startswith('0x'):
             note = f'  ; -> 0x{int(ins.op_str, 16) - BASE:x}'
         print(f'  {ins.address - BASE:08x}  {ins.mnemonic:<7} {ins.op_str}{note}')
-        n += 1
         if cnt and n >= cnt:
             break
 

@@ -77,7 +77,7 @@ def _container(ids):
     return {"raw_count": len(ids), "ids": list(ids)}
 
 
-GALAXY = list(range(0, 788))   # 788 systems, ids 0..787 (the live container is 0-based)
+GALAXY = list(range(788))   # 788 systems, ids 0..787 (the live container is 0-based)
 
 
 # --- contract ---------------------------------------------------------------------
@@ -159,7 +159,7 @@ def test_verdict_ids_out_of_range_is_a_negative():
 def test_zero_based_ids_are_in_range():
     """The galaxy container is 0-based (2026-11-02: ids 0..786), so id 0 is legal."""
     rows = _rows([0, 1, 2])
-    container = _container(list(range(0, 788)))
+    container = _container(list(range(788)))
     assert verdict(_stats(), rows, container, expected=788, distinct=3) == "dispatch_named"
 
 

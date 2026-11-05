@@ -272,6 +272,19 @@ export fn C2NeoLiveHashInto(out: [*]u8) callconv(.c) i32 {
     std.mem.writeInt(u64, out[8..16], snap.edges, .little);
     return 16;
 }
+
+/// verify 通路的两个计数:16 B = `[verified u64][verify_failed u64]`。
+///
+/// 与 `C2NeoLiveHashInto` 分开是为了不动 `C2NeoLiveStatsInto` 那份 8 词的契约
+/// (驱动按 64 B 解析;往里加词会被老读者当成别的字段)。`verified` = 定时核对
+/// 跑了且边集哈希相等;`verify_failed` = 核对这一趟整趟读失败 —— 后者 fail-closed,
+/// `live_scores` 与 `live_hash` 都不更新。
+export fn C2NeoVerifyStatsInto(out: [*]u8) callconv(.c) i32 {
+    const snap = c2_neo_vtable.liveVerifySnapshot();
+    std.mem.writeInt(u64, out[0..8], snap.verified, .little);
+    std.mem.writeInt(u64, out[8..16], snap.verify_failed, .little);
+    return 16;
+}
 const c2_neo_dispatch = @import("c2/neo_dispatch.zig");
 const c2_neo_effect = @import("c2/neo_effect.zig");
 const c = @import("quickjs/bindings.zig");

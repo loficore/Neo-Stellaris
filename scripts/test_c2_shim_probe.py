@@ -28,9 +28,9 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-import disrva  # noqa: E402
-import c2_shim_probe as shim  # noqa: E402
-from c2_shim_probe import (  # noqa: E402
+import disrva
+import c2_shim_probe as shim
+from c2_shim_probe import (
     EVIDENCE_VERDICTS,
     STATS_KEYS,
     VERDICTS,
@@ -40,7 +40,7 @@ from c2_shim_probe import (  # noqa: E402
     table_rvas,
     verdict_for,
 )
-from test_c2_witness_probe import zig_array_literal  # noqa: E402
+from test_c2_witness_probe import zig_array_literal
 
 SHIM_RVA = 0xCC4220
 ZIG_MODULE = REPO / "src" / "dll" / "c2" / "shim_witness_probe.zig"
@@ -233,7 +233,7 @@ def test_prologue_triangulation_pins_the_evidence_volume():
     """
     text = EVIDENCE_VOLUME.read_text(encoding="utf-8")
     section = text[text.index("## §71 "):]
-    match = re.search(r"^\| 24 B 前序 \| `([0-9a-f ]+)`", section, re.M)
+    match = re.search(r"^\| 24 B 前序 \| `([0-9a-f ]+)`", section, re.MULTILINE)
     assert match is not None, "§71.1 表里没有 24 B 前序行"
     covered = [int(tok, 16) for tok in match.group(1).split()]
     assert covered == TASK1_PROLOGUE

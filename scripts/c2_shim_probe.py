@@ -425,24 +425,20 @@ def write_tsv(path, rows, meta=None):
     was made from.
     """
     try:
-        fh = open(path, "w", encoding="utf-8")
-    except OSError as exc:
-        raise SystemExit(f"cannot write {path}: {exc}") from exc
-    with fh as f:
-        pairs = " ".join(
-            f"{key}={value}" for key, value in (meta or {}).items())
-        f.write(f"#meta {pairs}\n")
-        f.write("kind\tvalid\tmatched\ttable_index\ttable_rva\t"
-                "self_vtable_rva\tcaller_rva\tself_ptr\tctx_ptr\ta3\ta4\n")
-        for entry in rows:
-            f.write(
-                f"entry\t{entry['valid']}\t{entry['matched']}\t"
+        with open(path, "w", encoding="utf-8") as f:
+            pairs = " ".join(
+                f"{key}={value}" for key, value in (meta or {}).items())
+            f.write(f"#meta {pairs}\n")
+            f.write("kind\tvalid\tmatched\ttable_index\ttable_rva\t"
+                    "self_vtable_rva\tcaller_rva\tself_ptr\tctx_ptr\ta3\ta4\n")
+            f.writelines(f"entry\t{entry['valid']}\t{entry['matched']}\t"
                 f"{'-' if entry['table_index'] is None else entry['table_index']}\t"
                 f"{_hex_or_dash(entry['table_rva'])}\t"
                 f"0x{entry['self_vtable_rva']:x}\t0x{entry['caller_rva']:x}\t"
                 f"0x{entry['self_ptr']:x}\t0x{entry['ctx_ptr']:x}\t"
-                f"0x{entry['a3']:x}\t0x{entry['a4']:x}\n"
-            )
+                f"0x{entry['a3']:x}\t0x{entry['a4']:x}\n" for entry in rows)
+    except OSError as exc:
+        raise SystemExit(f"cannot write {path}: {exc}") from exc
     return len(rows)
 
 

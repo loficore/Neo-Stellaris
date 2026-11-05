@@ -76,7 +76,7 @@ def parse_allowlist(text: str) -> tuple[dict[str, str], int]:
 
 def load_allowlist(path: str) -> tuple[dict[str, str], str]:
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             text = fh.read()
     except FileNotFoundError:
         return {}, "absent"

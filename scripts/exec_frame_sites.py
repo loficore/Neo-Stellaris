@@ -196,7 +196,7 @@ def parse_probe_caller_rows(path):
     `ret = key + 5` 且 `assumed=True`(站点最终由本工具反解,估值只用于对账)。
     """
     rows = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
             if line.startswith("#") or not line.strip():
                 continue
@@ -256,15 +256,12 @@ def write_sites_tsv(path, framed, rows, meta):
     with open(path, "w", encoding="utf-8") as f:
         f.write("# ret_rva\tcount\tsite_rva\tform\tinsn\tfunc_start\tfunc_end"
                 "\tcensus_origin\tsite_in_census\n")
-        for r in framed:
-            f.write("\t".join([_hx(r["ret"]), str(r["count"]), _hx(r["site"]), r["form"],
+        f.writelines("\t".join([_hx(r["ret"]), str(r["count"]), _hx(r["site"]), r["form"],
                                r["insn"] or "-", _hx(r["func_start"]), _hx(r["func_end"]),
-                               r["census_origin"], str(r["site_in_census"])]) + "\n")
+                               r["census_origin"], str(r["site_in_census"])]) + "\n" for r in framed)
         f.write("# kind\tkey\tvalue\tdetail\n")
-        for key in ("resolved", "ambiguous", "none", "mem_form", "assumed"):
-            f.write(f"meta\t{key}\t{counts[key]}\t-\n")
-        for key, value in meta.items():
-            f.write(f"meta\t{key}\t{value}\t-\n")
+        f.writelines(f"meta\t{key}\t{counts[key]}\t-\n" for key in ("resolved", "ambiguous", "none", "mem_form", "assumed"))
+        f.writelines(f"meta\t{key}\t{value}\t-\n" for key, value in meta.items())
     return counts
 
 
@@ -273,7 +270,7 @@ def _load_census(path):
     `c2_harness` 被顶层拖进来)才落到本文件的同款解析 —— 见模块 docstring。"""
     try:
         from c2_scope_probe import load_call_census
-    except Exception:
+    except Exception:  # noqa: BLE001 — any import failure falls back to the local loader
         return _load_call_census_local(path)
     return load_call_census(path)
 
@@ -281,7 +278,7 @@ def _load_census(path):
 def _load_call_census_local(path):
     """同款 6 列 TSV 解析:{site: {"func": int|None, "origin": str}}(跳注释/空行/坏行)。"""
     out = {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue
@@ -319,7 +316,7 @@ def main(argv=None):
     try:
         import pdata                    # 顶层即读 exe —— 必须延迟 import 并把失败变成诊断
         func_of = pdata.func_of
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — pdata import failure is a diagnosis, not a bug
         print("[exec_frame_sites] .pdata 查找不可用(pdata import 失败):"
               f"{type(exc).__name__}: {exc};设 NS_STELLARIS_EXE 指向 exe 拷贝后重试",
               file=sys.stderr)

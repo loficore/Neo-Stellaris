@@ -33,5 +33,5 @@ def test_the_stats_line_keeps_the_drivers_key_order():
     body = src.split("fn statsInto", 1)[1]
     # The driver splits on '=' and ' '; a reordered line would silently relabel
     # every column of §93, so the order is pinned, not just the key set.
-    positions = [body.index(f"{key}={{d}}") for key in STATS_KEYS + ("dispatched", "null_scope", "mask_odd")]
+    positions = [body.index(f"{key}={{d}}") for key in (*STATS_KEYS, "dispatched", "null_scope", "mask_odd")]
     assert positions == sorted(positions)

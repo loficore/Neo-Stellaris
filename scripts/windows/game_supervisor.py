@@ -31,6 +31,7 @@ from popup_geometry import (option_rows, panel_bbox, row_kind,
                             window_enum_record)
 from popup_guard import bump, count_attempt, decide_action
 from popup_identity import fingerprint, geometry_signature, load_allowlist
+import contextlib
 
 CMD_PATH = r"C:\temp\ns_game_cmd.txt"
 CMD_SEEN_PATH = r"C:\temp\ns_game_cmd.seen"
@@ -516,10 +517,8 @@ def _user32():
 
 
 def _be_dpi_aware() -> None:
-    try:
+    with contextlib.suppress(Exception):
         _user32().SetProcessDPIAware()
-    except Exception:
-        pass
 
 
 def window_candidates(pid: int) -> list:
@@ -538,12 +537,12 @@ def window_candidates(pid: int) -> list:
     def cb(hwnd, _):
         wpid = wt.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
-        if wpid.value == pid and user32.IsWindowVisible(hwnd):
-            if user32.GetWindowTextLengthW(hwnd):
-                try:
-                    cands.append((int(hwnd), window_rect(hwnd)))
-                except OSError:
-                    cands.append((int(hwnd), None))
+        if (wpid.value == pid and user32.IsWindowVisible(hwnd)
+                and user32.GetWindowTextLengthW(hwnd)):
+            try:
+                cands.append((int(hwnd), window_rect(hwnd)))
+            except OSError:
+                cands.append((int(hwnd), None))
         return True
 
     user32.EnumWindows(cb, 0)
@@ -937,9 +936,10 @@ def crop_to_png(hwnd: int, bbox, out_path: str) -> bool:
     """
     try:
         grab_box(tuple(bbox)).save(out_path)
-        return True
     except (OSError, ValueError):
         return False
+    else:
+        return True
 
 
 def save_popup_evidence(hwnd: int, bbox, out_path: str, popup_id: str):
@@ -1138,10 +1138,8 @@ def _log(rec: dict) -> None:
 def _write_status(rec: dict) -> None:
     rec["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     rec["epoch"] = round(time.time(), 3)
-    try:
+    with contextlib.suppress(OSError):
         atomic_write_json(STATUS_PATH, rec)
-    except OSError:
-        pass
 
 
 def _read_status():
@@ -1171,9 +1169,10 @@ def _consume(state: dict, lease_id: str, now: float | None = None) -> bool:
             used = world_state.consume(store, lease_id, stamp)
             if used:
                 store.save()
-        return used
     except (OSError, ValueError, TimeoutError):
         return False
+    else:
+        return used
 
 
 def acquire_or_refuse(state: dict, action: str, *, guard: str | None = None,
@@ -1439,7 +1438,7 @@ def serve(args, once: bool = False) -> int:
             _log({"event": "command", "line": line})
             try:
                 quit_now, one_shot = _handle_command(cmd, hwnd, state)
-            except Exception as e:  # daemon survives one bad command
+            except Exception as e:  # noqa: BLE001 — daemon survives one bad command
                 _log({"event": "command_error", "line": line, "error": repr(e)})
             if quit_now:
                 break
@@ -1562,15 +1561,12 @@ def serve(args, once: bool = False) -> int:
                 except OSError as e:
                     note = f"choice_click_failed: {e}"
         elif action == "handle_dialog":
-            if stats["bbox"]:
-                if not crop_to_png(hwnd, stats["bbox"], POPUP_LIVE_PATH):
-                    # A failed capture must not leave last tick's frame for OCR
-                    # to read: no file means no text means geometry-only means
-                    # hold.  Stale pixels can mean clicking the wrong dialog.
-                    try:
-                        os.remove(POPUP_LIVE_PATH)
-                    except OSError:
-                        pass
+            if stats["bbox"] and not crop_to_png(hwnd, stats["bbox"], POPUP_LIVE_PATH):
+                # A failed capture must not leave last tick's frame for OCR
+                # to read: no file means no text means geometry-only means
+                # hold.  Stale pixels can mean clicking the wrong dialog.
+                with contextlib.suppress(OSError):
+                    os.remove(POPUP_LIVE_PATH)
             got = popup_tick(hwnd, POPUP_LIVE_PATH, nbbox, len(nrows), state,
                               ocr, ocr_enabled=not args.no_ocr,
                               allow_path=args.popup_allowlist)
@@ -1638,8 +1634,9 @@ def _status_line(rec) -> str:
 def _delete_task() -> None:
     for verb in ("/end", "/delete"):
         with open(os.devnull, "w") as devnull:
+            # best-effort cleanup: a missing task is success.
             subprocess.run(["schtasks", verb, "/tn", TASK_NAME, "/f"],
-                           stdout=devnull, stderr=devnull)
+                           stdout=devnull, stderr=devnull, check=False)
 
 
 def is_new_heartbeat(rec, baseline_epoch: float, now: float,

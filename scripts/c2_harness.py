@@ -1066,9 +1066,9 @@ def capture_thread_state(thread_handle, process_handle) -> dict:
     vanish mid-read, and a vanished value is a measurement, not a bug.
     """
     k32 = _kernel32()
-    state = dict(rip=None, rsp=None, thread_kernel_us=None, thread_user_us=None,
-                 process_kernel_us=None, process_user_us=None,
-                 context_err=None, times_err=None)
+    state = {"rip": None, "rsp": None, "thread_kernel_us": None, "thread_user_us": None,
+                 "process_kernel_us": None, "process_user_us": None,
+                 "context_err": None, "times_err": None}
 
     # Times first and without suspension: they are the primary discriminator, so
     # they must survive a failed or refused context read.
@@ -1108,10 +1108,9 @@ def capture_thread_state(thread_handle, process_handle) -> dict:
             state["rip"] = ctx.Rip
             state["rsp"] = ctx.Rsp
     finally:
-        if suspended != 0xFFFFFFFF:
-            if k32.ResumeThread(thread_handle) == 0xFFFFFFFF:
-                state["context_err"] = (state["context_err"] or "") + (
-                    f" ResumeThread gle={_gle()}")
+        if suspended != 0xFFFFFFFF and k32.ResumeThread(thread_handle) == 0xFFFFFFFF:
+            state["context_err"] = (state["context_err"] or "") + (
+                f" ResumeThread gle={_gle()}")
 
     return state
 

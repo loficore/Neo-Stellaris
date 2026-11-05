@@ -62,7 +62,7 @@ print("Waiting 2 seconds for DllMain to write marker...")
 time.sleep(2)
 
 if os.path.exists(marker_path):
-    with open(marker_path, 'r') as f:
+    with open(marker_path) as f:
         content = f.read()
     print(f"SUCCESS: Marker file found! Content: {content.strip()}")
 else:
@@ -71,7 +71,9 @@ else:
 
 # Step 4: Check if game is still alive
 import subprocess
-result = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/NH'], capture_output=True, text=True)
+# check=False: tasklist rc is not read; the stdout decides whether the pid is listed.
+result = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/NH'], capture_output=True, text=True,
+                        check=False)
 if str(pid) in result.stdout:
     print(f"Game (PID {pid}) is still running")
 else:

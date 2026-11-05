@@ -58,6 +58,7 @@ import os
 import re
 import struct
 import collections
+import contextlib
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -80,7 +81,7 @@ ANYEQ = re.compile(rb'(?:^|[\s{}])([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*')
 # id in events/). Those are keys of a string-indexed db, not keywords -- no token involved. Note the
 # discriminator is the INDENT: a keyword head is always nested inside something, a db entry head is
 # what the file is a list OF, so it starts the line.
-TOPLEVEL = re.compile(rb'^([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*\{', re.M)
+TOPLEVEL = re.compile(rb'^([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*\{', re.MULTILINE)
 TEMPLATE_DIRS = ('scripted_effects', 'scripted_triggers', 'scripted_loc', 'scripted_actions',
                  'scripted_governments', 'scripted_names')
 ITER_PREFIX = re.compile(r'^(any_|every_|all_|ordered_|random_|count_|per_)')
@@ -143,7 +144,8 @@ def corpus_files():
 
 
 def main():
-    data = open(EXE, 'rb').read()
+    with open(EXE, 'rb') as _fh:
+        data = _fh.read()
     exe_strings = standalone_strings(data, sections(data))
 
     # ---------------- (a) id agreement ----------------
@@ -179,10 +181,8 @@ def main():
         if len(r) < 6 or r[3] not in (EFFECT_DB, TRIGGER_DB):
             continue
         reg_rows += 1
-        try:
+        with contextlib.suppress(ValueError):
             reg[r[5]].add(int(r[4]))
-        except ValueError:
-            pass
     agree = [n for n, ids in reg.items() if ids == {lookup(n)[0]}]
     disagree = [n for n, ids in reg.items() if lookup(n)[0] is not None and n not in agree]
     absent = [n for n in reg if lookup(n)[0] is None]
@@ -203,7 +203,8 @@ def main():
     for path in corpus_files():
         nfiles += 1
         try:
-            raw = open(path, 'rb').read()
+            with open(path, 'rb') as _fh:
+                raw = _fh.read()
         except OSError as e:
             print('unreadable', path, e)
             continue
@@ -298,7 +299,7 @@ def main():
         print(f'      top UNEXPLAINED ({len(un)} distinct):')
         for w, c in un.most_common(30):
             inexe = 'EXE-STRING' if w in exe_strings else 'no exe string'
-            print(f'        {w:44} {c:7} {inexe:11} {sorted(files_seen[w])[0]}')
+            print(f'        {w:44} {c:7} {inexe:11} {min(files_seen[w])}')
 
     with open(OUT, 'w', encoding='utf-8') as f:
         f.write('# word\toccurrences\tfiles\ttoken_id\tclass\tmatched_as\tin_exe_as_standalone_string\n')

@@ -122,3 +122,93 @@ def test_fence_bites_on_a_live_mention():
 def test_fence_bites_on_an_automatic_gitea_trigger():
     sample = "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n\njobs:\n"
     assert gitea_trigger_names(sample) != []
+
+
+# --- Part C Task 8: tag 上先跑完整门再发 release ------------------------------
+
+
+def test_release_is_tag_only():
+    """A release is the one side effect that must never fire on a branch push.
+
+    The `if:` has to be in the job header (before `steps:`), so a tag push is the
+    only event that reaches the publish step.
+    """
+    text = _read(GITHUB_WORKFLOW)
+    job = text.split("  release:", 1)[1]
+    assert "startsWith(github.ref, 'refs/tags/')" in job.split("steps:", 1)[0]
+
+
+def test_the_gate_still_runs_on_tags():
+    """Tags must go through the same gate: `release` only `needs: gate`."""
+    assert "tags:" in _trigger_block(_read(GITHUB_WORKFLOW))
+
+
+# --- final-review fixes: the release artifact root and the gate dependency -------
+
+
+def _release_header(text):
+    """The release job's header: everything before its `steps:` key."""
+    return text.split("  release:", 1)[1].split("steps:", 1)[0]
+
+
+def _release_needs_gate(text):
+    return bool(re.search(r"^\s{4}needs:\s*gate\s*$", _release_header(text), re.MULTILINE))
+
+
+def _upload_block(text):
+    """The `upload-artifact` step body (up to the next step's `- name:`)."""
+    return text.split("- name: Upload release artifacts", 1)[1].split("- name:", 1)[0]
+
+
+def _block_scalar(block, key="path"):
+    """The entries of a YAML `key: |` block scalar, by indentation."""
+    lines = block.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == f"{key}: |":
+            base = len(line) - len(line.lstrip())
+            values = []
+            for nxt in lines[i + 1:]:
+                if not nxt.strip():
+                    continue
+                if len(nxt) - len(nxt.lstrip()) <= base:
+                    break
+                values.append(nxt.strip())
+            return values
+    return []
+
+
+def test_release_needs_the_gate_job():
+    """A release may only run after the full gate (review focus #5)."""
+    assert _release_needs_gate(_read(GITHUB_WORKFLOW))
+
+
+def test_the_gate_fence_bites_when_needs_is_missing():
+    sample = "  release:\n    if: startsWith(github.ref, 'refs/tags/')\n    steps:\n"
+    assert not _release_needs_gate(sample)
+
+
+def test_uploaded_artifacts_share_one_root():
+    """upload-artifact's root is the LCA of the paths; mixed roots nest the download.
+
+    With one absolute /tmp entry the LCA becomes "/", the artifact stores a full
+    `home/runner/work/...` tree, and `dist/<name>` in the publish step does not exist.
+    """
+    paths = _block_scalar(_upload_block(_read(GITHUB_WORKFLOW)))
+    assert paths, "no upload path block"
+    assert all(not path.startswith("/") for path in paths), paths
+    assert {path.rsplit("/", 1)[0] for path in paths} == {"zig-out/bin"}
+    assert {path.rsplit("/", 1)[-1] for path in paths} == {
+        "stellaris_quickjs.dll", "inject.exe", "sha256sums.txt"}
+
+
+def test_the_upload_root_fence_bites_on_a_mixed_path():
+    sample = "          path: |\n            zig-out/bin/a\n            /tmp/b\n"
+    paths = _block_scalar(sample)
+    assert [path for path in paths if path.startswith("/")] == ["/tmp/b"]
+
+
+def test_publish_uses_the_downloaded_basenames():
+    text = _read(GITHUB_WORKFLOW)
+    publish = text.split("- name: Publish release", 1)[1]
+    for name in ("stellaris_quickjs.dll", "inject.exe", "sha256sums.txt"):
+        assert f"dist/{name}" in publish

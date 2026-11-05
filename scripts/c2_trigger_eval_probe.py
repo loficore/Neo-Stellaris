@@ -339,10 +339,8 @@ def write_tsv(path, rows, meta):
         os.makedirs(directory, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="") as f:
-        for key, value in meta.items():
-            f.write(f"# {key}\t{value}\n")
-        for row in rows:
-            f.write(row + "\n")
+        f.writelines(f"# {key}\t{value}\n" for key, value in meta.items())
+        f.writelines(row + "\n" for row in rows)
     os.replace(tmp, path)
 
 
@@ -394,7 +392,7 @@ def refuse_if_resident(dll_name, resident_base):
     upload under a new name (the §76.7 `sqjs_c5.dll` trick) or shoot in a new process.
     """
     if resident_base is None:
-        return None
+        return
     print(
         f"[trigeval] {dll_name} is already mapped at 0x{resident_base:x} — LoadLibraryA "
         "would reuse that image, so the sha256 recorded for this shot would attest a file "

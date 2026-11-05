@@ -22,7 +22,6 @@ import pathlib
 import sys
 import zipfile
 from dataclasses import dataclass, field
-from typing import Optional, Union
 
 STAT_KEYS = (
     "systems",
@@ -40,7 +39,7 @@ STAT_KEYS = (
 
 @dataclass
 class Block:
-    entries: list[tuple[Optional[str], Union[str, "Block"]]] = field(default_factory=list)
+    entries: list[tuple[str | None, str | Block]] = field(default_factory=list)
 
 
 class _Parser:
@@ -185,12 +184,14 @@ def extract_hypergraph(
     for key, value in universe.entries:
         system_id = _decimal(key, "galactic_object system key")
         if not isinstance(value, Block):
-            raise ValueError(f"system {system_id}: block expected")
+            raise ValueError(f"system {system_id}: block expected")  # noqa: TRY004 — main maps ValueError to exit 2
         system_ids.add(system_id)
         hyperlanes = [v for k, v in value.entries if k == "hyperlane"]
         for hyperlane in hyperlanes:
             if not isinstance(hyperlane, Block):
-                raise ValueError(f"system {system_id}: hyperlane is not a block")
+                raise ValueError(  # noqa: TRY004 — main maps ValueError to exit 2
+                    f"system {system_id}: hyperlane is not a block"
+                )
             for entry_key, entry in hyperlane.entries:
                 if entry_key is not None or not isinstance(entry, Block):
                     raise ValueError(f"system {system_id}: malformed hyperlane entry")
@@ -275,7 +276,7 @@ def _format_length(value: float) -> str:
     return str(int(value)) if value.is_integer() else format(value, ".15g")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("save", help="path to the .sav ZIP")
     parser.add_argument("--edges", required=True, help="output edge TSV")

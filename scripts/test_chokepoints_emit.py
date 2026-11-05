@@ -56,8 +56,8 @@ def test_main_check_and_write(tmp_path):
     out = tmp_path / "t.zig"
     argv = ["--tsv", str(small), "--out", str(out), "--save-sha", SAVE_SHA]
     assert main(argv) == 0
-    assert main(argv + ["--check"]) == 0
+    assert main([*argv, "--check"]) == 0
     out.write_text(out.read_text() + " ", encoding="utf-8")
-    assert main(argv + ["--check"]) == 2
+    assert main([*argv, "--check"]) == 2
     out.unlink()
-    assert main(argv + ["--check"]) == 2
+    assert main([*argv, "--check"]) == 2

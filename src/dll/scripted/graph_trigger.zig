@@ -90,6 +90,31 @@ pub fn shouldRecompute(last: u64, now: u64) bool {
     return now != 0 and now != last;
 }
 
+/// 每隔多少次求值做一次**内容哈希**核对。
+///
+/// 代价:一次 verify = 一整趟读(约 10⁴ 次 `ReadProcessMemory`),而一次 reuse 只读
+/// 788 个 4 B 计数。787 个星系一次 tick 大约 3 次 verify(787 / 256 ≈ 3.1),所以
+/// 这个数不能更小;再大则「指纹没变、图变了」的漏报窗口按比例变长。
+pub const VERIFY_EVERY: u32 = 256;
+
+/// `every == 0` 关闭定时核对(恒 false)。`since_last >= every` 把「已经攒够」的
+/// 边界放在 inclusive:256 次之后的第 257 次求值会核对。
+pub fn shouldVerify(since_last: u32, every: u32) bool {
+    if (every == 0) return false;
+    return since_last >= every;
+}
+
+/// 一次求值对缓存该做什么。`recompute` 优先于 `verify`:指纹已经说变了,再跑一遍
+/// 哈希核对只会多付一趟读。
+pub const CacheAction = enum { reuse, verify, recompute };
+
+/// 纯决策,不读任何全局:调用方把「指纹变没变」与「距上次核对过了多少次」传进来。
+pub fn chooseAction(fingerprint_changed: bool, since_verify: u32, every: u32) CacheAction {
+    if (fingerprint_changed) return .recompute;
+    if (shouldVerify(since_verify, every)) return .verify;
+    return .reuse;
+}
+
 /// 一次求值的答案。判据顺序即失效顺序:scope 门 → id 门 → 读门 → 查表。
 pub fn decide(
     scope_kind: u32,
@@ -125,6 +150,10 @@ pub const Stats = struct {
     non_system_scope: u64 = 0,
     out_of_range: u64 = 0,
     read_failed: u64 = 0,
+    /// 「定时核对跑了、哈希相等」的次数。它**不**等于 `cached_hits`:后者连读都没做。
+    verified: u64 = 0,
+    /// 「定时核对这一趟读失败」的次数。读失败不许动分数与哈希(fail-closed)。
+    verify_failed: u64 = 0,
 };
 
 pub fn count(stats: *Stats, decision: Decision) void {
@@ -136,6 +165,20 @@ pub fn count(stats: *Stats, decision: Decision) void {
             stats.evaluated +%= 1;
             if (decision.recomputed) stats.recomputed +%= 1 else stats.cached_hits +%= 1;
         },
+    }
+}
+
+/// live 源一次求值的结局记到哪个计数器上。纯函数 —— 分支与计数分开测,
+/// `liveScore` 只负责把「这一次读到了什么」映射成 `(action, hash_matched)`。
+pub fn recordLiveFate(stats: *Stats, action: CacheAction, hash_matched: bool) void {
+    switch (action) {
+        .reuse => stats.cached_hits +%= 1,
+        .verify => if (hash_matched) {
+            stats.verified +%= 1;
+        } else {
+            stats.recomputed +%= 1;
+        },
+        .recompute => stats.recomputed +%= 1,
     }
 }
 
@@ -220,6 +263,9 @@ var live_fingerprint: u64 = 0;
 /// 上一趟成功读到的边集的哈希与条数。`hash == 0` = 本进程还没成功读过。
 var live_hash: u64 = 0;
 var live_edge_count: u32 = 0;
+/// 距上一次**整趟读**(重算或核对)过了多少次求值。只由 `VERIFY_EVERY` 消费:
+/// 任何一次 `readAt`(成功或失败)之后清零,其余求值 `+|= 1`。
+var evals_since_verify: u32 = 0;
 /// live 源自己的计数(与烘焙表的计数器分开:混在一起会分不清是哪条路写进去的)。
 pub var live_stats: Stats = .{};
 
@@ -297,17 +343,56 @@ pub fn liveScore(id: u32) ?u16 {
     }
     const now: u64 = if (unreadable) 0 else sum;
 
-    if (!shouldRecompute(live_fingerprint, now)) {
-        if (id >= live_count) return null;
-        live_stats.evaluated +%= 1;
-        live_stats.cached_hits +%= 1;
-        return live_scores[id];
-    }
+    const action = chooseAction(
+        shouldRecompute(live_fingerprint, now),
+        evals_since_verify,
+        VERIFY_EVERY,
+    );
 
-    graph_probe.readAt(mem, index) catch {
-        live_stats.read_failed +%= 1;
-        return null;
-    };
+    switch (action) {
+        .reuse => {
+            // 连核对都没做:只读一次指纹,不碰图。
+            evals_since_verify +|= 1;
+            if (id >= live_count) return null;
+            live_stats.evaluated +%= 1;
+            recordLiveFate(&live_stats, .reuse, false);
+            return live_scores[id];
+        },
+        .verify => {
+            // 指纹说没变,但攒够了核对次数:整趟读一次,和上一趟的边集哈希比。
+            graph_probe.readAt(mem, index) catch {
+                evals_since_verify = 0;
+                live_stats.verify_failed +%= 1;
+                return null; // fail-closed:分数与哈希都不动
+            };
+            evals_since_verify = 0;
+            const rows = graph_probe.rows();
+            if (hashEdges(rows) == live_hash) {
+                // 图确实没变:复用上一份分数,只记 `verified`。
+                live_fingerprint = now;
+                if (id >= live_count) return null;
+                live_stats.evaluated +%= 1;
+                recordLiveFate(&live_stats, .verify, true);
+                return live_scores[id];
+            }
+            // 指纹没变、哈希变了(#46 的漏格):用**这一次**读到的 rows 重算,
+            // 绝不再读第二趟。
+            return recomputeFrom(rows, now, id, .verify);
+        },
+        .recompute => {
+            graph_probe.readAt(mem, index) catch {
+                live_stats.read_failed +%= 1;
+                return null;
+            };
+            evals_since_verify = 0;
+            return recomputeFrom(graph_probe.rows(), now, id, .recompute);
+        },
+    }
+}
+
+/// `recompute` 与 `verify` 的「哈希不等」共用:同一趟 rows → analyze → 记分。
+/// `fate` 只影响计数:`verify` 的失配记 `recomputed`(见 `recordLiveFate`)。
+fn recomputeFrom(rows: []const Edge, now: u64, id: u32, fate: CacheAction) ?u16 {
     const stats = graph_probe.lastStats();
     const max_id = stats.max_id orelse {
         live_stats.read_failed +%= 1;
@@ -318,7 +403,7 @@ pub fn liveScore(id: u32) ?u16 {
         live_stats.read_failed +%= 1;
         return null;
     }
-    cd.analyze(std.heap.page_allocator, graph_probe.rows(), n, .{
+    cd.analyze(std.heap.page_allocator, rows, n, .{
         .scores = live_scores[0..n],
         .articulation = live_art[0..n],
         .bridge_endpoint = live_bridge[0..n],
@@ -330,9 +415,9 @@ pub fn liveScore(id: u32) ?u16 {
     live_count = n;
     live_fingerprint = now;
     // 哈希与分数取自**同一次** `readAt`:跨两次读拼接出来的边集从未同时存在过。
-    recordEdges(graph_probe.rows());
+    recordEdges(rows);
     live_stats.evaluated +%= 1;
-    live_stats.recomputed +%= 1;
+    recordLiveFate(&live_stats, fate, false);
     return if (id < n) live_scores[id] else null;
 }
 
@@ -345,6 +430,7 @@ pub fn resetLive() void {
     live_fingerprint = 0;
     live_hash = 0;
     live_edge_count = 0;
+    evals_since_verify = 0;
     live_stats = .{};
 }
 

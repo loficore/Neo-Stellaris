@@ -101,6 +101,10 @@ the two directories are not redundant — the rule above keeps that from matteri
   QuickJS allocator reasons documented at `build.zig:44-47`).
 - Toolchain pins (zig 0.16.0, just) live at the top of both workflows and are sha256-verified.
   `zig build abi-probe` is non-default and costs ~72 s cold, so it only runs on manual dispatch.
+- **Tags publish** — pushing a `v*` tag runs the same gate first (`release` has `needs: gate`),
+  then attaches `stellaris_quickjs.dll`, `inject.exe` and `sha256sums.txt` from that run with
+  `gh release create --verify-tag`. A tag can never ship bytes the gate has not seen, and no
+  third-party release action is involved.
 - **Remotes** — `origin` carries two push URLs (GitHub `loficore/Neo-Stellaris` **and** the local
   Gitea), so a single `git push` lands on both. GitHub is the one that matters: PRs and merges
   happen there, and Gitea is a mirror. A fresh clone has to restore the second URL, since it is

@@ -838,7 +838,7 @@ def test_gate_symbol_rule_flags_an_import_the_module_cannot_answer(
     """
     world_state = _gate_modules()["world_state"]
     monkeypatch.setattr(world_state, "GATE_ENTRY_POINTS",
-                        tuple(world_state.GATE_ENTRY_POINTS) + ("gate_ghost",))
+                        (*tuple(world_state.GATE_ENTRY_POINTS), "gate_ghost"))
     (tmp_path / "shot.py").write_text(
         "from world_probe import gate_install\n"
         "from world_state import assert_ready\n"

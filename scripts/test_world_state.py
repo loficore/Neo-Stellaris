@@ -98,9 +98,9 @@ sys.path.insert(0, str(REPO / "scripts"))
 # to world_state.py), so its pure half is reached through that directory.
 sys.path.insert(0, str(REPO / "scripts" / "windows"))
 
-import ns_world as cli  # noqa: E402  # pyright: ignore[reportMissingImports]
-import world_state as store_module  # noqa: E402 - the sys.path setup above must precede this import
-from world_state import (  # noqa: E402 - the sys.path setup above must precede this import
+import ns_world as cli  # pyright: ignore[reportMissingImports]
+import world_state as store_module
+from world_state import (
     ACTIONS,
     NO_ACTION,
     STATES,
@@ -156,7 +156,7 @@ def test_transition_table_matches_spec():
     # 穷举 states × states ×（五个动作 + NO_ACTION）：ALLOWED 之外一律 False。
     # 动作维含 NO_ACTION，否则「表外一律拒绝」对那 15 条探针驱动的边根本没被问过。
     for from_state, to_state, action in itertools.product(
-            STATES, STATES, ACTIONS + (NO_ACTION,)):
+            STATES, STATES, (*ACTIONS, NO_ACTION)):
         assert may(from_state, to_state, action) is ((from_state, to_state, action) in ALLOWED), \
             (from_state, to_state, action)
 

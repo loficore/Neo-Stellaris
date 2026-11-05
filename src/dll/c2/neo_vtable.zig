@@ -138,6 +138,13 @@ pub fn liveHashSnapshot() @TypeOf(graph_trigger.liveHashSnapshot()) {
     return graph_trigger.liveHashSnapshot();
 }
 
+/// verify 通路的两个计数:`verified` = 定时核对跑了且图没变;`verify_failed` =
+/// 核对这一趟读失败(fail-closed:分数与哈希都不动)。它们不进 8 词统计契约。
+pub fn liveVerifySnapshot() struct { verified: u64, verify_failed: u64 } {
+    const s = graph_trigger.liveSnapshot().stats;
+    return .{ .verified = s.verified, .verify_failed = s.verify_failed };
+}
+
 pub fn resetLiveSource() void {
     graph_trigger.resetLive();
 }

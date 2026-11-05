@@ -34,7 +34,7 @@ import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-import disrva  # noqa: E402
+import disrva
 
 # See the same note in `test_c2_donor_probe.py`: the prologue pins compare
 # against the real PE, so they skip loudly (never silently) where it is absent.
@@ -43,8 +43,8 @@ requires_exe = pytest.mark.skipif(
     reason="needs stellaris.exe: pins prologue bytes against the real PE "
            "(set NS_STELLARIS_EXE)",
 )
-import c2_witness_probe as witness  # noqa: E402
-from c2_witness_probe import (  # noqa: E402
+import c2_witness_probe as witness
+from c2_witness_probe import (
     VERDICTS,
     decode_entry,
     decode_layout,
@@ -76,7 +76,7 @@ STATS_KEYS = ("calls", "samples", "invalid_self", "unmatched",
 
 def _stats(**over):
     """A complete 12-key stats dict (decode_stats' output shape) with zeros."""
-    base = {key: 0 for key in STATS_KEYS}
+    base = dict.fromkeys(STATS_KEYS, 0)
     base["installed"] = 1
     base.update(over)
     return base
@@ -189,7 +189,7 @@ def test_decode_layout_rejects_wrong_entry_size():
     open: mask is a u64 here, so it occupies two words and a 5-word read would
     silently answer `mask=512` for a mask of `1<<32`.
     """
-    for short in (GOOD_LAYOUT[:5], list(GOOD_LAYOUT) + [0]):
+    for short in (GOOD_LAYOUT[:5], [*list(GOOD_LAYOUT), 0]):
         with pytest.raises(ValueError):
             decode_layout(short)
     for entry in (40, 56, 64):
@@ -409,22 +409,22 @@ def test_build_meta_records_entries_error_and_partitions():
     them absent (the pre-drain meta-only write) neither appears — so the first
     artifact line does not carry half-known partition data.
     """
-    common = dict(
-        exe_base=0x140000000,
-        image_end=0x140000000 + 0x3927000,
-        dll_path=r"C:/temp/sqjs_c4.dll",
-        dll_sha="deadbeef",
-        mask=0,
-        poll_s=120.0,
-        layout={"entry": 48, "stats": 56, "ring": 256, "mask": 0, "version": 1},
-        stats=_stats(calls=3, samples=3, unmatched=3),
-        stats_text="calls=3 samples=3 invalid_self=0 unmatched=3 h0=0 h1=0 "
+    common = {
+        "exe_base": 0x140000000,
+        "image_end": 0x140000000 + 0x3927000,
+        "dll_path": r"C:/temp/sqjs_c4.dll",
+        "dll_sha": "deadbeef",
+        "mask": 0,
+        "poll_s": 120.0,
+        "layout": {"entry": 48, "stats": 56, "ring": 256, "mask": 0, "version": 1},
+        "stats": _stats(calls=3, samples=3, unmatched=3),
+        "stats_text": "calls=3 samples=3 invalid_self=0 unmatched=3 h0=0 h1=0 "
                    "h2=0 h3=0 h4=0 patch_size=16 installed=1 mask=0",
-        entries=[],
-        verdict="witness_family_hit_unknown_table",
-        table=None,
-        install_rc=0,
-    )
+        "entries": [],
+        "verdict": "witness_family_hit_unknown_table",
+        "table": None,
+        "install_rc": 0,
+    }
     original_keys = (
         "exe_base", "image_size", "image_end", "dll", "dll_sha256", "target_rva",
         "mask", "poll_s", "layout", "calls", "samples", "entries", "tiers",

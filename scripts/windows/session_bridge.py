@@ -48,6 +48,7 @@ import os
 import subprocess
 import sys
 import time
+import contextlib
 
 #: The scheduled task this tool owns.  Distinct from the launcher's and the
 #: supervisor's names so firing one never disturbs the others.
@@ -148,10 +149,8 @@ def run_interactive(script: str, args: str = "", *,
         fh.write(vbs_text(python, script, args, OUT_PATH))
     # A leftover sentinel would let this call read the PREVIOUS run's exit code,
     # which is the one way this channel could report a result nobody produced.
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.remove(OUT_PATH)
-    except FileNotFoundError:
-        pass
 
     owner = f"{os.environ.get('COMPUTERNAME', '')}\\{os.environ.get('USERNAME', '')}"
     subprocess.run(task_create_args(TASK_NAME, SHIM_PATH, owner),

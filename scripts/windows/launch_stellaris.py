@@ -241,8 +241,9 @@ class _Timeline:
         """The carried lines, oldest first, with a note if any were dropped."""
         if not self._dropped:
             return list(self._lines)
-        return [f"... {self._dropped} earlier timeline line(s) dropped "
-                f"(cap {_MARKER_TIMELINE_MAX_LINES})"] + list(self._lines)
+        note = (f"... {self._dropped} earlier timeline line(s) dropped "
+                f"(cap {_MARKER_TIMELINE_MAX_LINES})")
+        return [note, *self._lines]
 
 
 # Set by main() while the inner chain runs, so log_event knows to collect.
@@ -326,9 +327,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _taskkill(image: str) -> subprocess.CompletedProcess:
+    # check=False: the caller reads taskkill's rc (1 = not running / access denied).
     return subprocess.run(
         ["taskkill", "/F", "/IM", image, "/T"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
 
 
@@ -374,9 +376,10 @@ def steam_spawn(app_id: int, dry_run: bool = False) -> int:
         return EXIT_OK
     uri = f"steam://rungameid/{app_id}"
     # Start-Process goes through ShellExecute, same protocol handler as os.startfile.
+    # check=False: a failed spawn is not fatal here; the observe phase decides.
     subprocess.run(
         ["powershell", "-NoProfile", "-Command", f"Start-Process '{uri}'"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     log_event("STEAM_SPAWN", uri=uri)
     return EXIT_OK
@@ -634,7 +637,9 @@ def _read_click_trace(hwnd: int, rect: tuple[int, int, int, int],
     foreground_hwnd: int | None = None
     cursor: tuple[int, int] | None = None
     launcher_alive: bool | None = None
-    try:
+    # Click-trace diagnostics only: a failing cursor/foreground probe must not turn
+    # a launch attempt into a traceback.
+    with contextlib.suppress(Exception):
         get_foreground_window, get_cursor_pos = _trace_fns()
         launcher_alive = pid is None or psutil.pid_exists(pid)
         foreground = get_foreground_window()
@@ -643,8 +648,6 @@ def _read_click_trace(hwnd: int, rect: tuple[int, int, int, int],
         point = _POINT()
         if get_cursor_pos(ctypes.byref(point)):
             cursor = (int(point.x), int(point.y))
-    except Exception:
-        pass
     return click_trace(rect, foreground_hwnd, hwnd, cursor, launcher_alive)
 
 
@@ -900,10 +903,11 @@ def launcher_click(hwnd: int, pid: int | None = None) -> int:
                 return EXIT_OK
         log_event("LAUNCHER_CLICK", step="diagnosis",
                   diagnosis=click_diagnosis(traces))
-        return EXIT_LAUNCHER_NO_ADVANCE
     except OSError as e:
         log_event("LAUNCHER_CLICK", step="click_blocked", error=repr(e))
         return EXIT_LAUNCHER_NO_FOCUS
+    else:
+        return EXIT_LAUNCHER_NO_ADVANCE
 
 
 def launcher_handoff(timeout_s: int) -> int | None:
@@ -963,10 +967,11 @@ def _top_windows() -> list[tuple[int, str]]:
         if skipped:
             log_event("GAME_WINDOWS", step="scan_complete", windows=len(out),
                       skipped=skipped)
-        return out
     except Exception as e:  # noqa: BLE001 — "nothing observable", retried by the caller
         log_event("GAME_WINDOWS", error=repr(e))
         return []
+    else:
+        return out
 
 
 def _is_jit_dialog_visible() -> bool:
@@ -1234,8 +1239,9 @@ def _delete_bridge_task(task_name: str) -> None:
     """
     for verb in ("/end", "/delete"):
         with contextlib.suppress(OSError):
+            # best-effort cleanup inside contextlib.suppress(OSError).
             subprocess.run(["schtasks", verb, "/tn", task_name, "/f"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, check=False)
 
 
 def _default_marker_path(pid: int) -> str:
@@ -1483,8 +1489,7 @@ def _write_marker(marker: str, code: int, pid: int | None = None,
     """
     try:
         with open(marker, "w", encoding="utf-8") as f:
-            for line in timeline:
-                f.write(f"{_MARKER_LOG_PREFIX}{line}\n")
+            f.writelines(f"{_MARKER_LOG_PREFIX}{line}\n" for line in timeline)
             if pid is not None:
                 f.write(f"PID:{pid}\n")
             f.write(f"DONE:{code}\n")
@@ -1571,9 +1576,10 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
     _create_lease(lease)
     task_scheduled = False
     try:
+        # check=False: the rc is mapped to EXIT_BRIDGE_SCHTASKS_DENIED below.
         create = subprocess.run(
             build_bridge_task_command(task_name, shim_path, st_str, ru),
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         if create.returncode != 0:
             log_event("BRIDGE", step="create", rc=create.returncode,
@@ -1584,8 +1590,9 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
             return EXIT_BRIDGE_SCHTASKS_DENIED
 
         task_scheduled = True
+        # check=False: the rc is mapped to a distinct exit code below.
         run = subprocess.run(build_bridge_run_command(task_name),
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, check=False)
         if run.returncode != 0:
             log_event("BRIDGE", step="run", rc=run.returncode,
                       stderr=run.stderr.strip())
@@ -1631,7 +1638,6 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
             # caller — empty stdout, then a ValueError — so stderr is where the
             # distinction goes.
             log_event("BRIDGE", result="no_pid_in_marker", dry_run=args.dry_run)
-        return code
     except Exception as e:  # noqa: BLE001 — the outer needs a blanket guard too
         # A3: session detection and the shim path pre-flight are outside this
         # try, but a missing schtasks, an unwritable tempdir, or any OSError out
@@ -1644,6 +1650,8 @@ def bridge_to_interactive_session(args: argparse.Namespace) -> int:
             with contextlib.suppress(OSError):
                 _delete_bridge_task(task_name)
         return EXIT_INTERNAL
+    else:
+        return code
     finally:
         # Runs on every path, including the except above. The shim and lease are
         # the outer's own files; the timeout path in particular must drop the

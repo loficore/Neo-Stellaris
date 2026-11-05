@@ -94,10 +94,8 @@ def test_arg_parser_overrides():
 def _fake_run(args, **kwargs):
     """taskkill returns 0 for missing process; 1 with stderr '... ACCESS denied' for permission."""
     if "stellaris.exe" in args or "Paradox Launcher.exe" in args:
-        m = MagicMock(returncode=0, stdout="", stderr="")
-        return m
-    m = MagicMock(returncode=1, stdout="", stderr="ERROR: Access is denied.")
-    return m
+        return MagicMock(returncode=0, stdout="", stderr="")
+    return MagicMock(returncode=1, stdout="", stderr="ERROR: Access is denied.")
 
 
 @patch("subprocess.run", side_effect=_fake_run)
@@ -265,7 +263,7 @@ def test_prekill_checks_return_codes_not_localized_text(mock_run):
 def test_steam_spawn_uses_start_process(mock_run):
     mock_run.return_value = MagicMock(returncode=0)
     steam_spawn(281990)
-    args, kwargs = mock_run.call_args
+    args, _kwargs = mock_run.call_args
     cmd = args[0]
     # URI is concatenated with 'Start-Process ...' into one -Command argument;
     # join the list to check for the URI substring (matches the sibling
@@ -730,7 +728,7 @@ def test_default_bridge_timeout_excludes_the_unpause_budget():
         launch_stellaris._INNER_BUDGET_LAUNCHER_CLICK_S,
         launch_stellaris._INNER_BUDGET_GAME_OBSERVE_S,
     ]
-    assert launch_stellaris._INNER_CHAIN_BUDGET_S == sum(mandatory)
+    assert sum(mandatory) == launch_stellaris._INNER_CHAIN_BUDGET_S
     assert launch_stellaris.DEFAULT_BRIDGE_TIMEOUT_S == (
         launch_stellaris._INNER_CHAIN_BUDGET_S
         + launch_stellaris._BRIDGE_TIMEOUT_MARGIN_S)
@@ -975,9 +973,8 @@ def test_window_rect_reads_the_four_edges_and_raises_on_failure():
     # GetWindowRect returning FALSE means the hwnd is dead or off-screen.
     with patch("launch_stellaris._cursor_fns",
                return_value=(MagicMock(return_value=0), MagicMock(),
-                             MagicMock())):
-        with pytest.raises(OSError):
-            _window_rect(4242)
+                             MagicMock())), pytest.raises(OSError):
+        _window_rect(4242)
 
 
 def test_click_at_moves_the_cursor_then_clicks_left_down_and_up():
@@ -997,9 +994,8 @@ def test_click_at_raises_when_setcursorpos_is_refused():
     whole drive a silent no-op that still reports success."""
     with patch("launch_stellaris._cursor_fns",
                return_value=(MagicMock(), MagicMock(return_value=0),
-                             MagicMock())):
-        with pytest.raises(OSError):
-            _click_at(640, 360)
+                             MagicMock())), pytest.raises(OSError):
+        _click_at(640, 360)
 
 
 @contextlib.contextmanager
@@ -2643,9 +2639,8 @@ def test_build_bridge_account_fails_loudly_rather_than_guessing():
     that much later as 'No mapping between account names and security IDs'."""
     with patch.dict(os.environ, {}, clear=True), \
             patch("launch_stellaris._login_user", return_value=""), \
-            patch("platform.node", return_value=""):
-        with pytest.raises(ValueError):
-            build_bridge_account()
+            patch("platform.node", return_value=""), pytest.raises(ValueError):
+        build_bridge_account()
 
 
 def test_pid_is_not_recorded_when_the_stdout_write_fails():
@@ -2658,7 +2653,7 @@ def test_pid_is_not_recorded_when_the_stdout_write_fails():
     def _print(*args, **kwargs):
         if kwargs.get("file") is None:
             raise OSError("stdout is gone")
-        return None
+        return
 
     with _full_chain(game_pid=5555), \
             patch("builtins.print", side_effect=_print):

@@ -255,6 +255,14 @@ def render(edges: list[tuple[int, int, float]], rows: list[tuple[int, int, int, 
     return "\n".join(out) + "\n"
 
 
+def _require_dense_score_table(rows) -> None:
+    """Raise the documented data error when the score table is not dense."""
+    if len(rows) != EXPECTED_SYSTEM_COUNT:
+        raise GraphFixtureDataError(
+            f"score table has {len(rows)} rows, expected {EXPECTED_SYSTEM_COUNT}"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--edges", required=True, help="edge TSV: a<TAB>b<TAB>length")
@@ -268,10 +276,7 @@ def main(argv: list[str] | None = None) -> int:
             pathlib.Path(args.edges).read_text(encoding="utf-8"), strict=True
         )
         rows = parse_scores(pathlib.Path(args.scores).read_text(encoding="utf-8"))
-        if len(rows) != EXPECTED_SYSTEM_COUNT:
-            raise GraphFixtureDataError(
-                f"score table has {len(rows)} rows, expected {EXPECTED_SYSTEM_COUNT}"
-            )
+        _require_dense_score_table(rows)
         rendered = render(edges, rows).encode("utf-8")
     except (OSError, UnicodeDecodeError, GraphFixtureDataError) as exc:
         print(f"graph_fixture_emit: {exc}", file=sys.stderr)

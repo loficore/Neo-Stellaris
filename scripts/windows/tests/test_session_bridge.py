@@ -142,7 +142,7 @@ def test_run_interactive_reads_the_sentinel_back(tmp_path, monkeypatch):
     def fake_run(argv, **kwargs):
         if "/run" in argv:
             out.write_text("hello\r\nEXIT=0\r\n", encoding="utf-8")
-        return None
+        return
 
     monkeypatch.setattr(bridge.subprocess, "run", fake_run)
 
@@ -166,5 +166,5 @@ def test_peel_timeout_is_absent_by_default():
 
 def test_the_task_name_is_its_own():
     """Firing this must not disturb the launcher's or the supervisor's task."""
-    assert bridge.TASK_NAME not in ("NeoStellarisSupervisor",)
+    assert bridge.TASK_NAME != "NeoStellarisSupervisor"
     assert "stellaris-launch" not in bridge.TASK_NAME

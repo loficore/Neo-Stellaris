@@ -34,7 +34,7 @@ def count_since(path, offset, marker: str):
     if offset is None:
         return None
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             handle.seek(offset)
             text = handle.read()
     except OSError:
@@ -58,7 +58,7 @@ def histogram(path, offset, marker: str):
         return None
     pattern = _ID_RE.get(marker) or re.compile(re.escape(marker) + r"\s+(\d+)")
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             handle.seek(offset)
             text = handle.read()
     except OSError:

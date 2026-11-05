@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import frida
+import contextlib
 
 
 def get_device(host: str | None = None) -> frida.core.Device:
@@ -307,10 +308,8 @@ def cmd_monitor_effects(
 
     import time
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         time.sleep(args.duration)
-    except KeyboardInterrupt:
-        pass
 
     return format_response("monitor_effects", True, **script.exports_sync.collect())
 
@@ -420,7 +419,7 @@ def main() -> int:
             )
         )
         return 1
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — the CLI's contract is a JSON error, not a traceback
         print(json.dumps(format_response(args.command, False, error=str(e))))
         return 1
 

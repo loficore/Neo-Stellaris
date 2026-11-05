@@ -549,7 +549,7 @@ def test_required_exports_add_slot2_stats_only_for_slot2():
     assert "C4Slot2StatsInto" not in mod.required_exports("capture")
     assert "C4Slot2StatsInto" in mod.required_exports("slot2")
     assert mod.required_exports("capture") == mod.REQUIRED_EXPORTS
-    assert mod.required_exports("slot2") == mod.REQUIRED_EXPORTS + ("C4Slot2StatsInto",)
+    assert mod.required_exports("slot2") == (*mod.REQUIRED_EXPORTS, "C4Slot2StatsInto")
 
 
 def _slot2_args(tmp_path):
@@ -575,8 +575,7 @@ def test_flow_aborts_before_the_game_is_touched_when_slot2_export_missing(monkey
     calls = []
     monkeypatch.setattr(mod, "_wait_ready", lambda *a, **k: ({"state": "paused"}, None))
     monkeypatch.setattr(mod, "_sha256_file", lambda p: mod.SAVE_SHA)
-    monkeypatch.setattr(mod.harness, "list_exports", lambda p: {
-        name: 0x10 for name in mod.REQUIRED_EXPORTS})
+    monkeypatch.setattr(mod.harness, "list_exports", lambda p: dict.fromkeys(mod.REQUIRED_EXPORTS, 16))
     monkeypatch.setattr(mod.harness, "resolve_pid",
                         lambda name: calls.append(name) or 1234)
     result = {}

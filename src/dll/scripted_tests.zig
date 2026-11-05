@@ -161,3 +161,79 @@ test "graph_trigger: the live hash follows the read that produced it" {
     gt.resetLive();
     try std.testing.expectEqual(@as(u64, 0), gt.liveHashSnapshot().hash);
 }
+
+// ---------------------------------------------------------------------------
+// graph_trigger: 缓存策略的选择(issue #46 方案 3)
+//
+// 「指纹变了就重算」是成本开关;「每 N 次求值核对一次内容哈希」是正确性通路。
+// 两者合成一个三分支决策,全部纯函数 —— 调度行为在这里被测死,liveScore 只照做。
+// ---------------------------------------------------------------------------
+
+test "graph_trigger: chooseAction prefers a changed fingerprint over a scheduled verify" {
+    try std.testing.expectEqual(gt.CacheAction.recompute, gt.chooseAction(true, 0, 256));
+    try std.testing.expectEqual(gt.CacheAction.recompute, gt.chooseAction(true, 999, 256));
+}
+
+test "graph_trigger: chooseAction schedules a verify even when the fingerprint matches" {
+    try std.testing.expectEqual(gt.CacheAction.verify, gt.chooseAction(false, 256, 256));
+    try std.testing.expectEqual(gt.CacheAction.verify, gt.chooseAction(false, 300, 256));
+    try std.testing.expectEqual(gt.CacheAction.reuse, gt.chooseAction(false, 255, 256));
+}
+
+test "graph_trigger: verify every 0 disables the scheduled verify entirely" {
+    try std.testing.expectEqual(gt.CacheAction.reuse, gt.chooseAction(false, 10_000, 0));
+    try std.testing.expect(!gt.shouldVerify(10_000, 0));
+}
+
+// ---------------------------------------------------------------------------
+// graph_trigger: live 源的三支结局与计数(Task 2)
+//
+// 计数器是判词面:`recomputed` 是我们真的跑了 analyze,`verified` 是核对通过、
+// `cached_hits` 是连核对都没做。`verify_failed` 只属于「核对这一趟读失败」。
+// ---------------------------------------------------------------------------
+
+test "graph_trigger: the four live fates are counted separately" {
+    var s = gt.Stats{};
+    gt.recordLiveFate(&s, .reuse, false);
+    gt.recordLiveFate(&s, .verify, true);
+    gt.recordLiveFate(&s, .verify, false);
+    gt.recordLiveFate(&s, .recompute, false);
+    try std.testing.expectEqual(@as(u64, 1), s.cached_hits);
+    try std.testing.expectEqual(@as(u64, 1), s.verified);
+    try std.testing.expectEqual(@as(u64, 2), s.recomputed);
+    try std.testing.expectEqual(@as(u64, 0), s.verify_failed);
+}
+
+test "graph_trigger: resetLive clears the cached hash and the new counters" {
+    gt.resetLive();
+    try std.testing.expectEqual(@as(u64, 0), gt.liveHashSnapshot().hash);
+    try std.testing.expectEqual(@as(u32, 0), gt.liveHashSnapshot().edges);
+    try std.testing.expectEqual(@as(u64, 0), gt.liveSnapshot().stats.verified);
+    try std.testing.expectEqual(@as(u64, 0), gt.liveSnapshot().stats.verify_failed);
+}
+
+// ---------------------------------------------------------------------------
+// graph_trigger: #46 的验收夹具 —— 度相同、图不同
+//
+// 指纹按槽号加权,所以「度在系统之间迁移」可见;但同一组槽内部换邻居仍然看不见
+// (度序列完全相同)。这一格只有内容哈希能判 —— 下面的夹具就是 issue #46 表里
+// 「总和相同、图不同」那一行。
+// ---------------------------------------------------------------------------
+
+test "graph_trigger: a rewiring that preserves every degree is still visible to the hash" {
+    // 两条互不相邻的边 vs 一个四元环的一半:A-D 度序列完全相同({1,1,1,1}),
+    // 但边集不同。
+    const matching = [_]Edge{ .{ .a = 1, .b = 2 }, .{ .a = 3, .b = 4 } };
+    const crossed = [_]Edge{ .{ .a = 1, .b = 3 }, .{ .a = 2, .b = 4 } };
+    const counts_matching = [_]u32{ 0, 1, 1, 1, 1 };
+    const counts_crossed = [_]u32{ 0, 1, 1, 1, 1 };
+    try std.testing.expectEqual(gt.fingerprint(&counts_matching), gt.fingerprint(&counts_crossed));
+    try std.testing.expect(gt.hashEdges(&matching) != gt.hashEdges(&crossed));
+}
+
+test "graph_trigger: the same picture twice is a cache hit, never a recompute" {
+    const before = [_]Edge{ .{ .a = 1, .b = 2 }, .{ .a = 2, .b = 3 } };
+    const h = gt.hashEdges(&before);
+    try std.testing.expectEqual(gt.CacheAction.reuse, gt.chooseAction(false, 0, 256));
+    try std.testing.expectEqual(h, gt.hashEdges(&before));
+}

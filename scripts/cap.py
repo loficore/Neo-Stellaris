@@ -10,7 +10,8 @@ _cands = [os.environ.get('NS_STELLARIS_EXE'),
 EXE = next((c for c in _cands if c and os.path.exists(c)), None)
 if EXE is None:
     sys.exit('stellaris.exe not found — set NS_STELLARIS_EXE')
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 nsec = struct.unpack_from('<H', f, mz+6)[0]
 opt_off = mz + 24
@@ -36,7 +37,7 @@ def dis(rva, n, label=None):
         mark = ''
         if '[rip' in ins.op_str:
             import re as _re
-            m = _re.search(r'\[(rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', ins.op_str, _re.I)
+            m = _re.search(r'\[(rip|eip)\s*([+-])\s*(0x[0-9a-f]+)\]', ins.op_str, _re.IGNORECASE)
             if m:
                 d = int(m.group(3), 16)
                 t = ins.address + ins.size + (d if m.group(2) == '+' else -d)

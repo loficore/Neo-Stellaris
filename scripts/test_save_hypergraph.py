@@ -84,7 +84,7 @@ def test_parse_quoted_strings_and_comments():
         ("name", 'a b "c"')
     ]
     assert ("planet", "162") in root.entries
-    dlcs = [value for key, value in root.entries if key == "required_dlcs"][0]
+    dlcs = next(value for key, value in root.entries if key == "required_dlcs")
     assert dlcs.entries == [(None, "Horizon Signal")]
 
 
@@ -95,7 +95,7 @@ def test_parse_repeated_keys_preserved():
 
 def test_parse_anonymous_blocks():
     root = parse_clausewitz("hyperlane={ { to=0 length=1 } { to=1 length=2 } }")
-    hyperlane = [value for key, value in root.entries if key == "hyperlane"][0]
+    hyperlane = next(value for key, value in root.entries if key == "hyperlane")
     assert isinstance(hyperlane, Block)
     anonymous = [value for key, value in hyperlane.entries if key is None]
     assert len(anonymous) == 2

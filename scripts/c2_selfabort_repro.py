@@ -204,8 +204,7 @@ def key_lines_in(stdout: str):
     """
     found = []
     for line in (stdout or "").splitlines():
-        if line.startswith("[repro] "):
-            line = line[len("[repro] "):]
+        line = line.removeprefix("[repro] ")
         head = line.split(" ", 1)[0].rstrip(":")
         if head in KEY_LINES:
             found.append(head)
@@ -279,8 +278,9 @@ def main(argv=None) -> int:
 
     print(f"[repro] dll={dll_path}")
     try:
+        # check=False: the child is expected to die with status 3; the rc is the reading.
         proc = subprocess.run([sys.executable, "-c", CHILD, dll_path],
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, timeout=120, check=False)
     except subprocess.TimeoutExpired:
         print("[repro] the child did not exit within 120 s; no exit status was observed")
         print("[repro] VERDICT: inconclusive — the child neither died with status 3 nor "

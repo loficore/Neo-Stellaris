@@ -13,7 +13,8 @@ from capstone.x86 import X86_OP_IMM
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 EXE = os.environ.get('NS_STELLARIS_EXE',
                      '/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe')
-f = open(EXE, 'rb').read()
+with open(EXE, 'rb') as _src:
+    f = _src.read()
 mz = struct.unpack_from('<I', f, 0x3c)[0]
 no = mz + 24 + struct.unpack_from('<H', f, mz + 20)[0]
 BASE = 0x140000000
@@ -28,7 +29,7 @@ SEC = {nm: (va, rsz, rp) for nm, va, vs, rsz, rp, ch in secs}
 
 
 def rva_of(nm, off):
-    va, rsz, rp = SEC[nm]
+    va, _rsz, rp = SEC[nm]
     return va + off - rp
 
 

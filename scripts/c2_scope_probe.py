@@ -221,7 +221,7 @@ def caller_site_estimate(return_rva):
 def load_call_census(path):
     """Task 1 site table -> {site: {"func": int|None, "origin": str}}."""
     out = {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue
@@ -240,7 +240,7 @@ def load_call_census(path):
 def load_id_names(path):
     """descriptor_oracle TSV -> {id: name}; ids there are decimal."""
     out = {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue
@@ -315,7 +315,7 @@ def load_vtable_map(path):
     floor: it only holds classes whose slot[1] is still base Execute.
     """
     out = {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue
@@ -858,10 +858,10 @@ def follow_roots(reader, exe_base, image_end, vtables, entries, *,
     _check_image(exe_base, image_end)
     objects = []
     root_stats = {
-        "followed_by_source": {s: 0 for s in FOLLOW_SOURCES},
-        "implausible_by_source": {s: 0 for s in FOLLOW_SOURCES},
-        "capped_by_source": {s: 0 for s in FOLLOW_SOURCES},
-        "withheld_by_source": {s: 0 for s in FOLLOW_SOURCES},
+        "followed_by_source": dict.fromkeys(FOLLOW_SOURCES, 0),
+        "implausible_by_source": dict.fromkeys(FOLLOW_SOURCES, 0),
+        "capped_by_source": dict.fromkeys(FOLLOW_SOURCES, 0),
+        "withheld_by_source": dict.fromkeys(FOLLOW_SOURCES, 0),
     }
     seen = set()
     for entry in entries:
@@ -903,7 +903,7 @@ EVIDENCE_D2_VERDICTS = ("depth2_known_vtable_hit", "lineage_edge_found")
 
 def _base_source(source):
     """Fold ``"<x>.d2"`` back to ``"<x>"`` so the budget is counted per root."""
-    return source[:-3] if source.endswith(".d2") else source
+    return source.removesuffix(".d2")
 
 
 def _plan_depth2_with_stats(objects, per_source, already):
@@ -911,10 +911,10 @@ def _plan_depth2_with_stats(objects, per_source, already):
     if already is None:
         already = {obj["root"] for obj in objects}
     stats = {
-        "planned_by_source": {s: 0 for s in FOLLOW_SOURCES},
-        "followed_by_source": {s: 0 for s in FOLLOW_SOURCES},
-        "capped_by_source": {s: 0 for s in FOLLOW_SOURCES},
-        "deduped_by_source": {s: 0 for s in FOLLOW_SOURCES},
+        "planned_by_source": dict.fromkeys(FOLLOW_SOURCES, 0),
+        "followed_by_source": dict.fromkeys(FOLLOW_SOURCES, 0),
+        "capped_by_source": dict.fromkeys(FOLLOW_SOURCES, 0),
+        "deduped_by_source": dict.fromkeys(FOLLOW_SOURCES, 0),
     }
     planned = []
     seen = set(already)
@@ -1207,6 +1207,9 @@ def query_region(pid, addr):
         )
         if written != ctypes.sizeof(info):
             return None
+    except Exception:  # noqa: BLE001
+        return None
+    else:
         return {
             "base": 0 if info.BaseAddress is None else info.BaseAddress,
             "allocation_base": (
@@ -1217,8 +1220,6 @@ def query_region(pid, addr):
             "protect": info.Protect,
             "type": info.Type,
         }
-    except Exception:  # noqa: BLE001
-        return None
     finally:
         close_handle(handle)
 

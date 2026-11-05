@@ -170,7 +170,7 @@ def probe(hwnd: int, pid: int) -> dict:
     # read_console answers exactly classify_console(bright_px); the verdict is
     # re-derived from the count so the probe's console word comes from the
     # same classifier the daemon uses.
-    seen, bright_px = gs.read_console(hwnd)
+    _seen, bright_px = gs.read_console(hwnd)
     console_state = console_state_of(gs.classify_console(bright_px))
     stats = gs.read_window(hwnd)
     rect = gs.window_rect(hwnd)
@@ -228,8 +228,9 @@ def _query_creation_date(pid: int) -> str | None:
         f"Get-CimInstance Win32_Process -Filter \"ProcessId={int(pid)}\" | "
         "ForEach-Object { $_.CreationDate.ToString('o') }")
     try:
+        # check=False: a non-zero rc means "cannot be asked" and returns None below.
         out = subprocess.run(["powershell", "-NoProfile", "-Command", command],
-                             capture_output=True, text=True, timeout=15)
+                             capture_output=True, text=True, timeout=15, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
