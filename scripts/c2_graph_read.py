@@ -36,6 +36,11 @@
   2. `--poll-s` 是读之前的**静置**秒数,不是轮询窗口:判据要求「连读两次」,拿轮询去等
      图安定会把撕裂读掩掉。
 
+**`--attach`**:挂到**已经在跑的**那一份模块(通常是 `c2_boot_inject.py` 注进去的),只解析基址 +
+验头 + 验 `C2Sanity`,不 `gate_install`、不注入。理由不是「省一步」:live 缓存是模块级静态量,
+二次注入得到的是另一份模块、缓存为 0(`fingerprint==0`),读出来像「没重算」—— 那是仪器口径。
+它与 `--mutate` / `--mutate-collide` / `--rewire` 不冲突:它只回答「注不注入」。
+
 判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖:无游戏、无 Windows API。
 """
 from __future__ import annotations
@@ -480,6 +485,34 @@ def refuse_if_resident(dll_name, base):
         raise SystemExit(EXIT_REFUSED)
 
 
+def decide_injection(*, attach, resident):
+    """三分支:``"attach"`` 挂已有模块 / ``"inject"`` 注一份新的 / ``"refuse"`` 前提不成立。
+
+    为什么要有 `attach` 这一支:`neo_score` 的 live 缓存是**模块级静态量**。二次注入拿到的是
+    另一份模块、缓存为 0(`fingerprint==0` ⇒ `instrument_broken`),读起来像「没重算」——
+    那是仪器口径,不是 #46 的证据(Review Focus #1)。所以「我要读那份已经跑出计数来的模块」
+    必须是一条和「注入」互斥的路,而不是注入之后碰运气。
+
+    两个输入都是既有事实:`attach` 是操作者的意图,`resident` 是同名模块此刻是否已映射。
+    非 attach 且已映射仍然是 `refuse` —— 那是 `refuse_if_resident` 的老口径:同名重注会
+    让加载器复用旧映像,注入这一步等于没发生。
+    """
+    # 写成两个「resident 优先」的分支而不是嵌套:这是纯函数,四格必须是四条独立的输出。
+    if resident:
+        return "attach" if attach else "refuse"
+    return "refuse" if attach else "inject"
+
+
+def _resident_base(pid, dll_name):
+    """Already-mapped base, or `None`. `resolve_base_address` raises when absent."""
+    import c2_harness as harness
+
+    try:
+        return harness.resolve_base_address(pid, dll_name)
+    except RuntimeError:
+        return None
+
+
 def _signed32(value):
     value &= 0xFFFF_FFFF
     return value - 0x1_0000_0000 if value & 0x8000_0000 else value
@@ -488,7 +521,7 @@ def _signed32(value):
 # --- live path (Windows only; not exercised by the host tests) ---------------------
 
 
-def gate_and_inject(pid, dll_path, allow_window=False, required_extra=()):
+def gate_and_inject(pid, dll_path, allow_window=False, required_extra=(), attach=False):
     """Seven exports in the FILE → refuse-if-resident → gate → inject → sanity.
 
     The gate call must stay **before** `inject_dll` in this scope: `scripts/
@@ -497,6 +530,10 @@ def gate_and_inject(pid, dll_path, allow_window=False, required_extra=()):
 
     `required_extra` lets a branch add exports (the collide shot needs the live cache
     keys) without weakening the plain graph read's pre-flight.
+
+    `attach=True` 是另一条前置:模块必须**已经在**同一个 pid 里(通常是 `c2_boot_inject.py`
+    注进去、已经跑出计数的那个),这一支只解析基址 + 验头 + 验 `C2Sanity`,**不**再走
+    `gate_install`,也**不**注入 —— 见 `decide_injection` 的理由。
     """
     import c2_harness as harness
 
@@ -509,23 +546,32 @@ def gate_and_inject(pid, dll_path, allow_window=False, required_extra=()):
 
     dll_name = os.path.basename(dll_path.replace("\\", "/"))
     print(f"[graph] pid={pid} dll={dll_path}")
-    try:
-        resident = harness.resolve_base_address(pid, dll_name)
-    except RuntimeError:
-        resident = None
-    refuse_if_resident(dll_name, resident)
 
-    if allow_window:
-        print("[graph] gate skipped by operator override (--allow-window)")
+    resident = _resident_base(pid, dll_name)
+    decision = decide_injection(attach=attach, resident=resident is not None)
+    if decision == "refuse":
+        # 两条 message 分开:attach 拒装是「没有可挂的模块」,非 attach 拒装是「同名已映射」。
+        refuse_if_resident(dll_name, resident)
+        print(f"[graph] attach: {dll_name} is not resident in pid {pid} — refusing "
+              "(attach never injects)", file=sys.stderr)
+        raise SystemExit(EXIT_REFUSED)
+
+    if attach:
+        # 这一支只读地认领已有的那一份:同名的 loader 映像 + 它自己的 live 缓存。
+        base = resident
+        print(f"[graph] attach: {dll_name} resident at 0x{base:x} — no injection")
     else:
-        from world_probe import gate_install  # pyright: ignore[reportMissingImports]
+        if allow_window:
+            print("[graph] gate skipped by operator override (--allow-window)")
+        else:
+            from world_probe import gate_install  # pyright: ignore[reportMissingImports]
 
-        gate_install("graphread")
+            gate_install("graphread")
 
-    harness.inject_dll(pid, dll_path)
-    harness.assert_game_alive(pid)
-    base = harness.resolve_base_address(pid, dll_name)
-    print(f"[graph] {dll_name} base: 0x{base:x}")
+        harness.inject_dll(pid, dll_path)
+        harness.assert_game_alive(pid)
+        base = harness.resolve_base_address(pid, dll_name)
+        print(f"[graph] {dll_name} base: 0x{base:x}")
 
     head = harness.read_memory(pid, base, 2)
     assert head == b"MZ", f"bad header at 0x{base:x}: {head!r}"
@@ -578,7 +624,7 @@ def read_live_pair(pid, base, exports, stats_buf, hash_buf):
 
 def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_file=None,
         allow_window=False, settle_s=0.0, mutate=None, mutate_collide=None,
-        kill_after=False):
+        kill_after=False, attach=False):
     """One shot in one game process. No hook is installed and nothing is unloaded.
 
     `mutate=(x, y)` switches the shot to the three-snapshot form: Read (base) →
@@ -607,7 +653,8 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
     expected = read_edge_table(edges_file) if edges_file else None
     base, exports = gate_and_inject(
         pid, dll_path, allow_window=allow_window,
-        required_extra=COLLIDE_EXPORTS if mutate_collide is not None else ())
+        required_extra=COLLIDE_EXPORTS if mutate_collide is not None else (),
+        attach=attach)
 
     stats_buf = harness.remote_alloc(pid, STATS_SIZE)
     drain_buf = harness.remote_alloc(pid, DRAIN_BYTES)
@@ -816,6 +863,10 @@ def main(argv=None):
                              "reading is two explicit reads, and polling would mask a tear)")
     parser.add_argument("--allow-window", action="store_true",
                         help="operator-declared premise: skip gate_install (recorded in meta)")
+    parser.add_argument("--attach", action="store_true",
+                        help="attach to the module that is ALREADY injected (never injects: a "
+                             "second copy would carry an empty live cache and read like "
+                             "'no recompute'); the name must match the boot-injected basename")
     parser.add_argument("--mutate", default=None, metavar="FROM,TO",
                         help="mutation shot: Read -> MutateAdd -> Read -> MutateRemove -> Read "
                              "on this pair (both within 0..0xFFFF, not an existing edge)")
@@ -841,7 +892,7 @@ def main(argv=None):
                   expect_edges=args.expect_edges, save_name=args.save_name,
                   edges_file=args.edges_file, allow_window=args.allow_window,
                   settle_s=args.poll_s, mutate=mutate, mutate_collide=mutate_collide,
-                  kill_after=args.kill_after)
+                  kill_after=args.kill_after, attach=args.attach)
     return code
 
 

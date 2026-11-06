@@ -195,3 +195,23 @@ def test_a_collision_where_the_hash_differs_is_flagged_suspicious():
         base_fingerprint=2446, collide_fingerprint=2446,
         base_hash=0x46F76122D529552D, collide_hash=0x1234)
     assert verdict == "graph_collision_suspicious"
+
+
+# --- A1: --attach(挂到已注入的那一份,不二次注入) -------------------------------
+
+
+def test_attach_refuses_when_the_module_is_not_resident():
+    assert mod.decide_injection(attach=True, resident=False) == "refuse"
+
+
+def test_attach_never_selects_the_inject_path_when_resident():
+    assert mod.decide_injection(attach=True, resident=True) == "attach"
+    assert mod.decide_injection(attach=False, resident=True) == "refuse"
+    assert mod.decide_injection(attach=False, resident=False) == "inject"
+
+
+def test_the_attach_branch_does_not_call_inject_dll():
+    src = (pathlib.Path(__file__).resolve().parent / "c2_graph_read.py").read_text(encoding="utf-8")
+    branch = src.split("if attach:", 1)[1].split("else:", 1)[0]
+    assert "inject_dll" not in branch
+    assert "gate_install" not in branch
