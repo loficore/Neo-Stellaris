@@ -215,3 +215,67 @@ def test_the_attach_branch_does_not_call_inject_dll():
     branch = src.split("if attach:", 1)[1].split("else:", 1)[0]
     assert "inject_dll" not in branch
     assert "gate_install" not in branch
+
+
+# --- A2: --rewire(保度 2-switch —— 指纹不变、边集变) ---------------------------
+
+
+def test_a_degree_preserving_switch_exists_in_a_four_cycle():
+    edges = [(1, 2), (2, 3), (3, 4), (4, 1)]
+    switch = mod.choose_switch(edges)
+    assert switch is not None
+    a, b, c, d = switch
+    assert len({a, b, c, d}) == 4
+    assert (min(a, b), max(a, b)) in {tuple(sorted(e)) for e in edges}
+    assert (min(c, d), max(c, d)) in {tuple(sorted(e)) for e in edges}
+    assert (min(a, c), max(a, c)) not in {tuple(sorted(e)) for e in edges}
+    assert (min(b, d), max(b, d)) not in {tuple(sorted(e)) for e in edges}
+
+
+def test_a_triangle_has_no_degree_preserving_switch():
+    assert mod.choose_switch([(1, 2), (2, 3), (3, 1)]) is None
+
+
+def test_rewire_steps_put_no_read_between_the_four_mutations():
+    assert mod.rewire_steps() == ["base", "remove_ab", "remove_cd", "add_ac", "add_bd",
+                                  "rewire_read"]
+
+
+def test_a_detected_rewire_needs_an_evaluation_and_a_recompute():
+    assert mod.classify_rewire(
+        base_fingerprint=9001, rewire_fingerprint=9001,
+        base_hash=0x46F76122D529552D, rewire_hash=0x1234,
+        evaluated_delta=788, recomputed_delta=1, restore_ok=True,
+    ) == "graph_rewire_detected"
+
+
+def test_the_missed_branch_is_the_one_issue_46_is_about():
+    assert mod.classify_rewire(
+        base_fingerprint=9001, rewire_fingerprint=9001,
+        base_hash=0x46F76122D529552D, rewire_hash=0x1234,
+        evaluated_delta=788, recomputed_delta=0, restore_ok=True,
+    ) == "graph_rewire_missed"
+
+
+def test_no_evaluation_is_an_instrument_reading_not_a_miss():
+    assert mod.classify_rewire(
+        base_fingerprint=9001, rewire_fingerprint=9001,
+        base_hash=0x46F76122D529552D, rewire_hash=0x1234,
+        evaluated_delta=0, recomputed_delta=0, restore_ok=True,
+    ) == "no_pulse"
+
+
+def test_an_unchanged_hash_means_the_switch_did_not_land():
+    assert mod.classify_rewire(
+        base_fingerprint=9001, rewire_fingerprint=9001,
+        base_hash=0x46F76122D529552D, rewire_hash=0x46F76122D529552D,
+        evaluated_delta=788, recomputed_delta=0, restore_ok=True,
+    ) == "graph_rewire_invisible"
+
+
+def test_a_failed_restore_is_dirty_even_if_the_rewire_was_detected():
+    assert mod.classify_rewire(
+        base_fingerprint=9001, rewire_fingerprint=9001,
+        base_hash=0x46F76122D529552D, rewire_hash=0x1234,
+        evaluated_delta=788, recomputed_delta=1, restore_ok=False,
+    ) == "restore_dirty"
