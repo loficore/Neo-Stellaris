@@ -1,0 +1,50 @@
+# C5 rewire live runs — 2026-11-06
+# 授权:用户「开始跑实机」(同一晚多个 fresh process;每次一个 pid)
+# 主机:Windows_Jiaolong;session 1 via session_bridge
+# DLL:C:/temp/sqjs_r1.dll  sha256=e1d2f51c0709d7439c80322d0124fabc95b4d54b22677ca52eccfd5cfcc4393d
+# 存档:autosave_2267.07.01.sav  N=788  M=1219
+
+[run 1 — 验收尝试,旧 driver,+300 s wait]
+pid=27432
+switch=0-490/1-145
+fingerprint 3991881723736717560 -> 3991881723736717560
+hash cec23a9e2b0a890d -> bb9d854b85cc102d
+evaluated +788, recomputed +1, verified +2
+restore_ok=0  ⇒ verdict restore_dirty
+kill rc=0
+artifact: evidence/logs/c5_rewire_4_4_4.tsv
+
+[run 2 — 诊断,--wait-pulse-s 0]
+pid=26680
+base hash cec23a9e2b0a890d; rewire hash cec23a9e2b0a890d (unchanged)
+restore_ok=1 (trivially: nothing had landed yet)
+verdict no_pulse
+⇒ 结论:`0x8BBAA0`/`0x8BBC20` 的写入下一 tick 才可见;改完立刻读读到的是旧图。
+
+[run 3 — 加了 settle,但恢复判据仍看 live_hash]
+pid=24776
+wait_graph_changed=1; wait_verify=1
+hash cec23a9e2b0a890d -> bb9d854b85cc102d
+evaluated +788, recomputed +1, verified +2
+wait_graph_restored=1 (读图器边集已经回到 base)
+restore_ok=0 (因为 live_hash 仍是 bb9d854b85cc102d)
+verdict restore_dirty
+⇒ 结论:图已经恢复;误判来自「恢复读拿 live 源缓存哈希」——它要等下一次核对才更新。
+
+[run 4 — settle + 恢复判据改用图边集]
+pid=23588
+wait_graph_changed=1; wait_verify=1
+fingerprint 3991881723736717560 -> 3991881723736717560
+hash cec23a9e2b0a890d -> bb9d854b85cc102d
+evaluated +788, recomputed +1, verified +2
+wait_graph_restored=1; restore_ok=1; live_hash_caught_up=0
+verdict graph_rewire_detected
+kill rc=0
+artifact: evidence/logs/c5_rewire_ok_4_4_4.tsv
+
+[收尾:存档检查]
+save games/_1474567734 现在有 5 份 autosave(2267.07.01 … 2269.07.01)。
+把 autosave_2269.01.01.sav 与 autosave_2269.07.01.sav 各跑一次 save_hypergraph.py:
+两份都是 systems=788 / undirected_edges=1219;
+(0,490) 与 (1,145) 在,(0,1) 与 (490,145) 不在
+⇒ 没有任何存档包含这次 2-switch。

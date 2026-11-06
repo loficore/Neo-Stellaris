@@ -1217,3 +1217,69 @@ just win "python C:/temp/session_bridge.py --timeout-s 900 C:/temp/c2_graph_read
 - 下一发(需**新的点名**)先做两件零 shot 的事:① 在离线/单测里把「运行期加的边能不能删」
   单独复现;② 给恢复加「读回校验 + 有限重试」或「改边期间暂停游戏」的收口,再谈第二发。
   只有 `overall_verdict=graph_rewire_detected` 才能把 #46 前半写成「实机已观测」。
+
+## §9 保度 2-switch 的验收发(2026-11-06):`graph_rewire_detected`,恢复两处判据修复
+
+**授权级**:同一晚用户「开始跑实机」;四次 fresh process(每个一个 pid),每次装一次、杀一次。
+产物 `evidence/logs/c5_rewire_ok_4_4_4.tsv` + `c5_rewire_ok_4_4_4.log`;§8 的第一发保留不改写。
+
+### §9.1 诊断发:改边下一 tick 才可见
+
+`--wait-pulse-s 0`(改完立刻读、不等核对)那一发(pid 26680)的读数是
+`base_hash = rewire_hash = cec23a9e2b0a890d`,`restore_ok=1`(因为什么都没落地)。
+⇒ `0x8BBAA0`/`0x8BBC20` 返回 0 只表示调用完成,**写入在下一 tick 才出现在
+`C5GraphRead` 的边集里**;改完立刻读、恢复完立刻读,读到的都是上一态。§8 的
+`restore_dirty` 就是这么来的:前向有 300 s 等待,落地了;恢复没有等待,读回时还是 rewire 态。
+
+### §9.2 两处修复
+
+1. **`--settle-graph-s`(默认 15 s,验收发用 20 s)**:前向改边后轮询 `C5GraphRead`,直到边集
+   **精确等于** `rewire_expected(base, switch)`;恢复后轮询到边集**精确等于** base。
+   只看「与 base 不同」会把部分落地(删了两条、加还没落)当成成功,所以判据是集合相等。
+2. **恢复判据改用图边集,不用 `live_hash`**:pid 24776 那一发 `wait_graph_restored=1`
+   (读图器已经回到 base),但 `restore_ok=0`,因为 `C2NeoLiveHashInto` 是 live 源**缓存**的
+   哈希,只在下一次核对时更新;拿它当清理判据会把成功判成 `restore_dirty`。现在
+   `restore_ok` 比较 `restore_read` 的 rows 与 base rows;`live_hash` 只作为
+   「缓存何时追上」的旁读(`live_hash_caught_up`)。
+
+### §9.3 验收发读数(pid 23588)
+
+```
+verdict=graph_rewire_detected  switch 0-490/1-145:
+  fingerprint 3991881723736717560 -> 3991881723736717560
+  hash cec23a9e2b0a890d -> bb9d854b85cc102d
+  evaluated +788, recomputed +1, verified +2
+  restore_ok=1 (graph_restored=1, live_hash bb9d854b85cc102d, caught_up=0)
+```
+
+步序:`base rc=0` → 四条改边 rc=0 → `wait_graph_changed ok=1` →
+`wait_verify ok=1(evaluated 7880→8668)` → `rewire_read rc=0` → 四条恢复 rc=0 →
+`wait_graph_restored ok=1` → `restore_read rc=0`;随后 `taskkill /F` rc=0。
+
+### §9.4 这一发**已能说**(三条)
+
+1. **#46 的漏格在活体里闭合了。** 保度 2-switch 让加权指纹一点不动,边集哈希变了;
+   同一个窗口 `evaluated +788`、`recomputed +1`、`verified +2` ⇒ `chooseAction` 的
+   `verify` 分支真的把「指纹说没变、哈希说变了」判成重算。
+2. **恢复是读图器证明的。** `wait_graph_restored=1` 且 `restore_ok=1`;进程随后被杀,
+   存档里没有这次 2-switch(见 §9.5)。
+3. **`--attach` + boot 注入的 live 源在同一个模块里成立**:`C2NeoLiveStatsInto` /
+   `C2NeoLiveHashInto` / `C2NeoVerifyStatsInto` 三份导出词序与字节契约在活体对上,
+   `--settle-graph-s` 的两次轮询都拿到 `edges=1219` 的完整边集。
+
+### §9.5 这一发**不能说**(四条)
+
+1. **`recomputed +1` 不是单点证明。** 指纹两端相等、哈希变了、`wait_verify=1`、
+   `verified +2` 都指向定时核对;但 artifact 没有记录「是哪一次求值重算的」。
+2. **`live_hash` 在验收发结束时仍是 rewire 值**(`caught_up=0`)。这是缓存的时间差,不是
+   清理失败;下一发可以多等一次核对,把 `live_hash` 追平也读出来,但本发**没有**证它。
+3. **一场战役、一版 exe、一条 2-switch。** 多边连锁、跨月一致性、别的存档都没测。
+4. **§8.4 的归因边界仍成立**:只能说「这一窗里发生了一次重算」,不能说「就是第 N 次核对做的」。
+
+### §9.6 收尾:没有脏图落盘
+
+`save games/_1474567734` 现在有 5 份 autosave(2267.07.01 … 2269.07.01)。
+把 `autosave_2269.01.01.sav` 与 `autosave_2269.07.01.sav` 各跑一次
+`save_hypergraph.py`:两份都是 `systems=788` / `undirected_edges=1219`,2-switch 的两个删边
+`(0,490)`/`(1,145)` 在、两个加边 `(0,1)`/`(490,145)` 不在 ⇒ **没有任何存档包含这次 2-switch**。
+进程已杀,不再有后续 autosave。
