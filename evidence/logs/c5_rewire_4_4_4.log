@@ -1,0 +1,65 @@
+# C5 rewire live shot — 2026-11-06
+# 授权:用户「开始实机运行」(点名门内,1 发)
+# 主机:Windows_Jiaolong;session 1 via session_bridge
+# pid=27432  save=autosave_2267.07.01.sav  N=788 M=1219
+# dll=C:/temp/sqjs_r1.dll  sha256=e1d2f51c0709d7439c80322d0124fabc95b4d54b22677ca52eccfd5cfcc4393d
+# 本地 zig build → zig-out/bin/stellaris_quickjs.dll 同一 sha;远端 Get-FileHash 对上。
+
+[boot]
+[boot] dll=C:/temp/sqjs_r1.dll sha16=e1d2f51c0709d743
+[boot] launched pid=27432 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+[boot] pid=27432
+[boot] gate skipped by operator override (--allow-window)
+BOOT dll=sqjs_r1.dll sha=e1d2f51c0709d743 effect_id=19343 set_id=19344 install_rc=0 alive=1
+EXIT=0
+
+[game.log — the monthly pulse that made the live cache non-zero]
+[21:27:35][effect_impl.cpp:21978]: [2267.8.1] Log effect, file: events/neo_ps_probe_events.txt line: 45. PS_HIT 萨尔利亚
+[21:27:35][effect_impl.cpp:21978]: [2267.8.1] Log effect,Neo: system 784.
+[21:27:35][effect_impl.cpp:21978]: [2267.8.1] Log effect, file: events/neo_ps_probe_events.txt line: 43. NEO_T0 赛达…
+[21:27:35][effect_impl.cpp:21978]: [2267.8.1] Log effect,Neo: system 787.
+[21:27:35][effect_impl.cpp:21978]: [2267.8.1] Log effect, file: events/neo_ps_probe_events.txt line: 45. PS_HIT 维拉X-1
+
+[graph shot]
+[graph] dll=C:/temp/sqjs_r1.dll sha256=e1d2f51c0709d7439c80322d0124fabc95b4d54b22677ca52eccfd5cfcc4393d
+[graph] pid=27432 dll=C:/temp/sqjs_r1.dll
+[graph] attach: sqjs_r1.dll resident at 0x7ff816320000 — no injection
+[graph] C2Sanity == 42, game alive — read authorized
+[graph] verdict=restore_dirty  switch 0-490/1-145: fingerprint 3991881723736717560 -> 3991881723736717560; hash cec23a9e2b0a890d -> bb9d854b85cc102d; evaluated +788, recomputed +1, verified +2; restore_ok=0 (hash bb9d854b85cc102d)
+[graph] artifact=C:/temp/c5_rewire.tsv
+[graph] taskkill /F /PID 27432 rc=0 — session not saved
+
+[artifact meta — copied verbatim into evidence/logs/c5_rewire_4_4_4.tsv]
+#meta overall_verdict=restore_dirty
+#meta expect_systems=788
+#meta expect_edges=1219
+#meta save_name=autosave_2267.07.01.sav
+#meta dll=sqjs_r1.dll
+#meta dll_sha256=e1d2f51c0709d7439c80322d0124fabc95b4d54b22677ca52eccfd5cfcc4393d
+#meta systems=788
+#meta edges=1219
+#meta skipped=0
+#meta max_id=787
+#meta layout=0x1,0x3260b98,0x18,0x20,0x10,0x8,0x59c,0x20
+#meta host_alive=1
+#meta base_fingerprint=3991881723736717560
+#meta base_hash=cec23a9e2b0a890d
+#meta evaluated_delta=788
+#meta recomputed_delta=1
+#meta verify_delta=2
+#meta verify_seen=1
+#meta restore_ok=0
+#meta restore_hash=bb9d854b85cc102d
+#meta rewire_hash=bb9d854b85cc102d
+#meta rewire_fingerprint=3991881723736717560
+#meta detail=switch 0-490/1-145: fingerprint 3991881723736717560 -> 3991881723736717560; hash cec23a9e2b0a890d -> bb9d854b85cc102d; evaluated +788, recomputed +1, verified +2; restore_ok=0 (hash bb9d854b85cc102d)
+#meta rewire_steps=step=base edges=1219 rc=0|live_before fingerprint=3991881723736717560 hash=cec23a9e2b0a890d evaluated=2364 recomputed=1 verified=9|step=remove_ab 0-490 rc=0|step=remove_cd 1-145 rc=0|step=add_ac 0-1 rc=0|step=add_bd 490-145 rc=0|step=wait_verify ok=1 evaluated=3152 recomputed=2 verified=11|step=rewire_read edges=1219 rc=0|live_after fingerprint=3991881723736717560 hash=bb9d854b85cc102d evaluated=3152 recomputed=2 verified=11|step=restore_remove_0_1 0-1 rc=0|step=restore_remove_490_145 490-145 rc=0|step=restore_add_0_490 0-490 rc=0|step=restore_add_1_145 1-145 rc=0|step=restore_read edges=1219 rc=0|live_restore fingerprint=3991881723736717560 hash=bb9d854b85cc102d
+
+[offline cross-check of the artifact rows]
+save_hypergraph.py autosave_2267.07.01.sav → systems=788 undirected_edges=1219
+Python FNV-1a over the artifact rows → base hash cec23a9e2b0a890d (matches)
+(rows − {(0,490),(1,145)} + {(0,1),(490,145)}) → bb9d854b85cc102d (matches the rewire hash)
+
+[save state after the shot]
+save games/_1474567734 last file = autosave_2267.07.01.sav, mtime 2026/11/4 16:02:12
+no new autosave was written; the driver killed pid 27432 before the next save.

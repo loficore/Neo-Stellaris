@@ -1124,3 +1124,96 @@ FNV-1a(64),连同条数一起从 16 B 的导出读回。
   edges=1219` 的读图结果一致,说明导出、字节序与"同一次读"的口径在活体里成立;
 * **不能说**:哈希相等仍不证明"引擎自己的缓存策略正确"(我们每次求值都在重读),也不携带
   id↔名字,更不覆盖"读撕裂"—— 撕裂时哈希无意义,判据是连读两次的边集相等(§3.6)。
+
+## §8 保度 2-switch 的实机一发(2026-11-06):检测半边成立,恢复没闭合 ⇒ `restore_dirty`
+
+**授权级**:点名 ×1(用户 2026-11-06「开始实机运行」)。一个进程、一发;装一次、杀一次,
+不重试。产物 `evidence/logs/c5_rewire_4_4_4.tsv` + `c5_rewire_4_4_4.log`。
+
+### §8.1 装配
+
+- `zig build` → `zig-out/bin/stellaris_quickjs.dll`,sha256 `e1d2f51c0709d7439c80322d0124fabc95b4d54b22677ca52eccfd5cfcc4393d`;
+  scp 成 `C:/temp/sqjs_r1.dll`,远端 `Get-FileHash` 与本地相等。
+- 驱动取自 `main` `25256f6`:`c2_harness.py` / `c2_boot_inject.py` / `c2_graph_read.py`;`just deploy`
+  更新 `session_bridge.py` / `world_probe.py`。
+- boot 注入(必须早于脚本解析):`c2_boot_inject.py C:/temp/sqjs_r1.dll --launch
+  D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe --launch-args=--continuelastsave
+  --allow-window --act write --score-source 1` → pid **27432**,
+  `BOOT ... effect_id=19343 set_id=19344 install_rc=0 alive=1`。
+- mod `neo_ps_probe` 已启用(`dlc_load.json` 的 `enabled_mods=["mod/neo_ps_probe.mod"]`);
+  月脉冲在 2267.8.1 跑出 `PS_HIT` / `Neo: system <id>` / `NEO_T*`,live 缓存非零。
+- 存档 `autosave_2267.07.01.sav`;离线 `save_hypergraph.py` 读数 `systems=788`、
+  `undirected_edges=1219`,作为 `--expect-systems/--expect-edges`。
+
+### §8.2 命令与读数
+
+```
+just win "python C:/temp/session_bridge.py --timeout-s 900 C:/temp/c2_graph_read.py \
+  C:/temp/sqjs_r1.dll --attach --expect-systems 788 --expect-edges 1219 \
+  --save-name autosave_2267.07.01.sav --rewire auto --wait-pulse-s 300 --kill-after \
+  --out C:/temp/c5_rewire.tsv"
+```
+
+```
+[graph] attach: sqjs_r1.dll resident at 0x7ff816320000 — no injection
+[graph] C2Sanity == 42, game alive — read authorized
+[graph] verdict=restore_dirty  switch 0-490/1-145:
+        fingerprint 3991881723736717560 -> 3991881723736717560;
+        hash cec23a9e2b0a890d -> bb9d854b85cc102d;
+        evaluated +788, recomputed +1, verified +2;
+        restore_ok=0 (hash bb9d854b85cc102d)
+[graph] taskkill /F /PID 27432 rc=0 — session not saved
+```
+
+`#meta` 的关键格:
+
+| 格 | 值 |
+|---|---|
+| `systems` / `edges` | `788` / `1219`(`skipped=0`,`max_id=787`) |
+| `switch` | `0-490-1-145`(删 `(0,490)`/`(1,145)`,加 `(0,1)`/`(490,145)`) |
+| `base_fingerprint` → `rewire_fingerprint` | `3991881723736717560` → **同一个值** |
+| `base_hash` → `rewire_hash` | `cec23a9e2b0a890d` → `bb9d854b85cc102d` |
+| `evaluated_delta` / `recomputed_delta` / `verify_delta` | `+788` / `+1` / `+2` |
+| `restore_ok` / `restore_hash` | `0` / `bb9d854b85cc102d`(仍是 rewire 态) |
+
+步序(artifact `rewire_steps` 原样):`base rc=0` → `remove_ab 0-490 rc=0` →
+`remove_cd 1-145 rc=0` → `add_ac 0-1 rc=0` → `add_bd 490-145 rc=0` →
+`wait_verify ok=1(evaluated 2364→3152)` → `rewire_read rc=0` → 四个 restore 步全 `rc=0` →
+`restore_read rc=0`。
+
+### §8.3 这一发**已能说**(三条)
+
+1. **指纹的漏格在活体里被定时核对抓住了。** 保度 2-switch 让 `neo_score` 的加权指纹
+   `3991881723736717560` 一点没动,而边集哈希从 `cec23a9e…` 变成 `bb9d854b…`;
+   同一个窗口里 `evaluated +788`、`recomputed +1`、`verified +2` ⇒ `chooseAction` 的
+   `verify` 分支真的跑了,并且把「指纹说没变、哈希说变了」判成重算。这是 #46 那一格
+   第一次有实机读数。
+2. **夹具是保度的,不是「加一条再删同一条」。** 四点 `0/490/1/145` 的度数逐个不变
+   ⇒ 按槽号加权的指纹必然不变;边集却真的换了。离线用 artifact 的 1219 行重算:
+   基线 `cec23a9e…`、2-switch 后 `bb9d854b…`,与活体逐字相等。
+3. **`--attach` 通道成立。** 挂到 boot 注入的同一份模块(`0x7ff816320000`),没有二次注入,
+   live 缓存非零,`C2Sanity==42`;`C2NeoLiveStatsInto` / `C2NeoLiveHashInto` /
+   `C2NeoVerifyStatsInto` 三份导出的词序与字节契约在活体里对上。
+
+### §8.4 这一发**不能说**(四条,硬边界)
+
+1. **`graph_rewire_detected` 不成立。** 计划要求恢复闭合;artifact 的 `overall_verdict` 是
+   **`restore_dirty`**。检测半边是正的,但整发不是一次干净的验收,不能写成「已通过」。
+2. **恢复为什么没闭合还不知道。** 四个恢复步的导出返回码全是 `0`,但恢复读的哈希仍是
+   `bb9d854b…`(rewire 态),边数仍是 1219。它不是缓存判负,是**改边/清理语义**的失败;
+   不要把它读成「引擎删不掉运行期加的边」——§5.4 的 `(5,9)` 在 M4 那一发里就是
+   `base == remove`(集合与 sha256 都相等)。本发的差别是 300 s 运行窗 + 四条改边连做;
+   下一发必须先把这一格单独测清楚。
+3. **`recomputed +1` 的归因不是单点证明。** 指纹两端相等、哈希变了、`wait_verify ok=1`、
+   `verified +2` 都指向定时核对;但 artifact 没有记录「是哪一次求值重算的」,所以严格说
+   只能说「这一窗里发生了一次重算」,不能说「就是第 N 次核对做的」。
+4. **一场战役、一版 exe、一条 2-switch。** 多边连锁、跨月一致性、别的存档、恢复后的
+   引擎寻路是否立刻用新图,都没测。
+
+### §8.5 收尾与下一步
+
+- 进程被 `taskkill /F`(rc=0);存档目录 `save games/_1474567734` 的最后一份仍是
+  `autosave_2267.07.01.sav`(2026/11/4 16:02:12),**没有新 autosave** —— 脏图没有被存下去。
+- 下一发(需**新的点名**)先做两件零 shot 的事:① 在离线/单测里把「运行期加的边能不能删」
+  单独复现;② 给恢复加「读回校验 + 有限重试」或「改边期间暂停游戏」的收口,再谈第二发。
+  只有 `overall_verdict=graph_rewire_detected` 才能把 #46 前半写成「实机已观测」。
