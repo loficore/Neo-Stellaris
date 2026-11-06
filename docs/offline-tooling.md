@@ -1674,7 +1674,7 @@ fail-closed(保留旧分数)且**不回落烘焙表**。判读三条:①`evaluat
 ③注册必须**早于脚本解析**,否则 `Invalid scripted effect: neo_action` —— 用 `--launch <exe>`
 配 `--allow-window`(主菜单本来就不是 `IN_GAME_RUNNING`,这一档是结构性例外,§7.1)。
 
-### `scripts/c2_graph_read.py [dll] --expect-systems N --expect-edges N --save-name NAME [--edges-file PATH] [--attach] [--mutate FROM,TO] [--mutate-collide FROM,TO] [--rewire auto|A,B,C,D] [--wait-pulse-s S] [--kill-after] [--out C:/temp/c5_graph_read.tsv]`
+### `scripts/c2_graph_read.py [dll] --expect-systems N --expect-edges N --save-name NAME [--edges-file PATH] [--attach] [--mutate FROM,TO] [--mutate-collide FROM,TO] [--rewire auto|A,B,C,D] [--wait-pulse-s S] [--settle-graph-s S] [--kill-after] [--out C:/temp/c5_graph_read.tsv]`
 
 **M4 的实机读图通道。** 不挂钩子:只读段只经 `ReadProcessMemory` 走 `C5GraphRead`→`StatsInto`→
 `DrainInto`(连读**两次**,两次的边集就是判据 —— 活容器撕裂读只有比两次才看得见),`--mutate` 段经
@@ -1735,11 +1735,15 @@ resident` 并 exit 2);它与 `--mutate` / `--mutate-collide` / `--rewire` 不冲
 11. **`expect_mismatch` 先于一切缓存判读**:base 读数与 `--expect-systems/--expect-edges` 不等
     ⇒ 一个导出都不改,直接停(换错存档或会话内新系统)。`--rewire` 现在**强制要求 `--attach`**
     (不带就直接 argparse 拒绝),因为二次注入的缓存是 0,那一发必然 `instrument_broken`。
+12. **改边/恢复是下一 tick 才可见的**(2026-11-06 诊断发):`0x8BBAA0`/`0x8BBC20` 返回后立刻读,
+    读到的仍是旧图 —— `--wait-pulse-s 0` 那一发的 `rewire_hash == base` 就是证据。`--settle-graph-s`
+    等的是**精确目标边集**(2-switch 后的四点集合 / 恢复后的 base 集合),不是「与 base 不同」;
+    部分落地(删了两条、加还没落)不是成功。`restore_ok=0` 在修复前多半是恢复读太早,不是引擎删不掉。
 
-判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖(**35 条**):读判词、改边判词、
+判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖(**38 条**):读判词、改边判词、
 碰撞判词、`--attach` 三分支(`decide_injection` 的四格 + 「attach 分支里没有 `inject_dll`」那条
-源码围栏)、保度 switch 与五个 rewire 判词、`parse_live` / `pulse_progress`、expect 对账与
-「rewire 不带 attach 被拒」、`parse_artifact`,无游戏、无 Windows API。
+源码围栏)、保度 switch 与五个 rewire 判词、`rewire_expected` / `graph_matches`、`parse_live` /
+`pulse_progress`、expect 对账与「rewire 不带 attach 被拒」、`parse_artifact`,无游戏、无 Windows API。
 
 ### `scripts/c2_graph_reconcile.py --log PATH --windows PATH --edges-base PATH --edges-add PATH [--name-map PATH] [--scores-dir DIR]`
 
