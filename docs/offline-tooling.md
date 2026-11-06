@@ -1674,12 +1674,13 @@ fail-closed(保留旧分数)且**不回落烘焙表**。判读三条:①`evaluat
 ③注册必须**早于脚本解析**,否则 `Invalid scripted effect: neo_action` —— 用 `--launch <exe>`
 配 `--allow-window`(主菜单本来就不是 `IN_GAME_RUNNING`,这一档是结构性例外,§7.1)。
 
-### `scripts/c2_graph_read.py [dll] --expect-systems N --expect-edges N --save-name NAME [--edges-file PATH] [--mutate FROM,TO] [--kill-after] [--out C:/temp/c5_graph_read.tsv]`
+### `scripts/c2_graph_read.py [dll] --expect-systems N --expect-edges N --save-name NAME [--edges-file PATH] [--attach] [--mutate FROM,TO] [--mutate-collide FROM,TO] [--rewire auto|A,B,C,D] [--wait-pulse-s S] [--kill-after] [--out C:/temp/c5_graph_read.tsv]`
 
 **M4 的实机读图通道。** 不挂钩子:只读段只经 `ReadProcessMemory` 走 `C5GraphRead`→`StatsInto`→
 `DrainInto`(连读**两次**,两次的边集就是判据 —— 活容器撕裂读只有比两次才看得见),`--mutate` 段经
 `C5GraphMutateAdd`/`Remove` 调引擎自己的 `0x8BBAA0`/`0x8BBC20` 并按固定顺序
-`base → add → add_read → remove → remove_read` 逐步写 `#meta step=`。判决词十档(见脚本 docstring);
+`base → add → add_read → remove → remove_read` 逐步写 `#meta step=`。verdict 值域见脚本自己的
+`VERDICTS`(**不在这里钉数量** —— 每加一种夹具就会加档,钉在这里必然漂);
 `--kill-after` 在 artifact 写完后 `taskkill /F`,不存档、不退回主菜单。
 
 **判读陷阱(六条):**
@@ -1706,8 +1707,36 @@ fail-closed(保留旧分数)且**不回落烘焙表**。判读三条:①`evaluat
 `<out>.base/.add/.remove` 是三列(`a<TAB>b<TAB>1`,第三列占位),这样
 `chokepoint_scores._read_edges` 可以原样吃。
 
-判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖(**17 条**):八档读判词 +
-五条改边判词 + `parse_artifact` 两条,无游戏、无 Windows API。
+**`--attach`**:挂到**已经在跑的**模块上(`c2_boot_inject.py` 注进去的那一份),只解析基址 + 验头 +
+验 `C2Sanity`,**不注入**、**不** `gate_install`。为什么必须有它:live 缓存是模块级静态量,二次注入
+是另一份模块、缓存为 0(`fingerprint==0`)⇒ 读出来像「没重算」,那是仪器口径而不是 #46 的证据。
+`--attach` 的目标名必须与 boot 注入的 basename **相同**(不同名就是「不在」,判 `attach: … is not
+resident` 并 exit 2);它与 `--mutate` / `--mutate-collide` / `--rewire` 不冲突 —— 它只回答「注不注入」。
+
+**`--rewire auto`**:保度 2-switch —— 删 `(a,b)`/`(c,d)`、加 `(a,c)`/`(b,d)`,四点度数**逐个不变**
+⇒ 指纹不变、边集变(`choose_switch` 的判据)。`auto` 从 base 读到的边里按排序后的边表**确定性**选
+第一个可行解;没有可行解判 `no_switch_available`(换一对端点或换存档,**不要硬改** —— 硬改出来的
+删加不保度,那一发证明不了 #46)。`--rewire A,B,C,D` 是点名端点。流程固定:
+`base → remove_ab → remove_cd → add_ac → add_bd → wait_verify → rewire_read → 逆序恢复 → restore_read`,
+四步改边之间**不夹读**。`--wait-pulse-s`(默认 300)等的是引擎**定时核对**那一步。
+
+**判读陷阱(新增四条,接在上面六条之后编号):**
+
+7. **基线必须 `evaluated` 在涨**;不涨就是没脉冲(先解暂停/换窗口),不是「没重算」。等核对超时且
+   `evaluated` 有增量 ⇒ 判 `no_pulse` 并在 `detail` 里写清 —— 那是 `VERIFY_EVERY=256` 没满足,
+   **没测到 ≠ 没重算**(`verify_seen=0` 是这两个读数的分界)。
+8. **只看 `recomputed` 增量**;`verified` 增量可以为 0 —— 本次核对就是失配那次(引擎的
+   `recordLiveFate` 把「核对发现哈希不同」记在 `recomputed` 上)。两个计数都要 `C2NeoVerifyStatsInto`
+   与 `C2NeoLiveStatsInto` 一起读,单看 `recomputed` 会把「核对了、没变」当成「没核对」。
+9. **`restore_dirty` 之后不许再调用任何导出**;驱动会**自己** `taskkill`(`restore_ok=0` 时不等
+   `--kill-after`),因为 autosave 每分钟一次,改过的图不能被自动存下去。
+10. **`graph_rewire_invisible` 是仪器档**:多半是 `(a,c)`/`(b,d)` 本来就存在,或有一步静默失败;
+    `instrument_broken` 则是四个键里有一个是 `0`(本进程还没成功读过图)。
+
+判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖(**33 条**):读判词、改边判词、
+碰撞判词、`--attach` 三分支(`decide_injection` 的四格 + 「attach 分支里没有 `inject_dll`」那条
+源码围栏)、保度 switch 与五个 rewire 判词、`parse_live` / `pulse_progress`、`parse_artifact`,
+无游戏、无 Windows API。
 
 ### `scripts/c2_graph_reconcile.py --log PATH --windows PATH --edges-base PATH --edges-add PATH [--name-map PATH] [--scores-dir DIR]`
 
