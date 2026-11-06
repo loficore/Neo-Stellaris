@@ -1732,11 +1732,14 @@ resident` 并 exit 2);它与 `--mutate` / `--mutate-collide` / `--rewire` 不冲
    `--kill-after`),因为 autosave 每分钟一次,改过的图不能被自动存下去。
 10. **`graph_rewire_invisible` 是仪器档**:多半是 `(a,c)`/`(b,d)` 本来就存在,或有一步静默失败;
     `instrument_broken` 则是四个键里有一个是 `0`(本进程还没成功读过图)。
+11. **`expect_mismatch` 先于一切缓存判读**:base 读数与 `--expect-systems/--expect-edges` 不等
+    ⇒ 一个导出都不改,直接停(换错存档或会话内新系统)。`--rewire` 现在**强制要求 `--attach`**
+    (不带就直接 argparse 拒绝),因为二次注入的缓存是 0,那一发必然 `instrument_broken`。
 
-判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖(**33 条**):读判词、改边判词、
+判读纯函数由 `python3 -m pytest scripts/test_c2_graph_read.py -q` 覆盖(**35 条**):读判词、改边判词、
 碰撞判词、`--attach` 三分支(`decide_injection` 的四格 + 「attach 分支里没有 `inject_dll`」那条
-源码围栏)、保度 switch 与五个 rewire 判词、`parse_live` / `pulse_progress`、`parse_artifact`,
-无游戏、无 Windows API。
+源码围栏)、保度 switch 与五个 rewire 判词、`parse_live` / `pulse_progress`、expect 对账与
+「rewire 不带 attach 被拒」、`parse_artifact`,无游戏、无 Windows API。
 
 ### `scripts/c2_graph_reconcile.py --log PATH --windows PATH --edges-base PATH --edges-add PATH [--name-map PATH] [--scores-dir DIR]`
 

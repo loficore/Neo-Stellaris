@@ -28,6 +28,8 @@
   * `graph_collision_named` / `graph_collision_suspicious` —— `--mutate-collide`:加与删之间
     **不夹读**,所以指纹回到原值;哈希也相等 ⇒ 图真的原样(named),指纹相等但哈希不等 ⇒
     这正是旧缓存路径会漏的那一格(issue #46;suspicious)。
+  * `expect_mismatch` —— `--rewire` 的 base 读数与 `--expect-systems/--expect-edges` 不等
+    (换了存档或会话内生成了新系统);一个导出都不改,直接停。它不是缓存判词。
   * `graph_rewire_detected` / `graph_rewire_missed` / `graph_rewire_invisible` / `no_pulse` /
     `no_switch_available` / `restore_dirty` —— `--rewire`:**保度** 2-switch(删 (a,b)/(c,d)、
     加 (a,c)/(b,d),四点度逐个不变 ⇒ 指纹不变而边集变)。detected = 指纹相同、哈希变了、
@@ -148,6 +150,7 @@ VERDICTS = (
     "graph_rewire_invisible",
     "no_pulse",
     "no_switch_available",
+    "expect_mismatch",
     "restore_dirty",
 )
 EVIDENCE_VERDICTS = (
@@ -443,6 +446,15 @@ def choose_switch(edges):
                     continue
                 return (a, b, c, d) if x == (a, c) else (a, b, d, c)
     return None
+
+
+def expectations_match(*, systems, edges, expect_systems, expect_edges):
+    """`--rewire` 的 base 读数是不是这一场的前提。
+
+    两个分支（普通读 / rewire）都必须先过这一关：`--expect-*` 是操作者声明的「这是哪一场
+    存档」。对不上就一个导出都不改 —— 把换错存档读成「图变了」是这一发唯一无法挽回的错误。
+    """
+    return systems == expect_systems and edges == expect_edges
 
 
 def rewire_steps():
@@ -1077,6 +1089,14 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
             step_lines = [f"step=base edges={stats1['edges']} rc={rc1}"]
             rewire_meta = {"step": "rewire", "switch": "unresolved",
                            "rewire_steps": "|".join(step_lines)}
+        elif not expectations_match(systems=stats1["systems"], edges=stats1["edges"],
+                                    expect_systems=expect_systems, expect_edges=expect_edges):
+            verdict = "expect_mismatch"
+            detail = (f"base read {stats1['systems']}/{stats1['edges']} != expected "
+                      f"{expect_systems}/{expect_edges} — 换错存档或会话内新系统;一个导出都没改")
+            step_lines = [f"step=base edges={stats1['edges']} rc={rc1}"]
+            rewire_meta = {"step": "rewire", "switch": "unresolved",
+                           "rewire_steps": "|".join(step_lines)}
         elif switch is None:
             verdict = "no_switch_available"
             detail = (f"no degree-preserving 2-switch in {len(rows1)} edges — "
@@ -1259,6 +1279,9 @@ def main(argv=None):
                                       ("--rewire", rewire_arg)) if value]
     if len(shots) > 1:
         parser.error(f"{' and '.join(shots)} are different shots; pick one")
+    if rewire_arg is not None and not args.attach:
+        parser.error("--rewire needs --attach: the live cache is per-module, a second "
+                     "injection reads as 0 (instrument_broken)")
 
     _, code = run(args.dll, args.out, expect_systems=args.expect_systems,
                   expect_edges=args.expect_edges, save_name=args.save_name,

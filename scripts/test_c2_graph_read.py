@@ -302,3 +302,23 @@ def test_pulse_progress_reports_three_deltas_and_never_wraps():
     after = {"evaluated": 888, "recomputed": 2, "verified": 5}
     assert mod.pulse_progress(before, after) == {
         "evaluated": 788, "recomputed": 1, "verified": 3}
+
+
+# --- 一发之前的硬门:换错存档 / 二次注入 -----------------------------------------
+
+
+def test_rewire_refuses_a_save_that_does_not_match_the_expectations():
+    assert mod.expectations_match(
+        systems=788, edges=1219, expect_systems=788, expect_edges=1219)
+    assert not mod.expectations_match(
+        systems=787, edges=1219, expect_systems=788, expect_edges=1219)
+    assert not mod.expectations_match(
+        systems=788, edges=1218, expect_systems=788, expect_edges=1219)
+
+
+def test_rewire_without_attach_is_refused_before_any_shot():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        mod.main(["x.dll", "--expect-systems", "1", "--expect-edges", "1",
+                  "--save-name", "s", "--rewire", "auto"])
