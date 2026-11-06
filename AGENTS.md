@@ -23,6 +23,7 @@ registration pipeline and identify extension points for new effects/triggers.
 | 阶段状态、前置、授权级别 | `docs/roadmap.md` |
 | `api/scope` 假偏移的逐条读点处置(16 行 `src/` + 1 行 `build.zig`)与 P15 绿定义 | `docs/scope-read-points.md` |
 | C5 试点二 spec:判据修订 + 5 项待裁定决策表 + 字段三档标签(**段1 的「交通要道」例子已被官方 `is_bottleneck_system` 覆盖,差异口径见 spec §0**) | `docs/c5-pilot2-spec.md` |
+| C6 验收标准:六道门 `C6-1`…`C6-6` + 每门的「通过 / 失败 / 不能说」(门→脚本→证据词由 `scripts/test_c6_acceptance_doc.py` 围栏钉住;读数为零,形状已定) | `docs/c6-acceptance.md` |
 | 脚本速查表(哪个读什么、产出哪个 artifact) | `scripts/README.md`、`scripts/test_scripts_layout.py`(约定的执行者) |
 | 4.4.4 锚点全表(Frida 重锚定) | `evidence/xrefs/anchors_4_4_4.md` |
 | keyword→behaviour 机器可读转储(3,900 条) | `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`(`scripts/thunkarrays.py`) |
