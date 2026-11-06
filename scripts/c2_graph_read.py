@@ -107,6 +107,11 @@ VERIFY_STATS_SIZE = 16        # C2NeoVerifyStatsInto: [verified u64][verify_fail
 #: 几十毫秒里发生;5 s 既够密,又不至于让轮询本身成为负担。
 PULSE_POLL_S = 5.0
 
+#: 改边/恢复的轮询间隔与默认等待上限。`0x8BBAA0`/`0x8BBC20` 的写入下一 tick 才可见
+#: (2026-11-06 诊断发),所以改完必须等**精确目标边集**出现,不能立刻读。
+MUTATION_POLL_S = 0.2
+MUTATION_SETTLE_S = 15.0
+
 #: `--rewire` 还需要核对计数(等的就是「核对跑过一次」),所以比 collide 多一个导出。
 REWIRE_EXPORTS = (*COLLIDE_EXPORTS, "C2NeoVerifyStatsInto")
 
@@ -489,6 +494,28 @@ def classify_rewire(*, base_fingerprint, rewire_fingerprint, base_hash, rewire_h
     return "graph_rewire_detected"
 
 
+def edge_key(rows):
+    """无向边集:方向无关、去重,作为「图是否变了」的集合判据。"""
+    return frozenset((min(a, b), max(a, b)) for a, b in rows)
+
+
+def rewire_expected(base_rows, switch):
+    """`base_rows` 做一次 2-switch 后**应该**得到的边集。
+
+    这是「改边落地」的判据:只看「与 base 不同」会把**部分落地**(删了两条、加还没落)
+    当成成功;`0x8BBAA0`/`0x8BBC20` 是下一 tick 才可见的,部分态是真实窗口。
+    """
+    a, b, c, d = switch
+    return (edge_key(base_rows)
+            - {(min(a, b), max(a, b)), (min(c, d), max(c, d))}
+            | {(min(a, c), max(a, c)), (min(b, d), max(b, d))})
+
+
+def graph_matches(want, rows):
+    """`want` 是 `edge_key` 的返回值。方向无关、顺序无关。"""
+    return edge_key(rows) == want
+
+
 # --- artifact ---------------------------------------------------------------------
 
 
@@ -792,8 +819,30 @@ def wait_for_verify(pid, base, exports, bufs, timeout_s):
         after = read_live_all(pid, base, exports, *bufs)
 
 
+def wait_for_graph(pid, base, exports, stats_buf, drain_buf, want, *, timeout_s,
+                   poll_s=MUTATION_POLL_S):
+    """轮询 `C5GraphRead`,直到边集 == `want`(或超时)。返回 `(ok, stats, rows)`。
+
+    为什么必须有这一步:2026-11-06 的诊断发证明 `0x8BBAA0`/`0x8BBC20` 的写入**下一 tick
+    才可见**。改完立刻读会读到旧图;恢复完立刻读会读到 rewire 态。判据用**精确边集**
+    而不是「与 base 不同」—— 四条改边可能分几个 tick 落地,部分态不是成功。
+    """
+    import time
+
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    stats, rows = None, []
+    while True:
+        rc, stats, rows = read_once(pid, base, exports, stats_buf, drain_buf)
+        if rc in (0, -4) and graph_matches(want, rows):
+            return True, stats, rows
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, stats, rows
+        time.sleep(min(poll_s, remaining))
+
+
 def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
-                base_stats, base_rc, wait_s):
+                base_stats, base_rows, base_rc, wait_s, settle_s):
     """保度 2-switch 的一发(不含 base 读):四次改边 → rewire 读 → 四次恢复 → 恢复读。
 
     返回 `(verdict, detail, step_lines, readings)`。`readings` 是判词用到的全部数字,
@@ -808,6 +857,7 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
     a, b, c, d = switch
     steps = rewire_steps()
     bufs = tuple(live_bufs)
+    expected = rewire_expected(base_rows, switch)
 
     step_lines = [f"step={steps[0]} edges={base_stats['edges']} rc={base_rc}"]
     before = read_live_all(pid, base, exports, *bufs)
@@ -834,8 +884,18 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
             step_error = f"{name} rc={rc}"
             break
 
-    after, read_rc, verify_ok, wait_before = before, None, False, before
+    change_ok, stats_forward = False, None
     if not step_error:
+        # 改边到下一 tick 才可见(2026-11-06 诊断发):先等**精确的目标边集**落地,
+        # 再谈核对。只看「与 base 不同」会把部分落地当成成功。
+        change_ok, stats_forward, _rows_forward = wait_for_graph(
+            pid, base, exports, stats_buf, drain_buf, expected, timeout_s=settle_s)
+        step_lines.append(
+            f"step=wait_graph_changed ok={int(change_ok)} "
+            f"edges={stats_forward['edges'] if stats_forward else 'null'}")
+
+    after, read_rc, verify_ok, wait_before = before, None, False, before
+    if not step_error and change_ok:
         # 先等一次核对再读:没有核对,`recomputed` 不动只说明「没轮到」(RF#3)。
         verify_ok, wait_before, wait_after = wait_for_verify(
             pid, base, exports, bufs, wait_s)
@@ -858,16 +918,31 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
         if rc != 0 and not step_error:
             step_error = f"{name} rc={rc}"
 
-    restore_rc, restore_stats, _rows = read_once(pid, base, exports, stats_buf, drain_buf)
+    restore_settled, stats_restored = False, None
+    if not step_error:
+        restore_settled, stats_restored, _rows_restored = wait_for_graph(
+            pid, base, exports, stats_buf, drain_buf, edge_key(base_rows),
+            timeout_s=settle_s)
+        step_lines.append(
+            f"step=wait_graph_restored ok={int(restore_settled)} "
+            f"edges={stats_restored['edges'] if stats_restored else 'null'}")
+
+    restore_rc, restore_stats, restore_rows = read_once(pid, base, exports, stats_buf,
+                                                       drain_buf)
     restored = read_live_all(pid, base, exports, *bufs)
     step_lines.append(f"step=restore_read edges={restore_stats['edges']} rc={restore_rc}")
     step_lines.append(f"live_restore fingerprint={restored['fingerprint']} "
                       f"hash={restored['hash']:016x}")
 
+    # 恢复的判据是**图**回到 base,不是 live 源的缓存哈希:`live_hash` 只在下一次核对时
+    # 更新,恢复后立刻读它必然是上一趟(rewire)的值。2026-11-06 第二发就是被这个判据
+    # 误判成 `restore_dirty` 的 —— `wait_graph_restored=1` 已经证明边集回到 base。
     restore_ok = (not step_error
+                  and restore_settled
                   and restore_rc in (0, -4)
                   and restore_stats["edges"] == base_stats["edges"]
-                  and restored["hash"] == before["hash"])
+                  and graph_matches(edge_key(base_rows), restore_rows))
+    live_hash_caught_up = restored["hash"] == before["hash"]
 
     # 增量与判词必须出自同一次核对:窗口 = `wait_for_verify` 的基线 → rewire 读之后那次快照。
     progress = pulse_progress(wait_before, after)
@@ -875,12 +950,18 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
     recomputed_delta = progress["recomputed"]
     verify_delta = progress["verified"]
 
-    if step_error:
-        # 夹具自己的故障先于任何缓存判读(RF#4:任何一步 rc 非 0 立即判脏并停手)。
-        # 不交给 `classify_rewire`:那里 `no_pulse` 排在 `restore_dirty` 前面,
-        # 而「我们没取到数」不该盖过「图上还留着我们的改动」。
+    if step_error or not restore_settled:
+        # 夹具自己的故障 / 恢复没落地先于任何缓存判读(RF#4:图上还可能留着我们的改动,
+        # 不许继续调导出)。不交给 `classify_rewire`:那里 `no_pulse` 排在 `restore_dirty`
+        # 前面,而「我们没取到数」不该盖过「图还没恢复」。
         verdict = "restore_dirty"
-        detail = f"{step_error}; restore_ok={int(restore_ok)} — 停手,别再调导出"
+        detail = (f"{step_error or 'restore did not settle'}; "
+                  f"restore_ok={int(restore_ok)} — 停手,别再调导出")
+    elif not change_ok:
+        # 改边没进目标边集:这是仪器/引擎语义档,不是缓存判负(下一发先查落地)。
+        verdict = "graph_rewire_invisible"
+        detail = (f"the 2-switch did not reach the expected edge set within {settle_s:.0f}s "
+                  f"(wait_graph_changed=0) — 没落地,不是缓存漏了")
     elif read_rc not in (0, -4):
         verdict = "instrument_broken"
         detail = f"rewire read == {read_rc} — 没读到图,判不了缓存"
@@ -900,7 +981,8 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
                   f"{after['fingerprint']}; hash {before['hash']:016x} -> "
                   f"{after['hash']:016x}; evaluated +{evaluated_delta}, "
                   f"recomputed +{recomputed_delta}, verified +{verify_delta}; "
-                  f"restore_ok={int(restore_ok)} (hash {restored['hash']:016x})")
+                  f"restore_ok={int(restore_ok)} (graph_restored={int(restore_settled)}, "
+                  f"live_hash {restored['hash']:016x}, caught_up={int(live_hash_caught_up)})")
 
     readings = {
         "step": "rewire",
@@ -910,11 +992,15 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
         "base_hash": f"{before['hash']:016x}",
         "rewire_hash": f"{after['hash']:016x}",
         "restore_hash": f"{restored['hash']:016x}",
+        "live_hash_caught_up": int(live_hash_caught_up),
         "evaluated_delta": evaluated_delta,
         "recomputed_delta": recomputed_delta,
         "verify_delta": verify_delta,
         "verify_seen": int(verify_ok),
         "wait_pulse_s": f"{wait_s:.0f}",
+        "settle_graph_s": f"{settle_s:.0f}",
+        "wait_graph_changed": int(change_ok),
+        "wait_graph_restored": int(restore_settled),
         "restore_ok": int(restore_ok),
         "rewire_steps": "|".join(step_lines),
     }
@@ -936,7 +1022,8 @@ def _read_export(pid, base, rva, buf, size):
 
 def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_file=None,
         allow_window=False, settle_s=0.0, mutate=None, mutate_collide=None,
-        rewire=None, wait_pulse_s=300.0, kill_after=False, attach=False):
+        rewire=None, wait_pulse_s=300.0, settle_graph_s=MUTATION_SETTLE_S,
+        kill_after=False, attach=False):
     """One shot in one game process. No hook is installed and nothing is unloaded.
 
     `mutate=(x, y)` switches the shot to the three-snapshot form: Read (base) →
@@ -1109,8 +1196,8 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
                          harness.remote_alloc(pid, LIVE_HASH_SIZE),
                          harness.remote_alloc(pid, VERIFY_STATS_SIZE))
             verdict, detail, step_lines, rewire_meta = rewire_shot(
-                pid, base, exports, stats_buf, drain_buf, live_bufs, switch, stats1, rc1,
-                wait_pulse_s)
+                pid, base, exports, stats_buf, drain_buf, live_bufs, switch, stats1,
+                rows1, rc1, wait_pulse_s, settle_graph_s)
         stats2 = None          # base / rewire_read / restore_read:没有「第二次读」
         rc2 = None
 
@@ -1259,6 +1346,10 @@ def main(argv=None):
                         help="with --rewire: how long to wait for the engine's scheduled "
                              "verify (VERIFY_EVERY=256 evaluations). Timeout is 'not measured' "
                              "(no_pulse), not 'no recompute'")
+    parser.add_argument("--settle-graph-s", type=float, default=MUTATION_SETTLE_S,
+                        help="with --rewire: how long to wait for the 2-switch (and its "
+                             "restore) to become visible in C5GraphRead. The mutations land "
+                             "on the next game tick; reading immediately sees the old graph")
     parser.add_argument("--kill-after", action="store_true",
                         help="after the artifact is written, taskkill the game (no save, no "
                              "menu: the plan's cleanup for a mutation shot)")
@@ -1288,6 +1379,7 @@ def main(argv=None):
                   edges_file=args.edges_file, allow_window=args.allow_window,
                   settle_s=args.poll_s, mutate=mutate, mutate_collide=mutate_collide,
                   rewire=rewire_arg, wait_pulse_s=args.wait_pulse_s,
+                  settle_graph_s=args.settle_graph_s,
                   kill_after=args.kill_after, attach=args.attach)
     return code
 

@@ -322,3 +322,39 @@ def test_rewire_without_attach_is_refused_before_any_shot():
     with pytest.raises(SystemExit):
         mod.main(["x.dll", "--expect-systems", "1", "--expect-edges", "1",
                   "--save-name", "s", "--rewire", "auto"])
+
+
+# --- 改边/恢复要等下一 tick 才可见(2026-11-06 诊断发) ---------------------------
+
+
+def test_rewire_expected_is_the_degree_preserving_target():
+    base = [(1, 2), (2, 3), (3, 4), (4, 1)]
+    expected = mod.rewire_expected(base, (1, 2, 3, 4))
+    assert expected == {(2, 3), (1, 4), (1, 3), (2, 4)}
+    assert mod.edge_key(base) != expected
+
+
+def test_rewire_expected_uses_the_switch_order_choose_switch_returns():
+    base = [(1, 2), (2, 3), (3, 4), (4, 1)]
+    a, b, c, d = mod.choose_switch(base)
+    expected = mod.rewire_expected(base, (a, b, c, d))
+    assert (min(a, b), max(a, b)) not in expected
+    assert (min(c, d), max(c, d)) not in expected
+    assert (min(a, c), max(a, c)) in expected
+    assert (min(b, d), max(b, d)) in expected
+
+
+def test_graph_matches_is_set_based_and_direction_free():
+    assert mod.graph_matches({(1, 2)}, [(2, 1)]) is True
+    assert mod.graph_matches({(1, 2)}, [(1, 2), (1, 3)]) is False
+    assert mod.graph_matches(set(), []) is True
+
+
+def test_restore_judge_uses_the_graph_rows_not_the_live_hash():
+    # 2026-11-06 第二发:图已经回到 base(wait_graph_restored=1),但 live_hash 要等下一次
+    # 核对才更新;拿它当恢复判据会把成功判成 restore_dirty。
+    src = (pathlib.Path(__file__).resolve().parent / "c2_graph_read.py").read_text(
+        encoding="utf-8")
+    block = src.split("restore_ok = (", 1)[1].split("live_hash_caught_up", 1)[0]
+    assert "restore_rows" in block
+    assert 'restored["hash"]' not in block
