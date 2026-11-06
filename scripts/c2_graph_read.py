@@ -101,6 +101,10 @@ LIVE_STATS_SIZE = 64          # C2NeoLiveStatsInto: u64 x 8 (fingerprint is word
 LIVE_HASH_SIZE = 16           # C2NeoLiveHashInto: [hash u64][edges u64]
 VERIFY_STATS_SIZE = 16        # C2NeoVerifyStatsInto: [verified u64][verify_failed u64]
 
+#: 等核对的轮询间隔(秒)。一次 verify = 一整趟读(约 10⁴ 次 RPM),所以它不会在
+#: 几十毫秒里发生;5 s 既够密,又不至于让轮询本身成为负担。
+PULSE_POLL_S = 5.0
+
 #: `--rewire` 还需要核对计数(等的就是「核对跑过一次」),所以比 collide 多一个导出。
 REWIRE_EXPORTS = (*COLLIDE_EXPORTS, "C2NeoVerifyStatsInto")
 
@@ -706,25 +710,78 @@ def read_live_all(pid, base, exports, live_stats_buf, live_hash_buf, live_verify
     键与 DLL 侧的契约一一对应(见 `src/dll/exports.zig`):
     `C2NeoLiveStatsInto` 8 词、`C2NeoLiveHashInto` 2 词、`C2NeoVerifyStatsInto` 2 词。
     """
-    words = struct.unpack("<8Q", _read_export(
-        pid, base, exports["C2NeoLiveStatsInto"], live_stats_buf, LIVE_STATS_SIZE))
-    hash64, _edges = struct.unpack("<QQ", _read_export(
-        pid, base, exports["C2NeoLiveHashInto"], live_hash_buf, LIVE_HASH_SIZE), 0)
-    verified, verify_failed = struct.unpack("<QQ", _read_export(
-        pid, base, exports["C2NeoVerifyStatsInto"], live_verify_buf, VERIFY_STATS_SIZE), 0)
+    return parse_live(
+        _read_export(pid, base, exports["C2NeoLiveStatsInto"], live_stats_buf, LIVE_STATS_SIZE),
+        _read_export(pid, base, exports["C2NeoLiveHashInto"], live_hash_buf, LIVE_HASH_SIZE),
+        _read_export(pid, base, exports["C2NeoVerifyStatsInto"], live_verify_buf,
+                     VERIFY_STATS_SIZE))
+
+
+def parse_live(stats_bytes, hash_bytes, verify_bytes):
+    """三份导出的字节 -> 一个 dict。纯函数:`test_c2_graph_read.py` 在 Linux 上钉键序。
+
+    词序**就是契约**(`src/dll/exports.zig` 的注释):
+    `evaluated, recomputed, cached_hits, non_system_scope, out_of_range, read_failed,
+    system_count, fingerprint` / `hash, edges` / `verified, verify_failed`。
+    """
+    words = struct.unpack("<8Q", stats_bytes[:LIVE_STATS_SIZE])
+    hash64, edges = struct.unpack("<QQ", hash_bytes[:LIVE_HASH_SIZE])
+    verified, verify_failed = struct.unpack("<QQ", verify_bytes[:VERIFY_STATS_SIZE])
     return {
-        "fingerprint": words[7],
-        "hash": hash64,
         "evaluated": words[0],
         "recomputed": words[1],
         "cached_hits": words[2],
+        "non_system_scope": words[3],
+        "out_of_range": words[4],
+        "read_failed": words[5],
+        "system_count": words[6],
+        "fingerprint": words[7],
+        "hash": hash64,
+        "edges": edges,
         "verified": verified,
         "verify_failed": verify_failed,
     }
 
 
+def pulse_progress(before, after):
+    """`{evaluated, recomputed, verified}` 三个增量,`max(0, …)` 防计数器被清零后回绕。
+
+    判据要的是「这一窗里发生了什么」,所以只看增量:`recomputed` 的绝对值包含安装前
+    历史。`C2NeoLiveReset` 会把计数清零,那时减出来是负数 —— 收成 0 而不是负数。
+    """
+    return {key: max(0, after[key] - before[key])
+            for key in ("evaluated", "recomputed", "verified")}
+
+
+def wait_for_verify(pid, base, exports, bufs, timeout_s):
+    """等**一次核对**:轮询三份导出,直到 `verified+recomputed` 增量 > 0 或超时。
+
+    返回 `(ok, before, after)`。为什么等的是 `verified` **加** `recomputed`,不是只看
+    `recomputed`:核对每 `VERIFY_EVERY=256` 次求值跑一趟,那一趟只有两种结局 —— 边集哈希
+    相等(`verified += 1`,分数不动)或哈希不同(`recomputed += 1`)。只看 `recomputed`
+    会把「核对了、发现没变」当成「没核对」,把一次正常的窗口判成 `no_pulse`。
+
+    `ok=False` 不是判负:它说的是**核对没轮到**(`VERIFY_EVERY` 未满足或窗口不够长),
+    调用方据此说「没测到」而不是「没重算」(Review Focus #3)。
+    """
+    import time
+
+    before = read_live_all(pid, base, exports, *bufs)
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    after = before
+    while True:
+        progress = pulse_progress(before, after)
+        if progress["verified"] + progress["recomputed"] > 0:
+            return True, before, after
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, before, after
+        time.sleep(min(PULSE_POLL_S, remaining))
+        after = read_live_all(pid, base, exports, *bufs)
+
+
 def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
-                base_stats, base_rc):
+                base_stats, base_rc, wait_s):
     """保度 2-switch 的一发(不含 base 读):四次改边 → rewire 读 → 四次恢复 → 恢复读。
 
     返回 `(verdict, detail, step_lines, readings)`。`readings` 是判词用到的全部数字,
@@ -765,8 +822,15 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
             step_error = f"{name} rc={rc}"
             break
 
-    after, read_rc = before, None
+    after, read_rc, verify_ok, wait_before = before, None, False, before
     if not step_error:
+        # 先等一次核对再读:没有核对,`recomputed` 不动只说明「没轮到」(RF#3)。
+        verify_ok, wait_before, wait_after = wait_for_verify(
+            pid, base, exports, bufs, wait_s)
+        step_lines.append(f"step=wait_verify ok={int(verify_ok)} "
+                          f"evaluated={wait_after['evaluated']} "
+                          f"recomputed={wait_after['recomputed']} "
+                          f"verified={wait_after['verified']}")
         read_rc, stats_rewire, _rows = read_once(pid, base, exports, stats_buf, drain_buf)
         step_lines.append(f"step={steps[5]} edges={stats_rewire['edges']} rc={read_rc}")
         after = read_live_all(pid, base, exports, *bufs)
@@ -793,9 +857,11 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
                   and restore_stats["edges"] == base_stats["edges"]
                   and restored["hash"] == before["hash"])
 
-    evaluated_delta = max(0, after["evaluated"] - before["evaluated"])
-    recomputed_delta = max(0, after["recomputed"] - before["recomputed"])
-    verify_delta = max(0, restored["verified"] - before["verified"])
+    # 增量与判词必须出自同一次核对:窗口 = `wait_for_verify` 的基线 → rewire 读之后那次快照。
+    progress = pulse_progress(wait_before, after)
+    evaluated_delta = progress["evaluated"]
+    recomputed_delta = progress["recomputed"]
+    verify_delta = progress["verified"]
 
     if step_error:
         # 夹具自己的故障先于任何缓存判读(RF#4:任何一步 rc 非 0 立即判脏并停手)。
@@ -803,6 +869,15 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
         # 而「我们没取到数」不该盖过「图上还留着我们的改动」。
         verdict = "restore_dirty"
         detail = f"{step_error}; restore_ok={int(restore_ok)} — 停手,别再调导出"
+    elif read_rc not in (0, -4):
+        verdict = "instrument_broken"
+        detail = f"rewire read == {read_rc} — 没读到图,判不了缓存"
+    elif not verify_ok:
+        # 核对没轮到:这说明**这一窗不够长**(VERIFY_EVERY=256 未满足),不是缓存漏了
+        # (RF#3)。判 `no_pulse` 并在 detail 里写清求值确实涨了 —— 那是「没测到」。
+        verdict = "no_pulse"
+        detail = (f"evaluated +{evaluated_delta} but no verification within {wait_s:.0f}s "
+                  f"(VERIFY_EVERY=256 未满足)— 没测到,不是没重算")
     else:
         verdict = classify_rewire(
             base_fingerprint=before["fingerprint"], rewire_fingerprint=after["fingerprint"],
@@ -826,6 +901,8 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
         "evaluated_delta": evaluated_delta,
         "recomputed_delta": recomputed_delta,
         "verify_delta": verify_delta,
+        "verify_seen": int(verify_ok),
+        "wait_pulse_s": f"{wait_s:.0f}",
         "restore_ok": int(restore_ok),
         "rewire_steps": "|".join(step_lines),
     }
@@ -847,7 +924,7 @@ def _read_export(pid, base, rva, buf, size):
 
 def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_file=None,
         allow_window=False, settle_s=0.0, mutate=None, mutate_collide=None,
-        rewire=None, kill_after=False, attach=False):
+        rewire=None, wait_pulse_s=300.0, kill_after=False, attach=False):
     """One shot in one game process. No hook is installed and nothing is unloaded.
 
     `mutate=(x, y)` switches the shot to the three-snapshot form: Read (base) →
@@ -1012,7 +1089,8 @@ def run(dll_path, out_path, *, expect_systems, expect_edges, save_name, edges_fi
                          harness.remote_alloc(pid, LIVE_HASH_SIZE),
                          harness.remote_alloc(pid, VERIFY_STATS_SIZE))
             verdict, detail, step_lines, rewire_meta = rewire_shot(
-                pid, base, exports, stats_buf, drain_buf, live_bufs, switch, stats1, rc1)
+                pid, base, exports, stats_buf, drain_buf, live_bufs, switch, stats1, rc1,
+                wait_pulse_s)
         stats2 = None          # base / rewire_read / restore_read:没有「第二次读」
         rc2 = None
 
@@ -1157,6 +1235,10 @@ def main(argv=None):
                              "add (a,c)/(b,d) so all four degrees stay put — the fingerprint "
                              "cannot move while the edge set does. 'auto' picks the first "
                              "feasible switch from the base read")
+    parser.add_argument("--wait-pulse-s", type=float, default=300.0,
+                        help="with --rewire: how long to wait for the engine's scheduled "
+                             "verify (VERIFY_EVERY=256 evaluations). Timeout is 'not measured' "
+                             "(no_pulse), not 'no recompute'")
     parser.add_argument("--kill-after", action="store_true",
                         help="after the artifact is written, taskkill the game (no save, no "
                              "menu: the plan's cleanup for a mutation shot)")
@@ -1182,7 +1264,8 @@ def main(argv=None):
                   expect_edges=args.expect_edges, save_name=args.save_name,
                   edges_file=args.edges_file, allow_window=args.allow_window,
                   settle_s=args.poll_s, mutate=mutate, mutate_collide=mutate_collide,
-                  rewire=rewire_arg, kill_after=args.kill_after, attach=args.attach)
+                  rewire=rewire_arg, wait_pulse_s=args.wait_pulse_s,
+                  kill_after=args.kill_after, attach=args.attach)
     return code
 
 

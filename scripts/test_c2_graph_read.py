@@ -6,6 +6,7 @@ Linux 上测。口径来自计划 Task 2 的 verdict 表 —— 每一档都必�
 """
 
 import pathlib
+import struct
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -279,3 +280,25 @@ def test_a_failed_restore_is_dirty_even_if_the_rewire_was_detected():
         base_hash=0x46F76122D529552D, rewire_hash=0x1234,
         evaluated_delta=788, recomputed_delta=1, restore_ok=False,
     ) == "restore_dirty"
+
+
+# --- A3: 读回 live/verify 计数,等一次核对 ---------------------------------------
+
+
+def test_parse_live_reads_the_three_exports_in_order():
+    stats = struct.pack("<8Q", 788, 3, 785, 0, 0, 0, 788, 9001)
+    h = struct.pack("<QQ", 0x46F76122D529552D, 1219)
+    v = struct.pack("<QQ", 7, 0)
+    live = mod.parse_live(stats, h, v)
+    assert live["evaluated"] == 788
+    assert live["recomputed"] == 3
+    assert live["fingerprint"] == 9001
+    assert live["hash"] == 0x46F76122D529552D
+    assert live["verified"] == 7
+
+
+def test_pulse_progress_reports_three_deltas_and_never_wraps():
+    before = {"evaluated": 100, "recomputed": 1, "verified": 2}
+    after = {"evaluated": 888, "recomputed": 2, "verified": 5}
+    assert mod.pulse_progress(before, after) == {
+        "evaluated": 788, "recomputed": 1, "verified": 3}
