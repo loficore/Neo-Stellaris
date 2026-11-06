@@ -1729,7 +1729,9 @@ resident` 并 exit 2);它与 `--mutate` / `--mutate-collide` / `--rewire` 不冲
    `recordLiveFate` 把「核对发现哈希不同」记在 `recomputed` 上)。两个计数都要 `C2NeoVerifyStatsInto`
    与 `C2NeoLiveStatsInto` 一起读,单看 `recomputed` 会把「核对了、没变」当成「没核对」。
 9. **`restore_dirty` 之后不许再调用任何导出**;驱动会**自己** `taskkill`(`restore_ok=0` 时不等
-   `--kill-after`),因为 autosave 每分钟一次,改过的图不能被自动存下去。
+   `--kill-after`),因为 autosave 每分钟一次,改过的图不能被自动存下去。**恢复判据是读图器的
+   边集回到 base,不是 `live_hash`** —— 后者只在下一次核对时更新,恢复后立刻读它必然是
+   rewire 态(2026-11-06 第二发就是被这个判据误判成 `restore_dirty` 的)。
 10. **`graph_rewire_invisible` 是仪器档**:多半是 `(a,c)`/`(b,d)` 本来就存在,或有一步静默失败;
     `instrument_broken` 则是四个键里有一个是 `0`(本进程还没成功读过图)。
 11. **`expect_mismatch` 先于一切缓存判读**:base 读数与 `--expect-systems/--expect-edges` 不等

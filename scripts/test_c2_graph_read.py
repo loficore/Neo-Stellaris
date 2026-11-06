@@ -348,3 +348,13 @@ def test_graph_matches_is_set_based_and_direction_free():
     assert mod.graph_matches({(1, 2)}, [(2, 1)]) is True
     assert mod.graph_matches({(1, 2)}, [(1, 2), (1, 3)]) is False
     assert mod.graph_matches(set(), []) is True
+
+
+def test_restore_judge_uses_the_graph_rows_not_the_live_hash():
+    # 2026-11-06 第二发:图已经回到 base(wait_graph_restored=1),但 live_hash 要等下一次
+    # 核对才更新;拿它当恢复判据会把成功判成 restore_dirty。
+    src = (pathlib.Path(__file__).resolve().parent / "c2_graph_read.py").read_text(
+        encoding="utf-8")
+    block = src.split("restore_ok = (", 1)[1].split("live_hash_caught_up", 1)[0]
+    assert "restore_rows" in block
+    assert 'restored["hash"]' not in block

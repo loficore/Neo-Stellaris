@@ -927,17 +927,22 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
             f"step=wait_graph_restored ok={int(restore_settled)} "
             f"edges={stats_restored['edges'] if stats_restored else 'null'}")
 
-    restore_rc, restore_stats, _rows = read_once(pid, base, exports, stats_buf, drain_buf)
+    restore_rc, restore_stats, restore_rows = read_once(pid, base, exports, stats_buf,
+                                                       drain_buf)
     restored = read_live_all(pid, base, exports, *bufs)
     step_lines.append(f"step=restore_read edges={restore_stats['edges']} rc={restore_rc}")
     step_lines.append(f"live_restore fingerprint={restored['fingerprint']} "
                       f"hash={restored['hash']:016x}")
 
+    # 恢复的判据是**图**回到 base,不是 live 源的缓存哈希:`live_hash` 只在下一次核对时
+    # 更新,恢复后立刻读它必然是上一趟(rewire)的值。2026-11-06 第二发就是被这个判据
+    # 误判成 `restore_dirty` 的 —— `wait_graph_restored=1` 已经证明边集回到 base。
     restore_ok = (not step_error
                   and restore_settled
                   and restore_rc in (0, -4)
                   and restore_stats["edges"] == base_stats["edges"]
-                  and restored["hash"] == before["hash"])
+                  and graph_matches(edge_key(base_rows), restore_rows))
+    live_hash_caught_up = restored["hash"] == before["hash"]
 
     # 增量与判词必须出自同一次核对:窗口 = `wait_for_verify` 的基线 → rewire 读之后那次快照。
     progress = pulse_progress(wait_before, after)
@@ -976,7 +981,8 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
                   f"{after['fingerprint']}; hash {before['hash']:016x} -> "
                   f"{after['hash']:016x}; evaluated +{evaluated_delta}, "
                   f"recomputed +{recomputed_delta}, verified +{verify_delta}; "
-                  f"restore_ok={int(restore_ok)} (hash {restored['hash']:016x})")
+                  f"restore_ok={int(restore_ok)} (graph_restored={int(restore_settled)}, "
+                  f"live_hash {restored['hash']:016x}, caught_up={int(live_hash_caught_up)})")
 
     readings = {
         "step": "rewire",
@@ -986,6 +992,7 @@ def rewire_shot(pid, base, exports, stats_buf, drain_buf, live_bufs, switch,
         "base_hash": f"{before['hash']:016x}",
         "rewire_hash": f"{after['hash']:016x}",
         "restore_hash": f"{restored['hash']:016x}",
+        "live_hash_caught_up": int(live_hash_caught_up),
         "evaluated_delta": evaluated_delta,
         "recomputed_delta": recomputed_delta,
         "verify_delta": verify_delta,
