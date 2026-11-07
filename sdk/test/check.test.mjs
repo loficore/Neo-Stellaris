@@ -152,8 +152,8 @@ test("the CLI exits 2 with a fail line for a broken project", () => {
 
 test("the flag gate accepts a literal that is not an official keyword", async () => {
   const dir = writeProject(
-    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_custom_marker"); });\n',
-    ["neo_custom_marker"],
+    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_marker"); });\n',
+    ["neo_marker"],
   );
   const result = await runCheck({ dir });
   assert.equal(result.ok, true, result.error);
@@ -173,6 +173,15 @@ test("neo check accepts a manifest whose flags list matches the bundle, in any o
   const dir = writeProject(
     'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_a"); s.setStarFlag("neo_b"); });\n',
     ["neo_b", "neo_a"],
+  );
+  const result = await runCheck({ dir });
+  assert.equal(result.ok, true, result.error);
+});
+
+test("neo check accepts a read-only bundle whose manifest declares the read name", async () => {
+  const dir = writeProject(
+    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { if (s.hasStarFlag("neo_hub")) { s.id; } });\n',
+    ["neo_hub"],
   );
   const result = await runCheck({ dir });
   assert.equal(result.ok, true, result.error);
@@ -202,7 +211,7 @@ test("the flag gate rejects a dynamic flag name and says v1 takes literals", asy
 
 test("the flag gate fails loudly when the keyword table is missing", async () => {
   const dir = writeProject(
-    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_custom_marker"); });\n',
+    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_custom_mark"); });\n',
   );
   const missing = path.join(tmpdir(), "no-such-keywords.tsv");
   const result = await runCheck({ dir, keywordsTsv: missing });

@@ -22,6 +22,7 @@ import {
   checkFlagNames,
   loadKeywordNames,
   normalizeFlagNames,
+  readFlagNames,
   readManifestFlags,
 } from "./flags.js";
 import { mockHostSource, type MockCall } from "./mock-host.js";
@@ -166,14 +167,15 @@ export async function runCheck(options: CheckOptions): Promise<CheckResult> {
   // P2-1b: the manifest is the ONLY flag-name source the host mints from, so a
   // manifest that no longer matches the bundle would ship a set of names the
   // runtime calls cannot resolve (`no_premint`).  Three-way agreement is
-  // required: bundle literals ↔ manifest `flags` (the host is the third reader).
+  // required: bundle literals (writes **and** reads — both need a preminted id)
+  // ↔ manifest `flags` (the host is the third reader).
   let manifestFlags: string[];
   try {
     manifestFlags = normalizeFlagNames(readManifestFlags(resolvedDir));
   } catch (error) {
     return fail((error as Error).message);
   }
-  const bundleFlags = normalizeFlagNames(flags.names);
+  const bundleFlags = normalizeFlagNames([...flags.names, ...readFlagNames(text)]);
   if (
     bundleFlags.length !== manifestFlags.length ||
     bundleFlags.some((name, i) => name !== manifestFlags[i])

@@ -103,6 +103,20 @@ test("neo build writes the literal flag names into neo/mod.json", async () => {
   assert.equal(manifest.id, "demo");
 });
 
+test("neo build records hasStarFlag literals too, so a read-only mod can be preminted", async () => {
+  const dir = makeProject({
+    main: 'onSystem((s) => { if (s.hasStarFlag("neo_hub")) s.setVariable("neo_score", 1); });',
+  });
+  await runBuild({ dir });
+  const manifest = JSON.parse(readFileSync(path.join(dir, "neo", "mod.json"), "utf8"));
+  assert.deepEqual(manifest.flags, ["neo_hub"]);
+});
+
+test("neo build refuses a flag name the loader would reject", async () => {
+  const dir = makeProject({ main: 'onSystem((s) => { s.setStarFlag("Neo_Hub"); });' });
+  await assert.rejects(() => runBuild({ dir }), /not a valid flag name/);
+});
+
 test("a missing export fails the build with the tsc diagnostic", async () => {
   const dir = tempDir("neo-build-bad-");
   writeProject(

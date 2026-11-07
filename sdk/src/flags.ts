@@ -27,6 +27,9 @@ export interface FlagCheck {
 /** `s.setStarFlag(` — a dot is required so the shim's method key does not match. */
 const CALL_RE = /\.\s*setStarFlag\s*\(/g;
 
+/** `s.hasStarFlag(` — a read needs a preminted id too, so its literals are recorded. */
+const READ_RE = /\.\s*hasStarFlag\s*\(/g;
+
 /** The keyword table `scripts/thunkarrays.py` emits (3,900 behaviour rows). */
 export const KEYWORDS_TSV = fileURLToPath(
   new URL("../../evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv", import.meta.url),
@@ -145,8 +148,40 @@ export function normalizeFlagNames(names: readonly string[]): string[] {
   return [...new Set(names)].sort();
 }
 
+/**
+ * Literal names the author **reads** with `hasStarFlag("…")`.
+ *
+ * Reads do not mint at runtime (P2-1b: the host only looks names up), but they need a
+ * preminted id just like writes do — so the install list must include them. Non-literal
+ * read names are skipped rather than reported: they can never be preminted, so they fail
+ * closed at runtime (`reason=no_premint`) without shipping a wrong key.
+ */
+export function readFlagNames(bundle: string): string[] {
+  const names: string[] = [];
+  for (const match of bundle.matchAll(READ_RE)) {
+    const text = firstArgument(bundle, match.index + match[0].length);
+    if (text === null) continue;
+    const value = literalValue(text);
+    if (value !== null) names.push(value);
+  }
+  return names;
+}
+
 function manifestPath(dir: string): string {
   return path.join(dir, "neo", "mod.json");
+}
+
+/** The loader's name bound (`neo_state.SSO_MAX`): longer names cannot be minted. */
+const MAX_FLAG_NAME = 15;
+
+/** The loader's name rules (`keyword_registry.NameCheck` + the 15-byte SSO bound). */
+export function flagNameProblem(name: string): string | null {
+  if (name.length === 0) return "empty";
+  if (name.length > MAX_FLAG_NAME) return `longer than ${MAX_FLAG_NAME} bytes`;
+  if (/[A-Z]/.test(name)) return "not all-lowercase";
+  const first = name[0];
+  if (first === "-" || (first >= "0" && first <= "9")) return "starts with - or a digit";
+  return null;
 }
 
 /** The `flags` array of `<dir>/neo/mod.json`; `[]` when the file or field is absent. */
@@ -164,6 +199,12 @@ export function readManifestFlags(dir: string): string[] {
   if (!Array.isArray(flags) || flags.some((item) => typeof item !== "string")) {
     throw new Error(`flags: ${manifestPath(dir)} "flags" must be an array of strings`);
   }
+  for (const name of flags as string[]) {
+    const problem = flagNameProblem(name);
+    if (problem) {
+      throw new Error(`flags: ${JSON.stringify(name)} is not a valid flag name (${problem})`);
+    }
+  }
   return flags as string[];
 }
 
@@ -180,6 +221,14 @@ export function readManifestFlags(dir: string): string[] {
  */
 export function mergeManifestFlags(dir: string, names: readonly string[]): string[] {
   const desired = normalizeFlagNames(names);
+  for (const name of desired) {
+    const problem = flagNameProblem(name);
+    if (problem) {
+      // 写进 manifest 就等于让 loader 把整个 mod 判成 BAD_MANIFEST;在 build 期
+      // 报错,让作者改名字,而不是在实机上静默禁用。
+      throw new Error(`flags: ${JSON.stringify(name)} is not a valid flag name (${problem})`);
+    }
+  }
   const file = manifestPath(dir);
   let raw: string;
   try {

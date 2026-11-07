@@ -188,10 +188,11 @@ allowance is deleted at integration.
   `setStarFlag` is `flag.write`; `hasStarFlag` is `flag.read`.
 - `engine` / `runtime` — compatibility strings; a mismatch disables the mod with a log line.
 - `flags` — **optional** (the 7th field; an old manifest without it still loads). The flag names
-  the host mints at install time. `neo build` fills it from the bundle's `setStarFlag("…")`
-  literals; `neo check` refuses a list that no longer matches. At most **32** names; each name is
-  1–15 bytes, all-lowercase, does not start with `-` or a digit. Missing `flags` behaves like
-  `[]`: the flag calls then fail closed with `no_premint`.
+  the host mints at install time. `neo build` fills it from the bundle's `setStarFlag("…")` **and**
+  `hasStarFlag("…")` literals (a read needs the same preminted id); `neo check` refuses a list that
+  no longer matches. At most **32** names; each name is 1–15 bytes, all-lowercase, does not start
+  with `-` or a digit. Missing `flags` behaves like `[]`: the flag calls then fail closed with
+  `no_premint`.
 
 Phase 1 loaded exactly one runtime mod. Phase 2 (Track A) loads up to **8** mods from
 `C:/temp/neo_mods/<id>/`, one QuickJS context/session each: a throwing, spinning, or
@@ -261,10 +262,13 @@ engine behaviour instead of a flag (the Phase 1 `Add_Modifier` hazard, one layer
 
 The gate reads the author's `setStarFlag("…")` call site, not the native
 `__neo_system_set_flag(id, name)` call: the SDK shim always forwards its own parameter, so the
-native call is dynamic in every bundle. It only inspects writes — `hasStarFlag` reads cannot mint
-anything. Because the keyword table is required, `neo check` needs the repository's `evidence/`
-directory (the developer preview ships that one TSV for exactly this reason); a missing table
-fails the check with the path it tried.
+native call is dynamic in every bundle. Only writes are gated here (a write is the only call that
+could mint a name); **`hasStarFlag("…")` literals are recorded in the manifest too** — a read needs
+the same preminted id — but they are not keyword-gated, because a read never mints anything and an
+undeclared or computed read name simply fails closed (`no_premint`) at runtime. Because the keyword
+table is required, `neo check` needs the repository's `evidence/` directory (the developer preview
+ships that one TSV for exactly this reason); a missing table fails the check with the path it
+tried.
 
 ### Flag premint (install time)
 

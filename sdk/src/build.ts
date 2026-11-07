@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { checkFlagNames, mergeManifestFlags } from "./flags.js";
+import { checkFlagNames, mergeManifestFlags, readFlagNames } from "./flags.js";
 
 export interface BuildOptions {
   /** Project directory: expects `tsconfig.json` + `src/main.ts`. */
@@ -115,10 +115,12 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
   mkdirSync(path.dirname(outfile), { recursive: true });
   await bundle(dir, true, outfile);
   // P2-1b: 构建期决定 flag 名。只记录 bundle 里的**字面量**(不读 keyword TSV ——
-  // 那是 `neo check` 的事,打包后的 SDK 不该依赖 `evidence/`)。host 在安装期
-  // (`C2NeoInstall`,脚本解析之前)按这份列表早发号,运行时只查预发表。
+  // 那是 `neo check` 的事,打包后的 SDK 不该依赖 `evidence/`)。写入与读取都要:
+  // 运行时两者都只查预发表 —— 只记录写会让「只读 hasStarFlag」的 mod 在实机上
+  // 以 `no_premint` 失败(C2 发 2 的只读 mod 就是这种形状)。
   const text = readFileSync(outfile, "utf8");
-  mergeManifestFlags(dir, checkFlagNames(text, new Set()).names);
+  const flags = checkFlagNames(text, new Set()).names;
+  mergeManifestFlags(dir, [...flags, ...readFlagNames(text)]);
   return { dir, outfile };
 }
 
