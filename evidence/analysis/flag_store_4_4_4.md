@@ -652,8 +652,12 @@ python3 scripts/disrva.py 0x1AA6460 --len=0x90
 ```
 01bcf0e6  mov     eax, dword ptr [rip + 0x169e02c]  ; -> 0x326d118   ; 读:装填因子
 01bcf0ec  inc     eax
-01bcf0f5  cvtdq2ps xmm1, xmm1
-01bcf100  comiss  xmm1, dword ptr [rip + 0x169e01d] ; -> 0x326d124  ; 0.9
+01bcf0ee  movd    xmm0, ecx                       ; mask
+01bcf0f2  cvtdq2ps xmm0, xmm0
+01bcf0f5  movd    xmm1, eax
+01bcf0f9  cvtdq2ps xmm1, xmm1
+01bcf0fc  divss   xmm1, xmm0
+01bcf100  comiss  xmm1, dword ptr [rip + 0x169e01d] ; -> 0x326d124  ; 0.9f
 
 01bcf162  mov     rax, qword ptr [rbp + 0x50]        ; &候选 id
 01bcf166  movzx   ecx, word ptr [rax]
