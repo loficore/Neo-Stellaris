@@ -17,6 +17,13 @@ injected QuickJS host on the game's main thread, once per system.
 > missing one, so `api.def` does not mention them. `setStarFlag`/`hasStarFlag` are in: the write
 > goes through the official `set_star_flag` body and the read through the official flag
 > container.
+>
+> **P2-1b (flag 早发号, 2026-11-07).** The C2 reading below (`raw=68639`) is the *pre-P2-1b*
+> state: the id was minted inside the handler, i.e. after the script parser had already grown the
+> token pool past 16 bits. P2-1b moves that mint into `C2NeoInstall` (before the parser runs) and
+> pins the names at build time in `neo/mod.json`'s `flags`; the runtime only looks them up
+> (`no_premint` otherwise). The writer is unchanged (`0x180F8E0`). The two live shots that would
+> prove it (C2 发 1 / 发 2) are still **blocked — no live reading exists for P2-1b**.
 
 
 ## What this is not
@@ -126,8 +133,8 @@ onSystem((s) => {
 | `System.degree` | `number` | Hyperlane degree, read on each access (not cached). |
 | `System.neighbors` | `readonly number[]` | Neighbour system ids, read on each access; the host returns a fresh array, capped (64) with a truncation log line. Needs `graph.read`. |
 | `System.setVariable` | `(name: string, value: number) => void` | Writes through the official `set_variable` body for the current system. |
-| `System.setStarFlag` | `(name: string) => void` | Sets the official star flag `name` through the `set_star_flag` body. Needs `flag.write`. The name must be a **string literal** and must not collide with an official keyword — see the build-time gate below. |
-| `System.hasStarFlag` | `(name: string) => boolean` | Reads the official star flag `name` from the flag container. Needs `flag.read`. |
+| `System.setStarFlag` | `(name: string) => void` | Sets the official star flag `name` through the `set_star_flag` body. Needs `flag.write`. The name must be a **string literal**, must be **declared in the manifest's `flags` list** (written by `neo build`), and must not collide with an official keyword — see the build-time gate below. An undeclared name is refused at runtime with `no_premint`; the handler never mints. |
+| `System.hasStarFlag` | `(name: string) => boolean` | Reads the official star flag `name` from the flag container. Needs `flag.read`. Same declared-name rule; an undeclared name reads `false` and logs `reason=no_premint`. |
 | `graph.betweenness` | `(s: System) => number` | Graph score for the system (same source as the C5-SCORE path). |
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200` — the T2 threshold; a constant, not a tuning knob in v1. |
 | `log` | `(message: string) => void` | Appends `NEO_JS_LOG <text>` to `C:/temp/neo_js.log`. |
@@ -167,7 +174,8 @@ allowance is deleted at integration.
   "scope": ["system"],
   "permissions": ["graph.read", "flag.read", "flag.write", "variable.write", "log"],
   "engine": "4.4.4",
-  "runtime": ">=0.1"
+  "runtime": ">=0.1",
+  "flags": ["neo_hub"]
 }
 ```
 
@@ -179,6 +187,11 @@ allowance is deleted at integration.
   the mod at load. `degree`, `neighbors`, `betweenness` and `isChokepoint` are `graph.read`;
   `setStarFlag` is `flag.write`; `hasStarFlag` is `flag.read`.
 - `engine` / `runtime` — compatibility strings; a mismatch disables the mod with a log line.
+- `flags` — **optional** (the 7th field; an old manifest without it still loads). The flag names
+  the host mints at install time. `neo build` fills it from the bundle's `setStarFlag("…")`
+  literals; `neo check` refuses a list that no longer matches. At most **32** names; each name is
+  1–15 bytes, all-lowercase, does not start with `-` or a digit. Missing `flags` behaves like
+  `[]`: the flag calls then fail closed with `no_premint`.
 
 Phase 1 loaded exactly one runtime mod. Phase 2 (Track A) loads up to **8** mods from
 `C:/temp/neo_mods/<id>/`, one QuickJS context/session each: a throwing, spinning, or
@@ -209,15 +222,24 @@ demonstrates the flag read/write pair.
 2. esbuild bundles `src/main.ts` as `--bundle --format=iife --platform=neutral --target=es2020`.
    The output has no `import`, no `require`, and no module loader dependency.
 3. Writes `<project>/neo/<manifest entry>` (default `neo/main.js`).
+4. Records the bundle's `setStarFlag("…")` literals in `<project>/neo/mod.json`'s `flags`
+   (deduped, sorted; every other manifest field is preserved). A project without a manifest is
+   not given one — the build prints `NEO_BUILD warn: no neo/mod.json, flags not recorded` on
+   stderr and the flag calls will fail closed at runtime. `neo build` does **not** consult the
+   keyword table (that is `neo check`'s gate); it only records names.
 
 `neo check --dir <project>` performs the same type-check and bundle in memory, then:
 
 1. statically rejects `require(`, `process.`, `window.`, `document.`, and dynamic `import(`
    (none of those exist in the host context);
 2. runs the **flag-name gate** over the bundle (see below);
-3. evaluates the bundle in a **real QuickJS runtime** (`quickjs-emscripten`, the same engine
+3. refuses a manifest whose `flags` list no longer matches the bundle's literals:
+   `flags: manifest flags are stale; run "neo build" (bundle has ["neo_hub"], manifest has [])`.
+   A missing `flags` field counts as `[]` (old manifests stay loadable, but a bundle that mints
+   names needs the list);
+4. evaluates the bundle in a **real QuickJS runtime** (`quickjs-emscripten`, the same engine
    family the host embeds) with the mock host installed;
-4. asserts that exactly one `onSystem` handler registered, that the handler runs for a fake
+5. asserts that exactly one `onSystem` handler registered, that the handler runs for a fake
    system id `7` without throwing, and that `__neo_api_version()` matches `api.def`.
 
 The mock host (`sdk/src/mock-host.ts`) records every native call; a passing example check reports
@@ -243,6 +265,50 @@ native call is dynamic in every bundle. It only inspects writes — `hasStarFlag
 anything. Because the keyword table is required, `neo check` needs the repository's `evidence/`
 directory (the developer preview ships that one TSV for exactly this reason); a missing table
 fails the check with the path it tried.
+
+### Flag premint (install time)
+
+Flag names are decided at **build** time (`neo build` writes them into `neo/mod.json`'s `flags`)
+and their token ids are minted at **install** time, before the script parser runs. At runtime the
+host only looks the name up.
+
+Why it cannot happen later: `set_star_flag` keeps the flag key in a **u16** cell (`[obj+0xC0]`),
+while the engine's name→token allocator (`0x1D13270`) numbers names from one global pool that
+also holds every official keyword and every dynamically added script name. On a real install that
+pool is already past 65,535, so a name minted at handler time lands **outside** the u16 space —
+the C2 reading `reason=no_flag_token_range raw=68639` is exactly that. Minting the same name at
+install time (≈5 s after start, when the dynamic pool is still ≈525 names) keeps it inside the
+range, and the official script side (`has_star_flag = neo_hub`) resolves the same id because it
+is the same allocator.
+
+`C2NeoInstall` therefore reads `C:/temp/neo_mods/<id>/neo/mod.json` for every candidate mod and
+calls `0x1D13270` once per declared name (`keyword_registry.mintToken`; no table insertion, no
+hand-picked ids). The three log lines are the install-time judgement:
+
+| Line | Meaning |
+|---|---|
+| `NEO_JS_PREMINT name=<name> id=<u16>` | minted and recorded; the runtime will use this id |
+| `NEO_JS_PREMINT_FAIL name=<name> reason=no_token` | the allocator returned nothing (name invalid or the pool refused) |
+| `NEO_JS_PREMINT_FAIL name=<name> raw=<n> reason=range` | minted, but the id is `> 0xFFFF` or the `0xFFFF` sentinel — the install is too late for this name |
+| `NEO_JS_INSTALL_SKIP id=<dir>` | that mod's manifest could not be read/parsed; its flags are not preminted |
+
+Runtime failures are separate and never mint: `NEO_JS_WRITE_REJECT … reason=no_premint` (name not
+declared), `NEO_JS_FLAG_REJECT … reason=no_premint` (read of an undeclared name) and
+`… reason=no_flag_container` (declared, but the flag container could not be read).
+
+Boundaries:
+
+- at most **32** names per install (`neo build` and the loader both refuse more — no silent
+  truncation); each name 1–15 bytes, all-lowercase, first character not `-` or a digit, and not
+  an official keyword (case-insensitive);
+- the premint shifts the ids of names minted **later** in the same process. That does not move
+  stored flags: a save serialises `flags=` blocks **by name** (with a timestamp as the value),
+  not by token id — see `evidence/analysis/save_flag_storage_4_4_4.md`;
+- the write itself is unchanged: `s.setStarFlag` still calls the official body `0x180F8E0`; this
+  change only decides *which* u16 goes into `[obj+0xC0]`.
+
+**No live reading for this design yet.** The two C2 shots (write + official `has_star_flag`, then
+reload the autosave) are blocked; until they run, the install logs above are the only observable.
 
 
 ## `neo pack`
@@ -297,6 +363,15 @@ mods (1 good + `bad_throw` / `bad_timeout` / `bad_perm`), `--act log --rule 1:0`
   silently picked.
 - Reading: `evidence/logs/runtime_js_phase2_safety_4_4_4.log`; #59, #60.
 
+**P2-1b response (2026-11-07): move the mint, not the id space.** Instead of truncating or
+deferring, the flag id is now minted during `C2NeoInstall` (before the script parser grows the
+pool) from names recorded at build time in `neo/mod.json`'s `flags`; the runtime only reads that
+table (`no_premint` otherwise). This directly targets the `raw=68639` reading above, but it has
+**no live reading yet**: the two P2-1b shots (write + official `has_star_flag`; then reload the
+autosave) are still **blocked**. The failure exits remain the plan's: if `PREMINT` itself logs
+`reason=no_token`, or the id is still `> 0xFFFF`, the feature is deferred rather than patched
+around.
+
 ## Limits (host-enforced)
 
 - Context memory **16 MiB**, stack **1 MiB**.
@@ -311,9 +386,12 @@ mods (1 good + `bad_throw` / `bad_timeout` / `bad_perm`), `--act log --rule 1:0`
 - No `s.name` and no `s.variable()` read. They stay out of `api.def` until Track A's static spike
   resolves an official body/read path for each one; a deferred name is simply absent, never
   guessed.
-- Star flags exist in the type surface but **do not work live** on an install whose token space
-  has grown past 65,535 (see the C2 section). The build-time gate still rejects computed names
-  and official-keyword collisions; that gate is necessary but not sufficient.
+- Star flags now have an install-time premint path (see [Flag premint](#flag-premint-install-time)):
+  the names are fixed at build time, minted once in `C2NeoInstall` while the token pool is still
+  inside 16 bits, and the runtime only looks them up. The earlier live failure (`raw=68639`) is
+  addressed by construction, **not yet proven live** — the two P2-1b shots are blocked. Limits:
+  32 names, 1–15 lowercase bytes each, no official-keyword collision; an install whose pool is
+  already past 65,535 at injection time cannot be rescued by this path (the log says so).
 - No country / fleet / planet / pop scopes; system scope only.
 - No `onMonthly` or any global tick hook. The monthly driver is a generated `on_action` + hidden
   `event` pair, i.e. the official script path.

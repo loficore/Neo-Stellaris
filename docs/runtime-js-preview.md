@@ -58,8 +58,11 @@ host `JS_Eval`s it from `C:/temp/neo_mods/<id>/neo/`.
    unknown effect, which is expected.
 4. **Report** the `NEO_JS_*` lines from `C:/temp/neo_js.log` (call/write/log
    counts, and any `NEO_JS_ERROR` / `NEO_JS_TIMEOUT` / `NEO_API_MISMATCH`), the
-   game version, the campaign and whether the host survived. A zero count means
-   "did not happen", not "fixed" — say which.
+   game version, the campaign and whether the host survived. Flag users should
+   also copy the install-time `NEO_JS_PREMINT` / `NEO_JS_PREMINT_FAIL` lines —
+   they are the only way to tell "name never declared" (`no_premint`) from
+   "install ran too late" (`reason=range`). A zero count means "did not happen",
+   not "fixed" — say which.
 5. **Do not** report `neo check` alone as a live result. The two gates are
    different by design.
 
@@ -69,8 +72,12 @@ host `JS_Eval`s it from `C:/temp/neo_mods/<id>/neo/`.
   `s.setStarFlag`, `s.hasStarFlag`, `graph.betweenness`, `graph.isChokepoint`,
   `log`, `apiVersion`. `s.name` and `s.variable()` are deferred until a static
   read path is resolved; they are absent from `api.def` rather than guessed.
-  Flag names are string literals only, and the build rejects names that collide
-  case-insensitively with an official keyword.
+  Flag names are string literals only, must be declared in `neo/mod.json`'s
+  `flags` (at most 32 names, 1–15 lowercase bytes each), and the build rejects
+  names that collide case-insensitively with an official keyword. The host mints
+  those names at **install** time, before the script parser runs, so the id stays
+  inside the engine's 16-bit flag key; an undeclared name fails closed with
+  `no_premint`. This premint path has **no live reading yet** (C2 is blocked).
 - **System scope only** — no country / fleet / planet / pop scopes.
 - **No `onMonthly` hook**: the monthly driver is the generated
   `on_action` → hidden event → `every_system` chain, i.e. the official script
