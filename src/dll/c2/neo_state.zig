@@ -47,6 +47,28 @@ pub fn encodeNumber(number: u32) u64 {
     return @as(u64, number) * 100_000;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2 A1: the official `set_star_flag` object (`s.setStarFlag`)
+// ---------------------------------------------------------------------------
+//
+// class_info `0x2610e80` → create `0x1895620`: `new(0x298)` → memset → base ctor
+// `0x1840700` → publish vtable at `[obj+0]`. The vtable's `+0x48` slot is `0x180f8e0`;
+// that body takes the `[+0xE8] == 0` branch and reads the u16 flag token id from
+// `[+0xC0]`, resolves the system through `[vptr+0xE0]` (`0x180f8d0` → `0x397490`)
+// and calls the engine's own flag writer `0x1bce180`. Zeroing the object is the
+// whole layout: the string form (`+0xC8`/`+0xF8`, gated by `+0xE8 != 0`) is unused.
+pub const STAR_FLAG_OBJECT_SIZE: usize = 0x298;
+pub const STAR_FLAG_VTABLE: usize = 0x26049B0;
+pub const STAR_FLAG_ID_OFF: usize = 0xC0;
+pub const STAR_FLAG_STRING_SIZE_OFF: usize = 0xE8;
+
+/// 摆一个「解析出 `set_star_flag = <flag_id>`」的对象。vtable 由调用方摆
+/// (`neo_vtable.setStarFlag`),与 `layoutNumber` 同一条纪律。
+pub fn layoutStarFlag(obj: *[STAR_FLAG_OBJECT_SIZE]u8, flag_id: u16) void {
+    @memset(obj, 0);
+    std.mem.writeInt(u16, obj[STAR_FLAG_ID_OFF..][0..2], flag_id, .little);
+}
+
 /// 把一个零初始化对象摆成「解析出了 `which = <name>`、`value = <number>` 的
 /// `set_variable`」。**不摆 vtable**(调用方摆)、不动 `+0x300`(保持 0,这是短路的前提)。
 ///
@@ -99,4 +121,24 @@ test "the object is the size the official create allocates" {
     try std.testing.expectEqual(@as(usize, 0x318), OBJECT_SIZE);
     try std.testing.expectEqual(@as(usize, 0xD0), NAME_STRING_OFF);
     try std.testing.expectEqual(@as(usize, 0x310), VALUE_CELL_OFF);
+}
+
+test "layoutStarFlag puts the u16 token id at +0xC0 and leaves +0xE8 zero" {
+    var obj: [STAR_FLAG_OBJECT_SIZE]u8 = [_]u8{0xFF} ** STAR_FLAG_OBJECT_SIZE;
+    layoutStarFlag(&obj, 10139);
+    try std.testing.expectEqual(@as(u16, 10139), std.mem.readInt(u16, obj[STAR_FLAG_ID_OFF..][0..2], .little));
+    // The body only takes the direct-id branch when [obj+0xE8] == 0.
+    try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, obj[STAR_FLAG_STRING_SIZE_OFF..][0..8], .little));
+    // Nothing else is allowed to survive: a stale byte anywhere else could steer
+    // the body into the string path or the resolver.
+    for (obj, 0..) |b, i| {
+        if (i == STAR_FLAG_ID_OFF or i == STAR_FLAG_ID_OFF + 1) continue;
+        try std.testing.expectEqual(@as(u8, 0), b);
+    }
+}
+
+test "the star-flag object is the size the official create allocates" {
+    try std.testing.expectEqual(@as(usize, 0x298), STAR_FLAG_OBJECT_SIZE);
+    try std.testing.expectEqual(@as(usize, 0x26049B0), STAR_FLAG_VTABLE);
+    try std.testing.expectEqual(@as(usize, 0xC0), STAR_FLAG_ID_OFF);
 }

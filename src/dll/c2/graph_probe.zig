@@ -303,6 +303,84 @@ pub fn systemDegree(id: u32) ?u32 {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2 (Runtime JS A2): neighbors + system flags, read-only container walks
+// ---------------------------------------------------------------------------
+
+/// `s.neighbors` 的返回上限(计划 §A2:上限如 64,截断要记日志)。64 远大于 4.4.4
+/// 活体最大度数;超了返回 `written < total`,调用方写一行 `NEO_JS_NEIGHBORS_TRUNC`。
+pub const MAX_NEIGHBORS: usize = 64;
+
+pub const NeighborRead = struct {
+    /// 写进 `out` 的条数 = `min(count, MAX_NEIGHBORS)`。
+    written: usize,
+    /// 容器头里的原始条数(`+0x59c`);`total > written` 就是截断。
+    total: u32,
+};
+
+/// 从一个系统对象读邻居 id 列表。与 `readSystemEdges` 同口径:数据 `+0x590`、计数
+/// `+0x59c`、步长 `0x20`、元素 `+8` = 邻居 id;容量守卫(`count > capacity` ⇒ 拒读)
+/// 也在同一格。只读,不缓存。
+pub fn neighborsAt(mem: Memory, system: usize, out: *[MAX_NEIGHBORS]u32) ?NeighborRead {
+    if (system == 0) return null;
+    const count = readDword(mem, gg.addAddr(system, graph.EDGE_COUNT_OFF) orelse return null) orelse
+        return null;
+    if (count == 0) return .{ .written = 0, .total = 0 };
+    if (count > graph.MAX_EDGE_COUNT) return null;
+    const capacity = readDword(mem, gg.addAddr(system, graph.EDGE_CAPACITY_OFF) orelse return null) orelse
+        return null;
+    if (count > capacity) return null;
+    const data = readPtr(mem, gg.addAddr(system, graph.EDGE_DATA_OFF) orelse return null) orelse
+        return null;
+    if (data == 0) return null;
+
+    const n = @min(@as(usize, count), MAX_NEIGHBORS);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        out[i] = readDword(mem, gg.elemAddr(data, i, graph.EDGE_STRIDE, graph.EDGE_ID_OFF) orelse
+            return null) orelse return null;
+    }
+    return .{ .written = n, .total = count };
+}
+
+/// `s.neighbors` 的生产入口:按 id 解析系统对象,读一趟邻居。
+pub fn systemNeighbors(id: u32, out: *[MAX_NEIGHBORS]u32) ?NeighborRead {
+    const ctx = resolveContext() orelse return null;
+    const obj = resolveIn(ctx, id) orelse return null;
+    return neighborsAt(memAdapter(), obj, out);
+}
+
+/// 系统 flag 容器里的 u16 flag token id 数组。写路径 `0x180f8e0` / `0x1bce180` 与
+/// 删路径 `0x1bce270` 用的是同一格(`+0x5f8` 容器、`+0x10` 数组、`+0x1c` 计数);
+/// 这里只扫描、不写。
+pub fn hasFlagAt(mem: Memory, system: usize, flag_id: u16) ?bool {
+    if (system == 0) return null;
+    const container = gg.addAddr(system, graph.FLAG_SET_OFF) orelse return null;
+    const count = readDword(mem, gg.addAddr(container, graph.FLAG_COUNT_OFF) orelse return null) orelse
+        return null;
+    if (count == 0) return false;
+    if (count > graph.MAX_FLAG_COUNT) return null;
+    const data = readPtr(mem, gg.addAddr(container, graph.FLAG_ID_ARRAY_OFF) orelse return null) orelse
+        return null;
+    if (data == 0) return null;
+
+    const n: usize = count;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const addr = gg.elemAddr(data, i, graph.FLAG_ID_SIZE, 0) orelse return null;
+        const got = readWord(mem, addr) orelse return null;
+        if (got == flag_id) return true;
+    }
+    return false;
+}
+
+/// `s.hasStarFlag` 的生产入口。
+pub fn systemHasFlag(id: u32, flag_id: u16) ?bool {
+    const ctx = resolveContext() orelse return null;
+    const obj = resolveIn(ctx, id) orelse return null;
+    return hasFlagAt(memAdapter(), obj, flag_id);
+}
+
+// ---------------------------------------------------------------------------
 // 进程内 Memory 适配
 // ---------------------------------------------------------------------------
 
@@ -321,6 +399,12 @@ fn readDword(mem: Memory, addr: usize) ?u32 {
     return std.mem.readInt(u32, &buf, .little);
 }
 
+fn readWord(mem: Memory, addr: usize) ?u16 {
+    var buf: [2]u8 = undefined;
+    if (!mem.read(mem.ctx, addr, buf.len, &buf)) return null;
+    return std.mem.readInt(u16, &buf, .little);
+}
+
 fn readPtr(mem: Memory, addr: usize) ?usize {
     var buf: [@sizeOf(usize)]u8 = undefined;
     if (!mem.read(mem.ctx, addr, buf.len, &buf)) return null;
@@ -333,4 +417,117 @@ comptime {
     // 两个改边例程的真 RVA(§1.1)。写成常量断言,免得手滑少一个字符。
     if (RVA_ADD_EDGE != 0x8BBAA0) @compileError("RVA_ADD_EDGE drifted from §1.1");
     if (RVA_REMOVE_EDGE != 0x8BBC20) @compileError("RVA_REMOVE_EDGE drifted from §1.1");
+}
+
+// ---------------------------------------------------------------------------
+// Tests — the Phase 2 container walks against a synthetic image. No engine.
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+const TestMem = struct {
+    bytes: [0x1000]u8 align(8) = [_]u8{0} ** 0x1000,
+    base: usize = 0x1000_0000,
+
+    fn read(ctx: *anyopaque, addr: usize, len: usize, buf: []u8) bool {
+        const self: *TestMem = @ptrCast(@alignCast(ctx));
+        if (addr < self.base) return false;
+        const off = addr - self.base;
+        if (off + len > self.bytes.len) return false;
+        @memcpy(buf, self.bytes[off..][0..len]);
+        return true;
+    }
+
+    fn mem(self: *TestMem) Memory {
+        return .{ .ctx = @ptrCast(self), .read = TestMem.read };
+    }
+
+    fn writeU32(self: *TestMem, off: usize, v: u32) void {
+        std.mem.writeInt(u32, self.bytes[off..][0..4], v, .little);
+    }
+
+    fn writeU64(self: *TestMem, off: usize, v: u64) void {
+        std.mem.writeInt(u64, self.bytes[off..][0..8], v, .little);
+    }
+
+    fn writeU16(self: *TestMem, off: usize, v: u16) void {
+        std.mem.writeInt(u16, self.bytes[off..][0..2], v, .little);
+    }
+};
+
+const SYSTEM_OFF: usize = 0x100; // system object inside the synthetic image
+const EDGE_DATA_OFF: usize = 0x200;
+const FLAG_DATA_OFF: usize = 0x300;
+
+fn armEdges(tm: *TestMem, count: u32, capacity: u32) void {
+    tm.writeU64(SYSTEM_OFF + graph.EDGE_DATA_OFF, @as(u64, @intCast(tm.base + EDGE_DATA_OFF)));
+    tm.writeU32(SYSTEM_OFF + graph.EDGE_CAPACITY_OFF, capacity);
+    tm.writeU32(SYSTEM_OFF + graph.EDGE_COUNT_OFF, count);
+}
+
+test "neighborsAt walks the same +0x590/+0x59c container as readGraph" {
+    var tm = TestMem{};
+    armEdges(&tm, 3, 4);
+    tm.writeU32(EDGE_DATA_OFF + 0 * graph.EDGE_STRIDE + graph.EDGE_ID_OFF, 11);
+    tm.writeU32(EDGE_DATA_OFF + 1 * graph.EDGE_STRIDE + graph.EDGE_ID_OFF, 22);
+    tm.writeU32(EDGE_DATA_OFF + 2 * graph.EDGE_STRIDE + graph.EDGE_ID_OFF, 33);
+
+    var out: [MAX_NEIGHBORS]u32 = undefined;
+    const r = neighborsAt(tm.mem(), tm.base + SYSTEM_OFF, &out).?;
+    try testing.expectEqual(@as(usize, 3), r.written);
+    try testing.expectEqual(@as(u32, 3), r.total);
+    try testing.expectEqualSlices(u32, &.{ 11, 22, 33 }, out[0..3]);
+}
+
+test "neighborsAt truncates at MAX_NEIGHBORS and reports the raw count" {
+    var tm = TestMem{};
+    armEdges(&tm, MAX_NEIGHBORS + 5, MAX_NEIGHBORS + 10);
+    var i: usize = 0;
+    while (i < MAX_NEIGHBORS + 5) : (i += 1) {
+        tm.writeU32(EDGE_DATA_OFF + i * graph.EDGE_STRIDE + graph.EDGE_ID_OFF, @intCast(i));
+    }
+    var out: [MAX_NEIGHBORS]u32 = undefined;
+    const r = neighborsAt(tm.mem(), tm.base + SYSTEM_OFF, &out).?;
+    try testing.expectEqual(MAX_NEIGHBORS, r.written);
+    try testing.expectEqual(@as(u32, MAX_NEIGHBORS + 5), r.total);
+    try testing.expectEqual(@as(u32, MAX_NEIGHBORS - 1), out[MAX_NEIGHBORS - 1]);
+}
+
+test "neighborsAt refuses a container whose count exceeds its capacity" {
+    var tm = TestMem{};
+    armEdges(&tm, 9, 8);
+    var out: [MAX_NEIGHBORS]u32 = undefined;
+    try testing.expectEqual(@as(?NeighborRead, null), neighborsAt(tm.mem(), tm.base + SYSTEM_OFF, &out));
+    try testing.expectEqual(@as(?NeighborRead, null), neighborsAt(tm.mem(), 0, &out));
+}
+
+test "hasFlagAt scans the u16 id array the official set/remove bodies use" {
+    var tm = TestMem{};
+    const container = SYSTEM_OFF + graph.FLAG_SET_OFF;
+    tm.writeU64(container + graph.FLAG_ID_ARRAY_OFF, @as(u64, @intCast(tm.base + FLAG_DATA_OFF)));
+    tm.writeU32(container + graph.FLAG_COUNT_OFF, 3);
+    tm.writeU16(FLAG_DATA_OFF + 0, 7);
+    tm.writeU16(FLAG_DATA_OFF + 2, 9);
+    tm.writeU16(FLAG_DATA_OFF + 4, 11);
+
+    const mem = tm.mem();
+    const obj = tm.base + SYSTEM_OFF;
+    try testing.expectEqual(@as(?bool, true), hasFlagAt(mem, obj, 9));
+    try testing.expectEqual(@as(?bool, true), hasFlagAt(mem, obj, 7));
+    try testing.expectEqual(@as(?bool, true), hasFlagAt(mem, obj, 11));
+    try testing.expectEqual(@as(?bool, false), hasFlagAt(mem, obj, 10));
+    try testing.expectEqual(@as(?bool, false), hasFlagAt(mem, obj, 0));
+
+    // Zero count is an empty set, not an unreadable container.
+    tm.writeU32(container + graph.FLAG_COUNT_OFF, 0);
+    try testing.expectEqual(@as(?bool, false), hasFlagAt(mem, obj, 9));
+}
+
+test "hasFlagAt fails closed on an unreadable container" {
+    var tm = TestMem{};
+    const container = SYSTEM_OFF + graph.FLAG_SET_OFF;
+    tm.writeU32(container + graph.FLAG_COUNT_OFF, 3);
+    // count > 0 but no data pointer.
+    tm.writeU64(container + graph.FLAG_ID_ARRAY_OFF, 0);
+    try testing.expectEqual(@as(?bool, null), hasFlagAt(tm.mem(), tm.base + SYSTEM_OFF, 7));
 }
