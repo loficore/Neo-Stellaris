@@ -24,6 +24,7 @@ const windows = @import("../hooking/windows.zig");
 const neo_effect = @import("neo_effect.zig");
 const neo_state = @import("neo_state.zig");
 const chokepoint_table = @import("chokepoint_table.zig");
+const neo_js_host = @import("neo_js_host.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -210,7 +211,10 @@ pub fn runSet(child: u64, scope: u64, a3: u64) u64 {
 /// The per-system body. Order is load-bearing (plan Task 2 Step 3): count →
 /// scope gate → read id → rule → compose → count → call. Nothing here writes
 /// engine memory; the only engine call is the official `log` implementation
-/// with a stack object.
+/// with a stack object.  Since Phase 1 Track A the same hit is then handed to
+/// the Runtime JS host (`notifyHost` → `neo_js_host.onSystem`); the host owns
+/// its own writes and only ever reaches the engine through the official
+/// `set_variable` body.
 pub fn runBody(scope: u64, a3: u64) u64 {
     _ = @atomicRmw(u64, &stat_calls, .Add, 1, .monotonic);
     if (!scopeReadable(@intCast(scope))) {
@@ -253,7 +257,15 @@ pub fn runBody(scope: u64, a3: u64) u64 {
 
     _ = @atomicRmw(u64, &stat_log_calls, .Add, 1, .monotonic);
     const log_fn: *const fn (u64, u64, u64) callconv(.c) u64 = @ptrFromInt(log_effect_addr);
-    return log_fn(@intFromPtr(&obj), scope, a3);
+    const rc = log_fn(@intFromPtr(&obj), scope, a3);
+
+    // Runtime JS(Phase 1 Track A):官方 `log` 之后,把同一个逐系统命中交给 host。
+    // 这里是**游戏主线程**的同步区间 —— host 的 QuickJS context 就在这条路径上懒建
+    // (计划 Review Focus 1);`scope` 只这一趟有效,host 不跨调用保存它。
+    // 非 Windows 目标上 `notifyHost` 走空实现:c2_tests 那条 native 根不链 QuickJS,
+    // 所以 `neo_js_host` 的那条 `@import` 只在 Windows 分支里被真正解析。
+    notifyHost(id, scope);
+    return rc;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +304,23 @@ pub fn stateResolved() bool {
 pub fn armWritePathForTest(body: usize, vtable: usize) void {
     state_body_addr = body;
     state_vtable_addr = vtable;
+}
+
+/// Runtime JS 的接收端。生产路径是 `neo_js_host.onSystem`;native 测试根不链
+/// QuickJS,所以 `runBody` 经这一层转交 —— 测试用 `setHostHookForTest` 把它换成
+/// 一个记录器,从而在 Linux 上钉住「同一 id/同一 scope、且在官方 log 之后」这条接线。
+var host_hook: ?*const fn (id: u32, scope: u64) void = null;
+
+pub fn setHostHookForTest(h: ?*const fn (id: u32, scope: u64) void) void {
+    host_hook = h;
+}
+
+fn notifyHost(id: u32, scope: u64) void {
+    if (host_hook) |h| {
+        h(id, scope);
+        return;
+    }
+    if (comptime is_windows) neo_js_host.onSystem(id, scope);
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +398,7 @@ pub fn resetForTest() void {
     stat_non_system_scope = 0;
     last_id = 0;
     hit_count = 0;
+    host_hook = null;
     @memset(std.mem.asBytes(&hits), 0);
 }
 
@@ -585,4 +615,79 @@ test "systemScopeId accepts only a 0x80 system scope and reads the id at +0x10" 
     // Null and implausible pointers are refused, not dereferenced.
     try std.testing.expectEqual(@as(?u32, null), systemScopeId(0));
     try std.testing.expectEqual(@as(?u32, null), systemScopeId(0x1000));
+}
+
+// --- Track A wiring: runBody -> Runtime JS host ------------------------------
+
+var host_hook_calls: usize = 0;
+var host_hook_id: u32 = 0;
+var host_hook_scope: u64 = 0;
+var seq: u32 = 0;
+var seq_log: u32 = 0;
+var seq_host: u32 = 0;
+
+fn stubLogSeq(self_ptr: u64, scope: u64, a3: u64) callconv(.c) u64 {
+    _ = self_ptr;
+    _ = scope;
+    _ = a3;
+    seq_log = seq;
+    seq += 1;
+    return 0;
+}
+
+fn hostHook(id: u32, scope: u64) void {
+    host_hook_calls += 1;
+    host_hook_id = id;
+    host_hook_scope = scope;
+    seq_host = seq;
+    seq += 1;
+}
+
+test "runBody hands the same id and scope to the Runtime JS host, after the official log" {
+    resetForTest();
+    defer {
+        setHostHookForTest(null);
+        resetForTest();
+    }
+    log_effect_addr = @intFromPtr(&stubLogSeq);
+    setHostHookForTest(&hostHook);
+    host_hook_calls = 0;
+    host_hook_id = 0xFFFF_FFFF;
+    host_hook_scope = 0;
+    seq = 0;
+    seq_log = 0;
+    seq_host = 0;
+    neo_effect.setRule(1, 0); // every system
+    defer neo_effect.setRule(0, 0);
+
+    var scope: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, scope[SCOPE_MASK_OFF..][0..4], 0x80, .little);
+    std.mem.writeInt(u32, scope[SCOPE_ID_OFF..][0..4], 7, .little);
+    _ = runBody(@intFromPtr(&scope), 0);
+
+    try std.testing.expectEqual(@as(usize, 1), host_hook_calls);
+    try std.testing.expectEqual(@as(u32, 7), host_hook_id);
+    // The scope is passed through unchanged — the host re-reads the id from it.
+    try std.testing.expectEqual(@as(u64, @intFromPtr(&scope)), host_hook_scope);
+    // Order is load-bearing: the engine's own `log` line is written first.
+    try std.testing.expect(seq_log < seq_host);
+}
+
+test "runBody does not reach the host when the rule rejects the system" {
+    resetForTest();
+    defer {
+        setHostHookForTest(null);
+        resetForTest();
+    }
+    log_effect_addr = @intFromPtr(&stubLogSeq);
+    setHostHookForTest(&hostHook);
+    host_hook_calls = 0;
+    neo_effect.setRule(0, 0); // rule disabled => every system is rejected
+
+    var scope: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, scope[SCOPE_MASK_OFF..][0..4], 0x80, .little);
+    std.mem.writeInt(u32, scope[SCOPE_ID_OFF..][0..4], 7, .little);
+    _ = runBody(@intFromPtr(&scope), 0);
+
+    try std.testing.expectEqual(@as(usize, 0), host_hook_calls);
 }
