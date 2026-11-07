@@ -277,6 +277,26 @@ Full reading: `evidence/logs/runtime_js_phase1_4_4_4.log`; issue #55. The exampl
 gained the v1.1 `hasStarFlag`/`setStarFlag` demo (guarded, so the per-pass write cadence is
 unchanged); the reading above is the Phase 1 bundle's and has **not** been re-taken.
 
+### Phase 2 C2 (multi-mod safety + flags)
+
+Two live shots (pid 25040 on `ce0fc76e…`, pid 25752 on `939d21f1…`), one campaign, four runtime
+mods (1 good + `bad_throw` / `bad_timeout` / `bad_perm`), `--act log --rule 1:0`:
+
+- **Isolation passed.** Each bad mod failed exactly once on its first dispatch and was disabled;
+  the good mod kept running (4 and 5 monthly passes; `NEO_JS_CALL` 3,152 and 3,940 = 788 × n;
+  `neo_score` writes 15/pass). Host alive in both, `taskkill` at the end.
+- **Star flags failed live, and the reason is structural.** `setStarFlag("neo_hub")` is rejected
+  with `reason=no_flag_token_range raw=68639`: the engine mints the name to token id **68,639**,
+  while `set_star_flag` stores the flag key in a **u16** cell (`[obj+0xC0]`). New names in this
+  install are minted past the 16-bit boundary (`[db+0x84]` = 18,817 static max + ≈49.8k dynamic
+  names), so **no freshly minted name can be used as a flag key**. `hasStarFlag` fails on the
+  same mint (`NEO_JS_FLAG_REJECT … reason=no_token raw=68639`).
+- Which means the v1.1 flag APIs are **not usable as specified**; they are not merely unproven.
+  Options (defer / truncate to u16 / restrict to pre-existing low ids) are recorded in
+  `evidence/logs/runtime_js_phase2_safety_4_4_4.log` and left as an explicit decision, not
+  silently picked.
+- Reading: `evidence/logs/runtime_js_phase2_safety_4_4_4.log`; #59, #60.
+
 ## Limits (host-enforced)
 
 - Context memory **16 MiB**, stack **1 MiB**.
@@ -291,8 +311,9 @@ unchanged); the reading above is the Phase 1 bundle's and has **not** been re-ta
 - No `s.name` and no `s.variable()` read. They stay out of `api.def` until Track A's static spike
   resolves an official body/read path for each one; a deferred name is simply absent, never
   guessed.
-- Star flags exist but are name-literal only: the build-time gate rejects computed names and
-  official-keyword collisions (see the flag-name gate above).
+- Star flags exist in the type surface but **do not work live** on an install whose token space
+  has grown past 65,535 (see the C2 section). The build-time gate still rejects computed names
+  and official-keyword collisions; that gate is necessary but not sufficient.
 - No country / fleet / planet / pop scopes; system scope only.
 - No `onMonthly` or any global tick hook. The monthly driver is a generated `on_action` + hidden
   `event` pair, i.e. the official script path.

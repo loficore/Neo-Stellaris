@@ -126,12 +126,57 @@ RVA）直接写进 `[obj+0]`。`set_star_flag` 的 body 用这一格做 `[rax+0x
 `raw` 是 `0x1D13270` 的**原始** u32 返回（0 = 没 mint 出来）。没有这一格，
 「引擎没发 id」和「发了但超过 u16」在日志上长得一样。
 
+## 第二发：带诊断的字节，mint 判词落定（2026-11-07）
+
+第二发只改字节（DLL `939d21f1…34a3ebe`，含上面的 vtable 修复与 `raw=` 诊断），mod 集合与口径
+不变：pid **25752**，`BOOT … effect_id=19343 set_id=19344 install_rc=0 alive=1`，`--act log
+--rule 1:0 --allow-window`，结束 `taskkill /F /PID 25752`。
+
+### 读数（`C:/temp/neo_js.log`，4,248 行）
+
+| 键 | 读数 | 判读 |
+|---|---|---|
+| `NEO_JS_CALL` | 3,940 = 788 × **5** | 5 个完整 pass |
+| `NEO_JS_WRITE`（`neo_score`） | **75** = 15 × 5 | 变量写仍然正常 |
+| `NEO_JS_ERROR` / `TIMEOUT` | 1 / 1 | 与第一发相同：各只一次、只停自己 |
+| `NEO_JS_WRITE_REJECT` | 76 | 1 越权 + **75 flag（15 × 5）** |
+| `NEO_JS_FLAG_REJECT` | 75 | 新诊断：读 flag 也 mint 失败 |
+| `reason=` | 75 × `no_flag_token_range` + 75 × `no_token` + 1 × `no_permission` | 三档分开了 |
+| `raw=` | **150 × `68639`** | **决定性读数** |
+
+逐字（第一行即判词）：
+
+    NEO_JS_WRITE_REJECT id=82 name=neo_hub reason=no_flag_token_range raw=68639 kind=flag
+    NEO_JS_FLAG_REJECT id=82 name=neo_hub reason=no_token raw=68639
+
+### 判词：token 空间已经越过 u16，flag 容器装不下新名字
+
+- `0x1D13270` 把 `neo_hub` mint 成 **68,639**，不是 0，也不是 `no_flag_body`。
+- `set_star_flag` 的对象把 flag id 存成 **u16**（`[obj+0xC0]`，body 用 `movzx … word`），
+  所以 68,639 无法表示；host 的 `id > 0xFFFF` fail-closed 是**正确**的选择，不是缺省失败。
+- 新 id = `[db+0x84] + [db+0x64] + 1`：本进程 `[db+0x84] = 18,817`（静态最大 id），
+  于是 **`[db+0x64]`（动态名字数）≈ 49,821**。这个安装的名字池已经把 16 位空间用完。
+- 结论是**结构性**的，不是 host 的 bug：只要名字池 > 65,535，任何**新 mint 的名字**都不能作为
+  u16 flag 键。`s.setStarFlag` / `s.hasStarFlag` 在当前安装上**不可用**。
+- 同一机制也适用于脚本自己的 `set_star_flag = <新名字>`（它走同一个 mint、同一个 u16 槽位），
+  但本发**没有**用官方脚本验证这一点；这句只作为推断记录，不作为读数。
+
+### 由这两个读数确定的剩余选择
+
+1. **defer**（推荐）：v1.1 不带 flag 写/读，把 u16 键空间列为 Phase 2.5 的研究项。
+2. **截断**：把 68,639 写成 `68,639 & 0xFFFF = 3,103`。与引擎的 u16 表示一致，但会产生
+   **静默别名**（两个不同名字落到同一个 flag 键），与项目「禁止静默接管」的纪律冲突。
+3. **只允许已存在且 id < 65,536 的名字**：等于只允许官方词，作者无法命名自己的 flag。
+
+本发**不做**选择；记录读数与三条路的代价。
+
 ## 边界（不能说）
 
-- **只证明这一次、这个存档、这个机位**：一个 campaign、四个 runtime mod、四个 pass。
+- **只证明这两次、这个存档、这个机位**：一个 campaign、四个 runtime mod、4 + 5 个 pass。
 - **`neighbors` 本发没被调用**（好 mod 只用了 betweenness / setVariable / flag / log）——
   A2 的邻居数组仍只有离线测试，没有实机读数。
-- **flag 写判负，flag 读未证明**；vtable 修复与诊断拆分都**没有实机读数**。
+- **flag 写判负（第一发）**；第二发把原因钉在 mint 的 u16 超界（`raw=68639`），
+  但 vtable 修复本身仍**没有实机读数**（mint 先失败，body 依旧没跑到）。
 - 三个坏法都在**第一次派发**（id=0）触发；没有验证「跑了几百次之后才坏」的路径。
 - 时间分辨率只有秒级；`CALL=3,152` 是 4 个 pass 的分派计数，不是每 session 计数。
 - 战役从 `autosave_2272.07.01.sav` 载入，跑了 4 个月；最新 autosave 已推进。
