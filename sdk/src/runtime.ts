@@ -1,3 +1,4 @@
+/// <reference path="./globals.d.ts" />
 // runtime.ts — the `@neo/runtime` surface.  Every entry point is a thin shim
 // over the frozen native contract in `sdk/api.def`; no state is cached here.
 //
