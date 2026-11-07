@@ -404,6 +404,22 @@ fn getToken(eng: *const Engine, holder: *const NameHolder) RegisterError!u32 {
     return id;
 }
 
+/// Phase 2 (Runtime JS A2): mint a token id without publishing a behaviour.
+///
+/// `set_star_flag` / `has_star_flag` are keyed by the **token id of the flag name**
+/// (the official `+0x48` body reads it as a u16 from `[obj+0xC0]`; the getter at
+/// `0x180f980` maps it back through the id→name table at `[db+0x70]`). A runtime flag
+/// must mint the same id the script lexer would, so this is the same `0x1D13270`
+/// call — but **nothing is inserted into a scripted db**, so §25.5's hijack
+/// scenario (a token id that an official keyword already owns) does not apply: the
+/// id is used as an opaque container key, and colliding with an existing token only
+/// means the flag shares that token's name, which is exactly the lexer's own
+/// case-folded behaviour. The caller must keep `holder`'s backing alive as long as
+/// the engine may retain it (`getToken`'s warning) — `neo_vtable` uses static holders.
+pub fn mintToken(eng: *const Engine, holder: *const NameHolder) RegisterError!u32 {
+    return getToken(eng, holder);
+}
+
 /// Step 3's precondition: the db object has to exist before anything can be inserted (§17).
 /// Both shapes are the ones the thunks actually use; nothing here invents a third.
 fn ensureDb(eng: *const Engine, db: Db) RegisterError!*align(16) anyopaque {
