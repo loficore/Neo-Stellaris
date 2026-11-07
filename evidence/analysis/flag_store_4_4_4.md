@@ -284,3 +284,187 @@ python3 scripts/disrva.py 0x135E40  --len=0x40
 python3 scripts/scratch/2026-11_flag_store/scan_flag_keyword.py --keyword set_star_flag
 ```
 
+---
+
+## 3. trigger 侧读手 + 读写同源交叉验证(计划 Task 3)
+
+### 3.1 读侧的容器出处:`0x1AA6460`(由它自己的错误串点名)
+
+`has_star_flag` 的 vtable `0x268cf48` 在 `+0xF0` 有一格 `0x1AA6460`,它引用的字符串
+是 **`"has_star_flag trigger at %d has Invalid Scope"`** —— 这是官方自己给该
+keyword 的命名,判据强度高于任何推断。
+
+```console
+$ python3 scripts/vtable.py 0x268CF48 --slots 40
+  [0x1e] +0xf0 -> 1aa6460  bounds 1aa6460..1aa64eb
+          str 26a5b28 "has_star_flag trigger at %d has Invalid Scope"
+  [0x4]  +0x20 -> 1aa5d10  bounds 1aa5d10..1aa5fb2     <-- parse(消费名字)
+  [0x5]  +0x28 -> 1a91a80  bounds 1a91a80..1a91ac4     <-- 共用求值基体(§77)
+```
+
+```console
+$ python3 scripts/disrva.py 0x1AA6460 --len=0x90
+  01aa6460  push    rdi
+  01aa6462  sub     rsp, 0x30
+  01aa6466  cmp     qword ptr [rdx + 8], 0x8000000     ; galaxy scope 特例
+  01aa646e  mov     rdi, rcx
+  01aa6471  jne     0x141aa6481
+  01aa6473  mov     rax, qword ptr [rdx + 0x24]
+  01aa6477  add     rax, 0x20
+  01aa647b  add     rsp, 0x30
+  01aa647f  pop     rdi
+  01aa6480  ret                                       ; galaxy: [scope+0x24]+0x20
+  01aa6481  mov     rcx, rdx
+  01aa6489  call    0x140393970  ; -> 0x393970          ; scope → 系统对象
+  ...
+  01aa64d4  call    0x141c91c30  ; -> 0x1c91c30          ; 报 Invalid Scope
+  01aa64d9  lea     rax, [rbx + 0x5f8]                   ; **container = 系统对象 + 0x5F8**
+  01aa64e0  mov     rbx, qword ptr [rsp + 0x40]
+  01aa64e5  add     rsp, 0x30
+  01aa64e9  pop     rdi
+  01aa64ea  ret
+```
+
+写侧的容器出处(§1.3 已读):`0x180F8E0` 的 `call [rax+0xE0]` → `0x180F8D0`
+(`mov rcx,rdx; jmp 0x397490`),`0x397490` 的 mask `0x80` 分支:
+
+```console
+$ python3 scripts/disrva.py 0x397490 --len=0x110
+  0039756e  call    0x140393970  ; -> 0x393970
+  00397573  add     rax, 0x5f8
+  00397579  add     rsp, 0x28
+  0039757d  ret
+```
+
+⇒ **两侧落到同一个 `scope(0x393970) + 0x5F8`**。判据 1(同成员偏移)**中**。
+
+### 3.2 container 的形状(逐字)
+
+```console
+$ python3 scripts/disrva.py 0x1BCE180 --len=0xD0
+  01bce180  mov     qword ptr [rsp + 8], rbx
+  01bce185  mov     dword ptr [rsp + 0x20], r9d          ; 第 4 参:0xFFFFFFFF 哨兵
+  01bce18a  mov     word ptr [rsp + 0x10], dx           ; 第 2 参:flag id (u16)
+  01bce194  mov     eax, 0xffff
+  01bce199  mov     rdi, r8                            ; 第 3 参:&日期 dword
+  01bce19c  mov     rbx, rcx                           ; 第 1 参:container
+  01bce19f  cmp     dx, ax
+  01bce1a2  je      0x141bce1ff                        ; id == 0xFFFF ⇒ **什么都不做**
+  01bce1a4  movsxd  rax, dword ptr [rcx + 0x1c]         ; container+0x1C = 计数
+  01bce1af  mov     r8, rax
+  01bce1b5  mov     rax, qword ptr [rbx + 0x10]        ; container+0x10 = u16 id 数组
+  01bce1c0  cmp     word ptr [rax], dx                 ; 线性扫描,逐 u16 比较
+  01bce1cb  add     rax, 2                             ; 元素宽度 2
+```
+
+命中分支(`0x1bce20a` 起):`mov r8,[rbx+0x28]` / `mov eax,[rdi]` /
+`mov [r8],eax`(`0x1bce226..0x1bce23e`)—— **把那个 dword 写进 `container+0x28`
+这张并行 u32 数组**,`r9d = 0xFFFFFFFF` 写进 `container+0x40`。
+未命中分支(`0x1bce1d4` 起):`0x1BCEE10`(压 id)+ `0x2A4990`(压值)+ `0x2C0520`。
+
+⇒ container 的实际布局:
+
+| 偏移 | 含义 |
+|---|---|
+| `+0x10` | **u16 flag id 数组** |
+| `+0x1C` | 元素计数(dword) |
+| `+0x28` | 并行 u32 数组(写手把日期写这里) |
+| `+0x40` | 并行 u32 数组(`0xFFFFFFFF` = 无到期) |
+
+这与存档 `flags = { 名字 = 时间戳 }` **同形**:名字由 flag id 经 §2.2 的
+`0x2A00DE0` 反查表还原,时间戳就是 `+0x28` 那一路的 dword。判据 3 **中**。
+
+### 3.3 判据 2:`0x180F590` 与 `0x1AA5D10` 是同一函数的两个副本
+
+这是本卷最硬的一条读数。把两个 parse 体规范化(抹掉地址/栈偏移/注释)后逐条对比:
+
+```
+set_star_flag parse instrs: 176   has_star_flag parse instrs: 176
+-lea r14, [rcx + 0x28]
++lea r14, [rcx + 0x40]
+-lea r8, [r15 + 0xf8]
+-lea rdx, [r15 + 0xc8]
++lea r8, [r15 + 0x258]
++lea rdx, [r15 + 0x228]
+-mov word ptr [r15 + 0xc0], ax
++mov word ptr [r15 + 0x220], ax
+```
+
+**176 条指令,只差 5 条**,且差异全部是**对象自身字段偏移**
+(effect 对象用 `+0xC0/+0xC8/+0xF8`,trigger 对象用 `+0x220/+0x228/+0x258`)。
+哈希、探测、SSO 容量门、`0x1BCF030` 插入、`0x158300` 落名字、`[0x326D110]` /
+`[0x326D118]` / `[0x326D11C]` 三个全局 —— **一个字节都不差**。
+
+```console
+$ python3 scripts/scratch/2026-11_flag_store/scan_flag_keyword.py --keyword has_star_flag
+# keyword=has_star_flag class_info=0x269f1d8 create=0x1b1ff60 new=0x3f8 vptrs=['0x268cf48']
+slot_off	slot_rva	func_rva	func_len	string_reads	id_reads	callees
+0x0020	0x268cf68	0x1aa5d10	0x2a2	... 0x1aa5e54:string_hash ... 0x1aa5f5f:name_vector_append	0x1aa5eeb:movzx_word ...	...
+```
+
+```console
+$ python3 scripts/scratch/2026-11_flag_store/scan_flag_keyword.py --keyword set_star_flag
+# keyword=set_star_flag class_info=0x2610e80 create=0x1895620 new=0x298 vptrs=['0x25f2b08', '0x26049b0']
+0x0038	0x25f2b40	0x180f590	0x2a2	0x180f5f6:string_assign;...;0x180f7df:name_vector_append	0x180f76b:movzx_word ...	...
+```
+
+**同一 `func_len` = `0x2a2`,同一 `string_reads`/`id_reads` 指纹。** 判据 2 **中**。
+
+### 3.4 唯一读 container 的那条 eval 体:`0x1AA6AE0`
+
+`has_star_flag` 的 `+0x20` slot `0x1AA5D10` 只做"名字→id 存进 `[obj+0x220]`"
+(它 `mov word [r15+0x220], ax` 后直接 `mov al,1; ret`,不返回谓词)。
+真正扫 container 的是同族里偏移 `+0x2A8` 的那一版:
+
+```console
+$ python3 scripts/disrva.py 0x1AA6AE0 --len=0x140
+  01aa6ae6  cmp     qword ptr [rcx + 0x2d0], 0
+  01aa6b2d  movzx   ebx, word ptr [rcx + 0x2a8]      ; 本对象自己的 u16 flag id
+  01aa6b37  call    0x140397490  ; -> 0x397490       ; **同一个 scope→container 解析器**
+  01aa6b49  movsxd  rax, dword ptr [rax + 0x1c]       ; 计数
+  01aa6b51  mov     rcx, qword ptr [r11 + 0x10]      ; u16 数组
+  01aa6b58  cmp     word ptr [rcx], bx               ; 线性扫描
+  01aa6b5d  inc     r9d
+  01aa6b63  add     rcx, 2
+  01aa6bbf  mov     rax, qword ptr [r11 + 0x40]      ; **命中后读并行 u32 数组**
+  01aa6bc6  mov     r8d, dword ptr [rax + rcx*4]
+  01aa6b75  imul    rcx, rax, 0x186a0                ; ×100000(定点)
+```
+
+**它走的是同一个 `0x397490`、同一个 `+0x1C`/`+0x10` 布局、同一张 `+0x40`
+并行数组** —— 与写手 `0x1BCE180` 逐字段对齐。这坐实了 container 的语义,
+也说明 `+0x5F8` 确实是**读写共用的那个 store**。
+
+**边界(必须写)**:`0x1AA6AE0` 在 vtable `0x268ddb8` 族里,"has_star_flag"这个名字
+是 `0x1AA6460` 的错误串给的,不是 `0x1AA6AE0` 自己的。所以:
+"container 布局与读写同源" = `pinned`;**`has_star_flag` 的那条 `+0x28` 求值槽
+(共用基体 `0x1A91A80` 尾跳 `[vptr+0x20]`)在 §77 已读成 `0x1AA5D10`,
+而 `0x1AA5D10` 只做 parse/存 id、返回 `al=1`** —— 缺口是"谁来把 `[obj+0x220]`
+和 container 比一次"。本卷**没有**读到 `has_star_flag` 自己的比较指令
+(候选是 `0x348B60` 那条 `[vptr+0xb8]` → `[vptr+0x18]` 的通用 trigger 求值基体),
+所以该格标 `unresolved`(见 §4 的 `eval_body`)。
+
+### 3.5 交叉验证判决:三条判据逐条落点
+
+| 判据 | 读数 | 判词 |
+|---|---|---|
+| 1. 同一个对象成员偏移 | 写:`0x397490` mask 0x80 → `0x393970(scope)+0x5F8`;读:`0x1AA6460` → `lea rax,[rbx+0x5f8]` | **中** |
+| 2. 同一族 map/hash helper | `0x180F590` 与 `0x1AA5D10` 176 条指令只差 5 条字段偏移;同用 `0x1C9E350`/`0x1BCF030`/`0x158300`/`[0x326D110]` | **中** |
+| 3. 形状与存档 `flags=` 一致 | container = `u16 id[](+0x10)` + 计数(`+0x1C`) + 并行 u32 日期(`+0x28`/`+0x40`);id 经 `0x2A00DE0` 反查回名字 | **中**(反查表 pinned,序列化函数未读) |
+
+⇒ **判词 `same_store`**(三条全中)。**但键空间是 flag 表,不是 token 表** ——
+A1 的失败在这一格,不在容器选择。
+
+### 3.6 复现(§3)
+
+```bash
+python3 scripts/disrva.py 0x1AA6460 --len=0x90
+python3 scripts/disrva.py 0x397490  --len=0x110
+python3 scripts/disrva.py 0x1BCE180 --len=0xD0
+python3 scripts/disrva.py 0x1AA6AE0 --len=0x140
+python3 scripts/scratch/2026-11_flag_store/scan_flag_keyword.py --keyword has_star_flag
+# 176 vs 176 那条 diff:
+python3 scripts/scratch/2026-11_flag_store/diff_parse_bodies.py --a 0x180F590 --b 0x1AA5D10
+```
+
+

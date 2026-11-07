@@ -49,6 +49,19 @@ deleter · docstring · doc_first_line · insert_fn_rva`。
 **注意 TSV 的 `col[7]`(0x34c090)是全表共享的 deleting destructor,不是 `create`**;
 `create` 只能从 `class_info` 的第二个 qword 读(`cinfo.py` 的口径),脚本已按此实现。
 
+## `diff_parse_bodies.py`
+
+对比两个 parse 体是不是同一函数的两个副本(取证卷 §3.3 的生产者):
+
+```bash
+python3 scripts/scratch/2026-11_flag_store/diff_parse_bodies.py --a 0x180F590 --b 0x1AA5D10
+```
+
+输出:`A`/`B` 各自的 `.pdata` 区间与指令条数,然后是规范化后的 unified diff。
+规范化**抹掉**地址、`[rsp + X]`、注释;**保留** mnemonic / 寄存器 / **结构体字段偏移**
+—— 后者正是要看的东西。两个实机 keyword 的读数:176 vs 176,只差 5 条,全是
+对象字段偏移(`+0xC0/+0xC8/+0xF8` vs `+0x220/+0x228/+0x258`)。
+
 ### 判读陷阱(踩过的)
 
 * **`.pdata` 起点才是函数边界**。`vtable.py` 用 "目标 == RUNTIME_FUNCTION 起点"
