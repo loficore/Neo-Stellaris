@@ -2,15 +2,21 @@
 // runtime.ts — the `@neo/runtime` surface.  Every entry point is a thin shim
 // over the frozen native contract in `sdk/api.def`; no state is cached here.
 //
-// `System` intentionally carries only `id` (plus `degree`, which is read on
-// each access).  The host may only use the engine scope for the duration of
-// one call, so the SDK must not retain anything but the numeric id.
+// `System` intentionally carries only `id` (plus `degree` and `neighbors`,
+// which are read on each access).  The host may only use the engine scope for
+// the duration of one call, so the SDK must not retain anything but the numeric
+// id.
+//
+// v1.1 is additive: `neighbors` is the only new member.  `API_VERSION` stays 1,
+// so a Phase 1 bundle keeps running unchanged.
 
 export const API_VERSION = 1;
 
 export interface System {
   readonly id: number;
   readonly degree: number;
+  /** Hyperlane neighbour system ids, as a fresh array on each access. */
+  readonly neighbors: readonly number[];
   setVariable(name: string, value: number): void;
 }
 
@@ -20,6 +26,9 @@ export function onSystem(fn: (s: System) => void): void {
       id,
       get degree(): number {
         return __neo_system_degree(id);
+      },
+      get neighbors(): readonly number[] {
+        return __neo_system_neighbors(id);
       },
       setVariable(name: string, value: number): void {
         __neo_system_set_var(id, name, value);

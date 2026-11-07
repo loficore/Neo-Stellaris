@@ -14,13 +14,14 @@ const sdkRoot = path.resolve(here, "..");
 installMockHost();
 const runtime = await import("../dist/runtime.js");
 
-test("api.def is the frozen v1 contract", () => {
+test("api.def is the v1.1 contract (v1 grew `neighbors` only)", () => {
   const def = JSON.parse(readFileSync(path.join(sdkRoot, "api.def"), "utf8"));
   assert.deepEqual(def, {
     version: 1,
     functions: [
       { name: "__neo_register_system", params: ["function"], returns: "void" },
       { name: "__neo_system_degree", params: ["u32"], returns: "u32" },
+      { name: "__neo_system_neighbors", params: ["u32"], returns: "array<u32>" },
       { name: "__neo_system_set_var", params: ["u32", "string", "f64"], returns: "void" },
       { name: "__neo_graph_betweenness", params: ["u32"], returns: "u32" },
       { name: "__neo_graph_is_chokepoint", params: ["u32"], returns: "bool" },
@@ -28,7 +29,7 @@ test("api.def is the frozen v1 contract", () => {
       { name: "__neo_api_version", params: [], returns: "u32" },
     ],
   });
-  assert.equal(new Set(def.functions.map((f) => f.name)).size, 7);
+  assert.equal(new Set(def.functions.map((f) => f.name)).size, 8);
 });
 
 test("API_VERSION mirrors api.def", () => {
@@ -52,6 +53,26 @@ test("onSystem hands the native id through and lazily reads degree", () => {
     state.calls.filter((c) => c.fn === "__neo_system_degree"),
     [{ fn: "__neo_system_degree", id: 7 }],
   );
+});
+
+test("System.neighbors reads the native array on each access", () => {
+  const before = mockState().registers;
+  let seen = null;
+  runtime.onSystem((s) => {
+    const first = s.neighbors;
+    const second = s.neighbors;
+    seen = { id: s.id, first: [...first], second: [...second], same: first === second };
+  });
+  const state = mockState();
+  assert.equal(state.registers, before + 1);
+  state.calls.length = 0;
+  state.handler(7);
+
+  assert.deepEqual(seen, { id: 7, first: [1, 2], second: [1, 2], same: false });
+  assert.deepEqual(state.calls, [
+    { fn: "__neo_system_neighbors", id: 7 },
+    { fn: "__neo_system_neighbors", id: 7 },
+  ]);
 });
 
 test("graph, setVariable and log reach the native functions", () => {

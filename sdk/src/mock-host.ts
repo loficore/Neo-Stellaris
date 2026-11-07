@@ -10,6 +10,7 @@
 // Node and in QuickJS with no module machinery.
 
 export const MOCK_DEGREE = 3;
+export const MOCK_NEIGHBORS: readonly number[] = [1, 2];
 export const MOCK_BETWEENNESS = 250;
 export const MOCK_CHOKEPOINT = true;
 export const MOCK_API_VERSION = 1;
@@ -28,6 +29,7 @@ export interface MockState {
   apiVersionCalls: number;
   calls: MockCall[];
   degree: number;
+  neighbors: number[];
   betweenness: number;
   chokepoint: boolean;
   apiVersion: number;
@@ -45,6 +47,7 @@ globalThis.__neo_mock = {
   apiVersionCalls: 0,
   calls: [],
   degree: ${MOCK_DEGREE},
+  neighbors: ${JSON.stringify(MOCK_NEIGHBORS)},
   betweenness: ${MOCK_BETWEENNESS},
   chokepoint: ${MOCK_CHOKEPOINT ? "true" : "false"},
   apiVersion: ${MOCK_API_VERSION}
@@ -65,6 +68,12 @@ globalThis.__neo_register_system = function (fn) {
 globalThis.__neo_system_degree = function (id) {
   globalThis.__neo_mock.calls.push({ fn: "__neo_system_degree", id: id >>> 0 });
   return globalThis.__neo_mock.degree;
+};
+`,
+  __neo_system_neighbors: `
+globalThis.__neo_system_neighbors = function (id) {
+  globalThis.__neo_mock.calls.push({ fn: "__neo_system_neighbors", id: id >>> 0 });
+  return globalThis.__neo_mock.neighbors.slice();
 };
 `,
   __neo_system_set_var: `
