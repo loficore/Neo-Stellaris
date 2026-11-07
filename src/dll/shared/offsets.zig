@@ -367,6 +367,24 @@ pub const graph = struct {
     pub const EDGE_STRIDE: usize = 0x20;
     /// `0xa6ab16 mov r8d, dword ptr [rdx + 8]` — 元素 `+8` = 邻居系统 id。base = 边元素。
     pub const EDGE_ID_OFF: usize = 0x08;
+
+    // -----------------------------------------------------------------------
+    // Phase 2 (Runtime JS A1): 系统 flag 容器。静态取证,读路径与写路径同一组偏移。
+    // 写:`set_star_flag` 的 `+0x48` body `0x180f8e0` 经 `[vptr+0xE0]`(`0x180f8d0` →
+    // `jmp 0x397490`)把 scope 解析成容器;`0x397490` 对 mask `0x80` 走
+    // `call 0x393970; add rax, 0x5f8`。读:`0x1bce180`(加)/`0x1bce270`(删)都
+    // 在同一个容器上做 `qword[+0x10]` 的 u16 数组 + `dword[+0x1c]` 计数。
+    // -----------------------------------------------------------------------
+    /// 容器基址 = 系统对象 + `0x5f8`(`0x397573 add rax, 0x5f8`)。
+    pub const FLAG_SET_OFF: usize = 0x5F8;
+    /// `0x1bce1b5 mov rax, qword ptr [rbx + 0x10]` — u16 flag-id 数组指针。base = 容器。
+    pub const FLAG_ID_ARRAY_OFF: usize = 0x10;
+    /// `0x1bce1a4 movsxd rax, dword ptr [rcx + 0x1c]` — 计数。base = 容器。
+    pub const FLAG_COUNT_OFF: usize = 0x1C;
+    /// `0x1bce1cb add rax, 2` — 元素宽度。
+    pub const FLAG_ID_SIZE: usize = 2;
+    /// 防御性上限(不是引擎常量):计数超过它按容器损坏处理。
+    pub const MAX_FLAG_COUNT: usize = 4096;
     /// 本模块的**防御性**上限,不是引擎常量:容器计数超过它,该容器整段按损坏跳过
     /// (计入 `skipped`),不进循环。787 系统的真实度远低于此。
     pub const MAX_EDGE_COUNT: usize = 4096;
@@ -709,6 +727,16 @@ test "graph: §1/§2 read-path offsets are pinned to the disasm sites" {
     try std.testing.expectEqual(@as(usize, 0x59c), graph.EDGE_COUNT_OFF);
     try std.testing.expectEqual(@as(usize, 0x20), graph.EDGE_STRIDE);
     try std.testing.expectEqual(@as(usize, 0x08), graph.EDGE_ID_OFF);
+    // Phase 2 A1: the system flag container. Write path `0x180f8e0` resolves the
+    // scope through `0x397490` (mask 0x80 → `0x393970(scope) + 0x5f8`) and both
+    // `0x1bce180` (add) / `0x1bce270` (remove) walk a u16 array at container+0x10
+    // with the count at +0x1c.
+    try std.testing.expectEqual(@as(usize, 0x5F8), graph.FLAG_SET_OFF);
+    try std.testing.expectEqual(@as(usize, 0x10), graph.FLAG_ID_ARRAY_OFF);
+    try std.testing.expectEqual(@as(usize, 0x1C), graph.FLAG_COUNT_OFF);
+    try std.testing.expectEqual(@as(usize, 2), graph.FLAG_ID_SIZE);
+    try std.testing.expect(graph.FLAG_SET_OFF > graph.EDGE_COUNT_OFF);
+    try std.testing.expect(graph.FLAG_ID_ARRAY_OFF < graph.FLAG_COUNT_OFF);
     // The container base at +0x588 is the vtable word; the fields the three read
     // paths (§2.2–§2.4) actually load are data +0x590, capacity +0x598, count +0x59c.
     try std.testing.expect(graph.EDGE_VECTOR_OFF < graph.EDGE_DATA_OFF);

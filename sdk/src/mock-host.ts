@@ -10,6 +10,7 @@
 // Node and in QuickJS with no module machinery.
 
 export const MOCK_DEGREE = 3;
+export const MOCK_NEIGHBORS: readonly number[] = [1, 2];
 export const MOCK_BETWEENNESS = 250;
 export const MOCK_CHOKEPOINT = true;
 export const MOCK_API_VERSION = 1;
@@ -28,6 +29,9 @@ export interface MockState {
   apiVersionCalls: number;
   calls: MockCall[];
   degree: number;
+  neighbors: number[];
+  /** Flags set through `__neo_system_set_flag`; `has_flag` reads this map. */
+  flags: Record<string, boolean>;
   betweenness: number;
   chokepoint: boolean;
   apiVersion: number;
@@ -45,6 +49,8 @@ globalThis.__neo_mock = {
   apiVersionCalls: 0,
   calls: [],
   degree: ${MOCK_DEGREE},
+  neighbors: ${JSON.stringify(MOCK_NEIGHBORS)},
+  flags: {},
   betweenness: ${MOCK_BETWEENNESS},
   chokepoint: ${MOCK_CHOKEPOINT ? "true" : "false"},
   apiVersion: ${MOCK_API_VERSION}
@@ -65,6 +71,12 @@ globalThis.__neo_register_system = function (fn) {
 globalThis.__neo_system_degree = function (id) {
   globalThis.__neo_mock.calls.push({ fn: "__neo_system_degree", id: id >>> 0 });
   return globalThis.__neo_mock.degree;
+};
+`,
+  __neo_system_neighbors: `
+globalThis.__neo_system_neighbors = function (id) {
+  globalThis.__neo_mock.calls.push({ fn: "__neo_system_neighbors", id: id >>> 0 });
+  return globalThis.__neo_mock.neighbors.slice();
 };
 `,
   __neo_system_set_var: `
@@ -99,6 +111,26 @@ globalThis.__neo_api_version = function () {
   globalThis.__neo_mock.apiVersionCalls += 1;
   globalThis.__neo_mock.calls.push({ fn: "__neo_api_version" });
   return globalThis.__neo_mock.apiVersion;
+};
+`,
+  __neo_system_set_flag: `
+globalThis.__neo_system_set_flag = function (id, name) {
+  globalThis.__neo_mock.calls.push({
+    fn: "__neo_system_set_flag",
+    id: id >>> 0,
+    name: String(name)
+  });
+  globalThis.__neo_mock.flags[String(name)] = true;
+};
+`,
+  __neo_system_has_flag: `
+globalThis.__neo_system_has_flag = function (id, name) {
+  globalThis.__neo_mock.calls.push({
+    fn: "__neo_system_has_flag",
+    id: id >>> 0,
+    name: String(name)
+  });
+  return globalThis.__neo_mock.flags[String(name)] === true;
 };
 `,
 };

@@ -25,6 +25,7 @@ const neo_effect = @import("neo_effect.zig");
 const neo_state = @import("neo_state.zig");
 const chokepoint_table = @import("chokepoint_table.zig");
 const neo_js_host = @import("neo_js_host.zig");
+const keyword_registry = @import("../scripted/keyword_registry.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -40,6 +41,14 @@ pub const RVA_STATE_BODY: usize = 0x188E1D0;
 /// 同一个类的 vtable;官方 `create` 把它写进 `[obj+0]`。
 pub const RVA_STATE_VTABLE: usize = 0x25EA560;
 
+/// Phase 2 A1 — `set_star_flag` 的 `+0x48` body(`0x26049B0` 的 slot[9])。
+/// 它自己经 `[vptr+0xE0]` 把 scope 解析成系统 flag 容器,再调官方写手 `0x1bce180`。
+pub const RVA_STAR_FLAG_BODY: usize = 0x180F8E0;
+
+/// 每个进程最多 mint 多少个 flag 名字的 token id。静态 holder 永不释放
+/// (`keyword_registry.getToken` 的寿命警告);超过就 fail-closed。
+pub const MAX_MINTED_FLAGS: usize = 64;
+
 pub const RULE_HITS: usize = 64;
 
 // ---------------------------------------------------------------------------
@@ -49,6 +58,7 @@ pub const RULE_HITS: usize = 64;
 var log_effect_addr: usize = 0;
 var state_body_addr: usize = 0;
 var state_vtable_addr: usize = 0;
+var star_flag_body_addr: usize = 0;
 
 /// 0 = 只写日志(C5-ADD 的原行为),1 = 日志 + 写两个系统变量
 /// (`neo_mark = id` / `neo_score = 图分数`)。
@@ -140,6 +150,97 @@ pub fn writeVariable(name: []const u8, number: u32, scope: u64) bool {
 
 fn writeState(id: u32, scope: u64) bool {
     return writeVariable(neo_state.VAR_NAME, id, scope);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 A1/A2: `s.setStarFlag` — the official `set_star_flag` body
+// ---------------------------------------------------------------------------
+//
+// Two official pieces, no fabrication of engine state:
+//   * `0x180f8e0` (`set_star_flag`'s `+0x48` slot) reads the flag token id from
+//     `[obj+0xC0]`, resolves the scope through `[vptr+0xE0]` (→ `0x397490`, which
+//     for a mask-0x80 scope returns `0x393970(scope) + 0x5f8`) and calls the
+//     engine's own flag writer `0x1bce180`;
+//   * `0x1D13270` mints the name→token id (`keyword_registry.mintToken`), the same
+//     key the script lexer uses. Nothing is inserted into a scripted db.
+//
+// The object is a zeroed stack block with the official vtable at `[0]` and the id
+// at `+0xC0` (`neo_state.layoutStarFlag`); `[+0xE8] == 0` selects the direct-id
+// branch the engine itself takes when the flag was parsed as a token.
+
+/// Test seam: the production path resolves the engine base; Linux tests inject a
+/// name→id map so the layout and the call shape stay testable without QuickJS or
+/// the engine.
+pub const TokenMinter = *const fn (name: []const u8) ?u16;
+
+var token_minter: ?TokenMinter = null;
+
+pub fn setTokenMinterForTest(m: ?TokenMinter) void {
+    token_minter = m;
+}
+
+/// Static holders: `0x1D13270` may retain the chars pointer, so the backing must
+/// outlive the call (`keyword_registry.getToken`). Append-only, never freed.
+var mint_holders: [MAX_MINTED_FLAGS]keyword_registry.NameHolder = undefined;
+var mint_holder_count: usize = 0;
+var mint_names: [MAX_MINTED_FLAGS][neo_state.SSO_MAX]u8 = undefined;
+var mint_name_lens: [MAX_MINTED_FLAGS]u8 = undefined;
+var mint_ids: [MAX_MINTED_FLAGS]u16 = undefined;
+
+/// Mint the token id a flag name maps to. Lower-cased first because the engine's
+/// token lookup case-folds (§25.5); names longer than the MSVC SSO limit (15 B) are
+/// rejected rather than heap-allocated, same bound `setVariable` uses.
+///
+/// Repeat calls with the same name hit the cache: otherwise every `hasStarFlag`
+/// would append a holder and exhaust `MAX_MINTED_FLAGS` after 64 evaluations.
+pub fn mintFlagToken(name: []const u8) ?u16 {
+    if (name.len == 0 or name.len > neo_state.SSO_MAX) return null;
+
+    var lower: [neo_state.SSO_MAX]u8 = undefined;
+    for (name, 0..) |ch, i| lower[i] = std.ascii.toLower(ch);
+    const key = lower[0..name.len];
+
+    var i: usize = 0;
+    while (i < mint_holder_count) : (i += 1) {
+        if (std.mem.eql(u8, mint_names[i][0..mint_name_lens[i]], key)) return mint_ids[i];
+    }
+    if (mint_holder_count >= MAX_MINTED_FLAGS) return null;
+
+    var id: u32 = 0;
+    if (token_minter) |m| {
+        id = m(key) orelse return null;
+    } else {
+        if (comptime !is_windows) return null;
+        const base = @intFromPtr(windows.moduleFunction(0) catch return null);
+        const eng = keyword_registry.Engine.map(base);
+        mint_holders[mint_holder_count] = keyword_registry.NameHolder.inlineSso(key);
+        const holder = &mint_holders[mint_holder_count];
+        id = keyword_registry.mintToken(&eng, holder) catch return null;
+    }
+    if (id == 0 or id > std.math.maxInt(u16)) return null;
+    @memcpy(mint_names[mint_holder_count][0..key.len], key);
+    mint_name_lens[mint_holder_count] = @intCast(key.len);
+    mint_ids[mint_holder_count] = @intCast(id);
+    mint_holder_count += 1;
+    return @intCast(id);
+}
+
+/// `s.setStarFlag(name)` 的执行体。返回是否真的调了官方 body。
+pub fn setStarFlag(flag_name: []const u8, scope: u64) bool {
+    if (star_flag_body_addr == 0) return false;
+    const id = mintFlagToken(flag_name) orelse return false;
+    return setStarFlagId(id, scope);
+}
+
+/// 已经拿到 token id 的版本(测试与 `hasStarFlag` 共用一次 mint)。
+pub fn setStarFlagId(flag_id: u16, scope: u64) bool {
+    if (star_flag_body_addr == 0) return false;
+    var obj: [neo_state.STAR_FLAG_OBJECT_SIZE]u8 align(8) = undefined;
+    neo_state.layoutStarFlag(&obj, flag_id);
+    std.mem.writeInt(u64, obj[0..8], neo_state.STAR_FLAG_VTABLE, .little);
+    const body: *const fn (u64, u64) callconv(.c) void = @ptrFromInt(star_flag_body_addr);
+    body(@intFromPtr(&obj), scope);
+    return true;
 }
 
 /// `neo_score` 的来源。0 = 烘焙表(C5-SCORE 原行为),1 = 活体重算(M5)。
@@ -284,6 +385,10 @@ pub fn resolveFromGame(game_base: usize) !void {
     const vtable = game_base + RVA_STATE_VTABLE;
     state_body_addr = if (plausible(body)) body else 0;
     state_vtable_addr = if (plausible(vtable)) vtable else 0;
+
+    // Phase 2: `set_star_flag` 的 body 独立解析(fail-closed,不影响变量写)。
+    const flag_body = game_base + RVA_STAR_FLAG_BODY;
+    star_flag_body_addr = if (plausible(flag_body)) flag_body else 0;
 }
 
 /// `0` = 只写日志 | `1` = 日志 + 写系统变量。其它值按「开」处理吗?
@@ -297,6 +402,16 @@ pub fn setAct(mode: u32) void {
 /// (它不由 `C1Run` 负责;主线程懒解析,失败就 fail-closed 不写)。
 pub fn stateResolved() bool {
     return state_body_addr != 0 and state_vtable_addr != 0;
+}
+
+/// `s.setStarFlag` 的 body 是否已解析到(与 `stateResolved` 独立)。
+pub fn flagsResolved() bool {
+    return star_flag_body_addr != 0;
+}
+
+/// 测试专用:把 `set_star_flag` body 直接摆上。
+pub fn armFlagPathForTest(body: usize) void {
+    star_flag_body_addr = body;
 }
 
 /// 测试专用:把写路径的两个地址直接摆上(生产侧只有 `resolveFromGame` 能设)。
@@ -385,6 +500,9 @@ pub fn resetForTest() void {
     log_effect_addr = 0;
     state_body_addr = 0;
     state_vtable_addr = 0;
+    star_flag_body_addr = 0;
+    token_minter = null;
+    mint_holder_count = 0;
     act_mode = 0;
     stat_calls = 0;
     stat_matched = 0;
@@ -690,4 +808,101 @@ test "runBody does not reach the host when the rule rejects the system" {
     _ = runBody(@intFromPtr(&scope), 0);
 
     try std.testing.expectEqual(@as(usize, 0), host_hook_calls);
+}
+
+// --- Phase 2: the set_star_flag path ---------------------------------------
+
+var flag_calls: usize = 0;
+var flag_seen_vtable: u64 = 0;
+var flag_seen_id: u16 = 0;
+var flag_seen_scope: u64 = 0;
+
+fn stubFlagBody(self_ptr: u64, scope: u64) callconv(.c) void {
+    const base: [*]const u8 = @ptrFromInt(self_ptr);
+    flag_seen_vtable = std.mem.readInt(u64, base[0..8], .little);
+    flag_seen_id = std.mem.readInt(u16, base[neo_state.STAR_FLAG_ID_OFF..][0..2], .little);
+    flag_seen_scope = scope;
+    flag_calls += 1;
+}
+
+fn testMinter(name: []const u8) ?u16 {
+    if (std.mem.eql(u8, name, "my_flag")) return 4242;
+    return null;
+}
+
+fn armFlags() void {
+    resetForTest();
+    flag_calls = 0;
+    star_flag_body_addr = @intFromPtr(&stubFlagBody);
+    setTokenMinterForTest(&testMinter);
+}
+
+test "setStarFlagId builds the official object and calls the +0x48 body" {
+    armFlags();
+    defer resetForTest();
+    try std.testing.expect(setStarFlagId(4242, 0xABCD));
+    try std.testing.expectEqual(@as(usize, 1), flag_calls);
+    try std.testing.expectEqual(@as(u64, neo_state.STAR_FLAG_VTABLE), flag_seen_vtable);
+    try std.testing.expectEqual(@as(u16, 4242), flag_seen_id);
+    try std.testing.expectEqual(@as(u64, 0xABCD), flag_seen_scope);
+}
+
+test "setStarFlag mints the name and forwards the minted id" {
+    armFlags();
+    defer resetForTest();
+    try std.testing.expect(setStarFlag("my_flag", 0x1234));
+    try std.testing.expectEqual(@as(usize, 1), flag_calls);
+    try std.testing.expectEqual(@as(u16, 4242), flag_seen_id);
+    try std.testing.expectEqual(@as(u64, 0x1234), flag_seen_scope);
+}
+
+test "setStarFlag refuses a name the minter rejects and an unresolved body" {
+    armFlags();
+    defer resetForTest();
+    try std.testing.expect(!setStarFlag("not_mintable", 1));
+    try std.testing.expectEqual(@as(usize, 0), flag_calls);
+
+    star_flag_body_addr = 0;
+    try std.testing.expect(!setStarFlag("my_flag", 1));
+    try std.testing.expect(!setStarFlagId(4242, 1));
+    try std.testing.expectEqual(@as(usize, 0), flag_calls);
+}
+
+test "flagsResolved is independent of the set_variable path" {
+    resetForTest();
+    defer resetForTest();
+    try std.testing.expect(!flagsResolved());
+    star_flag_body_addr = @intFromPtr(&stubFlagBody);
+    try std.testing.expect(flagsResolved());
+    try std.testing.expect(!stateResolved());
+}
+
+test "mintFlagToken is the seam: off Windows it fails closed without an injected map" {
+    resetForTest();
+    defer resetForTest();
+    if (builtin.os.tag == .windows) return;
+    try std.testing.expectEqual(@as(?u16, null), mintFlagToken("my_flag"));
+    setTokenMinterForTest(&testMinter);
+    try std.testing.expectEqual(@as(?u16, 4242), mintFlagToken("my_flag"));
+}
+
+var mint_calls: usize = 0;
+
+fn countingMinter(name: []const u8) ?u16 {
+    mint_calls += 1;
+    if (std.mem.eql(u8, name, "my_flag")) return 4242;
+    return null;
+}
+
+test "mintFlagToken lower-cases and caches, so repeated reads do not exhaust slots" {
+    resetForTest();
+    defer resetForTest();
+    setTokenMinterForTest(&countingMinter);
+    mint_calls = 0;
+
+    try std.testing.expectEqual(@as(?u16, 4242), mintFlagToken("my_flag"));
+    try std.testing.expectEqual(@as(?u16, 4242), mintFlagToken("MY_FLAG")); // case-folded
+    try std.testing.expectEqual(@as(?u16, 4242), mintFlagToken("my_flag"));
+    try std.testing.expectEqual(@as(usize, 1), mint_calls);
+    try std.testing.expectEqual(@as(?u16, null), mintFlagToken("0123456789abcdef")); // 16 B
 }

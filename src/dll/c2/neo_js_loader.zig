@@ -1,10 +1,12 @@
-// neo_js_loader.zig — Runtime JS loader(Track A, Task A2):manifest + 权限 + 「一个 mod」。
+// neo_js_loader.zig — Runtime JS loader(Track A):manifest + 权限 + 多 mod 列表。
 //
 // 目录契约(计划 Global Constraints,固定、不解析 `dlc_load.json`):
 //   C:/temp/neo_mods/<id>/neo/mod.json
 //   C:/temp/neo_mods/<id>/neo/main.js
-// `loadActive()` 枚举 `neo_mods` 下的直接子目录,**恰好一个**带 `neo/mod.json` 的才算
-// 活动 mod;0 个或多个都是可判读的失败(fail-closed,禁用,不重试)。
+// Phase 1 要求**恰好一个**带 `neo/mod.json` 的目录;Phase 2(Task A3)起支持
+// 最多 `MAX_MODS`(8)个:每个目录一个 session,坏 manifest 的候选跳过并计数,
+// 不影响其它 mod;超过 8 个的候选拒绝并计数。0 个仍是可判读的 `error.NoMod`
+// (fail-closed,不重试)。
 //
 // 纪律:
 //   * `api.def` 的 7 个 native 由 host 持有;本模块只交出「源码 + 权限」。
@@ -42,6 +44,22 @@ pub const MAX_ID_LEN: usize = 64;
 pub const MAX_MANIFEST_BYTES: usize = 4096;
 pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 
+/// Phase 2 (Task A3): 最多同时载入的 runtime mod 数。超过的**拒绝并日志**;
+/// 静态数组,不分配。8 是计划冻结值。
+pub const MAX_MODS: usize = 8;
+
+/// `loadActiveList()` 的读数:调用方(host)用它写「跳过几个 / 拒绝几个」的日志。
+pub const ListStats = struct {
+    /// 目录里带 `neo/mod.json` 的候选 mod 数(含被拒绝的)。
+    total: usize = 0,
+    /// 成功载入的数 = `items.len`。
+    loaded: usize = 0,
+    /// 载入失败的候选数(坏 manifest / 缺 entry / 读文件失败)。
+    skipped: usize = 0,
+    /// 超过 `MAX_MODS` 而没有尝试载入的数。
+    overflow: usize = 0,
+};
+
 pub const Manifest = struct {
     id: []const u8,
     entry: []const u8,
@@ -70,7 +88,6 @@ pub const ParseError = error{
 pub const LoadError = ParseError || error{
     NotWindows,
     NoMod,
-    MultipleMods,
     NoManifest,
     MissingEntry,
     FileTooLarge,
@@ -104,8 +121,14 @@ pub fn releaseManifest() void {
 // Manifest parsing (pure — the whole failure surface is tested on the host)
 // ---------------------------------------------------------------------------
 
+/// 解析一个 manifest。会先释放上一次的 arena —— 单 mod/测试的入口。
+/// 多 mod 载入走 `parseManifestRetained`(一次载入里所有 manifest 同时有效)。
 pub fn parseManifest(bytes: []const u8) ParseError!Manifest {
     releaseManifest();
+    return parseManifestRetained(bytes);
+}
+
+fn parseManifestRetained(bytes: []const u8) ParseError!Manifest {
     if (bytes.len == 0 or bytes.len > MAX_MANIFEST_BYTES) return error.NotJson;
 
     const value = std.json.parseFromSliceLeaky(std.json.Value, arenaAlloc(), bytes, .{
@@ -200,6 +223,12 @@ fn parsePermissions(v: std.json.Value) ParseError!Permissions {
                     p.graph_read = true;
                 } else if (std.mem.eql(u8, name, "variable.write")) {
                     p.variable_write = true;
+                } else if (std.mem.eql(u8, name, "variable.read")) {
+                    p.variable_read = true;
+                } else if (std.mem.eql(u8, name, "flag.write")) {
+                    p.flag_write = true;
+                } else if (std.mem.eql(u8, name, "flag.read")) {
+                    p.flag_read = true;
                 } else if (std.mem.eql(u8, name, "log")) {
                     p.log = true;
                 } else {
@@ -337,16 +366,21 @@ fn readFile(path: []const u8, out: []u8) LoadError!usize {
     return want;
 }
 
-/// `C:/temp/neo_mods/` 下**恰好一个**带 `neo/mod.json` 的直接子目录。
-/// 返回的切片指向静态缓冲,在下一次调用前有效。
-var mod_id: [MAX_ID_LEN]u8 = undefined;
-var mod_id_len: usize = 0;
+/// `C:/temp/neo_mods/` 下的候选 mod 目录(`neo/mod.json` 存在)。Phase 2 起支持
+/// 多个:按 id 字节序排序以保证载入顺序确定,最多 `MAX_MODS` 个被载入。
+var mod_ids: [MAX_MODS][MAX_ID_LEN]u8 = undefined;
+var mod_id_lens: [MAX_MODS]usize = undefined;
 var mod_count: usize = 0;
+var list_stats: ListStats = .{};
 
-/// 上一次枚举看到的候选 mod 数(`0`/`>1` 都是禁用理由;host 用它写
-/// `NEO_JS_MULTI_MOD n=<n>`)。
+/// 上一次枚举看到的候选 mod 数(所有带 manifest 的目录)。
 pub fn lastModCount() usize {
     return mod_count;
+}
+
+/// 上一次 `loadActiveList` 的读数(host 用它写跳过/拒绝的日志)。
+pub fn lastListStats() ListStats {
+    return list_stats;
 }
 
 fn modManifestExists(name: []const u8) bool {
@@ -358,42 +392,67 @@ fn modManifestExists(name: []const u8) bool {
     return true;
 }
 
-fn findActiveMod() LoadError![]const u8 {
-    if (comptime is_windows) {
-        mod_count = 0;
-        mod_id_len = 0;
-        var data: WIN32_FIND_DATAA = undefined;
-        const h = FindFirstFileA("C:\\temp\\neo_mods\\*", &data) orelse return error.NoMod;
-        if (@intFromPtr(h) == INVALID_HANDLE_VALUE) return error.NoMod;
-        defer _ = FindClose(h);
+/// 枚举候选目录名。返回前 `min(count, MAX_MODS)` 个;顺序按字节序,确定。
+fn findModIds() LoadError![]const []const u8 {
+    if (comptime !is_windows) return error.NotWindows;
+    mod_count = 0;
+    var data: WIN32_FIND_DATAA = undefined;
+    const h = FindFirstFileA("C:\\temp\\neo_mods\\*", &data) orelse return error.NoMod;
+    if (@intFromPtr(h) == INVALID_HANDLE_VALUE) return error.NoMod;
+    defer _ = FindClose(h);
 
-        while (true) {
-            if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0) {
-                const name = std.mem.sliceTo(&data.cFileName, 0);
-                if (!std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, "..") and modManifestExists(name)) {
+    while (true) {
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0) {
+            const name = std.mem.sliceTo(&data.cFileName, 0);
+            if (!std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, "..") and modManifestExists(name)) {
+                if (mod_count >= MAX_MODS) {
+                    // 只记数量;继续枚举,拒绝的数 = 总数 - MAX_MODS。
                     mod_count += 1;
-                    if (mod_count == 1) {
-                        if (name.len > mod_id.len) return error.PathTooLong;
-                        @memcpy(mod_id[0..name.len], name);
-                        mod_id_len = name.len;
-                    }
+                } else {
+                    if (name.len > MAX_ID_LEN) return error.PathTooLong;
+                    @memcpy(mod_ids[mod_count][0..name.len], name);
+                    mod_id_lens[mod_count] = name.len;
+                    mod_count += 1;
                 }
             }
-            if (FindNextFileA(h, &data) == 0) break;
         }
-        if (mod_count == 0) return error.NoMod;
-        if (mod_count > 1) return error.MultipleMods;
-        return mod_id[0..mod_id_len];
+        if (FindNextFileA(h, &data) == 0) break;
     }
-    return error.NotWindows;
+    if (mod_count == 0) return error.NoMod;
+
+    // 排序前 `min(mod_count, MAX_MODS)` 个,按 id 字节序(插入排序,上界 8)。
+    const n = @min(mod_count, MAX_MODS);
+    var i: usize = 1;
+    while (i < n) : (i += 1) {
+        var j = i;
+        while (j > 0) : (j -= 1) {
+            const a = mod_ids[j - 1][0..mod_id_lens[j - 1]];
+            const b = mod_ids[j][0..mod_id_lens[j]];
+            if (std.mem.order(u8, a, b) != .gt) break;
+            const tmp_id = mod_ids[j - 1];
+            mod_ids[j - 1] = mod_ids[j];
+            mod_ids[j] = tmp_id;
+            const tmp_len = mod_id_lens[j - 1];
+            mod_id_lens[j - 1] = mod_id_lens[j];
+            mod_id_lens[j] = tmp_len;
+        }
+    }
+
+    var out: [MAX_MODS][]const u8 = undefined;
+    for (0..n) |k| out[k] = mod_ids[k][0..mod_id_lens[k]];
+    // 静态返回数组:`mod_ids` 的切片在下一次 `loadActiveList` 前有效。
+    for (0..n) |k| ids_view[k] = out[k];
+    return ids_view[0..n];
 }
 
-/// 读 `<dir>/neo/main.js`。静态缓冲:`JS_Eval` 只在我们自己的一次加载里用它,
-/// 而且它需要哨兵终止;每个进程只载一次,不值得为它做一条堆分配路径。
-var source_buf: [MAX_SOURCE_BYTES]u8 = undefined;
+var ids_view: [MAX_MODS][]const u8 = undefined;
 
-/// `<dir>` 里的 `neo/mod.json` + `neo/main.js`。`<dir>` = `C:/temp/neo_mods/<id>`。
-pub fn loadFromDir(dir: []const u8) LoadError!Loaded {
+/// 每个 mod 一个源码缓冲(`JS_Eval` 要哨兵终止;载入后整个进程生命周期有效)。
+var source_bufs: [MAX_MODS][MAX_SOURCE_BYTES]u8 = undefined;
+
+/// `<dir>` 里的 `neo/mod.json` + `neo/main.js`,源码写进 `slot` 的静态缓冲。
+/// `<dir>` = `C:/temp/neo_mods/<id>`。不释放 manifest arena(多 mod 共用)。
+fn loadFromDirSlot(dir: []const u8, slot: usize) LoadError!Loaded {
     var buf: [MAX_PATH]u8 = undefined;
 
     const manifest_path = joinPath(&buf, &.{ dir, "/neo/mod.json" }) orelse return error.PathTooLong;
@@ -402,25 +461,70 @@ pub fn loadFromDir(dir: []const u8) LoadError!Loaded {
         error.NoManifest => error.NoManifest,
         else => err,
     };
-    const manifest = try parseManifest(manifest_buf[0..manifest_len]);
+    const manifest = try parseManifestRetained(manifest_buf[0..manifest_len]);
 
     const entry_path = joinPath(&buf, &.{ dir, "/neo/", manifest.entry }) orelse return error.PathTooLong;
-    const source_len = readFile(entry_path, &source_buf) catch |err| return switch (err) {
+    const out = &source_bufs[slot];
+    const source_len = readFile(entry_path, out) catch |err| return switch (err) {
         error.NoManifest => error.MissingEntry,
         else => err,
     };
-    if (source_len >= source_buf.len) return error.FileTooLarge;
-    source_buf[source_len] = 0;
+    if (source_len >= out.len) return error.FileTooLarge;
+    out[source_len] = 0;
 
-    return .{ .manifest = manifest, .source = source_buf[0..source_len :0] };
+    return .{ .manifest = manifest, .source = out[0..source_len :0] };
 }
 
-/// 活动 mod:枚举根目录、要求恰好一个、然后按固定目录载入。
+/// 单 mod 入口(兼容 Phase 1 的调用方/测试):先释放 manifest arena,再载入。
+pub fn loadFromDir(dir: []const u8) LoadError!Loaded {
+    releaseManifest();
+    return loadFromDirSlot(dir, 0);
+}
+
+var loaded_items: [MAX_MODS]Loaded = undefined;
+var loaded_ok: [MAX_MODS]bool = undefined;
+
+/// 活动 mod 列表。0 个候选 → `error.NoMod`;坏 manifest 的候选**跳过并计数**
+/// (`ListStats.skipped`),不影响其它 mod;超过 `MAX_MODS` 的候选不载入
+/// (`ListStats.overflow`),由 host 记一行拒绝日志。
+pub fn loadActiveList() LoadError![]const Loaded {
+    releaseManifest();
+    list_stats = .{};
+    const ids = try findModIds();
+    list_stats.total = mod_count;
+    list_stats.overflow = mod_count - ids.len;
+
+    for (ids, 0..) |id, i| {
+        var buf: [MAX_PATH]u8 = undefined;
+        const dir = joinPath(&buf, &.{ MODS_ROOT, id }) orelse {
+            loaded_ok[i] = false;
+            list_stats.skipped += 1;
+            continue;
+        };
+        loaded_items[i] = loadFromDirSlot(dir, i) catch {
+            loaded_ok[i] = false;
+            list_stats.skipped += 1;
+            continue;
+        };
+        loaded_ok[i] = true;
+        list_stats.loaded += 1;
+    }
+    // 跳过项会在 loaded_items 里留下空洞:把成功的项前移。
+    var w: usize = 0;
+    var r: usize = 0;
+    while (r < ids.len) : (r += 1) {
+        if (!loaded_ok[r]) continue;
+        if (w != r) loaded_items[w] = loaded_items[r];
+        w += 1;
+    }
+    return loaded_items[0..w];
+}
+
+/// 单 mod 兼容入口:列表的第一个;一个都载入不了就是 `error.NoMod`。
 pub fn loadActive() LoadError!Loaded {
-    const id = try findActiveMod();
-    var buf: [MAX_PATH]u8 = undefined;
-    const dir = joinPath(&buf, &.{ MODS_ROOT, id }) orelse return error.PathTooLong;
-    return loadFromDir(dir);
+    const list = try loadActiveList();
+    if (list.len == 0) return error.NoMod;
+    return list[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -574,4 +678,30 @@ test "the loader's Permissions is the host's type, not a copy" {
     try testing.expect(!host.canSetVariable(p));
     p.variable_write = true;
     try testing.expect(host.canSetVariable(p));
+}
+
+// --- Phase 2 A3: multi-mod list surface ------------------------------------
+
+test "MAX_MODS is the frozen Phase 2 bound" {
+    try testing.expectEqual(@as(usize, 8), MAX_MODS);
+    try testing.expectEqual(ListStats{}, lastListStats());
+}
+
+test "the Phase 2 permission bits parse from the manifest" {
+    defer releaseManifest();
+    const src =
+        \\{"id":"a","entry":"main.js","scope":["system"],"permissions":["graph.read","variable.write","variable.read","flag.write","flag.read","log"],"engine":"4.4.4","runtime":">=0.1"}
+    ;
+    const m = try parseManifest(src);
+    try testing.expect(m.permissions.graph_read);
+    try testing.expect(m.permissions.variable_write);
+    try testing.expect(m.permissions.variable_read);
+    try testing.expect(m.permissions.flag_write);
+    try testing.expect(m.permissions.flag_read);
+    try testing.expect(m.permissions.log);
+}
+
+test "off Windows the multi-mod list has no filesystem either" {
+    if (is_windows) return;
+    try testing.expectError(error.NotWindows, loadActiveList());
 }

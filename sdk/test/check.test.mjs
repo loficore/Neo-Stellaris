@@ -9,12 +9,14 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { runCheck, scanBundle } from "../dist/check.js";
+import { checkFlagNames, loadKeywordNames } from "../dist/flags.js";
 import { mockHostSource } from "../dist/mock-host.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..", "..");
 const sdkRoot = path.join(repo, "sdk");
 const exampleDir = path.join(repo, "examples", "chokepoint");
+const KEYWORDS_TSV = path.join(repo, "evidence", "xrefs", "keyword_behaviour_registration_4_4_4.tsv");
 
 function writeProject(source) {
   const dir = mkdtempSync(path.join(tmpdir(), "neo-check-"));
@@ -54,6 +56,8 @@ test("check passes the chokepoint example and records the example's calls", asyn
   assert.deepEqual(result.calls, [
     { fn: "__neo_graph_betweenness", id: 7 },
     { fn: "__neo_system_set_var", id: 7, name: "neo_score", value: 250 },
+    { fn: "__neo_system_has_flag", id: 7, name: "neo_hub" },
+    { fn: "__neo_system_set_flag", id: 7, name: "neo_hub" },
     { fn: "__neo_log", message: "NEO_HUB 7 250" },
     { fn: "__neo_api_version" },
   ]);
@@ -119,7 +123,7 @@ test("the CLI prints one NEO_CHECK line and exits 0 for the example", () => {
     { encoding: "utf8" },
   );
   const line = stdout.trim().split("\n").at(-1);
-  assert.match(line, /^NEO_CHECK ok dir=.* handler=1 calls=4$/);
+  assert.match(line, /^NEO_CHECK ok dir=.* handler=1 calls=6$/);
 });
 
 test("the CLI exits 2 with a fail line for a broken project", () => {
@@ -135,4 +139,65 @@ test("the CLI exits 2 with a fail line for a broken project", () => {
     assert.equal(error.status, 2);
     assert.match(String(error.stderr), /^NEO_CHECK fail: /);
   }
+});
+
+// --- B5: the build-time flag-name gate -------------------------------------
+//
+// `s.setStarFlag("x")` writes an engine flag.  A flag name that collides with an
+// official keyword is the Phase 1 hazard again (`Add_Modifier` used to mint the
+// *official* `add_modifier` token), so the gate is case-insensitive and fails at
+// build time, not at load time.
+
+test("the flag gate accepts a literal that is not an official keyword", async () => {
+  const dir = writeProject(
+    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_custom_marker"); });\n',
+  );
+  const result = await runCheck({ dir });
+  assert.equal(result.ok, true, result.error);
+});
+
+test("the flag gate rejects a flag name that is an official keyword, in any case", async () => {
+  for (const name of ["add_modifier", "Add_Modifier"]) {
+    const dir = writeProject(
+      `import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("${name}"); });\n`,
+    );
+    const result = await runCheck({ dir });
+    assert.equal(result.ok, false, name);
+    assert.match(String(result.error), /official keyword/i, name);
+    assert.match(String(result.error), new RegExp(name, "i"), name);
+  }
+});
+
+test("the flag gate rejects a dynamic flag name and says v1 takes literals", async () => {
+  const dir = writeProject(
+    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { const name = "neo_" + s.id; s.setStarFlag(name); });\n',
+  );
+  const result = await runCheck({ dir });
+  assert.equal(result.ok, false);
+  assert.match(String(result.error), /literal/i);
+  assert.match(String(result.error), /v1/i);
+});
+
+test("the flag gate fails loudly when the keyword table is missing", async () => {
+  const dir = writeProject(
+    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_custom_marker"); });\n',
+  );
+  const missing = path.join(tmpdir(), "no-such-keywords.tsv");
+  const result = await runCheck({ dir, keywordsTsv: missing });
+  assert.equal(result.ok, false);
+  assert.match(String(result.error), /keyword/i);
+  assert.ok(String(result.error).includes("no-such-keywords.tsv"), String(result.error));
+});
+
+test("checkFlagNames reads writes only, and compares case-insensitively", () => {
+  const keywords = loadKeywordNames(KEYWORDS_TSV);
+  assert.ok(keywords.has("add_modifier"));
+  assert.deepEqual(checkFlagNames('s.setStarFlag("neo_ok"); s.hasStarFlag("add_modifier");', keywords), {
+    names: ["neo_ok"],
+    problems: [],
+  });
+  const clash = checkFlagNames('s.setStarFlag("ADD_MODIFIER");', keywords);
+  assert.deepEqual(clash.names, ["ADD_MODIFIER"]);
+  assert.equal(clash.problems.length, 1);
+  assert.match(clash.problems[0], /official keyword/);
 });

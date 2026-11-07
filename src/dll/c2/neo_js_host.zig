@@ -1,8 +1,9 @@
-// neo_js_host.zig — Runtime JS host v1(Track A, Phase 1):native API + handler 调用 + 限额。
+// neo_js_host.zig — Runtime JS host v1/v1.1(Track A):native API + handler 调用 + 限额。
 //
-// **合同是冻结的**(`sdk/api.def` 是唯一权威,由 C1 的合同围栏核对):7 个 native
-// 名字一个不加、一个不改;`apiVersion()` 恒为 1。TS 侧(`@neo/runtime`)只暴露
-// `onSystem` / `System` / `graph` / `log` / `apiVersion`。
+// **Phase 1 的 7 个 native 是冻结合同**(`sdk/api.def` 是权威,由 C1 的合同围栏核对):
+// 这 7 个名字一个不改;`apiVersion()` 恒为 1。v1.1 的新函数只**加**,并且放在
+// `additive_native_table` 里(见下),冻结合同表保持原样。TS 侧(`@neo/runtime`)
+// 的 v1 面只暴露 `onSystem` / `System` / `graph` / `log` / `apiVersion`。
 //
 //   __neo_register_system(fn)                  handler 注册(bundle 顶层调用一次)
 //   __neo_system_degree(id) -> u32             边容器 `+0x59C`
@@ -12,29 +13,46 @@
 //   __neo_log(text)                            `C:/temp/neo_js.log`
 //   __neo_api_version() -> u32                 1
 //
+// Phase 2(v1.1,**加法**,`API_VERSION` 仍为 1)的 native 在 `additive_native_table`:
+//   __neo_system_neighbors(id) -> array<u32>   系统边容器 `+0x588/+0x590/+0x59C`
+//   __neo_system_set_flag(id, name)            官方 `set_star_flag` `+0x48` body
+//   __neo_system_has_flag(id, name) -> bool    系统 flag 容器 `+0x5f8`
+// `s.name` / `s.variable` 在 A1 静态侦察里是 deferred(没有可安全调用的官方
+// read path),**不实现**。`sdk/api.def` 由 Track B 补齐;在那之前这 3 个名字只
+// 存在于本文件的加法表里(冻结合同表仍是 7 个,见 `native_names`)。
+//
+// 多 mod(Task A3):每个 mod 一个 QuickJS runtime/context(`Session`),最多 8 个;
+// 一个 session 的异常/超时/越权只禁用**它自己**,其它 session 继续。
+//
 // 纪律(计划 Review Focus,逐条落点):
-//   1. **主线程**:runtime/context 只在 `ensureLoaded()` 里建,唯一调用方是 `onSystem`
-//      (逐系统派发 = 游戏主线程)。**不复用** `main.js_runtime` —— 那是 `C2Init` 在
-//      远程线程里建的,QuickJS 单线程。
+//   1. **主线程**:runtime/context 只在 `startSession` 里建,唯一生产调用方是
+//      `onSystem`(逐系统派发 = 游戏主线程)。**不复用** `main.js_runtime` —— 那是
+//      `C2Init` 在远程线程里建的,QuickJS 单线程。
 //   2. **scope 指针不跨调用保存**:`onSystem` 把当次 scope 放进 `current_scope`,
-//      handler 返回即清零。JS 只拿 id;`setVariable` 用当次 scope 调官方 body,并在
-//      写之前核对 `scope+0x10 == id`(不一致就拒写,而不是写进另一个星系)。
+//      handler 返回即恢复。JS 只拿 id;写路径用当次 scope 调官方 body,并在写之前
+//      核对 `scope+0x10 == id`(不一致就拒写,而不是写进另一个星系)。
 //   3. **写只走官方 body**:`neo_vtable.writeVariable` —— 与 C5-WRITE / C5-SCORE
 //      完全相同的对象布局、body(`0x188E1D0`)与 1e-5 定点编码。不写引擎内存。
-//   4. **异常隔离**:JS 异常 / 超时只记日志、丢弃这一次调用;游戏继续。
-//      每次 handler 调用有 10 ms 中断预算(`JS_SetInterruptHandler` 读我们自己的 deadline);
-//      另有一道「一次调用里的 native 调用次数」上限,作为中断路径失效时的第二道闸。
-//   5. **限额**:context 16 MiB、栈 1 MiB。
-//   6. **永不 `FreeLibrary`**;runtime 与进程同生命周期(`deinit` 无人调用)。
+//   4. **异常隔离**:JS 异常 / 超时 / 越权只把**该 session** `active=false`(A3/A4),
+//      其它 session 继续;游戏继续。每次 handler 调用有 10 ms 中断预算
+//      (`JS_SetInterruptHandler` 读我们自己的 deadline);另有一道「一次调用里的
+//      native 调用次数」上限,作为中断路径失效时的第二道闸。
+//   5. **限额**:每个 context 16 MiB、栈 1 MiB;最多 8 个 session。
+//   6. **永不 `FreeLibrary`**;runtime 与进程同生命周期(生产路径不 deinit)。
 //
 // 日志口径(驱动/证据按行读):
-//   NEO_JS_INIT_OK id=<mod> api=1 | NEO_JS_INIT_FAIL | NEO_JS_EVAL_FAIL | NEO_JS_NO_HANDLER
-//   NEO_JS_NO_MOD / NEO_JS_MULTI_MOD n=<n> / NEO_JS_BAD_MANIFEST / NEO_JS_MISSING_ENTRY
-//   NEO_JS_API_MISMATCH
-//   NEO_JS_CALL id=<id>           每次 onSystem 一行(**先于** handler 是否存在的判断)
-//   NEO_JS_WRITE id=<id> name=<name> | NEO_JS_WRITE_REJECT … reason=<tag>
+//   NEO_JS_INIT_OK id=<mod> api=1 | NEO_JS_INIT_FAIL id=<mod> | NEO_JS_SESSION_LIMIT id=<mod>
+//   NEO_JS_EVAL_FAIL id=<mod> <msg> | NEO_JS_NO_HANDLER id=<mod>
+//   NEO_JS_NO_MOD / NEO_JS_TOO_MANY_MODS n=<n> / NEO_JS_MODS n=<n>
+//   NEO_JS_BAD_MANIFEST / NEO_JS_MISSING_ENTRY / NEO_JS_API_MISMATCH
+//   NEO_JS_CALL id=<id>           每次 onSystem 一行(不管几个 session)
+//   NEO_JS_WRITE id=<id> name=<name> [kind=flag]
+//   NEO_JS_WRITE_REJECT … reason=<tag> [kind=flag]
+//   NEO_JS_FLAG_REJECT id=<id> name=<name> reason=no_permission
+//   NEO_JS_NEIGHBORS_REJECT id=<id> reason=no_permission
+//   NEO_JS_NEIGHBORS_TRUNC id=<id> total=<n> written=<n>
 //   NEO_JS_LOG <text>
-//   NEO_JS_ERROR id=<id> <message> | NEO_JS_TIMEOUT id=<id>
+//   NEO_JS_ERROR id=<id> mod=<mod> <message> | NEO_JS_TIMEOUT id=<id> mod=<mod>
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -55,10 +73,15 @@ const is_windows = builtin.os.tag == .windows;
 pub const API_VERSION: u32 = 1;
 
 /// v1 的权限位。`packed struct` 是有意的:一个 u8 就能原子地描述整组权限,
-/// loader 解析出它、host 只读它。
+/// loader 解析出它、host 只读它。Phase 2 只**加位**(v1.1 是加法):`variable.read`
+/// / `flag.write` / `flag.read` 供 A1 resolved 的 API 用,旧 manifest 的三种权限
+/// 语义不变。
 pub const Permissions = packed struct {
     graph_read: bool = false,
     variable_write: bool = false,
+    variable_read: bool = false,
+    flag_write: bool = false,
+    flag_read: bool = false,
     log: bool = false,
 };
 
@@ -99,10 +122,36 @@ const native_table = [_]NativeEntry{
     .{ .name = "__neo_api_version", .func = nativeApiVersion, .length = 0 },
 };
 
-/// 合同名字的只读视图(C1 的围栏与测试都读它)。
+/// 合同名字的只读视图(C1 的围栏与测试都读它)。**只含 Phase 1 的 7 个冻结名**。
 pub const native_names = blk: {
     var names: [native_table.len][]const u8 = undefined;
     for (native_table, 0..) |n, i| names[i] = n.name;
+    break :blk names;
+};
+
+/// Phase 2 (v1.1) 的**加法** native。刻意与 `native_table` 分开:
+/// `native_table`/`native_names` 是 Phase 1 的冻结合同,由
+/// `scripts/test_runtime_js_contract.py` 与 `sdk/api.def` 逐项对照;本轨道按任务
+/// 约束不改 `sdk/**`,而 v1.1 的 TS/mock/api.def 由 Track B(B1/B5)补齐。合并任务
+/// (C1)把两边的名字对齐后,这张表才会进围栏。
+///
+/// 字段叫 `js_name` 而不是 `name` 也是这个分离的结果:围栏用
+/// `.name = "(__neo_[a-z_]+)"` 抓合同表,加法表不在它的口径里。
+pub const AdditiveEntry = struct {
+    js_name: [:0]const u8,
+    func: c.JSCFunction,
+    length: c_int,
+};
+
+const additive_native_table = [_]AdditiveEntry{
+    .{ .js_name = "__neo_system_neighbors", .func = nativeSystemNeighbors, .length = 1 },
+    .{ .js_name = "__neo_system_set_flag", .func = nativeSystemSetFlag, .length = 2 },
+    .{ .js_name = "__neo_system_has_flag", .func = nativeSystemHasFlag, .length = 2 },
+};
+
+pub const additive_names = blk: {
+    var names: [additive_native_table.len][]const u8 = undefined;
+    for (additive_native_table, 0..) |n, i| names[i] = n.js_name;
     break :blk names;
 };
 
@@ -112,20 +161,49 @@ pub const native_names = blk: {
 
 pub const Status = enum { idle, ready, failed };
 
-var runtime: ?quickjs.Runtime = null;
-var handler: c.JSValue = c.JS_UNDEFINED;
+/// Phase 2 (Task A3): 每个 mod 一个 QuickJS session(runtime + context)。最多 8 个;
+/// 一个 session 的异常/超时/越权只把**它自己** `active=false`,其它照常跑。
+pub const MAX_SESSIONS: usize = 8;
+
+pub const Session = struct {
+    /// mod id(日志用;loader 保证它是安全的路径片段)。
+    id: []const u8,
+    runtime: quickjs.Runtime,
+    handler: c.JSValue = c.JS_UNDEFINED,
+    permissions: Permissions = .{},
+    /// `false` = 被禁用(异常/超时/越权/坏 bundle):`onSystem` 跳过它。
+    active: bool = false,
+    /// 一次 handler 调用里已经用掉的 native 调用次数(第二道闸)。
+    native_calls: u32 = 0,
+    sessions_calls: u64 = 0,
+    sessions_writes: u64 = 0,
+    sessions_errors: u64 = 0,
+    sessions_timeouts: u64 = 0,
+};
+
+var sessions: [MAX_SESSIONS]Session = undefined;
+var session_len: usize = 0;
+/// 当前正在跑的 session 下标 —— native 从它读取 permissions / handler。
+var active_index: usize = 0;
 var state: Status = .idle;
-var permissions: Permissions = .{};
 
 /// 当次派发的 scope。只在 `onSystem` 的同步区间里非零 —— 不跨调用保存(Review Focus 2)。
 var current_scope: u64 = 0;
-/// 当次调用里已经用掉的 native 调用次数(第二道闸)。
-var native_calls: u32 = 0;
 
 var call_count: u64 = 0;
 var write_count: u64 = 0;
 var error_count: u64 = 0;
 var timeout_count: u64 = 0;
+
+fn currentSession() ?*Session {
+    if (session_len == 0 or active_index >= session_len) return null;
+    return &sessions[active_index];
+}
+
+fn currentPermissions() Permissions {
+    if (currentSession()) |s| return s.permissions;
+    return .{};
+}
 
 // ---------------------------------------------------------------------------
 // Clock + log sink (both injectable so the Linux tests read exact lines)
@@ -243,6 +321,18 @@ pub fn canReadGraph(p: Permissions) bool {
     return p.graph_read;
 }
 
+pub fn canReadVariable(p: Permissions) bool {
+    return p.variable_read;
+}
+
+pub fn canWriteFlag(p: Permissions) bool {
+    return p.flag_write;
+}
+
+pub fn canReadFlag(p: Permissions) bool {
+    return p.flag_read;
+}
+
 /// `graph.betweenness(s)` 的来源 = C5-SCORE 的同一个 `scoreFor`(烘焙表或 live 源)。
 pub fn betweennessFor(p: Permissions, id: u32) u32 {
     if (!canReadGraph(p)) return 0;
@@ -290,9 +380,34 @@ pub fn writeSystemVariable(p: Permissions, id: u32, name: []const u8, value: f64
 /// 官方 `set_variable` body 的地址由 `C1Run` 解析;Runtime JS 不依赖那个时序,
 /// 第一次要写时自己补一次(主线程、幂等、失败就 fail-closed 不写)。
 fn ensureWritePath() void {
-    if (neo_vtable.stateResolved()) return;
+    if (neo_vtable.stateResolved() and neo_vtable.flagsResolved()) return;
     const base = @intFromPtr(windows.moduleFunction(0) catch return);
     neo_vtable.resolveFromGame(base) catch return;
+}
+
+/// `s.setStarFlag(name)` 的判定面(纯部分):权限 → 名字 →「scope 是不是这个 id」→
+/// 官方 `set_star_flag` body。写落在 scope 上,id 只是 JS 侧的镜像。
+pub const FlagResult = enum { ok, no_permission, bad_name, wrong_scope, no_engine };
+
+pub fn setSystemFlag(p: Permissions, id: u32, name: []const u8, scope: u64) FlagResult {
+    if (!canWriteFlag(p)) return .no_permission;
+    if (name.len == 0 or name.len > MAX_VAR_NAME) return .bad_name;
+    const scope_id = neo_vtable.systemScopeId(scope) orelse return .wrong_scope;
+    if (scope_id != id) return .wrong_scope;
+    ensureWritePath();
+    if (!neo_vtable.flagsResolved()) return .no_engine;
+    if (!neo_vtable.setStarFlag(name, scope)) return .no_engine;
+    _ = @atomicRmw(u64, &write_count, .Add, 1, .monotonic);
+    return .ok;
+}
+
+/// `s.hasStarFlag(name)` 的只读面:权限 → 名字 → 系统 flag 容器扫描。
+/// `+0x5f8` 容器 / `+0x10` u16 数组 / `+0x1c` 计数(`offsets.graph.FLAG_*`)。
+pub fn readSystemFlag(p: Permissions, id: u32, name: []const u8) ?bool {
+    if (!canReadFlag(p)) return null;
+    if (name.len == 0 or name.len > MAX_VAR_NAME) return null;
+    const token = neo_vtable.mintFlagToken(name) orelse return null;
+    return graph_probe.systemHasFlag(id, token);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,49 +422,58 @@ pub const Bundle = struct {
     permissions: Permissions,
 };
 
-/// 建(或复用)QuickJS context、注册 7 个 native、eval bundle、取回 handler。
+/// 建一个 QuickJS session(context)、注册 native、eval bundle、取回 handler。
 ///
-/// **只建一次**:`runtime` 一旦存在就不重建(QuickJS 单线程,重建会丢 handler
-/// 的 `JS_DupValue`)。测试里可以重复调用 —— 会复用同一个 context 重新 eval。
+/// Phase 2(A3):每个 mod 一个 session,最多 `MAX_SESSIONS` 个。失败只影响这一个
+/// (`active=false`),不重试。`resetForTest` 之前不会重建同一个 session。
 pub fn startSession(bundle: Bundle) bool {
-    state = .failed;
-    if (runtime == null) {
-        runtime = quickjs.Runtime.initWithConfig(.{
-            .mem_limit = CONTEXT_MEM_LIMIT,
-            .max_stack_size = STACK_LIMIT,
-        }) catch {
-            emit("NEO_JS_INIT_FAIL", .{});
-            return false;
-        };
-        c.JS_SetInterruptHandler(runtime.?.rt, interruptCb, null);
+    if (session_len >= MAX_SESSIONS) {
+        emit("NEO_JS_SESSION_LIMIT id={s}", .{bundle.id});
+        state = .failed;
+        return false;
     }
-    const rt = &runtime.?;
+    const idx = session_len;
+    var rt = quickjs.Runtime.initWithConfig(.{
+        .mem_limit = CONTEXT_MEM_LIMIT,
+        .max_stack_size = STACK_LIMIT,
+    }) catch {
+        emit("NEO_JS_INIT_FAIL id={s}", .{bundle.id});
+        state = .failed;
+        return false;
+    };
     const ctx = rt.ctx;
+    c.JS_SetInterruptHandler(rt.rt, interruptCb, null);
+    sessions[idx] = .{
+        .id = bundle.id,
+        .runtime = rt,
+        .permissions = bundle.permissions,
+        .active = false,
+    };
+    session_len = idx + 1;
+    active_index = idx;
 
-    permissions = bundle.permissions;
     // The bundle registers its handler *during* eval, i.e. also through a native.
-    native_calls = 0;
+    sessions[idx].native_calls = 0;
     registerNatives(ctx);
-    if (!handler.isUndefined()) {
-        c.JS_FreeValue(ctx, handler);
-        handler = c.JS_UNDEFINED;
-    }
 
     const res = rt.eval(bundle.source, "<neo_mod>");
     switch (res) {
         .ok => |v| c.JS_FreeValue(ctx, v),
         .err => |e| {
             var line_buf: [160]u8 = undefined;
-            emit("NEO_JS_EVAL_FAIL {s}", .{sanitize(&line_buf, clip(e.message, 150))});
+            emit("NEO_JS_EVAL_FAIL id={s} {s}", .{ bundle.id, sanitize(&line_buf, clip(e.message, 150)) });
             std.heap.page_allocator.free(e.message);
+            state = .failed;
             return false;
         },
     }
 
-    if (handler.isUndefined()) {
-        emit("NEO_JS_NO_HANDLER", .{});
+    if (sessions[idx].handler.isUndefined()) {
+        emit("NEO_JS_NO_HANDLER id={s}", .{bundle.id});
+        state = .failed;
         return false;
     }
+    sessions[idx].active = true;
     state = .ready;
     emit("NEO_JS_INIT_OK id={s} api={d}", .{ bundle.id, API_VERSION });
     return true;
@@ -359,31 +483,37 @@ pub fn startSession(bundle: Bundle) bool {
 fn ensureLoaded() void {
     if (state != .idle) return;
     state = .failed;
-    const bundle = loadActive() orelse return;
-    _ = startSession(bundle);
-}
-
-/// 活动 runtime mod 的来源:`C:/temp/neo_mods/<id>/neo/{mod.json,main.js}`。
-/// 0 个 / 多个 mod 与每一种坏 manifest 都在这里变成一行具名日志后禁用(fail-closed,
-/// 不重试)。off Windows 时 loader 没有文件系统,按「没有 mod」记 —— native 测试
-/// 根走的就是这条路径。
-fn loadActive() ?Bundle {
-    const loaded = loader.loadActive() catch |err| {
+    const list = loader.loadActiveList() catch |err| {
         reportLoadError(err);
-        return null;
+        return;
     };
-    return .{
-        .id = loaded.manifest.id,
-        .source = loaded.source,
-        .permissions = loaded.manifest.permissions,
-    };
+    if (list.len == 0) {
+        if (loader.lastListStats().skipped > 0) {
+            emit("NEO_JS_BAD_MANIFEST n={d}", .{loader.lastListStats().skipped});
+        } else {
+            emit("NEO_JS_NO_MOD", .{});
+        }
+        return;
+    }
+    const stats = loader.lastListStats();
+    if (stats.overflow > 0) emit("NEO_JS_TOO_MANY_MODS n={d}", .{stats.overflow});
+    if (list.len > 1) emit("NEO_JS_MODS n={d}", .{list.len});
+    var ready = false;
+    for (list) |loaded| {
+        const bundle = Bundle{
+            .id = loaded.manifest.id,
+            .source = loaded.source,
+            .permissions = loaded.manifest.permissions,
+        };
+        if (startSession(bundle)) ready = true;
+    }
+    state = if (ready) .ready else .failed;
 }
 
 /// loader 的失败面 → 日志词(计划 Review Focus 7:每一种都要能判读)。
 fn reportLoadError(err: loader.LoadError) void {
     switch (err) {
         error.NoMod, error.NotWindows => emit("NEO_JS_NO_MOD", .{}),
-        error.MultipleMods => emit("NEO_JS_MULTI_MOD n={d}", .{loader.lastModCount()}),
         error.EngineMismatch, error.RuntimeMismatch => emit("NEO_JS_API_MISMATCH", .{}),
         error.MissingEntry => emit("NEO_JS_MISSING_ENTRY", .{}),
         else => emit("NEO_JS_BAD_MANIFEST reason={s}", .{@errorName(err)}),
@@ -397,6 +527,10 @@ fn registerNatives(ctx: ?*c.JSContext) void {
         const f = c.JS_NewCFunction2(ctx, n.func, n.name.ptr, n.length, c.JS_CFUNC_generic, 0);
         _ = c.JS_SetPropertyStr(ctx, global, n.name.ptr, f);
     }
+    for (additive_native_table) |n| {
+        const f = c.JS_NewCFunction2(ctx, n.func, n.js_name.ptr, n.length, c.JS_CFUNC_generic, 0);
+        _ = c.JS_SetPropertyStr(ctx, global, n.js_name.ptr, f);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +538,8 @@ fn registerNatives(ctx: ?*c.JSContext) void {
 // ---------------------------------------------------------------------------
 
 /// 每次 `neo_action` 的 per-system 派发(游戏主线程)。第一次调用懒加载;
-/// ready 之后调一次 JS handler。任何失败都不向外抛 —— 游戏继续。
+/// ready 之后对**每个 active session** 调一次 handler。任何失败都不向外抛 ——
+/// 游戏继续,且只禁用出错的那个 session(Task A3/A4)。
 pub fn onSystem(id: u32, scope: u64) void {
     ensureLoaded();
     if (state != .ready) return;
@@ -412,26 +547,41 @@ pub fn onSystem(id: u32, scope: u64) void {
     _ = @atomicRmw(u64, &call_count, .Add, 1, .monotonic);
     emit("NEO_JS_CALL id={d}", .{id});
 
-    if (handler.isUndefined()) {
-        emit("NEO_JS_NO_HANDLER", .{});
-        return;
-    }
-    const rt = &runtime.?;
-    const ctx = rt.ctx;
-
-    native_calls = 0;
+    const saved_scope = current_scope;
     current_scope = scope;
-    defer current_scope = 0;
+    defer current_scope = saved_scope;
 
+    var i: usize = 0;
+    while (i < session_len) : (i += 1) {
+        if (!sessions[i].active) continue;
+        if (sessions[i].handler.isUndefined()) {
+            emit("NEO_JS_NO_HANDLER id={d} mod={s}", .{ id, sessions[i].id });
+            sessions[i].active = false;
+            continue;
+        }
+        runSession(i, id);
+    }
+}
+
+/// 跑一个 session 的 handler。异常/超时只禁用**这个** session。
+fn runSession(index: usize, id: u32) void {
+    active_index = index;
+    const s = &sessions[index];
+    s.sessions_calls += 1;
+    s.native_calls = 0;
+
+    const ctx = s.runtime.ctx;
     var args = [_]c.JSValue{c.JSValue.int32(@intCast(@min(id, 0x7FFF_FFFF)))};
     interrupt_fired = false;
     interrupt_deadline = nowNs() + CALL_BUDGET_NS;
-    const result = c.JS_Call(ctx, handler, c.JS_UNDEFINED, 1, &args);
+    const result = c.JS_Call(ctx, s.handler, c.JS_UNDEFINED, 1, &args);
     interrupt_deadline = 0;
 
     if (interrupt_fired) {
+        s.sessions_timeouts += 1;
+        s.active = false;
         _ = @atomicRmw(u64, &timeout_count, .Add, 1, .monotonic);
-        emit("NEO_JS_TIMEOUT id={d}", .{id});
+        emit("NEO_JS_TIMEOUT id={d} mod={s}", .{ id, s.id });
         // The interrupt leaves a pending exception; consume it so the next call
         // does not see a stale one.
         const exc = c.JS_GetException(ctx);
@@ -439,8 +589,10 @@ pub fn onSystem(id: u32, scope: u64) void {
         return;
     }
     if (result.isException()) {
+        s.sessions_errors += 1;
+        s.active = false;
         _ = @atomicRmw(u64, &error_count, .Add, 1, .monotonic);
-        reportException(ctx, id);
+        reportException(ctx, id, s.id);
         return;
     }
     c.JS_FreeValue(ctx, result);
@@ -453,16 +605,16 @@ fn interruptCb(_: ?*c.JSRuntime, _: ?*anyopaque) callconv(.c) c_int {
     return 1;
 }
 
-fn reportException(ctx: ?*c.JSContext, id: u32) void {
+fn reportException(ctx: ?*c.JSContext, id: u32, mod_id: []const u8) void {
     const exc = c.JS_GetException(ctx);
     var len: usize = 0;
     const raw = c.JS_ToCStringLen2(ctx, &len, exc, false);
     if (raw) |msg| {
         var line_buf: [180]u8 = undefined;
-        emit("NEO_JS_ERROR id={d} {s}", .{ id, sanitize(&line_buf, clip(msg[0..len], 160)) });
+        emit("NEO_JS_ERROR id={d} mod={s} {s}", .{ id, mod_id, sanitize(&line_buf, clip(msg[0..len], 160)) });
         c.JS_FreeCString(ctx, msg);
     } else {
-        emit("NEO_JS_ERROR id={d} (unknown)", .{id});
+        emit("NEO_JS_ERROR id={d} mod={s} (unknown)", .{ id, mod_id });
     }
     c.JS_FreeValue(ctx, exc);
 }
@@ -508,10 +660,12 @@ fn argString(ctx: ?*c.JSContext, argc: c_int, argv: [*]c.JSValue, idx: usize, bu
 
 /// 第二道闸:一次 handler 调用里的 native 调用次数。超了返回要抛的异常值。
 fn charge(ctx: ?*c.JSContext) ?c.JSValue {
-    if (native_calls >= MAX_NATIVE_CALLS_PER_HANDLER) {
-        return c.JS_ThrowInternalError(ctx, "neo: native call budget exhausted");
+    if (currentSession()) |s| {
+        if (s.native_calls >= MAX_NATIVE_CALLS_PER_HANDLER) {
+            return c.JS_ThrowInternalError(ctx, "neo: native call budget exhausted");
+        }
+        s.native_calls += 1;
     }
-    native_calls += 1;
     return null;
 }
 
@@ -525,8 +679,9 @@ fn nativeRegisterSystem(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, ar
     if (argc < 1 or !c.JS_IsFunction(ctx, argv[0])) {
         return c.JS_ThrowTypeError(ctx, "onSystem expects a function");
     }
-    if (!handler.isUndefined()) c.JS_FreeValue(ctx, handler);
-    handler = c.JS_DupValue(ctx, argv[0]);
+    const s = currentSession() orelse return c.JS_ThrowInternalError(ctx, "neo: no session");
+    if (!s.handler.isUndefined()) c.JS_FreeValue(ctx, s.handler);
+    s.handler = c.JS_DupValue(ctx, argv[0]);
     return c.JS_UNDEFINED;
 }
 
@@ -534,7 +689,7 @@ fn nativeSystemDegree(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv
     _ = this_val;
     if (charge(ctx)) |exc| return exc;
     const id = argU32(argc, argv) orelse return c.JSValue.int32(0);
-    if (!canReadGraph(permissions)) return c.JSValue.int32(0);
+    if (!canReadGraph(currentPermissions())) return c.JSValue.int32(0);
     const degree = graph_probe.systemDegree(id) orelse 0;
     return c.JSValue.int32(@intCast(@min(degree, 0x7FFF_FFFF)));
 }
@@ -547,7 +702,7 @@ fn nativeSystemSetVar(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv
     const name = argString(ctx, argc, argv, 1, &name_buf) orelse return c.JS_UNDEFINED;
     const value = argF64(argc, argv, 2) orelse return c.JS_UNDEFINED;
 
-    const res = writeSystemVariable(permissions, id, name, value, current_scope);
+    const res = writeSystemVariable(currentPermissions(), id, name, value, current_scope);
     if (res == .ok) {
         var line_buf: [32]u8 = undefined;
         emit("NEO_JS_WRITE id={d} name={s}", .{ id, sanitize(&line_buf, name) });
@@ -558,33 +713,105 @@ fn nativeSystemSetVar(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv
             sanitize(&line_buf, clip(name, 24)),
             @tagName(res),
         });
+        // 越权 = 这个 session 不再被信任(A4:只禁用该 session,其它继续)。
+        if (res == .no_permission) disableCurrent();
     }
     return c.JS_UNDEFINED;
+}
+
+/// Phase 2 A2 — `s.neighbors`: container walk, array<u32>. Permission is
+/// `graph.read`; missing permission returns an empty array (same shape Phase 1's
+/// `degree` uses: deny with 0, not an exception).
+fn nativeSystemNeighbors(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    if (charge(ctx)) |exc| return exc;
+    const arr = c.JS_NewArray(ctx);
+    const id = argU32(argc, argv) orelse return arr;
+    if (!canReadGraph(currentPermissions())) {
+        emit("NEO_JS_NEIGHBORS_REJECT id={d} reason=no_permission", .{id});
+        return arr;
+    }
+    var buf: [graph_probe.MAX_NEIGHBORS]u32 = undefined;
+    const read = graph_probe.systemNeighbors(id, &buf) orelse return arr;
+    var i: usize = 0;
+    while (i < read.written) : (i += 1) {
+        const nid = buf[i];
+        _ = c.JS_SetPropertyUint32(ctx, arr, @intCast(i), c.JSValue.int32(@intCast(@min(nid, 0x7FFF_FFFF))));
+    }
+    if (read.total > read.written) {
+        emit("NEO_JS_NEIGHBORS_TRUNC id={d} total={d} written={d}", .{ id, read.total, read.written });
+    }
+    return arr;
+}
+
+/// Phase 2 A2 — `s.setStarFlag(name)`: 官方 `set_star_flag` body,写落在当次 scope。
+fn nativeSystemSetFlag(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    if (charge(ctx)) |exc| return exc;
+    const id = argU32(argc, argv) orelse return c.JS_UNDEFINED;
+    var name_buf: [64]u8 = undefined;
+    const name = argString(ctx, argc, argv, 1, &name_buf) orelse return c.JS_UNDEFINED;
+
+    const res = setSystemFlag(currentPermissions(), id, name, current_scope);
+    if (res == .ok) {
+        var line_buf: [32]u8 = undefined;
+        emit("NEO_JS_WRITE id={d} name={s} kind=flag", .{ id, sanitize(&line_buf, name) });
+    } else {
+        var line_buf: [32]u8 = undefined;
+        emit("NEO_JS_WRITE_REJECT id={d} name={s} reason={s} kind=flag", .{
+            id,
+            sanitize(&line_buf, clip(name, 24)),
+            @tagName(res),
+        });
+        if (res == .no_permission) disableCurrent();
+    }
+    return c.JS_UNDEFINED;
+}
+
+/// Phase 2 A2 — `s.hasStarFlag(name)`: 只读系统 flag 容器(`+0x5f8`)。
+fn nativeSystemHasFlag(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    if (charge(ctx)) |exc| return exc;
+    const id = argU32(argc, argv) orelse return c.JSValue.boolVal(false);
+    var name_buf: [64]u8 = undefined;
+    const name = argString(ctx, argc, argv, 1, &name_buf) orelse return c.JSValue.boolVal(false);
+
+    if (!canReadFlag(currentPermissions())) {
+        var line_buf: [32]u8 = undefined;
+        emit("NEO_JS_FLAG_REJECT id={d} name={s} reason=no_permission", .{ id, sanitize(&line_buf, clip(name, 24)) });
+        disableCurrent();
+        return c.JSValue.boolVal(false);
+    }
+    return c.JSValue.boolVal(readSystemFlag(currentPermissions(), id, name) orelse false);
 }
 
 fn nativeGraphBetweenness(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
     _ = this_val;
     if (charge(ctx)) |exc| return exc;
     const id = argU32(argc, argv) orelse return c.JSValue.int32(0);
-    return c.JSValue.int32(@intCast(betweennessFor(permissions, id)));
+    return c.JSValue.int32(@intCast(betweennessFor(currentPermissions(), id)));
 }
 
 fn nativeGraphIsChokepoint(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
     _ = this_val;
     if (charge(ctx)) |exc| return exc;
     const id = argU32(argc, argv) orelse return c.JSValue.boolVal(false);
-    return c.JSValue.boolVal(chokepointFor(permissions, id));
+    return c.JSValue.boolVal(chokepointFor(currentPermissions(), id));
 }
 
 fn nativeLog(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
     _ = this_val;
     if (charge(ctx)) |exc| return exc;
-    if (!permissions.log) return c.JS_UNDEFINED;
+    if (!currentPermissions().log) return c.JS_UNDEFINED;
     var text_buf: [256]u8 = undefined;
     const text = argString(ctx, argc, argv, 0, &text_buf) orelse text_buf[0..0];
     var line_buf: [256]u8 = undefined;
     emit("NEO_JS_LOG {s}", .{sanitize(&line_buf, clip(text, 250))});
     return c.JS_UNDEFINED;
+}
+
+fn disableCurrent() void {
+    if (currentSession()) |s| s.active = false;
 }
 
 fn nativeApiVersion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
@@ -619,13 +846,51 @@ pub fn timeouts() u64 {
     return @atomicLoad(u64, &timeout_count, .monotonic);
 }
 
-/// 只清状态机与计数,**不**释放 runtime / handler:`JS_DupValue` 的引用还挂在
-/// `handler` 上,而且在 Windows 上这个 runtime 与进程同生命周期(永不 FreeLibrary)。
+/// 测试/诊断:当前 session 数与其中 active 的数量。
+pub fn sessionCount() usize {
+    return session_len;
+}
+
+pub fn activeSessions() usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < session_len) : (i += 1) {
+        if (sessions[i].active) n += 1;
+    }
+    return n;
+}
+
+pub fn sessionErrors(index: usize) u64 {
+    if (index >= session_len) return 0;
+    return sessions[index].sessions_errors;
+}
+
+pub fn sessionTimeouts(index: usize) u64 {
+    if (index >= session_len) return 0;
+    return sessions[index].sessions_timeouts;
+}
+
+/// 只清状态机与计数。**Windows 上不释放 runtime**(`JS_DupValue` 的引用还挂在
+/// handler 上,而且这个 runtime 与进程同生命周期,永不 FreeLibrary);宿主测试里
+/// 释放掉,免得每个用例都留下 8 个 runtime。
 pub fn resetForTest() void {
+    if (comptime !is_windows) {
+        var i: usize = 0;
+        while (i < session_len) : (i += 1) {
+            const s = &sessions[i];
+            // The handler is a JS_DupValue reference; QuickJS asserts the GC list
+            // is empty when the runtime is freed, so drop it first.
+            if (!s.handler.isUndefined()) {
+                c.JS_FreeValue(s.runtime.ctx, s.handler);
+                s.handler = c.JS_UNDEFINED;
+            }
+            s.runtime.deinit();
+        }
+    }
+    session_len = 0;
+    active_index = 0;
     state = .idle;
-    permissions = .{};
     current_scope = 0;
-    native_calls = 0;
     interrupt_deadline = 0;
     interrupt_fired = false;
     clock = null;
@@ -748,6 +1013,16 @@ test "permission bits gate the write and the graph read independently" {
     try testing.expect(!canSetVariable(read_only));
     try testing.expect(canSetVariable(full) and canReadGraph(full));
 
+    // Phase 2 bits are independent and default-deny.
+    try testing.expect(!canReadVariable(none));
+    try testing.expect(!canWriteFlag(none));
+    try testing.expect(!canReadFlag(none));
+    try testing.expect(canReadVariable(.{ .variable_read = true }));
+    try testing.expect(canWriteFlag(.{ .flag_write = true }));
+    try testing.expect(canReadFlag(.{ .flag_read = true }));
+    try testing.expect(!canWriteFlag(.{ .flag_read = true }));
+    try testing.expect(!canReadFlag(.{ .flag_write = true }));
+
     // No `graph.read` => 0/false even for an id the table knows.
     try testing.expectEqual(@as(u32, 0), betweennessFor(none, 0));
     try testing.expect(!chokepointFor(none, 0));
@@ -848,7 +1123,7 @@ test "a bundle that registers no handler is NEO_JS_NO_HANDLER" {
     try testing.expect(cap.contains("NEO_JS_NO_HANDLER"));
 }
 
-test "an exception inside the handler is NEO_JS_ERROR and the game keeps going" {
+test "an exception inside the handler is NEO_JS_ERROR and only that session is disabled" {
     resetForTest();
     defer resetForTest();
     var cap = Capture{};
@@ -864,11 +1139,14 @@ test "an exception inside the handler is NEO_JS_ERROR and the game keeps going" 
     try testing.expectEqual(@as(u64, 1), calls());
     try testing.expectEqual(@as(u64, 1), errors());
     try testing.expectEqual(@as(u64, 0), timeouts());
+    try testing.expectEqual(@as(usize, 0), activeSessions());
+    try testing.expectEqual(@as(u64, 1), sessionErrors(0));
     try testing.expect(cap.contains("NEO_JS_ERROR id=3"));
+    try testing.expect(cap.contains("mod=throw"));
     try testing.expect(cap.contains("boom"));
 }
 
-test "an endless handler is stopped by the 10 ms budget and logs NEO_JS_TIMEOUT" {
+test "an endless handler is stopped by the 10 ms budget and the session is disabled" {
     resetForTest();
     defer resetForTest();
     var cap = Capture{};
@@ -886,11 +1164,16 @@ test "an endless handler is stopped by the 10 ms budget and logs NEO_JS_TIMEOUT"
     try testing.expectEqual(@as(u64, 1), calls());
     try testing.expectEqual(@as(u64, 1), timeouts());
     try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expectEqual(@as(usize, 0), activeSessions());
+    try testing.expectEqual(@as(u64, 1), sessionTimeouts(0));
     try testing.expect(cap.contains("NEO_JS_TIMEOUT id=5"));
+    try testing.expect(cap.contains("mod=spin"));
 
-    // The next call is clean: the interrupt's pending exception was consumed.
+    // The next dispatch still logs NEO_JS_CALL, but the disabled session is not
+    // entered again — and the interrupt's pending exception was consumed.
     onSystem(6, 0);
-    try testing.expect(cap.contains("NEO_JS_TIMEOUT id=6"));
+    try testing.expect(!cap.contains("NEO_JS_TIMEOUT id=6"));
+    try testing.expectEqual(@as(u64, 1), timeouts());
     try testing.expectEqual(@as(u64, 0), errors());
 }
 
@@ -914,6 +1197,8 @@ test "setVariable without variable.write is rejected, not silently dropped" {
     try testing.expectEqual(@as(usize, 0), seen_body_calls);
     try testing.expect(cap.contains("NEO_JS_WRITE_REJECT id=7"));
     try testing.expect(cap.contains("reason=no_permission"));
+    // 越权 = 该 session 被禁用(A4),不是每帧继续尝试。
+    try testing.expectEqual(@as(usize, 0), activeSessions());
 }
 
 test "setVariable writes through the official body with the C5-WRITE encoding" {
@@ -1014,5 +1299,313 @@ test "resetForTest clears the state machine and the counters" {
     try testing.expectEqual(@as(u64, 0), writes());
     try testing.expectEqual(@as(u64, 0), errors());
     try testing.expectEqual(@as(u64, 0), timeouts());
-    try testing.expectEqual(Permissions{}, permissions);
+    try testing.expectEqual(@as(usize, 0), sessionCount());
+    try testing.expectEqual(@as(usize, 0), activeSessions());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 A3/A4: multiple sessions and their isolation
+// ---------------------------------------------------------------------------
+
+fn countOccurrences(hay: []const u8, needle: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, hay, i, needle)) |pos| {
+        n += 1;
+        i = pos + needle.len;
+    }
+    return n;
+}
+
+test "two sessions both receive every dispatch" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    try testing.expect(startSession(.{
+        .id = "a",
+        .source = "__neo_register_system(function(id){ __neo_log('a' + id); });",
+        .permissions = .{ .log = true },
+    }));
+    try testing.expect(startSession(.{
+        .id = "b",
+        .source = "__neo_register_system(function(id){ __neo_log('b' + id); });",
+        .permissions = .{ .log = true },
+    }));
+    try testing.expectEqual(@as(usize, 2), sessionCount());
+
+    onSystem(7, 0);
+
+    // One NEO_JS_CALL per dispatch (Phase 1 kept), then one handler per session.
+    try testing.expectEqual(@as(u64, 1), calls());
+    try testing.expect(cap.contains("NEO_JS_LOG a7"));
+    try testing.expect(cap.contains("NEO_JS_LOG b7"));
+    try testing.expectEqual(@as(usize, 2), activeSessions());
+}
+
+test "a throwing session is disabled and the other keeps running" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    _ = startSession(.{
+        .id = "bad",
+        .source = "__neo_register_system(function(id){ throw new Error('boom'); });",
+        .permissions = .{},
+    });
+    _ = startSession(.{
+        .id = "good",
+        .source = "__neo_register_system(function(id){ __neo_log('good' + id); });",
+        .permissions = .{ .log = true },
+    });
+
+    onSystem(1, 0);
+    onSystem(2, 0);
+
+    try testing.expectEqual(@as(u64, 2), calls());
+    try testing.expectEqual(@as(u64, 1), errors());
+    try testing.expectEqual(@as(u64, 1), sessionErrors(0));
+    try testing.expectEqual(@as(u64, 0), sessionErrors(1));
+    try testing.expectEqual(@as(usize, 1), activeSessions());
+    try testing.expectEqual(@as(usize, 2), countOccurrences(cap.text(), "NEO_JS_LOG good"));
+    // The good session really did run twice, and the bad one only once.
+    try testing.expect(cap.contains("NEO_JS_LOG good1"));
+    try testing.expect(cap.contains("NEO_JS_LOG good2"));
+    try testing.expectEqual(@as(usize, 1), countOccurrences(cap.text(), "NEO_JS_ERROR id="));
+}
+
+test "a timed-out session is disabled and the other keeps running" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    var fake = FakeClock{};
+    setClock(.{ .ctx = @ptrCast(&fake), .now_ns = FakeClock.now });
+
+    _ = startSession(.{
+        .id = "spin",
+        .source = "__neo_register_system(function(id){ for(;;){ __neo_log('spin'); } });",
+        .permissions = .{ .log = true },
+    });
+    _ = startSession(.{
+        .id = "good",
+        .source = "__neo_register_system(function(id){ __neo_log('good' + id); });",
+        .permissions = .{ .log = true },
+    });
+
+    onSystem(4, 0);
+    onSystem(5, 0);
+
+    try testing.expectEqual(@as(u64, 1), timeouts());
+    try testing.expectEqual(@as(u64, 1), sessionTimeouts(0));
+    try testing.expectEqual(@as(u64, 0), sessionTimeouts(1));
+    try testing.expectEqual(@as(usize, 1), activeSessions());
+    // A tiny handler does not reach QuickJS's 10k-opcode interrupt poll, so the
+    // healthy session survives the same dispatch the spinning one failed in.
+    try testing.expect(cap.contains("NEO_JS_LOG good4"));
+    try testing.expect(cap.contains("NEO_JS_LOG good5"));
+}
+
+test "a permission violation disables only the offending session" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    _ = startSession(.{
+        .id = "nosy",
+        .source = "__neo_register_system(function(id){ __neo_system_set_var(id, 'neo_score', 1); });",
+        .permissions = .{},
+    });
+    _ = startSession(.{
+        .id = "good",
+        .source = "__neo_register_system(function(id){ __neo_log('good' + id); });",
+        .permissions = .{ .log = true },
+    });
+
+    onSystem(7, 0);
+    onSystem(8, 0);
+
+    try testing.expect(cap.contains("NEO_JS_WRITE_REJECT id=7"));
+    try testing.expect(cap.contains("reason=no_permission"));
+    try testing.expectEqual(@as(usize, 1), activeSessions());
+    try testing.expectEqual(@as(usize, 2), countOccurrences(cap.text(), "NEO_JS_LOG good"));
+    // Only one rejection: the disabled session is not entered on the next dispatch.
+    try testing.expectEqual(@as(usize, 1), countOccurrences(cap.text(), "NEO_JS_WRITE_REJECT"));
+}
+
+test "session slots are bounded: the ninth bundle is refused with a log" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    var i: usize = 0;
+    while (i < MAX_SESSIONS) : (i += 1) {
+        try testing.expect(startSession(.{
+            .id = "ok",
+            .source = "__neo_register_system(function(id){ });",
+            .permissions = .{},
+        }));
+    }
+    try testing.expect(!startSession(.{
+        .id = "over",
+        .source = "__neo_register_system(function(id){ });",
+        .permissions = .{},
+    }));
+    try testing.expectEqual(MAX_SESSIONS, sessionCount());
+    try testing.expect(cap.contains("NEO_JS_SESSION_LIMIT id=over"));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 A2: the additive natives (neighbors / set_flag / has_flag)
+// ---------------------------------------------------------------------------
+
+test "the additive v1.1 natives are registered separately from the frozen seven" {
+    const expected = [_][]const u8{
+        "__neo_system_neighbors",
+        "__neo_system_set_flag",
+        "__neo_system_has_flag",
+    };
+    try testing.expectEqual(expected.len, additive_names.len);
+    for (expected, 0..) |name, i| try testing.expectEqualStrings(name, additive_names[i]);
+    // The Phase 1 contract table stays exactly seven names.
+    try testing.expectEqual(@as(usize, 7), native_names.len);
+    try testing.expectEqual(@as(usize, 3), additive_native_table.len);
+}
+
+var host_flag_calls: usize = 0;
+var host_flag_id: u16 = 0;
+var host_flag_scope: u64 = 0;
+
+fn hostFlagBody(self_ptr: u64, scope: u64) callconv(.c) void {
+    const base: [*]const u8 = @ptrFromInt(self_ptr);
+    host_flag_id = std.mem.readInt(u16, base[neo_state.STAR_FLAG_ID_OFF..][0..2], .little);
+    host_flag_scope = scope;
+    host_flag_calls += 1;
+}
+
+fn hostFlagMinter(name: []const u8) ?u16 {
+    if (std.mem.eql(u8, name, "mod_flag")) return 777;
+    return null;
+}
+
+test "a session can call setStarFlag through the additive native" {
+    resetForTest();
+    defer resetForTest();
+    neo_vtable.resetForTest();
+    defer neo_vtable.resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    host_flag_calls = 0;
+    neo_vtable.armFlagPathForTest(@intFromPtr(&hostFlagBody));
+    neo_vtable.setTokenMinterForTest(&hostFlagMinter);
+
+    _ = startSession(.{
+        .id = "flag",
+        .source = "__neo_register_system(function(id){ __neo_system_set_flag(id, 'mod_flag'); });",
+        .permissions = .{ .flag_write = true },
+    });
+    const scope align(8) = systemScope(7);
+    onSystem(7, @intFromPtr(&scope));
+
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expectEqual(@as(u64, 1), writes());
+    try testing.expectEqual(@as(usize, 1), host_flag_calls);
+    try testing.expectEqual(@as(u16, 777), host_flag_id);
+    try testing.expectEqual(@as(u64, @intFromPtr(&scope)), host_flag_scope);
+    try testing.expect(cap.contains("NEO_JS_WRITE id=7 name=mod_flag kind=flag"));
+}
+
+test "setStarFlag without flag.write is rejected and disables that session" {
+    resetForTest();
+    defer resetForTest();
+    neo_vtable.resetForTest();
+    defer neo_vtable.resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    host_flag_calls = 0;
+    neo_vtable.armFlagPathForTest(@intFromPtr(&hostFlagBody));
+    neo_vtable.setTokenMinterForTest(&hostFlagMinter);
+
+    _ = startSession(.{
+        .id = "flag",
+        .source = "__neo_register_system(function(id){ __neo_system_set_flag(id, 'mod_flag'); });",
+        .permissions = .{},
+    });
+    const scope align(8) = systemScope(7);
+    onSystem(7, @intFromPtr(&scope));
+
+    try testing.expectEqual(@as(u64, 0), writes());
+    try testing.expectEqual(@as(usize, 0), host_flag_calls);
+    try testing.expect(cap.contains("reason=no_permission"));
+    try testing.expectEqual(@as(usize, 0), activeSessions());
+}
+
+test "neighbors returns an array; without graph.read it is empty and logged" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    // Linux: no module base, so the container walk fails closed -> empty array.
+    _ = startSession(.{
+        .id = "graph",
+        .source = "__neo_register_system(function(id){ const n = __neo_system_neighbors(id); if (n.length !== 0) throw new Error('len ' + n.length); });",
+        .permissions = .{ .graph_read = true },
+    });
+    onSystem(2, 0);
+    try testing.expectEqual(@as(u64, 0), errors());
+
+    resetForTest();
+    armCapture(&cap);
+    _ = startSession(.{
+        .id = "nograph",
+        .source = "__neo_register_system(function(id){ const n = __neo_system_neighbors(id); if (n.length !== 0) throw new Error('len'); });",
+        .permissions = .{},
+    });
+    onSystem(2, 0);
+    try testing.expect(cap.contains("NEO_JS_NEIGHBORS_REJECT id=2 reason=no_permission"));
+}
+
+test "hasStarFlag without flag.read is rejected and disables that session" {
+    resetForTest();
+    defer resetForTest();
+    neo_vtable.resetForTest();
+    defer neo_vtable.resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    neo_vtable.setTokenMinterForTest(&hostFlagMinter);
+
+    _ = startSession(.{
+        .id = "flagread",
+        .source = "__neo_register_system(function(id){ if (__neo_system_has_flag(id, 'mod_flag')) throw new Error('true'); });",
+        .permissions = .{},
+    });
+    onSystem(9, 0);
+
+    try testing.expect(cap.contains("NEO_JS_FLAG_REJECT id=9 name=mod_flag reason=no_permission"));
+    try testing.expectEqual(@as(usize, 0), activeSessions());
+}
+
+test "hasStarFlag with flag.read fails closed (false) when the engine is absent" {
+    resetForTest();
+    defer resetForTest();
+    neo_vtable.resetForTest();
+    defer neo_vtable.resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    neo_vtable.setTokenMinterForTest(&hostFlagMinter);
+
+    _ = startSession(.{
+        .id = "flagread",
+        .source = "__neo_register_system(function(id){ if (__neo_system_has_flag(id, 'mod_flag')) throw new Error('true'); });",
+        .permissions = .{ .flag_read = true },
+    });
+    onSystem(9, 0);
+
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expectEqual(@as(usize, 1), activeSessions());
 }

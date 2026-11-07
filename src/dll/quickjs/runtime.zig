@@ -199,7 +199,9 @@ pub const Runtime = struct {
             // Extract the error message from the pending exception.
             const exc = c.JS_GetException(self.ctx);
             const msg = self.valueToString(exc) catch "unknown error";
-            // exc is consumed by GetException — no need to free it.
+            // JS_GetException returns an owned reference; the message was copied
+            // out, so release it (the runtime asserts an empty GC list when freed).
+            c.JS_FreeValue(self.ctx, exc);
             return .{ .err = .{ .message = msg } };
         }
 
