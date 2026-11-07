@@ -595,5 +595,185 @@ python3 scripts/disrva.py 0x1AA6460 --len=0x90
 * **未解释** P2-1b 里 `neo_tier1` 的 `NEO_JS_PREMINT` 为什么在安装期拿不到表项
   (那是读档时序,`0x1D13270` 那条线的事,与本卷的 flag 表不是同一对象)。
 
+---
+
+## 6. 插入原语与计数器归属(2026-11-08,离线;计划 Task 1)
+
+**判决:`(a) 插入函数自己递增`。** `0x1BCF030` 体内有 **3 个** `inc dword ptr [0x326d118]`;
+`0x180F590` 对 `0x326d118` **只有一次读**(`0x180f778`),没有写。`rip` 引用全量普查
+(`scripts/riprefs.py 0x326d118`,5 条)只有这两个函数 `+` 初始化器。
+⇒ 运行时插入合法;`ensure` 的写法是「读号 → 把号交给插入 → 插入落条目并递增」,
+**调用方不递增**。
+
+### 6.1 `0x1BCF030` 的签名与返回(逐字)
+
+`.pdata` 边界 `0x1bcf030..0x1bcf3f3`(0x3c3 B,`python3 scripts/pdata.py 0x1BCF030`)。
+
+| 寄存器 | 含义 | 逐字依据 |
+|---|---|---|
+| `rcx` | **不用** —— 函数体第一行就覆盖 | `01bcf057 movsxd rcx, dword ptr [rip + 0x169e0be] ; -> 0x326d11c` |
+| `rdx` | 出参记录指针 = `{ qword bucket_ptr; u8 inserted }` | 尾部 `mov [rsi], rbx` / `mov byte [rsi+8], 1\|0`,`mov rax, rsi` |
+| `r8d` | 名字哈希(`0x1C9E350` 的返回值) | `01bcf064 movsxd r12, r8d` → `and rbx, r12` 决定槽位 |
+| `r9` | **0x30 B 引擎串对象**指针:`+0x10` 内联字符 / `+0x20` 长度(dword 读)/ `+0x28` 容量(qword) | `01bcf081 movsxd r15, dword [r9+0x20]`;`01bcf085 mov r12, [r9+0x28]`;`01bcf09e lea rcx,[r13+0x10]` |
+| `[rsp+0x20]`(callee `[rbp+0x50]`) | `u16` 候选 id 的**指针** | `01bcf162 mov rax, [rbp+0x50]` / `movzx ecx, word [rax]` |
+
+返回值:`rax = rdx`(出参记录本身)。`inserted = 1` ⇒ 新建条目(把候选 id 写进
+`bucket+0x38` 并递增计数器);`inserted = 0` ⇒ 已存在,`bucket_ptr` 指向旧条目,
+**计数器不动**。
+
+槽位算法:`bucket = [0x326d110] + (hash & [0x326d11c]) * 0x40`(逐字
+`01bcf067 and rbx, r12` / `01bcf06d shl rbx, 6` / `01bcf074 add rbx, [0x326d110]`)。
+
+### 6.2 桶与串的布局(逐字)
+
+```
+01bcf090  cmp     qword ptr [rbx + 0x30], 0x10    ; 桶内串的容量门
+01bcf095  lea     rdx, [rbx + 0x18]               ; 内联字符
+01bcf099  jb      0x141bcf09e
+01bcf09b  mov     rdx, qword ptr [rdx]            ; 容量 >= 0x10 ⇒ 堆指针
+01bcf0ac  cmp     r15d, dword ptr [rbx + 0x28]    ; 长度
+01bcf0b5  call    0x142188310                     ; memcmp
+01bcf0bc  je      0x141bcf17f                     ; 命中
+...
+01bcf169  mov     word ptr [rbx + 0x38], cx       ; 命中/新建都往 +0x38 写 u16
+```
+
+| 桶偏移 | 含义 |
+|---|---|
+| `+0x00` | `u32` 名字哈希 |
+| `+0x04` | `u8` 探测距离(0 = 空槽,插入时从 1 起;`0xFF` = 尾部哨兵) |
+| `+0x08` | 0x30 B 引擎串对象(`+0x10` 字符 / `+0x20` 长度 / `+0x28` 容量) |
+| `+0x38` | **`u16` flag id** |
+
+步长 `0x40`;`0x08 + 0x30 = 0x38` 正好接上 id。
+
+### 6.3 计数器归属(逐字:3 个写点 + 1 个读点)
+
+```
+01bcf0e6  mov     eax, dword ptr [rip + 0x169e02c]  ; -> 0x326d118   ; 读:装填因子
+01bcf0ec  inc     eax
+01bcf0ee  movd    xmm0, ecx                       ; mask
+01bcf0f2  cvtdq2ps xmm0, xmm0
+01bcf0f5  movd    xmm1, eax
+01bcf0f9  cvtdq2ps xmm1, xmm1
+01bcf0fc  divss   xmm1, xmm0
+01bcf100  comiss  xmm1, dword ptr [rip + 0x169e01d] ; -> 0x326d124  ; 0.9f
+
+01bcf162  mov     rax, qword ptr [rbp + 0x50]        ; &候选 id
+01bcf166  movzx   ecx, word ptr [rax]
+01bcf169  mov     word ptr [rbx + 0x38], cx
+01bcf16d  inc     dword ptr [rip + 0x169dfa5]  ; -> 0x326d118   ; 写点 1(空槽直接落)
+
+01bcf1f0  call    0x141bcf7a0                     ; 把 victim 挪到下一空槽前先构造我们
+01bcf1f5  inc     dword ptr [rip + 0x169df1d]  ; -> 0x326d118   ; 写点 2
+
+01bcf396  inc     dword ptr [rip + 0x169dd7c]  ; -> 0x326d118   ; 写点 3(victim 落位后)
+```
+
+完整 `rip` 普查(`python3 scripts/riprefs.py 0x326d118 --verify`):
+
+```
+== 5 refs to 326d118 (.text) [verified] ==
+      4  func 1bcf030..1bcf3f3      ; 1 读 + 3 写(上面四条)
+      1  func 135e40..135e7f        ; 初始化:`mov qword [0x326d118], rax`(清零 counter+mask)
+```
+
+`0x180F590` 的唯一引用是 `0180f778 movzx eax, word ptr [rip + ...] ; -> 0x326d118`
+—— 它把**当前**计数值当候选 id 读出来(`mov word [rbp+0x38], ax`),再在
+`0x180f7b7` 把这个局部地址作为第 5 参交给 `0x1BCF030`。**号值由调用方读,递增由插入函数做**。
+
+⇒ `[0x326D118]` 就是这张表的 **size** 字段(与 `+0x14` 的 mask 同属 map 对象的
+`+0x10/+0x14` 两个 dword):id 稠密、从 0 起、每次成功插入 +1。`0xFFFF` 是引擎自己的
+「发不出来」档(`0180f783 mov ecx, 0xffff` / `cmp ax, cx` / `je 0x180f7f0` 不改
+`[obj+0xC0]`),`0x180f7f6 mov eax, 0xffff` 是名字串为空时的落点。
+
+### 6.4 `0x158300` = 反查 vector 的 append(**复制**名字)
+
+`.pdata` `0x158300..0x158324`(0x24 B),慢路径 tail-jump 到 `0x15848F`(同函数)。
+
+| 寄存器 | 含义 |
+|---|---|
+| `rcx` | vector 对象 = 全局 `0x2A00DE0`(对象本体,不是指针);`+8` 数据、`+0x10` 容量(dword)、`+0x14` 计数(dword) |
+| `edx` | 新元素下标(调用方读 `[0x2A00DF4]` = 追加前的计数) |
+| `r8` | 0x30 B 引擎串对象指针 |
+
+逐字:
+
+```
+00158308  movsxd  rax, dword ptr [rcx + 0x14]   ; size
+0015830f  mov     ecx, dword ptr [rcx + 0x10]   ; capacity
+00158318  cmp     eax, ecx
+0015831a  jne     0x14015848f                   ; 未满 ⇒ 直接 append(下面)
+...
+00158496  shl     rcx, 4                        ; 索引 × 3 << 4 = ×0x30
+0015849a  add     rcx, qword ptr [rdi + 8]      ; data + index*0x30
+0015849e  call    0x14015f590                   ; 拷构造(深拷贝)
+001584ab  inc     dword ptr [rdi + 0x14]        ; size++
+```
+
+`0x15F590` 是**拷贝构造**:它自己 `add rdx,0x10` / 读源容量 `[rdx+0x18]` / 内联或
+解引用取源字符,再调 `0x15F770`(分配 + memcpy + NUL)。⇒ **名字被复制进 vector,
+调用返回后调用方那份可以失效**;`ensure` 传栈上对象是安全的。
+
+### 6.5 `lookup` 能否只靠哈希 + 桶扫描(不调插入)
+
+**能,且这就是引擎自己的 find。** `0x180F590` 在决定要不要调 `0x1BCF030` 之前,
+先内联了一整段只读扫描(`0x180f6d4..0x180f747`),逐指令与 §2.2 的读法同形:
+
+```
+0180f6d4  call    0x141c9e350                  ; hash(seed=0, chars, len)
+0180f6e0  and     eax, r12d                    ; & mask
+0180f6e6  shl     rbx, 6
+0180f6ea  add     rbx, [0x326d110]
+0180f6f1  mov     dil, 1                      ; 探测距离从 1 起
+0180f700  cmp     byte ptr [rbx + 4], dil
+0180f704  jb      0x14180f749                 ; 该槽探测距离 < 当前距离 ⇒ 停,未命中
+...                                             ; 长度 + memcmp(同上)
+0180f73c  inc     dil
+0180f73f  add     rbx, 0x40
+0180f743  cmp     dil, byte ptr [rbx + 4]
+0180f747  jbe     0x14180f710
+```
+
+三个独立的引擎 parse 体(`0x180F590`、`0x1AA5D10`、`0x1BCE3F0`)是同一段扫描的
+三个副本 ⇒ 这不是推断,是引擎自己反复写的同一个 find。
+
+**尾部哨兵是死代码(所以 lookup 不需要它)**:`0x1BCF400`(扩容)给新表分配
+`(1<<n) + (n+2) + 1` 个槽,把 `DIB` 清零后单独把**最后那一槽**置 `0xFF`:
+
+```
+01bcf602  shl     ebx, cl                      ; ebx = 1 << n(bucket 数)
+01bcf604  add     cl, 2
+01bcf61b  mov     dword ptr [rbp + 0x14], eax   ; 新 mask = ebx - 1
+01bcf621  mov     byte ptr [rbp + 0x18], al     ; tail = n + 2
+01bcf630  lea     ecx, [rax + 1]                ; tail + 1
+01bcf633  mov     eax, 0x40
+01bcf638  add     ecx, ebx                      ; tail + 1 + capacity
+01bcf63a  mul     rcx                           ; 槽数 → 字节数
+...
+01bcf670  mov     byte ptr [rax + 4], r15b      ; 逐个槽 DIB = 0
+01bcf674  add     rax, 0x40
+01bcf67d  mov     byte ptr [rdx + 4], 0xff      ; 哨兵 = 下标 capacity+tail
+```
+
+而插入在落位前就检查 `cmp sil, byte [rdi + 0x18]`(tail)/ `cmp cl, [0x326d120]`,
+**探测距离 > tail 就扩容**;哨兵槽的下标是 `(mask+1)+tail`,从任何起点走到它都
+至少是 `tail+2` 距离 ⇒ 永不可能落条目,`[哨兵+4]` 恒 `0xFF`
+(`0x180f765 cmp byte [rbx+4],0xff` / `je` 就是这条永真判断)。lookup 在
+「`DIB < 距离`」的第一个空槽停下即可返回 `null`。
+
+### 6.6 复现(§6)
+
+```bash
+python3 scripts/pdata.py 0x1BCF030         # 0x1bcf030..0x1bcf3f3
+python3 scripts/disrva.py 0x1BCF030 --len=0x3C3
+python3 scripts/disrva.py 0x158300  --len=0x24
+python3 scripts/disrva.py 0x15F590  --len=0x57     # 拷贝构造
+python3 scripts/disrva.py 0x1BCF400 --len=0x1F8    # 扩容的分配算关(哨兵)
+python3 scripts/riprefs.py 0x326d118 --verify      # 5 条,只有两个函数
+python3 scripts/disrva.py 0x180F590 --len=0x2A2    # 扫描 + 取号,零写
+```
+
+**边界**:本节全部是静态读数;没有实机(§5 的边界仍然成立,Task C 未执行)。
 
 

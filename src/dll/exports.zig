@@ -1193,12 +1193,9 @@ export fn C2NeoInstall(token: u32) callconv(.c) i32 {
     const game_base = gameModuleBase();
     if (token == 0 or game_base == 0) return -1;
     c2_neo_vtable.resolveFromGame(game_base) catch return -2;
-    // P2-1b:安装期(脚本解析之前)把 manifest 声明的 flag 名用官方分配器预发成
-    // token id。运行时 `setSystemFlag`/`readSystemFlag` 只查这张表 —— 现场发号
-    // 会落在 u16 之外(C2 第二发:raw=68639)。失败只落日志,不改安装回执。
-    var flag_names: [c2_neo_js_loader.MAX_FLAGS][]const u8 = undefined;
-    const flag_count = c2_neo_js_loader.flagNamesForInstall(&flag_names);
-    _ = c2_neo_js_host.premintFlags(flag_names[0..flag_count]);
+    // flag 名 → 号的解析在**第一次读写**时发生(官方 flag 表 `0x326D110`,
+    // 见 `c2/flag_ids.zig`);安装期不再预发号 —— 那张表自己发 16 位号,与 lexer
+    // token 池无关。`Manifest.flags` 仍被解析,但 host 不再读它。
     c2_neo_dispatch.setToken(token) catch return -3;
     c2_neo_dispatch.install() catch return -4;
     return 0;

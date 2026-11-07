@@ -409,6 +409,39 @@ comptime {
     if (@sizeOf(usize) != 8) @compileError("graph offsets assume a 64-bit target: pointers are 8 bytes wide");
 }
 
+/// 官方 **flag 名表**(`0x326D110`:名字 → u16 flag id)与它的三个原语。
+/// [VERIFIED 4.4.4 STATIC] `evidence/analysis/flag_store_4_4_4.md` §2.3 / §4.2 / §6。
+///
+/// 这张表与 lexer token 表(`0x37347A0`,`0x1D13270` 发号)**是两个对象**:地址不同、
+/// 元素步长不同(0x40 vs 0x30)、发号器不同。P2-1b 两发实机判负的根因就是拿 token id
+/// 当 flag id 用(写进 `+0x5F8` 的号与官方脚本解析出的号永不相等)。
+/// 表作 map 用:`+8` 桶数组、`+0x10` size(= 下一个 id)、`+0x14` mask、
+/// `+0x18` tail(探测距离上限)、`+0x1c` 装填因子(0.9f)。
+pub const flag_ids = struct {
+    /// map 对象本体(全局,**不是**指针):0x326D108。
+    pub const RVA_MAP: usize = 0x326D108;
+    /// `+8` 桶数组基址(0x326D110);桶步长 0x40。
+    pub const RVA_BUCKETS: usize = 0x326D110;
+    /// `+0x10` size = **下一个 flag id**(dword;引擎按 word 读)。
+    pub const RVA_NEXT_ID: usize = 0x326D118;
+    /// `+0x14` 桶掩码(dword)。
+    pub const RVA_MASK: usize = 0x326D11C;
+    /// `+0x18` 尾部槽数(byte;`0x1BCF400` 扩容时置为 log2(capacity)+2)。
+    pub const RVA_TAIL: usize = 0x326D120;
+    /// `+0x1c` 装填因子(0.9f)。
+    pub const RVA_LOAD_FACTOR: usize = 0x326D124;
+    /// `0x1BCF030` robin-hood 插入/查找(§6.1;它**自己**递增 `RVA_NEXT_ID`)。
+    pub const RVA_MAP_EMPLACE: usize = 0x1BCF030;
+    /// `0x158300` 把名字 append 进反查 vector(深拷贝,§6.4)。
+    pub const RVA_NAME_APPEND: usize = 0x158300;
+    /// `0x1C9E350` 名字哈希(`hash(seed, chars, len)`,调用点 seed = 0)。
+    pub const RVA_NAME_HASH: usize = 0x1C9E350;
+    /// 反查 vector 对象本体(0x2A00DE0):`+8` 数据、`+0x10` 容量、`+0x14` 计数。
+    pub const RVA_NAME_VECTOR: usize = 0x2A00DE0;
+    /// 反查 vector 的元素步长(元素本身是一个 0x30 B 的引擎串)。
+    pub const NAME_ELEMENT_STRIDE: usize = 0x30;
+};
+
 /// CEffect object offsets.
 /// [FALSIFIED 3.x] 4.4.4 has NO central dispatch switch — effects are polymorphic
 /// CEffect::Execute via vtable call (evidence/analysis/runtime_444_structures.md).
@@ -706,6 +739,45 @@ test "C4 execution-path constants are pinned" {
     try std.testing.expectEqual(@as(usize, 0x349230), k.RVA_TRIGGER_PREDICATE);
     try std.testing.expect(k.RVA_TRIGGER_PREDICATE != k.RVA_EFFECT_PREDICATE);
     try std.testing.expect(k.RVA_TRIGGER_PREDICATE < text_end);
+}
+
+test "flag_ids: §6 的 flag 名表与三个原语钉在逐字地址上" {
+    const f = flag_ids;
+    // map 对象本体与它的五个相邻字段(§6.1/§6.3):size 就是**下一个 id**,
+    // tail = log2(capacity)+2,tail 之后的哨兵槽恒 0xFF(§6.5)。
+    try std.testing.expectEqual(@as(usize, 0x326D108), f.RVA_MAP);
+    try std.testing.expectEqual(@as(usize, 0x326D110), f.RVA_BUCKETS);
+    try std.testing.expectEqual(@as(usize, 0x326D118), f.RVA_NEXT_ID);
+    try std.testing.expectEqual(@as(usize, 0x326D11C), f.RVA_MASK);
+    try std.testing.expectEqual(@as(usize, 0x326D120), f.RVA_TAIL);
+    try std.testing.expectEqual(@as(usize, 0x326D124), f.RVA_LOAD_FACTOR);
+    // 三个原语:`0x1BCF030` 插入(自己递增 size)、`0x158300` 名字 append(深拷贝)、
+    // `0x1C9E350` 哈希(seed = 0)。
+    try std.testing.expectEqual(@as(usize, 0x1BCF030), f.RVA_MAP_EMPLACE);
+    try std.testing.expectEqual(@as(usize, 0x158300), f.RVA_NAME_APPEND);
+    try std.testing.expectEqual(@as(usize, 0x1C9E350), f.RVA_NAME_HASH);
+    try std.testing.expectEqual(@as(usize, 0x2A00DE0), f.RVA_NAME_VECTOR);
+    try std.testing.expectEqual(@as(usize, 0x30), f.NAME_ELEMENT_STRIDE);
+    // 五个字段是**同一个 map 对象**的相邻格,不是五个独立全局。
+    try std.testing.expectEqual(f.RVA_MAP + 0x08, f.RVA_BUCKETS);
+    try std.testing.expectEqual(f.RVA_MAP + 0x10, f.RVA_NEXT_ID);
+    try std.testing.expectEqual(f.RVA_MAP + 0x14, f.RVA_MASK);
+    try std.testing.expectEqual(f.RVA_MAP + 0x18, f.RVA_TAIL);
+    try std.testing.expectEqual(f.RVA_MAP + 0x1c, f.RVA_LOAD_FACTOR);
+    // §2.3 的三张表互不相同:flag 名表 ≠ lexer token DB ≠ 反查 vector。
+    try std.testing.expect(f.RVA_MAP != keyword_reg.RVA_TOKEN_DB_OBJECT);
+    try std.testing.expect(f.RVA_MAP != f.RVA_NAME_VECTOR);
+    try std.testing.expect(f.RVA_NAME_VECTOR != keyword_reg.RVA_TOKEN_DB_OBJECT);
+    // 反查 vector 的元素是 0x30 B 的引擎串,而 flag 桶步长是 0x40(两个不同步长)。
+    try std.testing.expectEqual(@as(usize, 0x30), f.NAME_ELEMENT_STRIDE);
+    try std.testing.expect(f.NAME_ELEMENT_STRIDE != 0x40);
+    // 原语都在 .text,状态都在 .data/_BSS(0x2392000 是 .text 的终点,同 §22 口径)。
+    const text_end: usize = 0x2392000;
+    try std.testing.expect(f.RVA_MAP_EMPLACE < text_end);
+    try std.testing.expect(f.RVA_NAME_APPEND < text_end);
+    try std.testing.expect(f.RVA_NAME_HASH < text_end);
+    try std.testing.expect(f.RVA_MAP > text_end);
+    try std.testing.expect(f.RVA_NAME_VECTOR > text_end);
 }
 
 test "graph: §1/§2 read-path offsets are pinned to the disasm sites" {
