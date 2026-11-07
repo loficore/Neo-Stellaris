@@ -532,8 +532,12 @@ pub fn flagNamesForInstall(out: *[MAX_FLAGS][]const u8) usize {
             host.emit("NEO_JS_INSTALL_SKIP id={s}", .{id});
             continue;
         };
+        var dropped: usize = 0;
         for (manifest.flags) |name| {
-            if (count >= MAX_FLAGS) break;
+            if (count >= MAX_FLAGS) {
+                dropped += 1;
+                continue;
+            }
             var dup = false;
             for (out[0..count]) |seen| {
                 if (std.mem.eql(u8, seen, name)) {
@@ -544,6 +548,10 @@ pub fn flagNamesForInstall(out: *[MAX_FLAGS][]const u8) usize {
             if (dup) continue;
             out[count] = name;
             count += 1;
+        }
+        if (dropped > 0) {
+            // 跨 mod 的并集超过全局上界:不静默截断,让安装期日志能读出来。
+            host.emit("NEO_JS_INSTALL_FLAGS_TRUNC id={s} dropped={d}", .{ id, dropped });
         }
     }
     return count;

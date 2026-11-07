@@ -420,6 +420,7 @@ var premint_count: usize = 0;
 /// 下一发的判据就是这几行:
 ///   `NEO_JS_PREMINT name=<name> id=<u16>`
 ///   `NEO_JS_PREMINT_FAIL name=<name> reason=no_token`      (mint 没给出 id)
+///   `NEO_JS_PREMINT_FAIL name=<name> reason=table_full`    (超过 MAX_PREMINT)
 ///   `NEO_JS_PREMINT_FAIL name=<name> raw=<n> reason=range` (>0xFFFF 或 0xFFFF 哨兵)
 ///
 /// 只走官方分配器:不插表、不选号、不写 `[db+0x64]`/`[db+0x80]`(AGENTS 约束 5)。
@@ -428,7 +429,8 @@ pub fn premintFlags(names: []const []const u8) usize {
     for (names) |name| {
         if (premintedId(name) != null) continue;
         if (premint_count >= MAX_PREMINT) {
-            emit("NEO_JS_PREMINT_FAIL name={s} reason=no_token", .{name});
+            // 表满与「分配器没给 id」是两件事:前者的修法是少声明名字,后者是时机/环境。
+            emit("NEO_JS_PREMINT_FAIL name={s} reason=table_full", .{name});
             continue;
         }
         const raw = neo_vtable.mintFlagTokenRaw(name) orelse {
@@ -1130,6 +1132,31 @@ test "encodeScriptNumber refuses anything a Debug build would abort on" {
     try testing.expectEqual(@as(?u32, null), encodeScriptNumber(std.math.nan(f64)));
     try testing.expectEqual(@as(?u32, null), encodeScriptNumber(std.math.inf(f64)));
     try testing.expectEqual(@as(?u32, null), encodeScriptNumber(4_294_967_296.0));
+}
+
+test "premintFlags reports table_full instead of blaming the allocator" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    neo_vtable.setTokenMinterForTest(&hostCountingMinter);
+
+    var names: [MAX_PREMINT + 1][]const u8 = undefined;
+    var bufs: [MAX_PREMINT + 1][12]u8 = undefined;
+    for (0..names.len) |i| {
+        bufs[i] = undefined;
+        names[i] = std.fmt.bufPrint(&bufs[i], "f{d}", .{i}) catch unreachable;
+    }
+    // 前 MAX_PREMINT 个进表,第 33 个必须是 table_full(不是 no_token)。
+    try testing.expectEqual(MAX_PREMINT, premintFlags(names[0..MAX_PREMINT]));
+    _ = premintFlags(names[MAX_PREMINT..]);
+    try testing.expect(cap.contains("reason=table_full"));
+    try testing.expectEqual(@as(usize, MAX_PREMINT), premint_count);
+}
+
+fn hostCountingMinter(name: []const u8) ?u32 {
+    _ = name;
+    return 9000;
 }
 
 test "onSystem before a session loads logs NEO_JS_NO_MOD and never calls JS" {
