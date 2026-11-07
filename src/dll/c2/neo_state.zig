@@ -29,6 +29,10 @@ pub const SCORE_NAME: []const u8 = "neo_score";
 /// `0x18A6970` 的 `new(0x318)`。
 pub const OBJECT_SIZE: usize = 0x318;
 
+/// MSVC `std::string` 内联缓冲(SSO)能装下的最大字节数。超过就会被**静默截断**
+/// 成另一个变量名,所以调用方(以及 `neo_vtable.writeVariable`)必须在写之前拒绝。
+pub const SSO_MAX: usize = 15;
+
 /// 名字包装起点;`std::string` 在 `NAME_OFF + 0x10`。
 pub const NAME_OFF: usize = 0xC0;
 pub const NAME_STRING_OFF: usize = 0xD0;

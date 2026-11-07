@@ -36,6 +36,11 @@ pub const exec_hook = @import("scripted/exec_hook.zig");
 // injector-facing trigger.
 pub const keyword_registry = @import("scripted/keyword_registry.zig");
 
+// Runtime JS host (Phase 1 Track A): the 7 `__neo_*` natives + the per-system
+// handler. Its only production entry point is `c2/neo_vtable.zig`'s `runBody`,
+// which calls `onSystem(id, scope)` right after the official `log` effect.
+pub const neo_js_host = @import("c2/neo_js_host.zig");
+
 // C2: QuickJS runtime integration — custom vtables + JS dispatch for registered keywords.
 pub const c2_handler = @import("c2/handler.zig");
 pub const c2_vtable = @import("c2/vtable.zig");
@@ -45,6 +50,7 @@ pub const c2_scope_probe = @import("c2/scope_probe.zig");
 pub const c2_wire = @import("c2/wire.zig");
 
 comptime {
+    _ = neo_js_host;
     _ = scripted;
     _ = exec_hook;
     _ = keyword_registry;
