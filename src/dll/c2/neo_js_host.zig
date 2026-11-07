@@ -387,7 +387,18 @@ fn ensureWritePath() void {
 
 /// `s.setStarFlag(name)` 的判定面(纯部分):权限 → 名字 →「scope 是不是这个 id」→
 /// 官方 `set_star_flag` body。写落在 scope 上,id 只是 JS 侧的镜像。
-pub const FlagResult = enum { ok, no_permission, bad_name, wrong_scope, no_engine };
+/// `no_engine` 在 C2 实机(2026-11-07)只给出一个笼统的 `no_engine` —— body 没解析
+/// 与 token 没 mint 出来在读数上无法区分。这里拆成两档,并把最后一档细到「id 超界」:
+/// 下一发的日志能直接指出是哪一格。
+pub const FlagResult = enum {
+    ok,
+    no_permission,
+    bad_name,
+    wrong_scope,
+    no_flag_body,
+    no_flag_token,
+    no_flag_token_range,
+};
 
 pub fn setSystemFlag(p: Permissions, id: u32, name: []const u8, scope: u64) FlagResult {
     if (!canWriteFlag(p)) return .no_permission;
@@ -395,8 +406,10 @@ pub fn setSystemFlag(p: Permissions, id: u32, name: []const u8, scope: u64) Flag
     const scope_id = neo_vtable.systemScopeId(scope) orelse return .wrong_scope;
     if (scope_id != id) return .wrong_scope;
     ensureWritePath();
-    if (!neo_vtable.flagsResolved()) return .no_engine;
-    if (!neo_vtable.setStarFlag(name, scope)) return .no_engine;
+    if (!neo_vtable.flagsResolved()) return .no_flag_body;
+    const raw = neo_vtable.mintFlagTokenRaw(name) orelse return .no_flag_token;
+    if (raw > std.math.maxInt(u16)) return .no_flag_token_range;
+    if (!neo_vtable.setStarFlagId(@intCast(raw), scope)) return .no_flag_body;
     _ = @atomicRmw(u64, &write_count, .Add, 1, .monotonic);
     return .ok;
 }
@@ -758,10 +771,13 @@ fn nativeSystemSetFlag(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, arg
         emit("NEO_JS_WRITE id={d} name={s} kind=flag", .{ id, sanitize(&line_buf, name) });
     } else {
         var line_buf: [32]u8 = undefined;
-        emit("NEO_JS_WRITE_REJECT id={d} name={s} reason={s} kind=flag", .{
+        // `raw=` 是引擎 mint 回来的原始 u32(0 = 没 mint 出来)。没有它,
+        // 「body 没解析」「token 没 mint」「id 超过 u16」三种失败在日志上长得一样。
+        emit("NEO_JS_WRITE_REJECT id={d} name={s} reason={s} raw={d} kind=flag", .{
             id,
             sanitize(&line_buf, clip(name, 24)),
             @tagName(res),
+            neo_vtable.lastFlagMintRaw(),
         });
         if (res == .no_permission) disableCurrent();
     }
@@ -782,7 +798,17 @@ fn nativeSystemHasFlag(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, arg
         disableCurrent();
         return c.JSValue.boolVal(false);
     }
-    return c.JSValue.boolVal(readSystemFlag(currentPermissions(), id, name) orelse false);
+    const maybe = readSystemFlag(currentPermissions(), id, name);
+    if (maybe == null) {
+        var line_buf: [32]u8 = undefined;
+        emit("NEO_JS_FLAG_REJECT id={d} name={s} reason=no_token raw={d}", .{
+            id,
+            sanitize(&line_buf, clip(name, 24)),
+            neo_vtable.lastFlagMintRaw(),
+        });
+        return c.JSValue.boolVal(false);
+    }
+    return c.JSValue.boolVal(maybe.?);
 }
 
 fn nativeGraphBetweenness(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
@@ -1487,7 +1513,7 @@ fn hostFlagBody(self_ptr: u64, scope: u64) callconv(.c) void {
     host_flag_calls += 1;
 }
 
-fn hostFlagMinter(name: []const u8) ?u16 {
+fn hostFlagMinter(name: []const u8) ?u32 {
     if (std.mem.eql(u8, name, "mod_flag")) return 777;
     return null;
 }
@@ -1500,7 +1526,7 @@ test "a session can call setStarFlag through the additive native" {
     var cap = Capture{};
     armCapture(&cap);
     host_flag_calls = 0;
-    neo_vtable.armFlagPathForTest(@intFromPtr(&hostFlagBody));
+    neo_vtable.armFlagPathForTest(@intFromPtr(&hostFlagBody), 0x140000000 + 0x26049B0);
     neo_vtable.setTokenMinterForTest(&hostFlagMinter);
 
     _ = startSession(.{
@@ -1527,7 +1553,7 @@ test "setStarFlag without flag.write is rejected and disables that session" {
     var cap = Capture{};
     armCapture(&cap);
     host_flag_calls = 0;
-    neo_vtable.armFlagPathForTest(@intFromPtr(&hostFlagBody));
+    neo_vtable.armFlagPathForTest(@intFromPtr(&hostFlagBody), 0x140000000 + 0x26049B0);
     neo_vtable.setTokenMinterForTest(&hostFlagMinter);
 
     _ = startSession(.{
