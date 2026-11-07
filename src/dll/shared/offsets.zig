@@ -741,6 +741,45 @@ test "C4 execution-path constants are pinned" {
     try std.testing.expect(k.RVA_TRIGGER_PREDICATE < text_end);
 }
 
+test "flag_ids: §6 的 flag 名表与三个原语钉在逐字地址上" {
+    const f = flag_ids;
+    // map 对象本体与它的五个相邻字段(§6.1/§6.3):size 就是**下一个 id**,
+    // tail = log2(capacity)+2,tail 之后的哨兵槽恒 0xFF(§6.5)。
+    try std.testing.expectEqual(@as(usize, 0x326D108), f.RVA_MAP);
+    try std.testing.expectEqual(@as(usize, 0x326D110), f.RVA_BUCKETS);
+    try std.testing.expectEqual(@as(usize, 0x326D118), f.RVA_NEXT_ID);
+    try std.testing.expectEqual(@as(usize, 0x326D11C), f.RVA_MASK);
+    try std.testing.expectEqual(@as(usize, 0x326D120), f.RVA_TAIL);
+    try std.testing.expectEqual(@as(usize, 0x326D124), f.RVA_LOAD_FACTOR);
+    // 三个原语:`0x1BCF030` 插入(自己递增 size)、`0x158300` 名字 append(深拷贝)、
+    // `0x1C9E350` 哈希(seed = 0)。
+    try std.testing.expectEqual(@as(usize, 0x1BCF030), f.RVA_MAP_EMPLACE);
+    try std.testing.expectEqual(@as(usize, 0x158300), f.RVA_NAME_APPEND);
+    try std.testing.expectEqual(@as(usize, 0x1C9E350), f.RVA_NAME_HASH);
+    try std.testing.expectEqual(@as(usize, 0x2A00DE0), f.RVA_NAME_VECTOR);
+    try std.testing.expectEqual(@as(usize, 0x30), f.NAME_ELEMENT_STRIDE);
+    // 五个字段是**同一个 map 对象**的相邻格,不是五个独立全局。
+    try std.testing.expectEqual(f.RVA_MAP + 0x08, f.RVA_BUCKETS);
+    try std.testing.expectEqual(f.RVA_MAP + 0x10, f.RVA_NEXT_ID);
+    try std.testing.expectEqual(f.RVA_MAP + 0x14, f.RVA_MASK);
+    try std.testing.expectEqual(f.RVA_MAP + 0x18, f.RVA_TAIL);
+    try std.testing.expectEqual(f.RVA_MAP + 0x1c, f.RVA_LOAD_FACTOR);
+    // §2.3 的三张表互不相同:flag 名表 ≠ lexer token DB ≠ 反查 vector。
+    try std.testing.expect(f.RVA_MAP != keyword_reg.RVA_TOKEN_DB_OBJECT);
+    try std.testing.expect(f.RVA_MAP != f.RVA_NAME_VECTOR);
+    try std.testing.expect(f.RVA_NAME_VECTOR != keyword_reg.RVA_TOKEN_DB_OBJECT);
+    // 反查 vector 的元素是 0x30 B 的引擎串,而 flag 桶步长是 0x40(两个不同步长)。
+    try std.testing.expectEqual(@as(usize, 0x30), f.NAME_ELEMENT_STRIDE);
+    try std.testing.expect(f.NAME_ELEMENT_STRIDE != 0x40);
+    // 原语都在 .text,状态都在 .data/_BSS(0x2392000 是 .text 的终点,同 §22 口径)。
+    const text_end: usize = 0x2392000;
+    try std.testing.expect(f.RVA_MAP_EMPLACE < text_end);
+    try std.testing.expect(f.RVA_NAME_APPEND < text_end);
+    try std.testing.expect(f.RVA_NAME_HASH < text_end);
+    try std.testing.expect(f.RVA_MAP > text_end);
+    try std.testing.expect(f.RVA_NAME_VECTOR > text_end);
+}
+
 test "graph: §1/§2 read-path offsets are pinned to the disasm sites" {
     // A single wrong field here would silently read a different object's memory,
     // so each constant is pinned to the instruction it was read from rather than

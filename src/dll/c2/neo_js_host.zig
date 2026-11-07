@@ -49,7 +49,6 @@
 //   NEO_JS_WRITE id=<id> name=<name> [kind=flag]
 //   NEO_JS_WRITE_REJECT … reason=<tag> [kind=flag]
 //   NEO_JS_FLAG_REJECT id=<id> name=<name> reason=no_permission|no_flag_token
-//   NEO_JS_INSTALL_SKIP id=<dir>                    安装期,坏 manifest 的 mod 被跳过
 //   NEO_JS_NEIGHBORS_REJECT id=<id> reason=no_permission
 //   NEO_JS_NEIGHBORS_TRUNC id=<id> total=<n> written=<n>
 //   NEO_JS_LOG <text>
@@ -286,7 +285,7 @@ fn appendToFile(line: []const u8) void {
     _ = CloseHandle(handle);
 }
 
-/// 一行日志的公共出口(host 的失败面与 loader 的 `NEO_JS_INSTALL_SKIP` 共用)。
+/// 一行日志的公共出口(host 的所有 `NEO_JS_*` 行共用)。
 pub fn emit(comptime fmt: []const u8, args: anytype) void {
     var buf: [384]u8 = undefined;
     const line = std.fmt.bufPrint(&buf, fmt ++ "\n", args) catch return;
