@@ -2,6 +2,8 @@
 
 A Zig-based DLL extension for Stellaris that embeds a QuickJS JavaScript runtime, enabling modders to write custom effects, triggers, and UI logic in JavaScript while hooking into the Clausewitz engine's CEffect/CTrigger dispatch pipeline.
 
+Runtime mods written in TypeScript use the **runtime JS SDK** in `sdk/`: see [docs/runtime-js-sdk.md](docs/runtime-js-sdk.md) for the v1 API, `neo build` / `neo check`, and the manifest format.
+
 ## Features
 
 - **Game State Access** — Read countries, planets, pops, systems, and game date/tick

@@ -1,0 +1,8 @@
+{
+  "id": "chokepoint",
+  "entry": "main.js",
+  "scope": ["system"],
+  "permissions": ["graph.read", "variable.write", "log"],
+  "engine": "4.4.4",
+  "runtime": ">=0.1"
+}
