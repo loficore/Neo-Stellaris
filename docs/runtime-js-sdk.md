@@ -18,12 +18,22 @@ injected QuickJS host on the game's main thread, once per system.
 > goes through the official `set_star_flag` body and the read through the official flag
 > container.
 >
-> **P2-1b (flag 早发号, 2026-11-07).** The C2 reading below (`raw=68639`) is the *pre-P2-1b*
+> **P2-1b (flag 早发号, 2026-11-07/08).** The C2 reading below (`raw=68639`) is the *pre-P2-1b*
 > state: the id was minted inside the handler, i.e. after the script parser had already grown the
 > token pool past 16 bits. P2-1b moves that mint into `C2NeoInstall` (before the parser runs) and
 > pins the names at build time in `neo/mod.json`'s `flags`; the runtime only looks them up
-> (`no_premint` otherwise). The writer is unchanged (`0x180F8E0`). The two live shots that would
-> prove it (C2 发 1 / 发 2) are still **blocked — no live reading exists for P2-1b**.
+> (`no_premint` otherwise).
+>
+> **Live result (2026-11-08, two shots): the premint works; the flag write/read still does not.**
+> `NEO_JS_PREMINT name=neo_hub id=19345` (inside u16), `NEO_JS_WRITE … kind=flag` returned ok and
+> our own read-back was `true` — but an official script's `has_star_flag = neo_hub` produced **0**
+> hits while its control `has_star_flag = neo_tier1` produced **139**, and the newest autosave
+> contains `neo_hub` **0** times. A second, read-only shot showed the same for reads: a flag the
+> engine demonstrably stores (`neo_tier1`) is invisible to `hasStarFlag` on all 788 systems.
+> ⇒ the A1 mapping “`set_star_flag` body `0x180F8E0` + system `+0x5F8` container” is **falsified**;
+> the write and the read are self-consistent against a structure that is not the star-flag store.
+> Both flag calls therefore stay **deferred**, now for a different reason than the u16 range.
+> Full reading: `evidence/logs/runtime_js_p2_1b_flags_4_4_4.log`.
 
 
 ## What this is not
@@ -133,8 +143,8 @@ onSystem((s) => {
 | `System.degree` | `number` | Hyperlane degree, read on each access (not cached). |
 | `System.neighbors` | `readonly number[]` | Neighbour system ids, read on each access; the host returns a fresh array, capped (64) with a truncation log line. Needs `graph.read`. |
 | `System.setVariable` | `(name: string, value: number) => void` | Writes through the official `set_variable` body for the current system. |
-| `System.setStarFlag` | `(name: string) => void` | Sets the official star flag `name` through the `set_star_flag` body. Needs `flag.write`. The name must be a **string literal**, must be **declared in the manifest's `flags` list** (written by `neo build`), and must not collide with an official keyword — see the build-time gate below. An undeclared name is refused at runtime with `no_premint`; the handler never mints. |
-| `System.hasStarFlag` | `(name: string) => boolean` | Reads the official star flag `name` from the flag container. Needs `flag.read`. Same declared-name rule; an undeclared name reads `false` and logs `reason=no_premint`. |
+| `System.setStarFlag` | `(name: string) => void` | Sets the official star flag `name` through the `set_star_flag` body. Needs `flag.write`. **Not usable live as of 2026-11-08** (the target structure is not the star-flag store; see the status note). The name must be a **string literal**, must be **declared in the manifest's `flags` list** (written by `neo build`), and must not collide with an official keyword — see the build-time gate below. An undeclared name is refused at runtime with `no_premint`; the handler never mints. |
+| `System.hasStarFlag` | `(name: string) => boolean` | Reads the official star flag `name` from the flag container. Needs `flag.read`. **Not usable live as of 2026-11-08** (the same mapping defect). Same declared-name rule; an undeclared name reads `false` and logs `reason=no_premint`. |
 | `graph.betweenness` | `(s: System) => number` | Graph score for the system (same source as the C5-SCORE path). |
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200` — the T2 threshold; a constant, not a tuning knob in v1. |
 | `log` | `(message: string) => void` | Appends `NEO_JS_LOG <text>` to `C:/temp/neo_js.log`. |
@@ -282,8 +292,13 @@ also holds every official keyword and every dynamically added script name. On a 
 pool is already past 65,535, so a name minted at handler time lands **outside** the u16 space —
 the C2 reading `reason=no_flag_token_range raw=68639` is exactly that. Minting the same name at
 install time (≈5 s after start, when the dynamic pool is still ≈525 names) keeps it inside the
-range, and the official script side (`has_star_flag = neo_hub`) resolves the same id because it
-is the same allocator.
+range (measured: `NEO_JS_PREMINT name=neo_hub id=19345`).
+
+The install-time mint is therefore **the** mechanism, and it is confirmed live. What is *not*
+confirmed — and is now known to be wrong — is where the write lands: the 2026-11-08 shots showed
+that the `0x180F8E0` write and the `+0x5F8` read agree with each other but are invisible to the
+official `has_star_flag` trigger and to the save. Treat the two flag calls as **not usable** until
+the real keyword record/container is re-derived (see the evidence log).
 
 `C2NeoInstall` therefore reads `C:/temp/neo_mods/<id>/neo/mod.json` for every candidate mod and
 calls `0x1D13270` once per declared name (`keyword_registry.mintToken`; no table insertion, no

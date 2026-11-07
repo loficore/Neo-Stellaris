@@ -1,10 +1,17 @@
 # Runtime JS SDK — developer preview (Phase 2)
 
 > **Status: blocked.** This page is the manifest for the preview package and the
-> trial script for issue #39. The package is **not built or published** yet: the
-> Phase 2 live safety shot (C2, one named shot on Stellaris 4.4.4) is still
-> blocked, and nothing here claims a live reading beyond the Phase 1 C1 result
-> recorded in [runtime-js-sdk.md](runtime-js-sdk.md#live-acceptance-2026-11-07-444).
+> trial script for issue #39. The package is **not built or published** yet.
+>
+> The Phase 2 live safety shot (C2) has run: multi-mod isolation **passed** (one good
+> mod kept running while three bad ones were disabled, host alive both times). The flag
+> APIs did **not** pass: two P2-1b shots on 2026-11-08 showed the install-time premint
+> works (`id=19345`, inside u16) but the write/read land on a structure that is not the
+> engine's star-flag store (official `has_star_flag` 0 hits against a 139-hit control;
+> the autosave contains no `neo_hub`). Flags are therefore **not part of the preview
+> surface** until the real keyword record is re-derived — see
+> `evidence/logs/runtime_js_p2_1b_flags_4_4_4.log` and the status note in
+> [runtime-js-sdk.md](runtime-js-sdk.md).
 
 ## What the preview is
 

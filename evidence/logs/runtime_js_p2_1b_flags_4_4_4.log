@@ -1,0 +1,151 @@
+# P2-1b — flag 早发号实机两发（4.4.4，2026-11-08）
+
+#
+# 授权原话：「跑实机开始吧」。计划：docs/superpowers/plans/2026-11-07-runtime-js-p2-1b-flags.md。
+# 分支：feat/runtime-js-p2-1b-flags @ 085cb28（PR #61），DLL sha256
+#       f4fb977063f9a384836538801e0ef391bd0b3b73327dcfd5c94e162063fe0da3（远端相等，
+#       部署名 C:/temp/sqjs_p2c.dll）。
+# 口径：--act log --rule 1:0 --allow-window；不 FreeLibrary；每发结束 taskkill /F。
+#
+# 结论先行：**早发号成功，flag 仍然写不进官方存储。**
+#   - 预发号按预期拿到 u16 内的 id（19345），写调用返回 ok，我们自己的读回 true；
+#   - 官方脚本的 has_star_flag 对同一个名字 **0 命中**，而同一发里对既有 flag
+#     `neo_tier1` 的对照有 139 行命中；
+#   - 最新自动存档里 `neo_hub` 出现 **0 次**。
+# ⇒ A1 的「`set_star_flag` body `0x180F8E0` + 系统 `+0x5F8` 容器」这条映射被实机否定：
+#   我们读写的是同一个结构，但那不是引擎的 star-flag 存储。C2 的 u16 越界是真问题，
+#   但不是当前唯一的、也不是卡住 feature 的那一个问题。
+
+## 装配
+
+- DLL：`zig-out/bin/stellaris_quickjs.dll` sha256 `f4fb9770…fe0da3`（远端 `Get-FileHash` 相等）
+- 驱动：`scripts/c2_boot_inject.py` sha256 `32ec722c…0a04151`；桥 `scripts/windows/session_bridge.py`
+  sha256 `f124a4fe…dba251`
+- 官方侧探针：编辑**已启用的**驱动 mod（`mod/neo_ps_probe`）的
+  `events/neo_ps_probe_events.txt`，在 `every_system` 里加两条（原文件先备份为
+  `.bak_p21b`，两发结束后已还原、校验 marker 消失）：
+
+      if = { limit = { has_star_flag = neo_tier1 } log = "NEO_FLAG_CTRL neo_tier1 [This.GetName]" }
+      if = { limit = { has_star_flag = neo_hub    } log = "NEO_FLAG_HIT neo_hub [This.GetName]" }
+
+  `neo_tier1` 是**对照**：它在旧存档的 `flags=` 块里已存在（见
+  `evidence/analysis/save_flag_storage_4_4_4.md`），用来证明官方 trigger 路径本身可用。
+- 发 A 的 runtime mod（`C:/temp/neo_mods/good`）：
+
+      flags: ["neo_hub"]；权限 flag.read/flag.write/log
+      handler：仅 id==82 → set_flag("neo_hub") → 回读 → log "GOOD flag id=82 has=<b>"
+
+- 发 B 的 runtime mod（`C:/temp/neo_mods/read_known`）：只读
+
+      flags: ["neo_tier1"]；权限 flag.read/log
+      handler：对每个 id 读 has_flag("neo_tier1") 命中即 log "KNOWN_HIT id=<id>"；
+               id==787 时 log "KNOWN_TOTAL <n>"
+
+- 两发之前都删除 `C:/temp/neo_js.log`。
+
+## 发 A（写 + 官方读）
+
+启动回执（逐字）：
+
+    [boot] dll=C:/temp/sqjs_p2c.dll sha16=f4fb977063f9a384
+    [boot] launched pid=18480 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+    [boot] pid=18480
+    [boot] gate skipped by operator override (--allow-window)
+    BOOT dll=sqjs_p2c.dll sha=f4fb977063f9a384 effect_id=19343 set_id=19344 install_rc=0 alive=1
+    EXIT=0
+
+解暂停：`session_bridge.py` → `neo_unpause.py`（`game_supervisor.find_window` + `press_space`），
+`HWND 18480 2886178 / SPACE sent`。跑约 11 个月度 pass 后 `taskkill /F /PID 18480`。
+
+`C:/temp/neo_js.log`（8,692 行）关键行：
+
+    NEO_JS_PREMINT name=neo_hub id=19345
+    NEO_JS_INIT_OK id=good api=1
+    NEO_JS_WRITE id=82 name=neo_hub kind=flag          （11 次，每月一次）
+    NEO_JS_LOG GOOD flag id=82 has=true                （11 次）
+    NEO_JS_WRITE_REJECT / ERROR / TIMEOUT / API_MISMATCH = 0 / 0 / 0 / 0
+    NEO_JS_CALL = 6,947
+
+引擎日志（`logs/game.log`，尾 6,000 行窗口）：
+
+    NEO_FLAG_HIT  = 0
+    NEO_FLAG_CTRL = 139      （neo_tier1，对照）
+    PS_HIT        = 1949
+    NEO_T2        = 37
+
+存档（自动存档池）：
+
+    autosave_2274.07.01.sav  （最新）
+    neo_hub count 0     ← 我们写了 11 次的 flag 没有进存档
+
+**判读**：写调用返回 ok，我们自己的读回也是 true，但
+①官方 trigger 看不见（0 命中，而对照 139 命中）②存档里没有。
+⇒ 写进的结构不是 star-flag 存储。
+
+## 发 B（只读 → 判定“读路径也不对”）
+
+发 A 的“读档验收”前提已经不成立（存档里没有 `neo_hub`），所以把第二发改成
+**判别性只读**：读一个引擎确实存着的 flag（`neo_tier1`），看我们的读路径能不能看见它。
+
+启动回执：
+
+    BOOT dll=sqjs_p2c.dll sha=f4fb977063f9a384 effect_id=19343 set_id=19344 install_rc=0 alive=1
+    pid=20852
+
+解暂停（上一发的 `press_space` 这次被前台锁拒绝，改用 `neo_focus_space.py`：
+`SwitchToThisWindow` 被拒 → `AttachThreadInput` 成功，再发 Space）。跑 7 个月度 pass 后
+`taskkill /F /PID 20852`。
+
+`C:/temp/neo_js.log`（5,525 行）：
+
+    NEO_JS_PREMINT name=neo_tier1 id=19345     ← 安装期这个名字**还不在**表里
+    NEO_JS_INIT_OK id=read_known api=1
+    NEO_JS_CALL = 5,516
+    KNOWN_HIT   = 0                            ← 788 个星系 × 7 个月，全部未命中
+    KNOWN_TOTAL = 7                            （每个 pass 一行，全是 0）
+
+同一窗口的引擎侧对照：
+
+    NEO_FLAG_CTRL = 139    （时间戳 2275.10.1，正是这一发跑出来的月份）
+
+**判读**：引擎对 `neo_tier1` 的真实存储 = trigger 命中 139 行；我们的读路径在同一进程、
+同一批系统上 **0 命中**。⇒ `system+0x5F8` 不是 `has_star_flag` 读的存储，A1 的
+`has_star_flag = 只读 +0x5F8` 这条 `static_inference` **被否**。
+
+附带的时序读数：`neo_tier1` 在安装期（约 5 s）还不在 token 表里（预发号给了它一个新 id
+19345），说明**存档里的 flag 名字是在读档时（晚于安装）才发号的**。这条与
+`save_flag_storage_4_4_4.md` 的“按名字存”一致。
+
+## 结论（按计划里的失败出口）
+
+计划的三条失败出口里，本发命中的是第 3 条：
+
+> `WRITE kind=flag` 但官方脚本读不到 → 判 deferred，记录该负结论。
+
+补充两条本发才有的读数（计划写这条时还不知道）：
+
+1. **不是 u16 的问题**：预发号把 id 压到 19,345，`setStarFlagId` 正常返回，写路径本身不崩。
+2. **是映射的问题**：我们读写的 `+0x5F8` 不是 star-flag 存储。C2 的 `raw=68639` 是真问题，
+   但它只是**先挡住**了这条更深的错误；修好 mint 之后，写才第一次真正落到结构上，于是暴露出
+   A1 的 body/容器映射选错了。
+
+因此 `s.setStarFlag` / `s.hasStarFlag` **仍判 deferred**，并且理由从“id 越界”更正为
+“官方存储未定位”。
+
+## 边界（不能说）
+
+- 一个战役、两个进程；对照计数取自 `game.log` 尾 6,000 行窗口，不是全文件计数。
+- 没有验证 `0x180F8E0` 到底属于哪个 keyword（可能不是 `set_star_flag`）；也没有找到真正的
+  star-flag 存储。存档格式只告诉我们它是 `name=timestamp`（见上引取证节）。
+- 没有验证“官方脚本 `set_star_flag = neo_hub` 之后，我们的读能不能看见”——这会是下一步的
+  判别发（一发即可），但本发**没打**。
+- 发 A 的 11 个 pass 与发 B 的 7 个 pass 之间，战役推进到 2275.10；自动存档池已滚动。
+- 驱动 mod 的临时探针已还原（备份 `.bak_p21b`，还原后 marker 消失）。
+
+## 下一步（研究项，不需要实机）
+
+1. 重新定位 `set_star_flag` 的 keyword 记录：从 `keyword_behaviour_registration_4_4_4.tsv`
+   取 `class_info`/`create`，**不要**复用 A1 那条 `0x2610E80 → 0x1895620 → 0x180F8E0` 链；
+   用存档格式（`map<string,u64>`）当指纹去找写手。
+2. 定位 `has_star_flag` 的求值槽与它真正读的成员。
+3. 找到之后，再判断 P2-1b 的预发号机制要不要保留（它本身是对的：id 19345 就是证明）。
