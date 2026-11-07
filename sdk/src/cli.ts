@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// cli.ts — `neo new` / `neo build` / `neo check`.
+// cli.ts — `neo new` / `neo build` / `neo check` / `neo pack`.
 //
 // Exit codes are the CI/author contract: 0 = ok, 2 = the project (or the
 // request) is not shippable.  Diagnostics go to stderr on exactly one line;
 // success is one line on stdout, so a log cannot hide which step ran.
 //
-// `build`/`check` take `--dir <project>`; the project owns
+// `build`/`check`/`pack` take `--dir <project>`; the project owns
 // `tsconfig.json`, `src/main.ts` and `neo/mod.json`.  `new` takes the target
 // directory as its positional argument.
 
@@ -16,6 +16,7 @@ import { parseArgs } from "node:util";
 import { runBuild } from "./build.js";
 import { runCheck } from "./check.js";
 import { runNew } from "./new.js";
+import { runPack } from "./pack.js";
 
 const USAGE = `neo — runtime JS SDK for the Neo-Stellaris QuickJS host
 
@@ -23,6 +24,7 @@ usage:
   neo new <dir> --id <id> [--name <name>]
   neo build --dir <project> [--outfile <file>]
   neo check --dir <project>
+  neo pack --dir <project> [--out <file.zip>]
 
 new scaffolds <dir> from the SDK template (TypeScript + manifest + the monthly
 event driver).  The result must already pass "neo build" and "neo check".
@@ -30,12 +32,16 @@ event driver).  The result must already pass "neo build" and "neo check".
 build writes <project>/neo/<manifest entry> (default neo/main.js).
 check bundles in memory and runs the bundle in a real QuickJS context with the
 mock host installed.
+pack builds, checks, and zips descriptor.mod + common/ + events/ + neo/ +
+README.md into <project>/dist/<id>.zip (a whitelist: no node_modules, no dist
+cache, no .git).
 `;
 
 interface Parsed {
   command: string | undefined;
   dir: string | undefined;
   outfile: string | undefined;
+  out: string | undefined;
   id: string | undefined;
   name: string | undefined;
   help: boolean;
@@ -48,6 +54,7 @@ function parse(argv: string[]): Parsed {
     options: {
       dir: { type: "string" },
       outfile: { type: "string" },
+      out: { type: "string" },
       id: { type: "string" },
       name: { type: "string" },
       help: { type: "boolean", short: "h" },
@@ -57,13 +64,14 @@ function parse(argv: string[]): Parsed {
     command: positionals[0],
     dir: positionals[1] ?? values.dir,
     outfile: values.outfile,
+    out: values.out,
     id: values.id,
     name: values.name,
     help: values.help === true,
   };
 }
 
-const COMMANDS = new Set(["new", "build", "check"]);
+const COMMANDS = new Set(["new", "build", "check", "pack"]);
 
 function fail(prefix: string, message: string): number {
   process.stderr.write(`${prefix} fail: ${message}\n`);
@@ -113,6 +121,18 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     } catch (error) {
       return fail("NEO_BUILD", (error as Error).message);
+    }
+  }
+
+  if (parsed.command === "pack") {
+    try {
+      const result = await runPack({ dir: parsed.dir, out: parsed.out });
+      process.stdout.write(
+        `NEO_PACK ok dir=${result.dir} out=${result.outfile} entries=${result.entries.length}\n`,
+      );
+      return 0;
+    } catch (error) {
+      return fail("NEO_PACK", (error as Error).message);
     }
   }
 
