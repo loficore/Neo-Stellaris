@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { runBuild } from "./build.js";
+import { runCheck } from "./check.js";
 
 const USAGE = `neo — runtime JS SDK for the Neo-Stellaris QuickJS host
 
@@ -80,9 +81,21 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  // `check` is implemented in check.ts (B3).
-  process.stderr.write("NEO_CHECK fail: check is not wired yet\n");
-  return 2;
+  // `check` is the build-time gate (B3): real QuickJS + mock host.
+  try {
+    const result = await runCheck({ dir: parsed.dir });
+    if (result.ok) {
+      process.stdout.write(
+        `NEO_CHECK ok dir=${result.dir} handler=${result.registrations} calls=${result.calls.length}\n`,
+      );
+      return 0;
+    }
+    process.stderr.write(`NEO_CHECK fail: ${result.error ?? "unknown failure"}\n`);
+    return 2;
+  } catch (error) {
+    process.stderr.write(`NEO_CHECK fail: ${(error as Error).message}\n`);
+    return 2;
+  }
 }
 
 function invokedAsScript(): boolean {

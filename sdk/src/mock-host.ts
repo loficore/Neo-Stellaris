@@ -97,6 +97,7 @@ globalThis.__neo_log = function (message) {
   __neo_api_version: `
 globalThis.__neo_api_version = function () {
   globalThis.__neo_mock.apiVersionCalls += 1;
+  globalThis.__neo_mock.calls.push({ fn: "__neo_api_version" });
   return globalThis.__neo_mock.apiVersion;
 };
 `,
