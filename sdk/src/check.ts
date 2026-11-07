@@ -18,7 +18,12 @@ import { readFileSync } from "node:fs";
 import { getQuickJS, type QuickJSContext } from "quickjs-emscripten";
 
 import { bundleProject } from "./build.js";
-import { checkFlagNames, loadKeywordNames } from "./flags.js";
+import {
+  checkFlagNames,
+  loadKeywordNames,
+  normalizeFlagNames,
+  readManifestFlags,
+} from "./flags.js";
 import { mockHostSource, type MockCall } from "./mock-host.js";
 
 export interface CheckOptions {
@@ -156,6 +161,27 @@ export async function runCheck(options: CheckOptions): Promise<CheckResult> {
   const flags = checkFlagNames(text, keywords);
   if (flags.problems.length > 0) {
     return fail(flags.problems.join("; "));
+  }
+
+  // P2-1b: the manifest is the ONLY flag-name source the host mints from, so a
+  // manifest that no longer matches the bundle would ship a set of names the
+  // runtime calls cannot resolve (`no_premint`).  Three-way agreement is
+  // required: bundle literals ↔ manifest `flags` (the host is the third reader).
+  let manifestFlags: string[];
+  try {
+    manifestFlags = normalizeFlagNames(readManifestFlags(resolvedDir));
+  } catch (error) {
+    return fail((error as Error).message);
+  }
+  const bundleFlags = normalizeFlagNames(flags.names);
+  if (
+    bundleFlags.length !== manifestFlags.length ||
+    bundleFlags.some((name, i) => name !== manifestFlags[i])
+  ) {
+    return fail(
+      `flags: manifest flags are stale; run "neo build" (bundle has ` +
+        `${JSON.stringify(bundleFlags)}, manifest has ${JSON.stringify(manifestFlags)})`,
+    );
   }
 
   const expectedVersion = contractVersion();

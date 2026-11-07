@@ -4,5 +4,6 @@
   "scope": ["system"],
   "permissions": ["graph.read", "flag.read", "flag.write", "log"],
   "engine": "4.4.4",
-  "runtime": ">=0.1"
+  "runtime": ">=0.1",
+  "flags": []
 }

@@ -13,7 +13,8 @@
 //      `0x1D13270` looks names up case-insensitively, so a flag named like a
 //      keyword would address engine behaviour rather than a flag.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface FlagCheck {
@@ -130,4 +131,77 @@ export function loadKeywordNames(tsvPath: string = KEYWORDS_TSV): Set<string> {
     if (cell !== undefined && cell.length > 0) out.add(cell.trim().toLowerCase());
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// P2-1b: the manifest `flags` list is the single source of the install-time
+// premint (the host mints exactly these names before the script parser runs).
+// `neo build` records the bundle's literals here; `neo check` refuses a manifest
+// that no longer matches the bundle.  Neither path trusts a runtime argument.
+// ---------------------------------------------------------------------------
+
+/** Canonical form of a flag-name list: deduped, sorted, stable in a log line. */
+export function normalizeFlagNames(names: readonly string[]): string[] {
+  return [...new Set(names)].sort();
+}
+
+function manifestPath(dir: string): string {
+  return path.join(dir, "neo", "mod.json");
+}
+
+/** The `flags` array of `<dir>/neo/mod.json`; `[]` when the file or field is absent. */
+export function readManifestFlags(dir: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(manifestPath(dir), "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === undefined) throw error;
+    return [];
+  }
+  if (parsed === null || typeof parsed !== "object") return [];
+  const flags = (parsed as { flags?: unknown }).flags;
+  if (flags === undefined) return [];
+  if (!Array.isArray(flags) || flags.some((item) => typeof item !== "string")) {
+    throw new Error(`flags: ${manifestPath(dir)} "flags" must be an array of strings`);
+  }
+  return flags as string[];
+}
+
+/**
+ * Record the bundle's literal flag names in `<dir>/neo/mod.json`, preserving every
+ * other field.  Returns the list now on disk (deduped + sorted).
+ *
+ * A missing manifest is **not** created: the project is expected to own one, and
+ * inventing it here would hide a broken project.  The warning goes to stderr so
+ * the CLI's one-line `NEO_BUILD ok …` contract on stdout is untouched.
+ *
+ * The file is only rewritten when the list changes, so a project whose manifest
+ * already agrees keeps its formatting (the checked-in example is one of those).
+ */
+export function mergeManifestFlags(dir: string, names: readonly string[]): string[] {
+  const desired = normalizeFlagNames(names);
+  const file = manifestPath(dir);
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    process.stderr.write("NEO_BUILD warn: no neo/mod.json, flags not recorded\n");
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(`flags: ${file} is not valid JSON (${(error as Error).message})`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`flags: ${file} is not a JSON object`);
+  }
+  const current = normalizeFlagNames(readManifestFlags(dir));
+  if (current.length === desired.length && current.every((name, i) => name === desired[i])) {
+    return desired;
+  }
+  (parsed as Record<string, unknown>).flags = desired;
+  writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
+  return desired;
 }

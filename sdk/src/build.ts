@@ -11,6 +11,8 @@ import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { checkFlagNames, mergeManifestFlags } from "./flags.js";
+
 export interface BuildOptions {
   /** Project directory: expects `tsconfig.json` + `src/main.ts`. */
   dir: string;
@@ -112,6 +114,11 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
   );
   mkdirSync(path.dirname(outfile), { recursive: true });
   await bundle(dir, true, outfile);
+  // P2-1b: 构建期决定 flag 名。只记录 bundle 里的**字面量**(不读 keyword TSV ——
+  // 那是 `neo check` 的事,打包后的 SDK 不该依赖 `evidence/`)。host 在安装期
+  // (`C2NeoInstall`,脚本解析之前)按这份列表早发号,运行时只查预发表。
+  const text = readFileSync(outfile, "utf8");
+  mergeManifestFlags(dir, checkFlagNames(text, new Set()).names);
   return { dir, outfile };
 }
 

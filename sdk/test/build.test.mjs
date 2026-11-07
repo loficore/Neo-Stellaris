@@ -23,6 +23,11 @@ function writeProject(dir, source) {
   mkdirSync(path.join(dir, "src"), { recursive: true });
   mkdirSync(path.join(dir, "neo"), { recursive: true });
   writeFileSync(path.join(dir, "src", "main.ts"), source);
+  writeTsconfig(dir);
+  writeFileSync(path.join(dir, "neo", "mod.json"), '{"id":"tmp","entry":"main.js"}\n');
+}
+
+function writeTsconfig(dir) {
   writeFileSync(
     path.join(dir, "tsconfig.json"),
     JSON.stringify(
@@ -43,7 +48,29 @@ function writeProject(dir, source) {
       2,
     ),
   );
-  writeFileSync(path.join(dir, "neo", "mod.json"), '{"id":"tmp","entry":"main.js"}\n');
+}
+
+/** A project with a full manifest (`id: demo`) so tests can read the written fields back. */
+function makeProject({ main, flags } = {}) {
+  const dir = tempDir("neo-build-flags-");
+  mkdirSync(path.join(dir, "src"), { recursive: true });
+  mkdirSync(path.join(dir, "neo"), { recursive: true });
+  writeFileSync(
+    path.join(dir, "src", "main.ts"),
+    `import { onSystem } from "@neo/runtime";\n${main}\n`,
+  );
+  writeTsconfig(dir);
+  const manifest = {
+    id: "demo",
+    entry: "main.js",
+    scope: ["system"],
+    permissions: ["flag.read", "flag.write"],
+    engine: "4.4.4",
+    runtime: ">=0.1",
+  };
+  if (flags !== undefined) manifest.flags = flags;
+  writeFileSync(path.join(dir, "neo", "mod.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  return dir;
 }
 
 test("builds the chokepoint example to an IIFE bundle", async () => {
@@ -63,6 +90,17 @@ test("the built example survives a plain node syntax check", async () => {
   const outfile = path.join(tempDir("neo-build-"), "main.js");
   await runBuild({ dir: exampleDir, outfile });
   execFileSync(process.execPath, ["--check", outfile]);
+});
+
+test("neo build writes the literal flag names into neo/mod.json", async () => {
+  const dir = makeProject({
+    main: 'onSystem((s) => { if (!s.hasStarFlag("neo_hub")) s.setStarFlag("neo_hub"); s.setStarFlag("neo_choke"); });',
+  });
+  await runBuild({ dir });
+  const manifest = JSON.parse(readFileSync(path.join(dir, "neo", "mod.json"), "utf8"));
+  assert.deepEqual(manifest.flags, ["neo_choke", "neo_hub"]);
+  // 其它字段原样保留
+  assert.equal(manifest.id, "demo");
 });
 
 test("a missing export fails the build with the tsc diagnostic", async () => {

@@ -18,7 +18,7 @@ const sdkRoot = path.join(repo, "sdk");
 const exampleDir = path.join(repo, "examples", "chokepoint");
 const KEYWORDS_TSV = path.join(repo, "evidence", "xrefs", "keyword_behaviour_registration_4_4_4.tsv");
 
-function writeProject(source) {
+function writeProject(source, flags) {
   const dir = mkdtempSync(path.join(tmpdir(), "neo-check-"));
   mkdirSync(path.join(dir, "src"), { recursive: true });
   mkdirSync(path.join(dir, "neo"), { recursive: true });
@@ -43,7 +43,9 @@ function writeProject(source) {
       2,
     ),
   );
-  writeFileSync(path.join(dir, "neo", "mod.json"), '{"id":"tmp","entry":"main.js"}\n');
+  const manifest = { id: "tmp", entry: "main.js" };
+  if (flags !== undefined) manifest.flags = flags;
+  writeFileSync(path.join(dir, "neo", "mod.json"), `${JSON.stringify(manifest)}\n`);
   return dir;
 }
 
@@ -151,6 +153,26 @@ test("the CLI exits 2 with a fail line for a broken project", () => {
 test("the flag gate accepts a literal that is not an official keyword", async () => {
   const dir = writeProject(
     'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_custom_marker"); });\n',
+    ["neo_custom_marker"],
+  );
+  const result = await runCheck({ dir });
+  assert.equal(result.ok, true, result.error);
+});
+
+test("neo check rejects a manifest whose flags list is stale", async () => {
+  const dir = writeProject(
+    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_hub"); });\n',
+    [],
+  );
+  const result = await runCheck({ dir, keywordsTsv: KEYWORDS_TSV });
+  assert.equal(result.ok, false);
+  assert.match(String(result.error), /manifest flags are stale/);
+});
+
+test("neo check accepts a manifest whose flags list matches the bundle, in any order", async () => {
+  const dir = writeProject(
+    'import { onSystem } from "@neo/runtime";\nonSystem((s) => { s.setStarFlag("neo_a"); s.setStarFlag("neo_b"); });\n',
+    ["neo_b", "neo_a"],
   );
   const result = await runCheck({ dir });
   assert.equal(result.ok, true, result.error);
