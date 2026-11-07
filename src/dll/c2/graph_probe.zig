@@ -291,6 +291,17 @@ fn resolveIn(ctx: Context, id: u32) ?usize {
     return if (entry_id == id) entry else null;
 }
 
+/// 一个系统的**度数**:边容器头 `+0x59C` 的原始条数(§1.3/§2.2 容器口径)。
+///
+/// Runtime JS 的 `s.degree` 用它。只读:同一套 §1.2 查表 + **进程内**
+/// `readProcessMemory`,不缓存、不改引擎字节。解析不上(u16 外、陈旧表项、
+/// 未解析模块基址)返回 `null` —— JS 侧拿到 0,而不是一个伪造的度数。
+pub fn systemDegree(id: u32) ?u32 {
+    const ctx = resolveContext() orelse return null;
+    const obj = resolveIn(ctx, id) orelse return null;
+    return readDword(memAdapter(), gg.addAddr(obj, graph.EDGE_COUNT_OFF) orelse return null);
+}
+
 // ---------------------------------------------------------------------------
 // 进程内 Memory 适配
 // ---------------------------------------------------------------------------

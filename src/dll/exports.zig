@@ -233,6 +233,18 @@ const c2_graph_probe = @import("c2/graph_probe.zig");
 const c2_exec_caller = @import("c2/exec_caller_probe.zig");
 /// C5-ADD(§93):`neo_action` 的逐系统派发点、body 与导出。
 const c2_neo_vtable = @import("c2/neo_vtable.zig");
+const c2_neo_js_host = @import("c2/neo_js_host.zig");
+
+// Track A (Runtime JS, Phase 1): the host lands in the DLL build before the
+// dispatch wiring (Task A3).  Taking these entry points' addresses forces the
+// x86_64-windows build to analyse them — the native test roots only exercise the
+// pure parts, and every Windows-only branch (kernel32 file I/O) is pruned there,
+// so without this the shipped code path would compile for the first time on the
+// live shot.
+comptime {
+    _ = &c2_neo_js_host.onSystem;
+    _ = &c2_neo_js_host.startSession;
+}
 
 /// M5:`neo_score` 的来源。`0` = 烘焙表(`chokepoint_table.zig`),`1` = 活体重算
 /// (读 `C5Graph*` 同一套容器 + `chokepoint_dynamic`,指纹变了才重算)。`-1` = 未知值。

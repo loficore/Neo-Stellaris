@@ -100,6 +100,19 @@ pub fn isSystemScope(mask: u32) bool {
     return mask == 0x80;
 }
 
+/// 当次派发给我们的 scope 确实是 system scope 时返回它的 id(`+0x10`),否则 `null`。
+///
+/// Runtime JS(Track A)要拿它做两件事:把「JS 只拿 id」这条纪律固定下来(`onSystem`
+/// 读一次),以及**在写之前核对** `setVariable(id, …)` 的 id 与当次 scope 一致 ——
+/// 写走的是 scope,id 只是 JS 侧的镜像;两者不一致时拒绝写,而不是把值写进另一个星系。
+pub fn systemScopeId(scope: u64) ?u32 {
+    if (scope == 0) return null;
+    const s: usize = @intCast(scope);
+    if (!scopeReadable(s)) return null;
+    if (!isSystemScope(readU32(s, SCOPE_MASK_OFF))) return null;
+    return readU32(s, SCOPE_ID_OFF);
+}
+
 fn recordHit(id: u32) void {
     const nth = @atomicRmw(u64, &hit_count, .Add, 1, .monotonic);
     if (nth < RULE_HITS) hits[@intCast(nth)] = id;
@@ -107,15 +120,25 @@ fn recordHit(id: u32) void {
 
 /// C5-WRITE 的动作分支:`set_variable` 的官方 body 收 `(self, scope)`。
 /// 合成对象在栈上、vtable 由我们摆;写进引擎的是**官方 body 自己**做的。
-/// 返回是否真的调了 body —— 地址没解析到时是 `false`(计 `skipped`)。
-fn writeState(id: u32, scope: u64) bool {
+///
+/// 名字与值由调用方给:Runtime JS 的 `s.setVariable(name, value)`(Track A)用的
+/// 就是这一条路径,不是另一套写手。名字必须 **≤ 15 字节**(MSVC 内联串上限,
+/// `neo_state.layoutNumber` 的注释),超长会被静默截断成另一个变量名 —— 所以这里
+/// 直接拒绝,而不是写一个错的。
+/// 返回是否真的调了 body —— 地址没解析到、名字非法时都是 `false`。
+pub fn writeVariable(name: []const u8, number: u32, scope: u64) bool {
     if (state_body_addr == 0 or state_vtable_addr == 0) return false;
+    if (name.len == 0 or name.len > neo_state.SSO_MAX) return false;
     var obj: [neo_state.OBJECT_SIZE]u8 align(8) = undefined;
-    neo_state.layoutNumber(&obj, neo_state.VAR_NAME, id);
+    neo_state.layoutNumber(&obj, name, number);
     std.mem.writeInt(u64, obj[0..8], state_vtable_addr, .little);
     const body: *const fn (u64, u64) callconv(.c) void = @ptrFromInt(state_body_addr);
     body(@intFromPtr(&obj), scope);
     return true;
+}
+
+fn writeState(id: u32, scope: u64) bool {
+    return writeVariable(neo_state.VAR_NAME, id, scope);
 }
 
 /// `neo_score` 的来源。0 = 烘焙表(C5-SCORE 原行为),1 = 活体重算(M5)。
@@ -167,13 +190,7 @@ pub fn scoreFor(id: u32) ?u16 {
 /// 返回是否真的写了;越界 id 与未解析地址都算 `false`(计 `score_skipped`)。
 fn writeScore(id: u32, scope: u64) bool {
     const score = scoreFor(id) orelse return false;
-    if (state_body_addr == 0 or state_vtable_addr == 0) return false;
-    var obj: [neo_state.OBJECT_SIZE]u8 align(8) = undefined;
-    neo_state.layoutNumber(&obj, neo_state.SCORE_NAME, score);
-    std.mem.writeInt(u64, obj[0..8], state_vtable_addr, .little);
-    const body: *const fn (u64, u64) callconv(.c) void = @ptrFromInt(state_body_addr);
-    body(@intFromPtr(&obj), scope);
-    return true;
+    return writeVariable(neo_state.SCORE_NAME, score, scope);
 }
 
 /// C5-PARAM: the `neo_set` body. Transparent forward — the loader already
@@ -261,6 +278,20 @@ pub fn resolveFromGame(game_base: usize) !void {
 /// 不 —— 只有精确的 1 开写,其余一律关,免得上层传错常量时悄悄改世界。
 pub fn setAct(mode: u32) void {
     @atomicStore(u32, &act_mode, mode, .monotonic);
+}
+
+/// 官方 `set_variable` body / vtable 是否已解析到。
+/// Runtime JS 的 `s.setVariable` 用它在第一次写之前补一次 `resolveFromGame`
+/// (它不由 `C1Run` 负责;主线程懒解析,失败就 fail-closed 不写)。
+pub fn stateResolved() bool {
+    return state_body_addr != 0 and state_vtable_addr != 0;
+}
+
+/// 测试专用:把写路径的两个地址直接摆上(生产侧只有 `resolveFromGame` 能设)。
+/// 只在 Debug 测试根里被调用;不改任何引擎字节。
+pub fn armWritePathForTest(body: usize, vtable: usize) void {
+    state_body_addr = body;
+    state_vtable_addr = vtable;
 }
 
 // ---------------------------------------------------------------------------
@@ -506,4 +537,52 @@ test "runBody counts one score write beside the state write" {
     // Two calls: `neo_mark` first (C5-WRITE), then `neo_score` (C5-SCORE).
     try std.testing.expectEqual(@as(usize, 2), seen_calls);
     try std.testing.expectEqualStrings(neo_state.SCORE_NAME, seen_names[1][0..neo_state.SCORE_NAME.len]);
+}
+
+// --- Track A (Runtime JS): the generic write path and the scope id gate -------
+
+test "writeVariable writes any script name through the official body" {
+    armStubs();
+    // Runtime JS's `s.setVariable('neo_score', 286)` lands on the same body the
+    // C5-WRITE/C5-SCORE paths use — only the name and value come from JS.
+    try std.testing.expect(writeVariable("custom_var", 286, 0));
+    try std.testing.expectEqual(@as(usize, 1), seen_calls);
+    try std.testing.expectEqualStrings("custom_var", seen_names[0][0.."custom_var".len]);
+    try std.testing.expectEqual(neo_state.encodeNumber(286), seen_values[0]);
+    try std.testing.expectEqual(@as(u64, RVA_STATE_VTABLE), seen_vtables[0]);
+}
+
+test "writeVariable refuses a name the MSVC short string would truncate" {
+    armStubs();
+    // 16 bytes would be silently cut to 15 by `writeSso` -> a *different* variable
+    // every tick.  Reject instead of writing a wrong name.
+    try std.testing.expect(!writeVariable("0123456789abcdef", 1, 0));
+    try std.testing.expectEqual(@as(usize, 0), seen_calls);
+    try std.testing.expect(!writeVariable("", 1, 0));
+    try std.testing.expectEqual(@as(usize, 0), seen_calls);
+    // 15 bytes is the boundary and must pass.
+    try std.testing.expect(writeVariable("0123456789abcde", 1, 0));
+    try std.testing.expectEqual(@as(usize, 1), seen_calls);
+}
+
+test "writeVariable does not write when the body is unresolved" {
+    armStubs();
+    state_body_addr = 0;
+    try std.testing.expect(!writeVariable("neo_score", 1, 0));
+    try std.testing.expectEqual(@as(usize, 0), seen_calls);
+}
+
+test "systemScopeId accepts only a 0x80 system scope and reads the id at +0x10" {
+    var scope: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, scope[SCOPE_MASK_OFF..][0..4], 0x80, .little);
+    std.mem.writeInt(u32, scope[SCOPE_ID_OFF..][0..4], 4242, .little);
+    try std.testing.expectEqual(@as(?u32, 4242), systemScopeId(@intFromPtr(&scope)));
+
+    // 0x81 is not the system marker (§80.2: only the `every_system` stamp is 0x80).
+    std.mem.writeInt(u32, scope[SCOPE_MASK_OFF..][0..4], 0x81, .little);
+    try std.testing.expectEqual(@as(?u32, null), systemScopeId(@intFromPtr(&scope)));
+
+    // Null and implausible pointers are refused, not dereferenced.
+    try std.testing.expectEqual(@as(?u32, null), systemScopeId(0));
+    try std.testing.expectEqual(@as(?u32, null), systemScopeId(0x1000));
 }
