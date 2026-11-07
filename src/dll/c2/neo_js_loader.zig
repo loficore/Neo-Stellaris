@@ -46,12 +46,13 @@ pub const MAX_ID_LEN: usize = 64;
 pub const MAX_MANIFEST_BYTES: usize = 4096;
 pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 
-/// P2-1b: 一份安装里最多预发的 flag 名数。`neo/mod.json` 的 `flags` 是可选的
-/// 第 7 字段;超过这个数在 loader(这里)与 build 两侧都报错,不静默截断。
+/// `neo/mod.json` 的 `flags`(可选第 7 字段)一项最多几个名字。这是**构建期撞名门**
+/// 的上界:`neo build` 记录、`neo check` 比对;host 不再在安装期读它(P2-1b 的预发号
+/// 已删除,号的来源是官方 flag 表,见 `c2/flag_ids.zig`)。超过在两侧都报错,不截断。
 pub const MAX_FLAGS: usize = 32;
 
-/// flag 名的字节上限 = `neo_state` 的 SSO 容量(`mintFlagTokenRaw` 的 holder
-/// 是 15 B SSO 字符串,再长就要堆分配 —— 那条路不在本模块的纪律里)。
+/// flag 名的字节上限 = 引擎名字对象的 SSO 边界(0x30 B 的串对象内联 15 B)。
+/// 超过就要堆分配,那条路不在本模块的纪律里(见 `flag_ids.EngineString`)。
 pub const MAX_FLAG_NAME: usize = neo_state.SSO_MAX;
 
 /// Phase 2 (Task A3): 最多同时载入的 runtime mod 数。超过的**拒绝并日志**;
@@ -77,8 +78,9 @@ pub const Manifest = struct {
     permissions: Permissions,
     engine: []const u8,
     runtime: []const u8,
-    /// P2-1b: 构建期声明的 flag 名(`neo build` 写入)。可选 —— 缺省是空列表,
-    /// 旧的 Phase 1/2 manifest 仍然合法;那时 flag 调用 fail-closed(`no_premint`)。
+    /// 构建期声明的 flag 名(`neo build` 写入)。可选 —— 缺省是空列表,旧 manifest
+    /// 仍然可载入。**host 不再读它**(P2-1b 的安装期预发号已删除);它现在的唯一
+    /// 用途是构建期撞名门(`neo check` 的 flags 与 bundle 字面量对账)。
     /// 切片活在 manifest arena 里(下一次 `parseManifest`/`releaseManifest` 之前有效)。
     flags: []const []const u8 = &.{},
 };
@@ -505,58 +507,6 @@ fn findModIds() LoadError![]const []const u8 {
 
 var ids_view: [MAX_MODS][]const u8 = undefined;
 
-/// P2-1b: 安装期要预发的 flag 名(`C2NeoInstall` → `premintFlags`)。
-///
-/// 只读 `C:/temp/neo_mods/<id>/neo/mod.json` 的 `flags` 字段 —— **不信 bundle 的
-/// 运行时参数**:名字的唯一来源是 manifest(`neo check` 保证它与 bundle 字面量一致)。
-/// 与 `findModIds` 用同一次目录枚举(同排序、同样最多 `MAX_MODS` 个),所以预发号
-/// 覆盖的正是之后会被载入的那批 mod。坏 manifest 跳过并落一行 `NEO_JS_INSTALL_SKIP`。
-///
-/// `out` 里的切片指向 manifest arena(下一次 `releaseManifest` 之前有效);
-/// 调用方(`premintFlags`)必须在同一趟里把字节复制走。非 Windows 返回 0。
-pub fn flagNamesForInstall(out: *[MAX_FLAGS][]const u8) usize {
-    if (comptime !is_windows) return 0;
-    var count: usize = 0;
-    const ids = findModIds() catch return 0;
-    for (ids) |id| {
-        var dir_buf: [MAX_PATH]u8 = undefined;
-        const dir = joinPath(&dir_buf, &.{ MODS_ROOT, id }) orelse continue;
-        var path_buf: [MAX_PATH]u8 = undefined;
-        const manifest_path = joinPath(&path_buf, &.{ dir, "/neo/mod.json" }) orelse continue;
-        var manifest_buf: [MAX_MANIFEST_BYTES]u8 = undefined;
-        const manifest_len = readFile(manifest_path, &manifest_buf) catch {
-            host.emit("NEO_JS_INSTALL_SKIP id={s}", .{id});
-            continue;
-        };
-        const manifest = parseManifestRetained(manifest_buf[0..manifest_len]) catch {
-            host.emit("NEO_JS_INSTALL_SKIP id={s}", .{id});
-            continue;
-        };
-        var dropped: usize = 0;
-        for (manifest.flags) |name| {
-            if (count >= MAX_FLAGS) {
-                dropped += 1;
-                continue;
-            }
-            var dup = false;
-            for (out[0..count]) |seen| {
-                if (std.mem.eql(u8, seen, name)) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (dup) continue;
-            out[count] = name;
-            count += 1;
-        }
-        if (dropped > 0) {
-            // 跨 mod 的并集超过全局上界:不静默截断,让安装期日志能读出来。
-            host.emit("NEO_JS_INSTALL_FLAGS_TRUNC id={s} dropped={d}", .{ id, dropped });
-        }
-    }
-    return count;
-}
-
 /// 每个 mod 一个源码缓冲(`JS_Eval` 要哨兵终止;载入后整个进程生命周期有效)。
 var source_bufs: [MAX_MODS][MAX_SOURCE_BYTES]u8 = undefined;
 
@@ -848,10 +798,4 @@ test "manifest flags are optional, unique, and name-checked" {
     try testing.expectError(error.TooManyFlags, parseManifest(
         \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1","flags":["f0","f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12","f13","f14","f15","f16","f17","f18","f19","f20","f21","f22","f23","f24","f25","f26","f27","f28","f29","f30","f31","f32"]}
     ));
-}
-
-test "flagNamesForInstall is a no-op off Windows" {
-    if (builtin.os.tag == .windows) return;
-    var out: [MAX_FLAGS][]const u8 = undefined;
-    try testing.expectEqual(@as(usize, 0), flagNamesForInstall(&out));
 }
