@@ -1,12 +1,19 @@
-# Runtime JS SDK (v1 — system scope)
+# Runtime JS SDK (v1.1 — system scope)
 
 Authoring SDK for **runtime JS mods**: TypeScript compiled by `neo build`, evaluated by the
 injected QuickJS host on the game's main thread, once per system.
 
-> **Status.** The SDK side (this document, `sdk/`, `examples/`) is complete and covered by
-> `npm test`. The end-to-end acceptance — the injected host loading a real bundle in a real
-> campaign — is the Phase 1 C1 shot and is **blocked** pending the Track A host and a named
-> live session. Nothing below claims a live reading.
+> **Status (2026-11-07).** v1 is live-accepted (Phase 1 C1, below). v1.1 is the SDK half of
+> Phase 2 and is **additive**: `API_VERSION` stays `1` and the only new member is
+> `System.neighbors` (plus the `neo new` / `neo pack` authoring commands). The host half
+> (`neighbors` native, one QuickJS session per mod, per-session isolation) lands on
+> `feat/runtime-js-p2-host`; until it merges, a bundle that reads `s.neighbors` checks green
+> offline but has no native in the game. The Phase 2 live safety shot (C2) and the developer
+> preview publication (C3) are **blocked** — nothing here claims either reading.
+>
+> `s.name`, `s.variable()` and the star-flag calls are **not in the contract**. They are
+> deferred until the Track A static spike resolves an official body/read path; a guessed
+> native name would be worse than a missing one, so `api.def` does not mention them.
 
 ## What this is not
 
@@ -27,15 +34,22 @@ Without the injected loader the files described here are inert.
 cd sdk
 npm ci                       # exact versions from sdk/package-lock.json
 
-# Build the bundled example to examples/chokepoint/neo/main.js
-node dist/cli.js build --dir ../examples/chokepoint
+# Scaffold a new project, then build + check it untouched
+node dist/cli.js new ../my-mod --id my_mod --name "My Mod"
+node dist/cli.js build --dir ../my-mod
+node dist/cli.js check --dir ../my-mod
 
-# Type-check, bundle, and run it in a real QuickJS context with the mock host
+# Package it: build + check, stage dist/my_mod/, then write ../my_mod.zip
+node dist/cli.js pack --dir ../my-mod --out ../my_mod.zip
+
+# The bundled example still works the same way
+node dist/cli.js build --dir ../examples/chokepoint
 node dist/cli.js check --dir ../examples/chokepoint
 ```
 
-`npm link` (from `sdk/`) installs the `neo` command globally, after which the two commands are
-`neo build --dir <project>` and `neo check --dir <project>`.
+`npm link` (from `sdk/`) installs the `neo` command globally, after which the commands are
+`neo new <dir> --id <id> [--name <name>]`, `neo build --dir <project>`,
+`neo check --dir <project>` and `neo pack --dir <project> [--out <zip>]`.
 
 A passing check prints exactly one line and exits `0`:
 
@@ -51,11 +65,20 @@ A failure prints `NEO_CHECK fail: <reason>` and exits `2`.
 my-mod/
 ├── tsconfig.json        # maps @neo/runtime at the SDK source
 ├── src/main.ts          # the mod
-└── neo/mod.json         # manifest (read by the loader)
+├── neo/mod.json         # manifest (read by the loader)
+├── neo/main.js          # build output, not committed
+├── descriptor.mod       # launcher metadata
+├── common/on_actions/   # monthly driver (on_monthly_pulse -> the event)
+└── events/              # hidden event: every_system { neo_action = { } }
 ```
 
+`neo new` writes exactly the template in `sdk/templates/neo-mod/`; the acceptance promise is
+that the generated tree passes `neo build` and `neo check` with no hand edits
+(`sdk/test/new.test.mjs`).
+
 `tsconfig.json` has to point `@neo/runtime` at the SDK's `src/runtime.ts`; v1 does not publish a
-package to a registry, so there is no `node_modules` install step for the SDK itself:
+package to a registry, so there is no `node_modules` install step for the SDK itself. `neo new`
+resolves that path relative to the generated directory:
 
 ```json
 {
@@ -87,28 +110,34 @@ onSystem((s) => {
 });
 ```
 
-## API (v1, frozen)
+
+## API (v1.1 — additive over the frozen v1 surface)
 
 | Export | Signature | Notes |
 |---|---|---|
-| `onSystem` | `(handler: (s: System) => void) => void` | Registers the per-system handler. Call it exactly once — the host keeps one handler. |
+| `onSystem` | `(handler: (s: System) => void) => void` | Registers the per-system handler. Call it exactly once — the host keeps one handler per session. |
 | `System.id` | `number` | The engine system id for this call. The only handle the SDK retains. |
 | `System.degree` | `number` | Hyperlane degree, read on each access (not cached). |
+| `System.neighbors` | `readonly number[]` | Neighbour system ids, read on each access; the host returns a fresh array, capped (64) with a truncation log line. Needs `graph.read`. |
 | `System.setVariable` | `(name: string, value: number) => void` | Writes through the official `set_variable` body for the current system. |
 | `graph.betweenness` | `(s: System) => number` | Graph score for the system (same source as the C5-SCORE path). |
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200` — the T2 threshold; a constant, not a tuning knob in v1. |
 | `log` | `(message: string) => void` | Appends `NEO_JS_LOG <text>` to `C:/temp/neo_js.log`. |
-| `apiVersion` | `() => number` | Returns the host's contract version; v1 is `1`. |
+| `apiVersion` | `() => number` | Returns the host's contract version; v1.x is `1`. |
 
 ### Native contract
 
-The SDK is a shim over seven globals installed by the host. `sdk/api.def` is the single source of
+The SDK is a shim over eight globals installed by the host. `sdk/api.def` is the single source of
 truth (`version: 1`); the TypeScript surface, the mock host, and the Zig host must all match it.
+`__neo_system_neighbors` is the v1.1 addition; the host side of it is Track A's (A2), so the
+Python fence allows it to be declared before it is implemented and the allowance is deleted at
+integration.
 
 | Native | Params | Returns |
 |---|---|---|
 | `__neo_register_system` | `function` | `void` |
 | `__neo_system_degree` | `u32` | `u32` |
+| `__neo_system_neighbors` | `u32` | `array<u32>` |
 | `__neo_system_set_var` | `u32`, `string`, `f64` | `void` |
 | `__neo_graph_betweenness` | `u32` | `u32` |
 | `__neo_graph_is_chokepoint` | `u32` | `bool` |
@@ -134,11 +163,27 @@ truth (`version: 1`); the TypeScript surface, the mock host, and the Zig host mu
 - `entry` — the bundle filename the loader evaluates. Required.
 - `scope` — v1 accepts `["system"]` only. Required.
 - `permissions` — any of `graph.read`, `variable.write`, `log`. A native whose permission is
-  absent is refused by the host, and an unknown permission disables the mod at load.
+  absent is refused by the host, and an unknown permission disables the mod at load. `degree`,
+  `neighbors`, `betweenness` and `isChokepoint` are all `graph.read`.
 - `engine` / `runtime` — compatibility strings; a mismatch disables the mod with a log line.
 
-Exactly one runtime mod is supported in v1. Zero mods, more than one, a bad manifest, a missing
-`main.js`, or an API-version mismatch all log a reason and leave the game running without JS.
+Phase 1 loaded exactly one runtime mod. Phase 2 (Track A) loads up to **8** mods from
+`C:/temp/neo_mods/<id>/`, one QuickJS context/session each: a throwing, spinning, or
+over-reaching mod disables only its own session (`NEO_JS_ERROR` / `NEO_JS_TIMEOUT` /
+`WRITE_REJECT`) and the other sessions keep receiving `onSystem`. Zero mods logs
+`NEO_JS_NO_MOD`; more than 8 are refused with a log line. The single-mod output shape is
+unchanged from Phase 1. **The multi-mod half is not in this branch and has no live reading** —
+the C2 safety shot is blocked.
+
+## `neo new`
+
+`neo new <dir> --id <id> [--name <name>]` copies `sdk/templates/neo-mod/` (substituting the id,
+the display name, and the relative `@neo/runtime` path) and prints
+`NEO_NEW ok dir=<abs> id=<id> files=<n>`. It refuses a non-empty target, an id outside
+`[a-z0-9][a-z0-9_]{0,63}` (the id is a manifest id, a loader directory name *and* a Clausewitz
+event namespace), and a display name containing a quote or control character. The generated tree
+is exactly the template: `src/main.ts`, `neo/mod.json`, `tsconfig.json`, `descriptor.mod`,
+`common/on_actions/<id>_on_actions.txt`, `events/<id>_events.txt`, `README.md`.
 
 ## `neo build` and `neo check`
 
@@ -163,6 +208,24 @@ The mock host (`sdk/src/mock-host.ts`) records every native call; a passing exam
 `calls=4` (`betweenness`, `set_var`, `log`, `api_version`). `neo check` is the last gate before a
 bundle is shippable, but it cannot prove engine behaviour — that is the live acceptance shot.
 
+## `neo pack`
+
+`neo pack --dir <project> [--out <zip>]`
+
+1. Runs `neo build` (so `neo/<entry>` exists) and `neo check`; a failing check aborts the pack
+   with `NEO_PACK fail: pack: neo check failed: …` and writes no archive.
+2. Stages `<project>/dist/<id>/` from a **whitelist**: `descriptor.mod`, `common/**`, `events/**`,
+   `neo/mod.json`, `neo/<entry>`, and a `README.md` (the author's own README, if any, plus the
+   known-limitation block).
+3. Writes a store-only zip (fixed 1980-01-01 timestamps, entries sorted) — the same inputs
+   produce the same bytes — to `--out` or `<project>/dist/<id>.zip`.
+4. Reads the archive back and compares every entry with what it staged before reporting
+   `NEO_PACK ok dir=<abs> out=<zip> entries=<n>`.
+
+`node_modules/`, `dist/` and `.git/` are excluded by construction (they are never in the
+whitelist), not by a filter that can silently miss one. The packaged README always carries the
+"this is not a Workshop mod / inert without the injected host" limitation.
+
 ## Live acceptance (2026-11-07, 4.4.4)
 
 Phase 1 C1 passed in one live shot (pid 3848, DLL sha256 `8c774e60b36c2969c6b792b34dffd19ac301e16cc7fbc41c581bca9ab4febe7f`):
@@ -184,12 +247,16 @@ Full reading: `evidence/logs/runtime_js_phase1_4_4_4.log`; issue #55.
   never unloaded (`FreeLibrary` is forbidden — patched engine objects would jump into a dead
   page).
 
-## Known limitations (v1 non-goals)
+## Known limitations (v1.1 non-goals)
 
-- No `s.name`, `s.neighbors`, `s.variable()` reads, or star flags.
+- No `s.name`, `s.variable()` reads, or star flags. They stay out of `api.def` until Track A's
+  static spike resolves an official body/read path for each one (B5 follow-up); a deferred name
+  is simply absent, never guessed.
 - No country / fleet / planet / pop scopes; system scope only.
-- No `onMonthly` or any global tick hook.
-- One runtime mod, no multi-mod composition, no `dlc_load.json` parsing.
+- No `onMonthly` or any global tick hook. The monthly driver is a generated `on_action` + hidden
+  `event` pair, i.e. the official script path.
+- No `dlc_load.json` parsing and no inter-mod JS calls; the Phase 2 host loads up to 8 isolated
+  sessions, not a module graph.
 - `log` writes `C:/temp/neo_js.log`, not the official `game.log`.
 - The SDK is TypeScript-source distributed only (see below).
 
@@ -199,11 +266,20 @@ Experimental, source-only. `@neo/runtime` is not published to npm in v1; clone t
 map the package with `paths` as shown above. Phase 1 live acceptance passed on 2026-11-07 (see
 above); the distribution remains experimental and injection-based.
 
+Phase 2 adds a **developer preview package** (SDK + templates + example + docs, zipped by
+`neo pack`/the release job) for issue #39 testers — see
+[docs/runtime-js-preview.md](runtime-js-preview.md). Publishing it is blocked on the C2 safety
+shot; the preview is explicitly not a Workshop upload.
+
 ## Running the gate
 
 ```bash
 just sdk-test     # cd sdk && npm ci && npm test
 ```
 
-CI runs the same two commands (`actions/setup-node` with Node 24) next to the Zig gate; the Zig
-gate (`just check-full`) stays Node-free so a local run needs no npm registry.
+`sdk-test` type-checks the SDK, builds the example, runs `neo new` → `neo build` → `neo check` on
+a generated project, and packs it twice to prove the artifact is byte-identical. CI runs the same
+commands (`actions/setup-node` with Node 24) next to the Zig gate; the Zig gate
+(`just check-full`) stays Node-free so a local run needs no npm registry, but it does run the
+Python contract fence (`scripts/test_runtime_js_contract.py`) that pins `sdk/api.def` against
+`src/dll/c2/neo_js_host.zig`.

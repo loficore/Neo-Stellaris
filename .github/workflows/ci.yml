@@ -73,6 +73,10 @@ jobs:
         run: npm ci
 
       - name: npm test (sdk)
+        # One command covers the whole Track B surface: type-check, the example's
+        # bundle + real-QuickJS check, the `neo new` scaffold round-trip
+        # (`new` → `build` → `check`), and two `neo pack` runs that must be
+        # byte-identical.  No extra step, so no second copy of the command list.
         working-directory: sdk
         run: npm test
 
