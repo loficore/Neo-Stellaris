@@ -467,4 +467,133 @@ python3 scripts/scratch/2026-11_flag_store/scan_flag_keyword.py --keyword has_st
 python3 scripts/scratch/2026-11_flag_store/diff_parse_bodies.py --a 0x180F590 --b 0x1AA5D10
 ```
 
+---
+
+## 4. 映射表 + falsifier + host 契约(计划 Task 4)
+
+### 4.1 映射表(两行,六个字段;缺字段一律写 `unknown`,不留空)
+
+| keyword | class_info | create | vtable | write_slot | eval_slot | store_offset | consumes |
+|---|---|---|---|---|---|---|---|
+| `set_star_flag` | `0x2610e80` | `0x1895620` (new `0x298`) | `0x26049b0` (+ secondary `0x25f2b08`) | **`+0x18` = `0x180F590`**(名字→u16)+ **`+0x48` = `0x180F8E0`**(落盘) | n/a(effect) | **`scope(0x393970)+0x5F8`** | **`string`**(`FLAGNAME` → u16 flag id) |
+| `has_star_flag` | `0x269f1d8` | `0x1b1ff60` (new `0x3f8`) | `0x268cf48` | n/a(trigger) | **`+0x20` = `0x1AA5D10`**(名字→u16,存 `[obj+0x220]`)+ `+0x28` = `0x1a91a80`(共用基体) | **`scope(0x393970)+0x5F8`** | **`string`** |
+
+机器可读(一行一条,`|` 分隔):
+
+```
+set_star_flag | class_info=0x2610e80 | create=0x1895620 | vtable=0x26049b0 | write_slot=0x180f590+0x180f8e0 | store_offset=0x5f8 | consumes=string
+has_star_flag | class_info=0x269f1d8 | create=0x1b1ff60 | vtable=0x268cf48 | eval_slot=0x1aa5d10 | store_offset=0x5f8 | consumes=string
+```
+
+**`eval_body`(谁把 `[obj+0x220]` 和 container 比一次)**:`unresolved`。
+`+0x28` 的共用基体 `0x1A91A80` 尾跳 `[vptr+0x20]` = `0x1AA5D10`,而 `0x1AA5D10`
+只做名字→id 并 `mov al,1; ret`;通用 trigger 求值基体候选是 `0x348B60`
+(`call [vptr+0xb8]` 后 `call [vptr+0x18]`),**没有读到比较指令本身**。
+原因:该槽的真正求值体要么被 `0x349700` 一族代劳(只回 `+0x14` 的 dword),
+要么在 `.pdata` 之外内联;本卷的离线预算里没有收口。
+
+### 4.2 键空间(必须与映射表一起读)
+
+```console
+$ python3 scripts/disrva.py 0x135E40 --len=0x40    # flag 名表的初始化
+  00135e44  call    0x141bcefd0  ; -> 0x1bcefd0        ; 分配桶数组
+  00135e58  mov     qword ptr [rip + 0x31372b1], rax  ; -> 0x326d110   (桶基址)
+  00135e61  mov     qword ptr [rip + 0x31372b0], rax  ; -> 0x326d118   (号数清零)
+  00135e68  mov     byte ptr [rip + 0x31372b2], al   ; -> 0x326d120
+```
+
+| 全局 | 作用 |
+|---|---|
+| `0x326D110` | flag 名→u16 的桶数组基址(步长 `0x40`,id 在 `+0x38`) |
+| `0x326D118` | 下一个 flag id(u16) |
+| `0x326D11C` | 桶掩码 |
+| `0x2A00DE0` | flag id→名字 的 vector(`+8` 数据、`+0x14` 计数、元素 `0x30`、名字在 `+0x10`) |
+| `0x1BCF030` | 插入桶表 |
+| `0x158300` | 把名字 append 进 `0x2A00DE0` |
+| `0x1C9E350` | 字符串哈希 |
+
+**与 token DB(`0x37347A0`,`0x1D13270` 发号)不是同一张表。**
+
+### 4.3 falsifier(至少四条;出现即判本卷映射是错的)
+
+| # | 读数 | 判错的哪一格 |
+|---|---|---|
+| F1 | 用 `0x180F590`(或让引擎自己解析 `set_star_flag = probe`)写一个 flag 后,**最新存档的 `flags=` 块里不出现 `probe`** | `set_star_flag` 写链(§2)错 —— 要么容器偏移错,要么写的不是 star flag |
+| F2 | 官方脚本 `set_star_flag = probe` 之后,**同一进程里读 `[0x393970(scope)+0x5F8]` 的 u16 数组不含该 id**(或用 `0x1BCE180` 的线性扫描找不到) | `store_offset=0x5F8` 错 |
+| F3 | `has_star_flag = probe` 在官方脚本里命中,但用 `0x1AA6460` 拿到的 container 扫描**不命中** | 读侧 `0x1AA6460` 不是 `has_star_flag` 的容器出处(§3.1 错) |
+| F4 | 写手调用链里**读不到** `[[0x3260BB0]+0xC0]`(或它不是当期日期),或写进 `container+0x28` 的值与存档 `flags=` 右侧的数不相等 | 时间戳那一格(§2.4)错 |
+| F5 | 同一个名字在 `[0x326D110]` 表里查到的 u16 **等于** `0x1D13270` 给它的 token id | 键空间判词(§4.2)错 —— 那 A1 的写法本来就该能命中 |
+| F6 | `movzx ..., word ptr [obj+0x220]` 在 `has_star_flag` 的求值链上**根本不存在**(即 `+0x220` 不是它的 flag id 字段) | 读侧字段偏移错 |
+| F7 | `flags=` 块里的时间戳与 `container+0x28` / `container+0x40` 哪一张对不上(两张都在,写手写 `+0x28`、读体 `0x1AA6AE0` 读 `+0x40`) | container 并行数组的语义(§3.2 / §4.5 第 2 条)错 |
+
+### 4.4 host 契约(**只写形状,不写实现**)
+
+将来 `neo_js_host` 要正确写/读 star flag,调用形状必须是:
+
+**写(`setStarFlag(name)`)**:
+
+1. 名字串放**堆上 NUL 结尾的 char***,长度上限沿用 MSVC SSO 边界 `≤ 15`
+   (超过 `0x10` 会让 `cmp qword [rbx+0x30],0x10` 走堆指针分支,语义不变但要求
+   调用方保证生命周期;引擎侧是复制进表的,所以只要调用期间有效即可)。
+2. **不要**调 `0x1D13270` 拿 id。id 必须由 flag 表发:
+   `0x1BCF030(name, hash, ...)` 插入/查找 → `word [bucket+0x38]`。
+   等价的官方入口就是 `0x180F590`(它把这一串全做了)。
+3. 得到 u16 后写 `[obj+0xC0]`,再调 `0x180F8E0`(或直接用 `0x1BCE180`)。
+   `0x1BCE180` 的四个参数:`(container, id, &u32_date, 0xFFFFFFFF)`。
+4. **返回值怎么解释**:`0x180F8E0` 没有返回值(`ret` 前不设 `al`);
+   成败只能靠"事后扫 container"判定。
+5. **失败如何 fail-closed**:`id == 0xFFFF` 时 `0x1BCE180` 直接返回(什么都不做),
+   所以 host 侧必须把 `0xFFFF` 当**硬失败**(名字解析失败),不要当成"写成功"。
+   §2.2 的 `0x180F7F6`(`mov eax,0xffff`)就是这条的来源。
+
+**读(`hasStarFlag(name)`)**:
+
+1. 同样先用 `0x180F590`/`0x1BCF030` 解析出 u16(**不要**用 token id)。
+2. container 用 `0x1AA6460(scope, ...)` 取(它内部 `0x393970` + `+0x5F8`,
+   并对 galaxy scope 走 `[scope+0x24]+0x20` 特例);或直接用 `0x397490` 的 mask 0x80 分支。
+3. 线性扫 `container+0x10` 的 `u16[container+0x1C]`,比较目标 id。
+4. **返回 bool 从哪读**:命中即 true。container 有两张并行 u32 数组:
+   `0x1BCE180` 把 `[[0x3260BB0]+0xC0]`(日期)写进 `+0x28`,把 `0xFFFFFFFF`
+   (−1,哨兵)写进 `+0x40`(`0x1BCE20F..0x1BCE23E`);而 `0x1AA6AE0` 这个官方样本
+   **读的是 `+0x40` 并乘 `0x186A0`**(`0x1AA6BBF..0x1AA6BC6`)。
+   两者谁是"存档右侧那个时间戳"**本卷没有收口**(见 §4.5),
+   所以 host **不要**现在就把任一张当时间戳硬编码 —— 只读 bool 是安全的。
+5. **fail-closed**:container 指针为空 / 计数为 0 / id 为 `0xFFFF` ⇒ 一律返回
+   **false**(不要抛,不要回 true)。
+
+### 4.5 仍未收口的断言(诚实清单)
+
+| 断言 | 等级 | 为什么 |
+|---|---|---|
+| `has_star_flag` 把 `[obj+0x220]` 与 container 比较的那条指令 | `unresolved` | §4.1 的 `eval_body`;`+0x28` 的尾跳落到 parse 体,通用基体 `0x348B60` 的 `[vptr+0x18]` 目标未读到比较 |
+| 存档序列化把 `+0x28` 的 dword 写成 `flags=` 右侧 | `static_inference` | 反查表(`0x2A00DE0`,0x30 步长,name 在 +0x10)与 container 布局都 pinned,但**序列化函数本身没读** |
+| `+0x28` 与 `+0x40` 哪一张是"存档右侧那个时间戳" | **`unresolved`** | 写手 `0x1BCE180` 把日期写 `+0x28`、`0xFFFFFFFF` 写 `+0x40`;而官方读体 `0x1AA6AE0` 读的却是 `+0x40` 并乘 `0x186A0`。两条读数方向相反,本卷没有第三条证据裁决 |
+| `[0x3260BB0]+0xC0` 就是"当期日期" | `static_inference` | 写手确实读它并写进 `+0x28`(§2.4 逐字);它是"日期"而非别的计数器,靠 `0x1BCE180` 的用法(与 `0xFFFFFFFF` 到期哨兵并列)推断 |
+| `0x1AA6460` 的 galaxy 特例 `[scope+0x24]+0x20` 也是 star flag 容器 | `unverified` | 有指令(§3.1),但没有第二个消费者印证;`has_star_flag` 在 galaxy scope 下的语义不在本卷范围 |
+| `0xFFFF` 在 flag 表里是"无效/未分配" | `pinned` | §2.2 `0x180F7F6`;§3.2 `0x1BCE19F` 的早退 |
+
+### 4.6 复现(§4)
+
+```bash
+python3 scripts/disrva.py 0x135E40  --len=0x40
+python3 scripts/disrva.py 0x1BCF030 --len=0x120
+python3 scripts/disrva.py 0x158300  --len=0xD0
+python3 scripts/disrva.py 0x180F980 --len=0x2E0
+python3 scripts/disrva.py 0x1AA6460 --len=0x90
+```
+
+---
+
+## 5. 没做的事(边界)
+
+* **Task C 未执行** —— 未启动游戏、未注入、未跑 `just win` / `session_bridge.py` /
+  `c2_*` / 任何 `C:/temp` 的东西。§4.3 的七条 falsifier 一条都没有被实机检验。
+* **未改 `src/dll/**`**、未改 SDK、未改既有取证卷与 `evidence/xrefs/` 的表。
+* **未验证 `0x3260BB0` 的完整语义**(只读它 `+0xC0` 的 dword)。
+* **未读存档序列化函数**(`flags=` 的生产者),所以 §4.5 第 2 条停在 `static_inference`。
+* **未查 C1/C2/C4 的既有锚点是否受影响** —— 本卷只服务 flag 存储。
+* **未解释** P2-1b 里 `neo_tier1` 的 `NEO_JS_PREMINT` 为什么在安装期拿不到表项
+  (那是读档时序,`0x1D13270` 那条线的事,与本卷的 flag 表不是同一对象)。
+
+
 
