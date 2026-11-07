@@ -1,10 +1,17 @@
 # Runtime JS SDK — developer preview (Phase 2)
 
 > **Status: blocked.** This page is the manifest for the preview package and the
-> trial script for issue #39. The package is **not built or published** yet: the
-> Phase 2 live safety shot (C2, one named shot on Stellaris 4.4.4) is still
-> blocked, and nothing here claims a live reading beyond the Phase 1 C1 result
-> recorded in [runtime-js-sdk.md](runtime-js-sdk.md#live-acceptance-2026-11-07-444).
+> trial script for issue #39. The package is **not built or published** yet.
+>
+> The Phase 2 live safety shot (C2) has run: multi-mod isolation **passed** (one good
+> mod kept running while three bad ones were disabled, host alive both times). The flag
+> APIs did **not** pass: two P2-1b shots on 2026-11-08 showed the install-time premint
+> works (`id=19345`, inside u16) but the write/read land on a structure that is not the
+> engine's star-flag store (official `has_star_flag` 0 hits against a 139-hit control;
+> the autosave contains no `neo_hub`). Flags are therefore **not part of the preview
+> surface** until the real keyword record is re-derived — see
+> `evidence/logs/runtime_js_p2_1b_flags_4_4_4.log` and the status note in
+> [runtime-js-sdk.md](runtime-js-sdk.md).
 
 ## What the preview is
 
@@ -58,8 +65,11 @@ host `JS_Eval`s it from `C:/temp/neo_mods/<id>/neo/`.
    unknown effect, which is expected.
 4. **Report** the `NEO_JS_*` lines from `C:/temp/neo_js.log` (call/write/log
    counts, and any `NEO_JS_ERROR` / `NEO_JS_TIMEOUT` / `NEO_API_MISMATCH`), the
-   game version, the campaign and whether the host survived. A zero count means
-   "did not happen", not "fixed" — say which.
+   game version, the campaign and whether the host survived. Flag users should
+   also copy the install-time `NEO_JS_PREMINT` / `NEO_JS_PREMINT_FAIL` lines —
+   they are the only way to tell "name never declared" (`no_premint`) from
+   "install ran too late" (`reason=range`). A zero count means "did not happen",
+   not "fixed" — say which.
 5. **Do not** report `neo check` alone as a live result. The two gates are
    different by design.
 
@@ -69,8 +79,12 @@ host `JS_Eval`s it from `C:/temp/neo_mods/<id>/neo/`.
   `s.setStarFlag`, `s.hasStarFlag`, `graph.betweenness`, `graph.isChokepoint`,
   `log`, `apiVersion`. `s.name` and `s.variable()` are deferred until a static
   read path is resolved; they are absent from `api.def` rather than guessed.
-  Flag names are string literals only, and the build rejects names that collide
-  case-insensitively with an official keyword.
+  Flag names are string literals only, must be declared in `neo/mod.json`'s
+  `flags` (at most 32 names, 1–15 lowercase bytes each), and the build rejects
+  names that collide case-insensitively with an official keyword. The host mints
+  those names at **install** time, before the script parser runs, so the id stays
+  inside the engine's 16-bit flag key; an undeclared name fails closed with
+  `no_premint`. This premint path has **no live reading yet** (C2 is blocked).
 - **System scope only** — no country / fleet / planet / pop scopes.
 - **No `onMonthly` hook**: the monthly driver is the generated
   `on_action` → hidden event → `every_system` chain, i.e. the official script

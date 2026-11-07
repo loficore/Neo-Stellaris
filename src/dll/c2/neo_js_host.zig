@@ -48,7 +48,10 @@
 //   NEO_JS_CALL id=<id>           每次 onSystem 一行(不管几个 session)
 //   NEO_JS_WRITE id=<id> name=<name> [kind=flag]
 //   NEO_JS_WRITE_REJECT … reason=<tag> [kind=flag]
-//   NEO_JS_FLAG_REJECT id=<id> name=<name> reason=no_permission
+//   NEO_JS_FLAG_REJECT id=<id> name=<name> reason=no_permission|no_premint|no_flag_container
+//   NEO_JS_PREMINT name=<name> id=<u16>             安装期(C2NeoInstall),每个名字一行
+//   NEO_JS_PREMINT_FAIL name=<name> [raw=<n>] reason=no_token|range
+//   NEO_JS_INSTALL_SKIP id=<dir>                    安装期,坏 manifest 的 mod 被跳过
 //   NEO_JS_NEIGHBORS_REJECT id=<id> reason=no_permission
 //   NEO_JS_NEIGHBORS_TRUNC id=<id> total=<n> written=<n>
 //   NEO_JS_LOG <text>
@@ -284,7 +287,8 @@ fn appendToFile(line: []const u8) void {
     _ = CloseHandle(handle);
 }
 
-fn emit(comptime fmt: []const u8, args: anytype) void {
+/// 一行日志的公共出口(host 的失败面与 loader 的 `NEO_JS_INSTALL_SKIP` 共用)。
+pub fn emit(comptime fmt: []const u8, args: anytype) void {
     var buf: [384]u8 = undefined;
     const line = std.fmt.bufPrint(&buf, fmt ++ "\n", args) catch return;
     writeLine(line);
@@ -386,19 +390,79 @@ fn ensureWritePath() void {
 }
 
 /// `s.setStarFlag(name)` 的判定面(纯部分):权限 → 名字 →「scope 是不是这个 id」→
-/// 官方 `set_star_flag` body。写落在 scope 上,id 只是 JS 侧的镜像。
-/// `no_engine` 在 C2 实机(2026-11-07)只给出一个笼统的 `no_engine` —— body 没解析
-/// 与 token 没 mint 出来在读数上无法区分。这里拆成两档,并把最后一档细到「id 超界」:
-/// 下一发的日志能直接指出是哪一格。
+/// **预发表** → 官方 `set_star_flag` body。写落在 scope 上,id 只是 JS 侧的镜像。
+///
+/// P2-1b:运行时**不发号**。名字→id 的映射在安装期由 `premintFlags` 用官方分配器
+/// 一次性建好(`C2NeoInstall`,脚本解析之前);这里只查表,查不到就是 `no_premint`。
+/// C2 第二发(`raw=68639`)证明现场发号会落在 u16 之外,而现场发号本身也会把
+/// 动态名字池推得更远。
 pub const FlagResult = enum {
     ok,
     no_permission,
     bad_name,
     wrong_scope,
     no_flag_body,
-    no_flag_token,
-    no_flag_token_range,
+    no_premint,
 };
+
+/// 预发表上界 = loader 的 `MAX_FLAGS`(两份 manifest 声明在两侧都封顶 32)。
+pub const MAX_PREMINT: usize = loader.MAX_FLAGS;
+
+var premint_names: [MAX_PREMINT][neo_state.SSO_MAX]u8 = undefined;
+var premint_lens: [MAX_PREMINT]u8 = undefined;
+var premint_ids: [MAX_PREMINT]u16 = undefined;
+var premint_count: usize = 0;
+
+/// 安装期把 manifest 声明的 flag 名逐个交给官方分配器(`0x1D13270`,经
+/// `neo_vtable.mintFlagTokenRaw` 的静态 holder 路径),成功的 name→u16 存进静态表。
+///
+/// 返回**新**入表的条数(同名第二次不发号、也不计数)。每一行都写日志 ——
+/// 下一发的判据就是这几行:
+///   `NEO_JS_PREMINT name=<name> id=<u16>`
+///   `NEO_JS_PREMINT_FAIL name=<name> reason=no_token`      (mint 没给出 id)
+///   `NEO_JS_PREMINT_FAIL name=<name> reason=table_full`    (超过 MAX_PREMINT)
+///   `NEO_JS_PREMINT_FAIL name=<name> raw=<n> reason=range` (>0xFFFF 或 0xFFFF 哨兵)
+///
+/// 只走官方分配器:不插表、不选号、不写 `[db+0x64]`/`[db+0x80]`(AGENTS 约束 5)。
+pub fn premintFlags(names: []const []const u8) usize {
+    var added: usize = 0;
+    for (names) |name| {
+        if (premintedId(name) != null) continue;
+        if (premint_count >= MAX_PREMINT) {
+            // 表满与「分配器没给 id」是两件事:前者的修法是少声明名字,后者是时机/环境。
+            emit("NEO_JS_PREMINT_FAIL name={s} reason=table_full", .{name});
+            continue;
+        }
+        const raw = neo_vtable.mintFlagTokenRaw(name) orelse {
+            emit("NEO_JS_PREMINT_FAIL name={s} reason=no_token", .{name});
+            continue;
+        };
+        if (raw == 0) {
+            emit("NEO_JS_PREMINT_FAIL name={s} reason=no_token", .{name});
+            continue;
+        }
+        if (raw >= std.math.maxInt(u16)) { // 0xFFFF 是引擎哨兵,和越界同一档
+            emit("NEO_JS_PREMINT_FAIL name={s} raw={d} reason=range", .{ name, raw });
+            continue;
+        }
+        @memcpy(premint_names[premint_count][0..name.len], name);
+        premint_lens[premint_count] = @intCast(name.len);
+        premint_ids[premint_count] = @intCast(raw);
+        premint_count += 1;
+        added += 1;
+        emit("NEO_JS_PREMINT name={s} id={d}", .{ name, raw });
+    }
+    return added;
+}
+
+/// 预发表查找。解析期之后**唯一**的 name→id 通道(写和读都只走这里)。
+pub fn premintedId(name: []const u8) ?u16 {
+    var i: usize = 0;
+    while (i < premint_count) : (i += 1) {
+        if (std.mem.eql(u8, premint_names[i][0..premint_lens[i]], name)) return premint_ids[i];
+    }
+    return null;
+}
 
 pub fn setSystemFlag(p: Permissions, id: u32, name: []const u8, scope: u64) FlagResult {
     if (!canWriteFlag(p)) return .no_permission;
@@ -407,19 +471,19 @@ pub fn setSystemFlag(p: Permissions, id: u32, name: []const u8, scope: u64) Flag
     if (scope_id != id) return .wrong_scope;
     ensureWritePath();
     if (!neo_vtable.flagsResolved()) return .no_flag_body;
-    const raw = neo_vtable.mintFlagTokenRaw(name) orelse return .no_flag_token;
-    if (raw > std.math.maxInt(u16)) return .no_flag_token_range;
-    if (!neo_vtable.setStarFlagId(@intCast(raw), scope)) return .no_flag_body;
+    const flag_id = premintedId(name) orelse return .no_premint;
+    if (!neo_vtable.setStarFlagId(flag_id, scope)) return .no_flag_body;
     _ = @atomicRmw(u64, &write_count, .Add, 1, .monotonic);
     return .ok;
 }
 
-/// `s.hasStarFlag(name)` 的只读面:权限 → 名字 → 系统 flag 容器扫描。
+/// `s.hasStarFlag(name)` 的只读面:权限 → 名字 → **预发表** → 系统 flag 容器扫描。
 /// `+0x5f8` 容器 / `+0x10` u16 数组 / `+0x1c` 计数(`offsets.graph.FLAG_*`)。
+/// 未声明的名字返回 null,**不**在 handler 里 mint(运行时零发号)。
 pub fn readSystemFlag(p: Permissions, id: u32, name: []const u8) ?bool {
     if (!canReadFlag(p)) return null;
     if (name.len == 0 or name.len > MAX_VAR_NAME) return null;
-    const token = neo_vtable.mintFlagToken(name) orelse return null;
+    const token = premintedId(name) orelse return null;
     return graph_probe.systemHasFlag(id, token);
 }
 
@@ -771,13 +835,12 @@ fn nativeSystemSetFlag(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, arg
         emit("NEO_JS_WRITE id={d} name={s} kind=flag", .{ id, sanitize(&line_buf, name) });
     } else {
         var line_buf: [32]u8 = undefined;
-        // `raw=` 是引擎 mint 回来的原始 u32(0 = 没 mint 出来)。没有它,
-        // 「body 没解析」「token 没 mint」「id 超过 u16」三种失败在日志上长得一样。
-        emit("NEO_JS_WRITE_REJECT id={d} name={s} reason={s} raw={d} kind=flag", .{
+        // P2-1b:`no_premint` = 名字不在安装期预发表里;mint 本身的失败读数在
+        // 安装期(`NEO_JS_PREMINT_FAIL`),运行时的 handler 不再发号,所以这里没有 `raw=`。
+        emit("NEO_JS_WRITE_REJECT id={d} name={s} reason={s} kind=flag", .{
             id,
             sanitize(&line_buf, clip(name, 24)),
             @tagName(res),
-            neo_vtable.lastFlagMintRaw(),
         });
         if (res == .no_permission) disableCurrent();
     }
@@ -801,10 +864,12 @@ fn nativeSystemHasFlag(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, arg
     const maybe = readSystemFlag(currentPermissions(), id, name);
     if (maybe == null) {
         var line_buf: [32]u8 = undefined;
-        emit("NEO_JS_FLAG_REJECT id={d} name={s} reason=no_token raw={d}", .{
+        // 两种 null 必须能分开:名字没在安装期声明(`no_premint`,运行时不补发号)
+        // vs 声明了但容器读不到(`no_flag_container` = 引擎侧不可读)。
+        emit("NEO_JS_FLAG_REJECT id={d} name={s} reason={s}", .{
             id,
             sanitize(&line_buf, clip(name, 24)),
-            neo_vtable.lastFlagMintRaw(),
+            if (premintedId(name) == null) "no_premint" else "no_flag_container",
         });
         return c.JSValue.boolVal(false);
     }
@@ -921,6 +986,7 @@ pub fn resetForTest() void {
     interrupt_fired = false;
     clock = null;
     sink = null;
+    premint_count = 0;
     @atomicStore(u64, &call_count, 0, .monotonic);
     @atomicStore(u64, &write_count, 0, .monotonic);
     @atomicStore(u64, &error_count, 0, .monotonic);
@@ -1066,6 +1132,31 @@ test "encodeScriptNumber refuses anything a Debug build would abort on" {
     try testing.expectEqual(@as(?u32, null), encodeScriptNumber(std.math.nan(f64)));
     try testing.expectEqual(@as(?u32, null), encodeScriptNumber(std.math.inf(f64)));
     try testing.expectEqual(@as(?u32, null), encodeScriptNumber(4_294_967_296.0));
+}
+
+test "premintFlags reports table_full instead of blaming the allocator" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    neo_vtable.setTokenMinterForTest(&hostCountingMinter);
+
+    var names: [MAX_PREMINT + 1][]const u8 = undefined;
+    var bufs: [MAX_PREMINT + 1][12]u8 = undefined;
+    for (0..names.len) |i| {
+        bufs[i] = undefined;
+        names[i] = std.fmt.bufPrint(&bufs[i], "f{d}", .{i}) catch unreachable;
+    }
+    // 前 MAX_PREMINT 个进表,第 33 个必须是 table_full(不是 no_token)。
+    try testing.expectEqual(MAX_PREMINT, premintFlags(names[0..MAX_PREMINT]));
+    _ = premintFlags(names[MAX_PREMINT..]);
+    try testing.expect(cap.contains("reason=table_full"));
+    try testing.expectEqual(@as(usize, MAX_PREMINT), premint_count);
+}
+
+fn hostCountingMinter(name: []const u8) ?u32 {
+    _ = name;
+    return 9000;
 }
 
 test "onSystem before a session loads logs NEO_JS_NO_MOD and never calls JS" {
@@ -1528,6 +1619,8 @@ test "a session can call setStarFlag through the additive native" {
     host_flag_calls = 0;
     neo_vtable.armFlagPathForTest(@intFromPtr(&hostFlagBody), 0x140000000 + 0x26049B0);
     neo_vtable.setTokenMinterForTest(&hostFlagMinter);
+    const premint = [_][]const u8{"mod_flag"};
+    try testing.expectEqual(@as(usize, 1), premintFlags(&premint));
 
     _ = startSession(.{
         .id = "flag",
@@ -1634,4 +1727,85 @@ test "hasStarFlag with flag.read fails closed (false) when the engine is absent"
 
     try testing.expectEqual(@as(u64, 0), errors());
     try testing.expectEqual(@as(usize, 1), activeSessions());
+}
+
+// ---------------------------------------------------------------------------
+// P2-1b: the premint table (runtime mints nothing)
+// ---------------------------------------------------------------------------
+
+var counting_mint_calls: usize = 0;
+
+fn countingHostFlagMinter(name: []const u8) ?u32 {
+    counting_mint_calls += 1;
+    return hostFlagMinter(name);
+}
+
+/// `big_flag` 越过 u16;`sentinel_flag` 是引擎的 0xFFFF 哨兵。两个都必须被拒。
+fn hostBigMinter(name: []const u8) ?u32 {
+    if (std.mem.eql(u8, name, "big_flag")) return 68639;
+    if (std.mem.eql(u8, name, "sentinel_flag")) return 0xFFFF;
+    return hostFlagMinter(name);
+}
+
+test "premint stores u16 ids and the flag natives only read that table" {
+    resetForTest();
+    defer resetForTest();
+    neo_vtable.resetForTest();
+    defer neo_vtable.resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    counting_mint_calls = 0;
+    neo_vtable.armFlagPathForTest(@intFromPtr(&hostFlagBody), 0x140000000 + 0x26049B0);
+    neo_vtable.setTokenMinterForTest(&countingHostFlagMinter);
+
+    const names = [_][]const u8{"mod_flag"};
+    try testing.expectEqual(@as(usize, 1), premintFlags(&names));
+    try testing.expectEqual(@as(?u16, 777), premintedId("mod_flag"));
+    try testing.expectEqual(@as(usize, 1), counting_mint_calls); // 一次，且只有这一次
+
+    const scope align(8) = systemScope(7);
+    const p = Permissions{ .flag_write = true, .flag_read = true };
+    try testing.expectEqual(FlagResult.ok, setSystemFlag(p, 7, "mod_flag", @intFromPtr(&scope)));
+    // Linux 上没有引擎容器,读路径 fail-closed 到 null —— 但它**不许**发号。
+    try testing.expectEqual(@as(?bool, null), readSystemFlag(p, 7, "mod_flag"));
+
+    // 未声明的名字:运行时不许自己 mint。
+    try testing.expectEqual(FlagResult.no_premint, setSystemFlag(p, 7, "not_declared", @intFromPtr(&scope)));
+    try testing.expectEqual(@as(?bool, null), readSystemFlag(p, 7, "not_declared"));
+    try testing.expectEqual(@as(usize, 1), counting_mint_calls);
+}
+
+test "premint refuses an id above u16 and the sentinel 0xFFFF" {
+    resetForTest();
+    defer resetForTest();
+    neo_vtable.resetForTest();
+    defer neo_vtable.resetForTest();
+    var cap2 = Capture{};
+    armCapture(&cap2);
+    neo_vtable.setTokenMinterForTest(&hostBigMinter);
+
+    const names = [_][]const u8{ "big_flag", "sentinel_flag", "mod_flag" };
+    try testing.expectEqual(@as(usize, 1), premintFlags(&names)); // 前两个被拒，mod_flag 仍在
+    try testing.expect(premintedId("big_flag") == null);
+    try testing.expect(premintedId("sentinel_flag") == null);
+    try testing.expectEqual(@as(?u16, 777), premintedId("mod_flag"));
+}
+
+test "premint emits one parseable line per name and logs the two failure shapes" {
+    resetForTest();
+    defer resetForTest();
+    neo_vtable.resetForTest();
+    defer neo_vtable.resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    neo_vtable.setTokenMinterForTest(&hostBigMinter);
+
+    const names = [_][]const u8{ "mod_flag", "big_flag", "unknown_flag", "mod_flag" };
+    try testing.expectEqual(@as(usize, 1), premintFlags(&names));
+
+    try testing.expect(cap.contains("NEO_JS_PREMINT name=mod_flag id=777"));
+    try testing.expect(cap.contains("NEO_JS_PREMINT_FAIL name=big_flag raw=68639 reason=range"));
+    try testing.expect(cap.contains("NEO_JS_PREMINT_FAIL name=unknown_flag reason=no_token"));
+    // 同名只发一次:那一行只出现一次。
+    try testing.expectEqual(@as(usize, 1), countOccurrences(cap.text(), "NEO_JS_PREMINT name=mod_flag"));
 }

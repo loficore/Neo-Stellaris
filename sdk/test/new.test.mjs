@@ -51,6 +51,10 @@ test("neo new scaffolds a complete project and prints one NEO_NEW line", () => {
   assert.deepEqual(manifest.permissions, ["graph.read", "flag.read", "flag.write", "log"]);
   assert.equal(manifest.engine, "4.4.4");
   assert.equal(manifest.runtime, ">=0.1");
+  // P2-1b: 模板不带 flag 名(`neo build` 会把 bundle 里的字面量写进这里)。
+  assert.deepEqual(manifest.flags, []);
+  // P2-1b: the template starts with an empty flag list; `neo build` fills it.
+  assert.deepEqual(manifest.flags, []);
 
   const main = read(dir, "src", "main.ts");
   assert.match(main, /onSystem/);
@@ -82,6 +86,12 @@ test("a generated project builds and checks with no hand edits", () => {
   assert.equal(build.status, 0, build.stderr);
   assert.match(build.stdout.trim(), /^NEO_BUILD ok dir=.* out=.*neo\/main\.js$/);
   assert.ok(existsSync(path.join(dir, "neo", "main.js")));
+  const built = JSON.parse(read(dir, "neo", "mod.json"));
+  assert.deepEqual(built.flags, ["neo_greeted"]);
+
+  // P2-1b: the build records the template's literal flag name in the manifest.
+  const manifest = JSON.parse(read(dir, "neo", "mod.json"));
+  assert.deepEqual(manifest.flags, ["neo_greeted"]);
 
   const check = run(["check", "--dir", dir]);
   assert.equal(check.status, 0, check.stderr);

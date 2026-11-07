@@ -27,6 +27,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const host = @import("neo_js_host.zig");
+const neo_state = @import("neo_state.zig");
+const keyword_registry = @import("../scripted/keyword_registry.zig");
 
 const loader = @This();
 
@@ -43,6 +45,14 @@ pub const EXPECTED_SCOPE = "system";
 pub const MAX_ID_LEN: usize = 64;
 pub const MAX_MANIFEST_BYTES: usize = 4096;
 pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
+
+/// P2-1b: 一份安装里最多预发的 flag 名数。`neo/mod.json` 的 `flags` 是可选的
+/// 第 7 字段;超过这个数在 loader(这里)与 build 两侧都报错,不静默截断。
+pub const MAX_FLAGS: usize = 32;
+
+/// flag 名的字节上限 = `neo_state` 的 SSO 容量(`mintFlagTokenRaw` 的 holder
+/// 是 15 B SSO 字符串,再长就要堆分配 —— 那条路不在本模块的纪律里)。
+pub const MAX_FLAG_NAME: usize = neo_state.SSO_MAX;
 
 /// Phase 2 (Task A3): 最多同时载入的 runtime mod 数。超过的**拒绝并日志**;
 /// 静态数组,不分配。8 是计划冻结值。
@@ -67,6 +77,10 @@ pub const Manifest = struct {
     permissions: Permissions,
     engine: []const u8,
     runtime: []const u8,
+    /// P2-1b: 构建期声明的 flag 名(`neo build` 写入)。可选 —— 缺省是空列表,
+    /// 旧的 Phase 1/2 manifest 仍然合法;那时 flag 调用 fail-closed(`no_premint`)。
+    /// 切片活在 manifest arena 里(下一次 `parseManifest`/`releaseManifest` 之前有效)。
+    flags: []const []const u8 = &.{},
 };
 
 pub const ParseError = error{
@@ -82,6 +96,8 @@ pub const ParseError = error{
     UnknownPermission,
     EngineMismatch,
     RuntimeMismatch,
+    BadFlagName,
+    TooManyFlags,
     OutOfMemory,
 };
 
@@ -143,8 +159,9 @@ fn parseManifestRetained(bytes: []const u8) ParseError!Manifest {
         else => return error.NotAnObject,
     };
 
-    // Strict field set: every key must be one of the six, once, and all six must exist.
-    var seen = [_]bool{false} ** 6;
+    // Strict field set: every key must be one of the seven, once. The first six
+    // are required; `flags` is optional (P2-1b: old manifests stay valid).
+    var seen = [_]bool{false} ** 7;
     var it = obj.iterator();
     while (it.next()) |entry| {
         const idx: ?usize = if (std.mem.eql(u8, entry.key_ptr.*, "id"))
@@ -159,12 +176,14 @@ fn parseManifestRetained(bytes: []const u8) ParseError!Manifest {
             4
         else if (std.mem.eql(u8, entry.key_ptr.*, "runtime"))
             5
+        else if (std.mem.eql(u8, entry.key_ptr.*, "flags"))
+            6
         else
             return error.UnknownField;
         if (seen[idx.?]) return error.DuplicateField;
         seen[idx.?] = true;
     }
-    for (seen) |present| {
+    for (seen[0..6]) |present| {
         if (!present) return error.MissingField;
     }
 
@@ -185,6 +204,8 @@ fn parseManifestRetained(bytes: []const u8) ParseError!Manifest {
     const runtime = try asString(obj.get("runtime").?);
     if (!runtimeSatisfies(runtime, host.API_VERSION)) return error.RuntimeMismatch;
 
+    const flags = try parseFlags(obj.get("flags"));
+
     return .{
         .id = id,
         .entry = entry,
@@ -192,7 +213,44 @@ fn parseManifestRetained(bytes: []const u8) ParseError!Manifest {
         .permissions = permissions,
         .engine = engine,
         .runtime = runtime,
+        .flags = flags,
     };
+}
+
+/// P2-1b: `flags` 是可选的第 7 字段。必须是 JSON array of string;每项过
+/// `flagNameOk`;重复项**去重保序**(不是错误 —— 两份互相 import 的源码可以
+/// 各自写同一个字面量);超过 `MAX_FLAGS` 是 `error.TooManyFlags`,不截断。
+fn parseFlags(v: ?std.json.Value) ParseError![]const []const u8 {
+    const value = v orelse return &.{};
+    const items = switch (value) {
+        .array => |a| a.items,
+        else => return error.BadFieldType,
+    };
+    var list = std.ArrayList([]const u8).empty;
+    const alloc = arenaAlloc();
+    for (items) |item| {
+        const name = try asString(item);
+        if (!flagNameOk(name)) return error.BadFlagName;
+        var dup = false;
+        for (list.items) |seen| {
+            if (std.mem.eql(u8, seen, name)) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+        if (list.items.len >= MAX_FLAGS) return error.TooManyFlags;
+        list.append(alloc, name) catch return error.OutOfMemory;
+    }
+    return list.toOwnedSlice(alloc) catch return error.OutOfMemory;
+}
+
+/// 与 `keyword_registry.NameCheck` 同一套(空 / 首字符 / 大小写),再加一条
+/// SSO 长度上限。全小写是硬性的:`0x1D13270` 的查找会 case-fold,大小写混写
+/// 正是「静默接管官方 keyword」的形状(AGENTS 约束 4)。
+fn flagNameOk(name: []const u8) bool {
+    if (name.len > MAX_FLAG_NAME) return false;
+    return keyword_registry.NameCheck.check(name).ok;
 }
 
 fn asString(v: std.json.Value) ParseError![]const u8 {
@@ -446,6 +504,58 @@ fn findModIds() LoadError![]const []const u8 {
 }
 
 var ids_view: [MAX_MODS][]const u8 = undefined;
+
+/// P2-1b: 安装期要预发的 flag 名(`C2NeoInstall` → `premintFlags`)。
+///
+/// 只读 `C:/temp/neo_mods/<id>/neo/mod.json` 的 `flags` 字段 —— **不信 bundle 的
+/// 运行时参数**:名字的唯一来源是 manifest(`neo check` 保证它与 bundle 字面量一致)。
+/// 与 `findModIds` 用同一次目录枚举(同排序、同样最多 `MAX_MODS` 个),所以预发号
+/// 覆盖的正是之后会被载入的那批 mod。坏 manifest 跳过并落一行 `NEO_JS_INSTALL_SKIP`。
+///
+/// `out` 里的切片指向 manifest arena(下一次 `releaseManifest` 之前有效);
+/// 调用方(`premintFlags`)必须在同一趟里把字节复制走。非 Windows 返回 0。
+pub fn flagNamesForInstall(out: *[MAX_FLAGS][]const u8) usize {
+    if (comptime !is_windows) return 0;
+    var count: usize = 0;
+    const ids = findModIds() catch return 0;
+    for (ids) |id| {
+        var dir_buf: [MAX_PATH]u8 = undefined;
+        const dir = joinPath(&dir_buf, &.{ MODS_ROOT, id }) orelse continue;
+        var path_buf: [MAX_PATH]u8 = undefined;
+        const manifest_path = joinPath(&path_buf, &.{ dir, "/neo/mod.json" }) orelse continue;
+        var manifest_buf: [MAX_MANIFEST_BYTES]u8 = undefined;
+        const manifest_len = readFile(manifest_path, &manifest_buf) catch {
+            host.emit("NEO_JS_INSTALL_SKIP id={s}", .{id});
+            continue;
+        };
+        const manifest = parseManifestRetained(manifest_buf[0..manifest_len]) catch {
+            host.emit("NEO_JS_INSTALL_SKIP id={s}", .{id});
+            continue;
+        };
+        var dropped: usize = 0;
+        for (manifest.flags) |name| {
+            if (count >= MAX_FLAGS) {
+                dropped += 1;
+                continue;
+            }
+            var dup = false;
+            for (out[0..count]) |seen| {
+                if (std.mem.eql(u8, seen, name)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+            out[count] = name;
+            count += 1;
+        }
+        if (dropped > 0) {
+            // 跨 mod 的并集超过全局上界:不静默截断,让安装期日志能读出来。
+            host.emit("NEO_JS_INSTALL_FLAGS_TRUNC id={s} dropped={d}", .{ id, dropped });
+        }
+    }
+    return count;
+}
 
 /// 每个 mod 一个源码缓冲(`JS_Eval` 要哨兵终止;载入后整个进程生命周期有效)。
 var source_bufs: [MAX_MODS][MAX_SOURCE_BYTES]u8 = undefined;
@@ -704,4 +814,44 @@ test "the Phase 2 permission bits parse from the manifest" {
 test "off Windows the multi-mod list has no filesystem either" {
     if (is_windows) return;
     try testing.expectError(error.NotWindows, loadActiveList());
+}
+
+// --- P2-1b: the optional `flags` field -------------------------------------
+
+test "manifest flags are optional, unique, and name-checked" {
+    defer releaseManifest();
+    const m = try parseManifest(
+        \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1",
+        \\ "flags":["neo_hub","neo_hub","neo_choke"]}
+    );
+    try testing.expectEqual(@as(usize, 2), m.flags.len);
+    try testing.expectEqualStrings("neo_hub", m.flags[0]);
+    try testing.expectEqualStrings("neo_choke", m.flags[1]);
+
+    const empty = try parseManifest(
+        \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1"}
+    );
+    try testing.expectEqual(@as(usize, 0), empty.flags.len);
+
+    try testing.expectError(error.BadFlagName, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1","flags":["Neo_Hub"]}
+    ));
+    try testing.expectError(error.BadFlagName, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1","flags":["3d"]}
+    ));
+    try testing.expectError(error.BadFlagName, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1","flags":["sixteen_chars_xx"]}
+    ));
+    try testing.expectError(error.BadFieldType, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1","flags":"neo_hub"}
+    ));
+    try testing.expectError(error.TooManyFlags, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1","flags":["f0","f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12","f13","f14","f15","f16","f17","f18","f19","f20","f21","f22","f23","f24","f25","f26","f27","f28","f29","f30","f31","f32"]}
+    ));
+}
+
+test "flagNamesForInstall is a no-op off Windows" {
+    if (builtin.os.tag == .windows) return;
+    var out: [MAX_FLAGS][]const u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), flagNamesForInstall(&out));
 }
