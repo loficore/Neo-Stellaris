@@ -163,6 +163,18 @@ The mock host (`sdk/src/mock-host.ts`) records every native call; a passing exam
 `calls=4` (`betweenness`, `set_var`, `log`, `api_version`). `neo check` is the last gate before a
 bundle is shippable, but it cannot prove engine behaviour — that is the live acceptance shot.
 
+## Live acceptance (2026-11-07, 4.4.4)
+
+Phase 1 C1 passed in one live shot (pid 3848, DLL sha256 `8c774e60b36c2969c6b792b34dffd19ac301e16cc7fbc41c581bca9ab4febe7f`):
+
+- 27 monthly passes; `NEO_JS_CALL = 21,276 = 788 × 27`; the engine-side `Neo: system` lines are 21,276 as well.
+- `NEO_JS_WRITE = 405 = 15 × 27` (`neo_score`); `NEO_JS_LOG = 405`; `NEO_JS_ERROR` / `NEO_JS_TIMEOUT` / `NEO_API_MISMATCH` = 0 / 0 / 0; host alive throughout.
+- The 15 written ids are exactly the baked table's T2 set (`score >= 200`). The earlier plan estimate of 135 was wrong: the table has 15 T2, 70 T1 and 702 T0.
+- Game time 2270.07.01 → 2272.10.1. `--act log` wrote no `neo_mark`; the JS `setVariable` wrote `neo_score`. The latest autosave is `autosave_2272.07.01.sav`.
+- Boundaries: one example, one campaign, one runtime mod. Exception/timeout paths were not triggered (0 is "did not happen", not "fixed"). `betweenness` reads the baked table, not the live re-score. No uninstall after load.
+
+Full reading: `evidence/logs/runtime_js_phase1_4_4_4.log`; issue #55.
+
 ## Limits (host-enforced)
 
 - Context memory **16 MiB**, stack **1 MiB**.
@@ -184,8 +196,8 @@ bundle is shippable, but it cannot prove engine behaviour — that is the live a
 ## Distribution
 
 Experimental, source-only. `@neo/runtime` is not published to npm in v1; clone the repository and
-map the package with `paths` as shown above. Treat everything here as unstable until the Phase 1
-live acceptance produces a reading.
+map the package with `paths` as shown above. Phase 1 live acceptance passed on 2026-11-07 (see
+above); the distribution remains experimental and injection-based.
 
 ## Running the gate
 
