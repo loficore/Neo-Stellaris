@@ -13,7 +13,8 @@
   "files": [
     "api.def",
     "dist",
-    "src"
+    "src",
+    "templates"
   ],
   "engines": {
     "node": ">=24"

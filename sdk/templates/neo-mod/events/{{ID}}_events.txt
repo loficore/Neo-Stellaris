@@ -1,0 +1,25 @@
+# {{NAME}} — runtime JS driver (Stellaris 4.4.4).
+#
+# `every_system` from a no-scope event iterates once, so a system scope is
+# entered first (2026-11-01 reading, scripts/windows/fixtures/).
+#
+# `neo_action` is the effect the injected QuickJS host registers.  Without the
+# injection the script parser reports it as an unknown effect — that log line is
+# expected for a runtime JS mod and is not a syntax error here.  The body is an
+# empty block on purpose: `neo_action = yes` is rejected at parse time because
+# the registered class parses an assignment block.
+namespace = {{ID}}
+
+event = {
+	id = {{ID}}.1
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		random_system = {
+			every_system = {
+				neo_action = { }
+			}
+		}
+	}
+}

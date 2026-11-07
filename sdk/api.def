@@ -7,6 +7,9 @@
     {"name": "__neo_graph_betweenness", "params": ["u32"], "returns": "u32"},
     {"name": "__neo_graph_is_chokepoint", "params": ["u32"], "returns": "bool"},
     {"name": "__neo_log", "params": ["string"], "returns": "void"},
-    {"name": "__neo_api_version", "params": [], "returns": "u32"}
+    {"name": "__neo_api_version", "params": [], "returns": "u32"},
+    {"name": "__neo_system_neighbors", "params": ["u32"], "returns": "array<u32>"},
+    {"name": "__neo_system_set_flag", "params": ["u32", "string"], "returns": "void"},
+    {"name": "__neo_system_has_flag", "params": ["u32", "string"], "returns": "bool"}
   ]
 }
