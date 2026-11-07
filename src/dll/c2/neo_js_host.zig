@@ -44,6 +44,7 @@ const windows = @import("../hooking/windows.zig");
 const neo_vtable = @import("neo_vtable.zig");
 const neo_state = @import("neo_state.zig");
 const graph_probe = @import("graph_probe.zig");
+const loader = @import("neo_js_loader.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -362,11 +363,31 @@ fn ensureLoaded() void {
     _ = startSession(bundle);
 }
 
-/// 活动 runtime mod 的来源。Task A1 只有状态机;Task A2 把它接到
-/// `neo_js_loader.loadActive()`(磁盘上的 `C:/temp/neo_mods/<id>/neo/…`)。
+/// 活动 runtime mod 的来源:`C:/temp/neo_mods/<id>/neo/{mod.json,main.js}`。
+/// 0 个 / 多个 mod 与每一种坏 manifest 都在这里变成一行具名日志后禁用(fail-closed,
+/// 不重试)。off Windows 时 loader 没有文件系统,按「没有 mod」记 —— native 测试
+/// 根走的就是这条路径。
 fn loadActive() ?Bundle {
-    emit("NEO_JS_NO_MOD", .{});
-    return null;
+    const loaded = loader.loadActive() catch |err| {
+        reportLoadError(err);
+        return null;
+    };
+    return .{
+        .id = loaded.manifest.id,
+        .source = loaded.source,
+        .permissions = loaded.manifest.permissions,
+    };
+}
+
+/// loader 的失败面 → 日志词(计划 Review Focus 7:每一种都要能判读)。
+fn reportLoadError(err: loader.LoadError) void {
+    switch (err) {
+        error.NoMod, error.NotWindows => emit("NEO_JS_NO_MOD", .{}),
+        error.MultipleMods => emit("NEO_JS_MULTI_MOD n={d}", .{loader.lastModCount()}),
+        error.EngineMismatch, error.RuntimeMismatch => emit("NEO_JS_API_MISMATCH", .{}),
+        error.MissingEntry => emit("NEO_JS_MISSING_ENTRY", .{}),
+        else => emit("NEO_JS_BAD_MANIFEST reason={s}", .{@errorName(err)}),
+    }
 }
 
 fn registerNatives(ctx: ?*c.JSContext) void {

@@ -234,6 +234,7 @@ const c2_exec_caller = @import("c2/exec_caller_probe.zig");
 /// C5-ADD(§93):`neo_action` 的逐系统派发点、body 与导出。
 const c2_neo_vtable = @import("c2/neo_vtable.zig");
 const c2_neo_js_host = @import("c2/neo_js_host.zig");
+const c2_neo_js_loader = @import("c2/neo_js_loader.zig");
 
 // Track A (Runtime JS, Phase 1): the host lands in the DLL build before the
 // dispatch wiring (Task A3).  Taking these entry points' addresses forces the
@@ -244,6 +245,7 @@ const c2_neo_js_host = @import("c2/neo_js_host.zig");
 comptime {
     _ = &c2_neo_js_host.onSystem;
     _ = &c2_neo_js_host.startSession;
+    _ = &c2_neo_js_loader.loadActive;
 }
 
 /// M5:`neo_score` 的来源。`0` = 烘焙表(`chokepoint_table.zig`),`1` = 活体重算
