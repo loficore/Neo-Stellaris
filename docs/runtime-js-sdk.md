@@ -287,7 +287,7 @@ is the same allocator.
 
 `C2NeoInstall` therefore reads `C:/temp/neo_mods/<id>/neo/mod.json` for every candidate mod and
 calls `0x1D13270` once per declared name (`keyword_registry.mintToken`; no table insertion, no
-hand-picked ids). The three log lines are the install-time judgement:
+hand-picked ids). The install-time lines are the judgement:
 
 | Line | Meaning |
 |---|---|
