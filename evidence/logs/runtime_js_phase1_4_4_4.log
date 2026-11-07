@@ -1,0 +1,204 @@
+# Phase 1 C1 — runtime JS SDK v1 实机验收，4.4.4，一发（2026-11-07）
+#
+# 授权原话：「执行 Phase 1 的 C1 实机验收（唯一一发）」。
+# 计划：docs/superpowers/plans/2026-11-07-runtime-js-phase1.md 的 Task C1（Track A/B 已合并）。
+# 工作树：runtime-js-c1 @ 30819ef（Merge PR #57 feat/runtime-js-phase1）→ 本文件提交在
+#         evidence/runtime-js-c1 分支，**不 push、不 merge**。
+# 口径：--act log（不写 neo_mark）；JS 自己的 setVariable 会写 neo_score —— 那是被测功能本身，
+#       不是仪器越界。不 FreeLibrary；进程 taskkill。
+
+## 装配（全部为本地构建 + 字节校验）
+
+- sdk：`cd sdk && npm ci && npm run build`
+  npm ci 输出：`found 0 vulnerabilities`；另有 `install-scripts` 警告
+  （`esbuild@0.28.2 (postinstall: node install.js)` 未被 allowScripts 覆盖）——
+  不影响后续 build/check，esbuild 平台二进制可用。
+- 示例构建/检查（逐字）：
+    NEO_BUILD ok dir=/home/lofibass/orca/workspaces/Neo-Stellaris/runtime-js-c1/examples/chokepoint out=/home/lofibass/orca/workspaces/Neo-Stellaris/runtime-js-c1/examples/chokepoint/neo/main.js
+      exit=0
+    NEO_CHECK ok dir=/home/lofibass/orca/workspaces/Neo-Stellaris/runtime-js-c1/examples/chokepoint handler=1 calls=4
+      exit=0
+- DLL：`zig build` → zig-out/bin/stellaris_quickjs.dll（7,792,640 B）
+    sha256 8c774e60b36c2969c6b792b34dffd19ac301e16cc7fbc41c581bca9ab4febe7f
+    → scp 成 C:/temp/sqjs_js1.dll；远端 Get-FileHash = 8C774E60B36C2969C6B792B34DFFD19AC301E16CC7FBC41C581BCA9AB4FEBE7F（相等）。
+    字节身份另有 boot 回执的 sha16=8c774e60b36c2969 互证。
+    新鲜度：构建产物含 12 条 `NEO_JS_` 串与 `__neo_graph_betweenness`（不是缓存的旧 DLL）。
+- 驱动（远端与仓库逐字节相等，sha256）：
+    c2_harness.py     c92604fabbf4df59e420318fb12265c3c1e180a9a771651f76907c731ec14460
+    c2_boot_inject.py 32ec722c68a472b4292bf983abce0e2b17840369b1a52072591b2e0360a04151
+    session_bridge.py f124a4fefe9be45608d634b74ea3ff0890f37eb8c221b1fddab33a56d6dba251
+  （两者与 Phase 0 那一发是同一份字节，读数可直接对比。）
+- 运行时 mod：C:/temp/neo_mods/chokepoint/neo/{mod.json, main.js}
+    main.js  sha256 f0a971d589dfdc79ce87d753702c6abfac0d2cb32c397bca0934057b4e101403
+    mod.json sha256 895e7f52682fcfe97cbf702f4aa467c309b31be4c90dca469a6a2be16d69cabd
+    远端 Get-FileHash 与本地逐字节相等（两个都相等）。
+    mod.json: id=chokepoint entry=main.js scope=["system"]
+              permissions=["graph.read","variable.write","log"] engine="4.4.4" runtime=">=0.1"
+- 引擎侧 witness mod：neo_ps_probe 仍启用 —— dlc_load.json 的
+    {"disabled_dlcs":[],"enabled_mods":["mod/neo_ps_probe.mod"]}
+  events/neo_ps_probe_events.txt: `every_system = { neo_action = { } + check_variable neo_score + log PS_HIT }`；
+  common/on_actions: on_monthly_pulse → neo_ps.1。
+- 存档：autosave_2270.07.01（--continuelastsave 载入；该目录原有 5 份，最新即此份）。
+- host 干净起点：注入前 Get-Process stellaris 计数 = 0；ns_world status = NO_GAME。
+
+## 唯一一发（一条命令，不重试）
+
+    just win "python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_boot_inject.py \
+      C:/temp/sqjs_js1.dll --launch D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe \
+      --launch-args=--continuelastsave --allow-window --act log --rule 1:0"
+
+回执（逐字）：
+
+    [boot] dll=C:/temp/sqjs_js1.dll sha16=8c774e60b36c2969
+    [boot] launched pid=3848 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+    [boot] pid=3848
+    [boot] gate skipped by operator override (--allow-window)
+    BOOT dll=sqjs_js1.dll sha=8c774e60b36c2969 effect_id=19343 set_id=19344 install_rc=0 alive=1
+    EXIT=0
+
+pid: 3848（窗口内唯一 stellaris 进程；taskkill 后 Get-Process stellaris = 0）
+dll sha256: 8c774e60b36c2969c6b792b34dffd19ac301e16cc7fbc41c581bca9ab4febe7f
+**rule 必须是 1:0**（host hook 在 C5 规则门里面；0:0 会让 host 永远看不到系统）——本发显式传 1:0。
+
+## 解暂停（载入后默认暂停）
+
+1. 注入后 ~60 s：ns_world status = BLOCKED_WITH_EVIDENCE
+   （pause=unknown, console=closed, window=dialog, gold_px=10454, row_count=29, reason=unreadable）——
+   这不是游戏内弹窗，是 Stellaris 窗口被 Firefox/Orca 等前台窗口盖住、分类器看不到游戏画面
+   （物理屏截图确认：游戏窗口只在任务栏，前台是浏览器）。host 仍 alive（pid 3848）。
+2. 用 win-desktop MCP 点任务栏 "Stellaris - 1 个运行窗口"（1645,1404）→ 游戏画面到前台：
+   银河视图 + 顶右「2270.07.01 暂停」。
+3. `Shortcut("space")` → 顶右变绿三角「2270.07.11 高速」；4 s 后 ns_world status = IN_GAME_RUNNING
+   （pause=playing, green_px=195）。不需要 ns_focus_once.py（AttachThreadInput 那条没动用）。
+4. 判据成立：game.log 开始出 `Neo: system` / `PS_HIT`，且 neo_js.log 出 `NEO_JS_CALL`。
+
+## 时间线（host 本地时间，2026-11-07）
+
+15:39  zig build 完成；15:42:48 boot 命令起；15:42:55 回执 BOOT（install_rc=0 alive=1）
+15:43–15:45  存档载入，停在暂停态（game.log 不增长、neo_js.log 不存在）
+15:45 末  任务栏聚焦 + Space 解暂停
+15:46:05  第 1 个月度脉冲（2270.8.1）
+15:51:01  第 27 个月度脉冲（2272.10.1）
+15:51:05  taskkill /F /PID 3848（成功）；alive=0，stellaris 计数=0
+15:51:09  收尾读数（日志已刷新：22,087 行）
+
+## 读数
+
+- NEO_JS 日志（C:/temp/neo_js.log，整份 sha256）
+    sha256 deec03ee9bb174e934e5b8b7e7d3d55878467114be28d00e89ebea14a5eb8485
+    行数 22,087 / 426,365 B
+  计数（逐条 Select-String，见下「原始日志身份」）:
+    NEO_JS_INIT_OK      1        ← 首行: `NEO_JS_INIT_OK id=chokepoint api=1`
+    NEO_JS_CALL         21,276   = 788 × 27
+    NEO_JS_WRITE        405      = 15 × 27（每行 `NEO_JS_WRITE id=N name=neo_score`）
+    NEO_JS_LOG          405      = 15 × 27（每行 `NEO_JS_LOG NEO_HUB <id> <score>`）
+    NEO_JS_ERROR        0
+    NEO_JS_TIMEOUT      0
+    NEO_API_MISMATCH    0
+    NEO_JS_WRITE_REJECT 0
+    NEO_JS_NO_HANDLER   0
+  首两行（逐字）: `NEO_JS_INIT_OK id=chokepoint api=1` / `NEO_JS_CALL id=0`
+  末两行（逐字）: `NEO_JS_CALL id=786` / `NEO_JS_CALL id=787`
+  （即每个月度 pass 的 id 序列都是 0..787，27 次完整闭合；没有半截 pass。）
+- 引擎侧同源（game.log，同一个窗口）:
+    `Neo: system` 21,276 条 —— **与 NEO_JS_CALL 逐条相等**（同一个 788 序列、27 个月）
+    `PS_HIT`      21,168 条 —— 每月 784，比 788 少 4；与 Phase 0 同一缺口、同一归因
+                              （差在 mod 自己的 `log` 路径上，不在我们的调用点上）
+    `Unexpected token` 0 条 —— 时间序没错（token 已 mint，mod 不是静默失效）
+    NEO_T2 405 / NEO_T1 1,485 / NEO_T0 19,305 —— mod 侧看到的分档分布（T2 与 WRITE 数一致；
+                              三者合计 21,195，比 `Neo: system` 少 81、比 `PS_HIT` 多 27 ——
+                              同样差在 mod 自己的 log 路径上，本发没有追）
+- `NEO_JS_WRITE` 的 id 集合 = baked 表里 score ≥ 200 的 15 个 id，逐月逐 id 相等：
+    82, 126, 199, 239, 274, 290, 364, 391, 486, 578, 587, 610, 705, 717, 771
+  （27 个月里每月正好这 15 个，顺序一致；`NEO_JS_LOG NEO_HUB` 的 id 序列与 WRITE 完全相同。）
+  说明 **计划里的「期望 ≈ 135 × 月数」是错的**：`src/dll/c2/chokepoint_table.zig` 里 score ≥ 200
+  的项**只有 15 个**（SCORE_COUNT=787，scores ≥ 100 的 70 个，最大 286）。实机 15/月 才是正确读数。
+  id 787 超出表范围（表是 0..786）⇒ `scoreFor(787)=null` ⇒ betweenness=0、不写；而 787 不在
+  T2 集合里，所以**没有少写**（少 1 假设不成立，实机 15 个全中）。
+- 每个月度 pass 的引擎时间戳（game.log `Neo: system` 行，秒级）：
+
+    2270.8.1   n=788 id=0..787 15:46:05        2271.11.1  n=788 id=0..787 15:48:55
+    2270.9.1   n=788 id=0..787 15:46:16        2271.12.1  n=788 id=0..787 15:49:07
+    2270.10.1  n=788 id=0..787 15:46:27        2272.1.1   n=788 id=0..787 15:49:18
+    2270.11.1  n=788 id=0..787 15:46:39        2272.2.1   n=788 id=0..787 15:49:30
+    2270.12.1  n=788 id=0..787 15:46:50        2272.3.1   n=788 id=0..787 15:49:41
+    2271.1.1   n=788 id=0..787 15:47:01        2272.4.1   n=788 id=0..787 15:49:52
+    2271.2.1   n=788 id=0..787 15:47:13        2272.5.1   n=788 id=0..787 15:50:04
+    2271.3.1   n=788 id=0..787 15:47:24        2272.6.1   n=788 id=0..787 15:50:15
+    2271.4.1   n=788 id=0..787 15:47:36        2272.7.1   n=788 id=0..787 15:50:26
+    2271.5.1   n=788 id=0..787 15:47:47        2272.8.1   n=788 id=0..787 15:50:38
+    2271.6.1   n=788 id=0..787 15:47:58        2272.9.1   n=788 id=0..787 15:50:49
+    2271.7.1   n=788 id=0..787 15:48:10        2272.10.1  n=788 id=0..787 15:51:01
+    2271.8.1   n=788 id=0..787 15:48:21
+    2271.9.1   n=788 id=0..787 15:48:33
+    2271.10.1  n=788 id=0..787 15:48:44
+
+  27 个 pass，每个 pass 内 788 行都落在同一秒；cadence ≈ 11.5 s/月（含 autosave 停顿）；
+  全程 15:46:05 → 15:51:01 = 296 s / 27 月 ≈ 10.96 s/月。
+- 游戏时间：载入 2270.07.01 → 停止 2272.10.1（27 个月）。autosave 从 2270.07.01 推进到
+  **autosave_2272.07.01.sav**（新增 4 份：2271.01.01 / 2271.07.01 / 2272.01.01 / 2272.07.01；
+  下一份 2273.01.01 还没到就被杀了，与 27 个月对得上）。
+  该目录是**固定 5 份的滚动池**（前后都是 5 个文件）：窗口前最老的三份
+  2268.07.01 / 2269.01.01 / 2269.07.01 被引擎自己删掉了，现在最老的一份是 2270.07.01。
+- host: 存活到被杀。27 个 pass 全程 alive=1；taskkill 后 alive=0、stellaris 计数=0。
+- 写入落在存档：405 次 `neo_score` 写（15 id × 27 月）；`--act log` 没有写 `neo_mark`。
+
+## 判词
+
+**通过**（就本存档、本 mod、本机位这一发而言）：
+
+- `NEO_JS_INIT_OK id=chokepoint api=1` 恰 1 条 —— loader 找到唯一的 runtime mod、
+  manifest 校验过、bundle 在**主线程第一次 Execute**里 eval 成功、handler 注册成功。
+- `NEO_JS_CALL` = 788 × 27 = 21,276，与引擎侧 `Neo: system` 逐条相等 ⇒ vendor 的 TDZ
+  形状是对的：每次 `neo_action` 的 Execute 都进到 JS handler，一次不落、一次不多。
+- `NEO_JS_WRITE` / `NEO_JS_LOG` = 15 × 27 = 405，id 集合与 baked 表的 T2 集合逐月完全相同 ⇒
+  `graph.betweenness` → `scoreFor` → `setVariable("neo_score")` 这条链在本机位上可复现。
+- 0 条 ERROR / TIMEOUT / API_MISMATCH / WRITE_REJECT / NO_HANDLER；host 全程存活；
+  没有 JS 异常泄漏到引擎（mod 的 T0/T1/T2 分档也照常出）。
+- `--act log` 的规则门没挡住 host：rule=1:0 显式传了，`Neo: system` 每月 788 条证明它过门。
+
+## 不能说 / 边界
+
+- **只证明这一个示例**（`chokepoint`，15 个 T2 星系/月）在这套形状下跑通；不等于任意 JS
+  （长计算、深递归、抛异常、GC 压力、多 mod）都安全。异常/超时路径这发没被触发
+  （TIMEOUT/ERROR 都 0 =「没发生」，不是「修好了」）。
+- **分数是烘焙表的读数**：`graph.betweenness` 走的是 `chokepoint_table.zig`（存档 SHA
+  6f271294… 的离线 T2），不是运行时重算；本发没有动图、没有换存档，所以**不能**说
+  「分数随存档演化正确」。计划里 135/月 的期望与本读数不符（实际 15/月），已按表核过：
+  表里 score ≥ 200 只有 15 项 —— 是期望写错了，不是运行时漏写。
+- **每月少 4 条 `PS_HIT`**（21,168 vs 21,276）是 mod 日志路径的既有缺口，Phase 0 那一发
+  同缺口同归因；本发没有追它，所以**不能**说「每个 system 的整个 effect body 都跑完了」，
+  只能说「我们这一侧的 788 次调用/月 是完整的」。
+- **一个 runtime mod、一个 scope 类型**：0 个/多个 mod 的日志面、`scope != system`、权限拒绝、
+  `NEO_JS_ERROR`/`TIMEOUT` 的实际落盘形状，本发都**没**产生实例（单测里有，实机没有）。
+- **一次进程**：装载后没有卸载（不 FreeLibrary），所以「卸载后再装第二份」这条路没被验证。
+  存档被推进 27 个月并落了 4 份 autosave —— 下一次 `--continuelastsave` 会载入
+  **2272.07.01**，不是本发的 2270.07.01。
+- 时间只用秒级时间戳（game.log 的分辨率），没有做 per-call 的微秒级分布；
+  「主线程 QuickJS 的开销」只有一个上界（≈11 s/月 是整段模拟的墙钟，不是 JS 的 CPU 时间）。
+
+## 原始日志身份（供复核；完整 22,087 行留在机位 C:/temp/neo_js.log 与本地副本）
+
+  C:/temp/neo_js.log  sha256 deec03ee9bb174e934e5b8b7e7d3d55878467114be28d00e89ebea14a5eb8485
+                      22,087 行 / 426,365 B / mtime 2026-11-07 15:51:01
+  本地副本（Linux 侧工作副本，未入库）:
+    /mnt/cache/tmp/opencode/neo_js_phase1_final.log   同 sha256
+    /mnt/cache/tmp/opencode/neo_js_phase1.log         拉取时刻的较早快照（17,997 行，
+                                                      sha256 80e24e3567267cae4dd6c042b3ea5901436a35f2db51bd8302a9ba195cbe5c9a）
+
+  文件头（前 5 行，逐字）:
+    NEO_JS_INIT_OK id=chokepoint api=1
+    NEO_JS_CALL id=0
+    NEO_JS_CALL id=1
+    NEO_JS_CALL id=2
+    NEO_JS_CALL id=3
+  文件尾（后 5 行，逐字）:
+    NEO_JS_CALL id=783
+    NEO_JS_CALL id=784
+    NEO_JS_CALL id=785
+    NEO_JS_CALL id=786
+    NEO_JS_CALL id=787
+
+  每月的 WRITE/LOG 块形状（第 1 个月，id=82 一例，逐字）:
+    NEO_JS_WRITE id=82 name=neo_score
+    NEO_JS_LOG NEO_HUB 82 236
