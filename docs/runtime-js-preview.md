@@ -19,6 +19,7 @@ contains exactly:
 | `examples/chokepoint/` | the worked example (graph betweenness → `neo_score`) |
 | `docs/runtime-js-sdk.md` | API, `neo new/build/check/pack`, manifest format |
 | `docs/runtime-js-preview.md` | this page |
+| `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv` | the keyword table `neo check`'s flag-name gate compares against |
 | `zig-out/bin/stellaris_quickjs.dll` | the injected host, built by the same gate as CI |
 | `zig-out/bin/inject.exe` | the injector the Phase 1 shot used |
 | `SHA256SUMS` | hashes of the two binaries |
@@ -44,9 +45,10 @@ host `JS_Eval`s it from `C:/temp/neo_mods/<id>/neo/`.
    node dist/cli.js check --dir my-mod      # real QuickJS, mock host
    node dist/cli.js pack  --dir my-mod --out my_mod.zip
    ```
-   `NEO_CHECK ok … handler=1 calls=4` is the offline green. It proves the bundle
+   `NEO_CHECK ok … handler=1 calls=6` is the offline green. It proves the bundle
    type-checks, avoids Node/browser globals, registers exactly one `onSystem`
-   handler and speaks the frozen native contract. It cannot prove engine
+   handler, survives the flag-name gate (literal names, no official-keyword
+   collisions) and speaks the frozen native contract. It cannot prove engine
    behaviour.
 3. **Live (4.4.4, Windows, x86_64 only):** copy `my-mod` to
    `C:/temp/neo_mods/my_mod/` so that `neo/mod.json` and `neo/main.js` are inside
@@ -64,9 +66,11 @@ host `JS_Eval`s it from `C:/temp/neo_mods/<id>/neo/`.
 ## Known limitations of the preview
 
 - **v1.1 API is shallow**: `s.id`, `s.degree`, `s.neighbors`, `s.setVariable`,
-  `graph.betweenness`, `graph.isChokepoint`, `log`, `apiVersion`. `s.name`,
-  `s.variable()` and star flags are deferred until a static read path is
-  resolved; they are absent from `api.def` rather than guessed.
+  `s.setStarFlag`, `s.hasStarFlag`, `graph.betweenness`, `graph.isChokepoint`,
+  `log`, `apiVersion`. `s.name` and `s.variable()` are deferred until a static
+  read path is resolved; they are absent from `api.def` rather than guessed.
+  Flag names are string literals only, and the build rejects names that collide
+  case-insensitively with an official keyword.
 - **System scope only** — no country / fleet / planet / pop scopes.
 - **No `onMonthly` hook**: the monthly driver is the generated
   `on_action` → hidden event → `every_system` chain, i.e. the official script

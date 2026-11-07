@@ -32,7 +32,10 @@ frozen native contract.  It cannot prove engine behaviour — only a live game c
 
 ## Limits
 
-- `s.id`, `s.degree`, `s.neighbors`, `s.setVariable`, `graph.*`, `log`.
+- `s.id`, `s.degree`, `s.neighbors`, `s.setVariable`, `s.setStarFlag`,
+  `s.hasStarFlag`, `graph.*`, `log`.
+- Flag names must be **string literals** and must not collide with an official
+  keyword; `neo check` enforces both at build time.
 - A handler runs with a 10 ms interrupt budget; one exception or timeout
   disables this mod only.
 - Permissions are declared in `neo/mod.json`; an undeclared capability is

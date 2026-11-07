@@ -5,7 +5,8 @@
 // Three layers, cheapest first:
 //   1. tsc + esbuild (shared with `neo build`) — type and bundle errors;
 //   2. a static scan of the bundle — no `require(`, `process.`, `window.`,
-//      `document.`, `import(` (none of those exist in the host context);
+//      `document.`, `import(` (none of those exist in the host context), and the
+//      flag-name gate (literal names only, no official-keyword collisions);
 //   3. eval in QuickJS with the mock host — registration, handler execution
 //      with a fake system id, and the API version.
 //
@@ -17,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { getQuickJS, type QuickJSContext } from "quickjs-emscripten";
 
 import { bundleProject } from "./build.js";
+import { checkFlagNames, loadKeywordNames } from "./flags.js";
 import { mockHostSource, type MockCall } from "./mock-host.js";
 
 export interface CheckOptions {
@@ -24,6 +26,8 @@ export interface CheckOptions {
   dir: string;
   /** Override the injected mock host (tests omit a native function on purpose). */
   hostSource?: string;
+  /** Override the keyword table used by the flag-name gate (tests pass a missing path). */
+  keywordsTsv?: string;
 }
 
 export interface CheckResult {
@@ -138,6 +142,20 @@ export async function runCheck(options: CheckOptions): Promise<CheckResult> {
   const forbidden = scanBundle(text);
   if (forbidden.length > 0) {
     return fail(`forbidden global(s): ${forbidden.join("; ")}`);
+  }
+
+  // B5: flag names are checked before the bundle runs, because a name that
+  // collides with an official keyword resolves in the token DB, not in a flag
+  // map (AGENTS.md 约束 4 is the same hazard one layer down).
+  let keywords: Set<string>;
+  try {
+    keywords = loadKeywordNames(options.keywordsTsv);
+  } catch (error) {
+    return fail((error as Error).message);
+  }
+  const flags = checkFlagNames(text, keywords);
+  if (flags.problems.length > 0) {
+    return fail(flags.problems.join("; "));
   }
 
   const expectedVersion = contractVersion();

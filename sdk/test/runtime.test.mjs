@@ -14,22 +14,24 @@ const sdkRoot = path.resolve(here, "..");
 installMockHost();
 const runtime = await import("../dist/runtime.js");
 
-test("api.def is the v1.1 contract (v1 grew `neighbors` only)", () => {
+test("api.def is v1 plus the v1.1 additive tail", () => {
   const def = JSON.parse(readFileSync(path.join(sdkRoot, "api.def"), "utf8"));
   assert.deepEqual(def, {
     version: 1,
     functions: [
       { name: "__neo_register_system", params: ["function"], returns: "void" },
       { name: "__neo_system_degree", params: ["u32"], returns: "u32" },
-      { name: "__neo_system_neighbors", params: ["u32"], returns: "array<u32>" },
       { name: "__neo_system_set_var", params: ["u32", "string", "f64"], returns: "void" },
       { name: "__neo_graph_betweenness", params: ["u32"], returns: "u32" },
       { name: "__neo_graph_is_chokepoint", params: ["u32"], returns: "bool" },
       { name: "__neo_log", params: ["string"], returns: "void" },
       { name: "__neo_api_version", params: [], returns: "u32" },
+      { name: "__neo_system_neighbors", params: ["u32"], returns: "array<u32>" },
+      { name: "__neo_system_set_flag", params: ["u32", "string"], returns: "void" },
+      { name: "__neo_system_has_flag", params: ["u32", "string"], returns: "bool" },
     ],
   });
-  assert.equal(new Set(def.functions.map((f) => f.name)).size, 8);
+  assert.equal(new Set(def.functions.map((f) => f.name)).size, 10);
 });
 
 test("API_VERSION mirrors api.def", () => {
@@ -72,6 +74,25 @@ test("System.neighbors reads the native array on each access", () => {
   assert.deepEqual(state.calls, [
     { fn: "__neo_system_neighbors", id: 7 },
     { fn: "__neo_system_neighbors", id: 7 },
+  ]);
+});
+
+test("setStarFlag and hasStarFlag reach the native functions", () => {
+  let seen = null;
+  runtime.onSystem((s) => {
+    s.setStarFlag("neo_hub");
+    seen = { set: s.hasStarFlag("neo_hub"), missing: s.hasStarFlag("neo_absent") };
+  });
+  const state = mockState();
+  state.flags = {};
+  state.calls.length = 0;
+  state.handler(7);
+
+  assert.deepEqual(seen, { set: true, missing: false });
+  assert.deepEqual(state.calls, [
+    { fn: "__neo_system_set_flag", id: 7, name: "neo_hub" },
+    { fn: "__neo_system_has_flag", id: 7, name: "neo_hub" },
+    { fn: "__neo_system_has_flag", id: 7, name: "neo_absent" },
   ]);
 });
 

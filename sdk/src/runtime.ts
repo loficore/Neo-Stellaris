@@ -7,8 +7,11 @@
 // the duration of one call, so the SDK must not retain anything but the numeric
 // id.
 //
-// v1.1 is additive: `neighbors` is the only new member.  `API_VERSION` stays 1,
-// so a Phase 1 bundle keeps running unchanged.
+// v1.1 is additive: `neighbors`, `setStarFlag` and `hasStarFlag` are the only new
+// members.  `API_VERSION` stays 1, so a Phase 1 bundle keeps running unchanged.
+// `setStarFlag` writes through the official `set_star_flag` body (never engine
+// memory) and its name must be a string literal — `neo check` enforces that at
+// build time and rejects names that collide with an official keyword.
 
 export const API_VERSION = 1;
 
@@ -18,6 +21,10 @@ export interface System {
   /** Hyperlane neighbour system ids, as a fresh array on each access. */
   readonly neighbors: readonly number[];
   setVariable(name: string, value: number): void;
+  /** Sets the official star flag `name` on this system (needs `flag.write`). */
+  setStarFlag(name: string): void;
+  /** Reads the official star flag `name` (needs `flag.read`). */
+  hasStarFlag(name: string): boolean;
 }
 
 export function onSystem(fn: (s: System) => void): void {
@@ -32,6 +39,12 @@ export function onSystem(fn: (s: System) => void): void {
       },
       setVariable(name: string, value: number): void {
         __neo_system_set_var(id, name, value);
+      },
+      setStarFlag(name: string): void {
+        __neo_system_set_flag(id, name);
+      },
+      hasStarFlag(name: string): boolean {
+        return __neo_system_has_flag(id, name);
       },
     });
   });

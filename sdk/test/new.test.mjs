@@ -48,13 +48,15 @@ test("neo new scaffolds a complete project and prints one NEO_NEW line", () => {
   assert.equal(manifest.id, "my_mod");
   assert.equal(manifest.entry, "main.js");
   assert.deepEqual(manifest.scope, ["system"]);
-  assert.deepEqual(manifest.permissions, ["graph.read", "log"]);
+  assert.deepEqual(manifest.permissions, ["graph.read", "flag.read", "flag.write", "log"]);
   assert.equal(manifest.engine, "4.4.4");
   assert.equal(manifest.runtime, ">=0.1");
 
   const main = read(dir, "src", "main.ts");
   assert.match(main, /onSystem/);
   assert.match(main, /s\.neighbors/);
+  assert.match(main, /s\.setStarFlag/);
+  assert.match(main, /s\.hasStarFlag/);
 
   const pathMap = JSON.parse(read(dir, "tsconfig.json")).compilerOptions.paths["@neo/runtime"];
   assert.equal(pathMap.length, 1);
@@ -83,7 +85,7 @@ test("a generated project builds and checks with no hand edits", () => {
 
   const check = run(["check", "--dir", dir]);
   assert.equal(check.status, 0, check.stderr);
-  assert.match(check.stdout.trim(), /^NEO_CHECK ok dir=.* handler=1 calls=4$/);
+  assert.match(check.stdout.trim(), /^NEO_CHECK ok dir=.* handler=1 calls=6$/);
 });
 
 test("neo new refuses a non-empty target and a manifest-breaking id", () => {

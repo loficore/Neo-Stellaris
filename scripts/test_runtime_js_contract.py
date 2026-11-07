@@ -5,7 +5,9 @@ Phase 1 的 native 名字是冻结合同。TS 包、Zig host 和 mock host 三�
 
 Phase 2 的两条 track 分开落地（Track B 先加声明，Track A 再实现），所以围栏允许
 `PENDING_HOST` 里的名字暂时只有 `api.def` 一侧；除这些之外 host 必须逐项同序实现。
-这是 phase 2 期间唯一的松口，C1 合并时清空该集合即恢复「全等」。
+`ADDITIVE` 同时钉住追加尾部的**顺序**（v1 七项之后：neighbors → set_flag →
+has_flag），A2 实现时若插错位置这里会指出来。C1 清空 `PENDING_HOST`、把最后一条
+改成 `FROZEN_V1 + ADDITIVE` 全等，即恢复 phase 1 的强度。
 """
 import json
 import pathlib
@@ -18,10 +20,13 @@ RUNTIME = REPO / "sdk/src/runtime.ts"
 
 NAME_RE = re.compile(r'\.name = "(__neo_[a-z_]+)"')
 
-# Phase 2 / B1 已在 `api.def` 声明、A2 尚未实现的名字。清空它就回到全等检查。
-PENDING_HOST = {
+# v1.1 的追加尾部：`api.def` 已声明，A2 尚未实现（本分支的 host 仍是 v1 的七项）。
+ADDITIVE = [
     "__neo_system_neighbors",
-}
+    "__neo_system_set_flag",
+    "__neo_system_has_flag",
+]
+PENDING_HOST = set(ADDITIVE)
 
 # v1 的七个名字：哪怕有 pending，它们的相对顺序也不许动（旧 bundle 按位置无关，
 # 但 host 的 NATIVE_FUNCTIONS 与 api.def 同序是「逐项同序」这条规则的本体）。
@@ -54,9 +59,11 @@ def test_api_def_and_host_native_names_match_in_order():
     assert [name for name in PENDING_HOST if name not in declared] == []
 
 
-def test_api_def_is_v1_plus_declared_additions():
+def test_v1_is_the_head_and_the_additive_tail_keeps_host_order():
     names = api_names()
     assert [name for name in names if name not in PENDING_HOST] == FROZEN_V1
+    assert [name for name in names if name in PENDING_HOST] == ADDITIVE
+    assert names[: len(FROZEN_V1)] == FROZEN_V1
     assert len(set(names)) == len(names)
 
 
@@ -73,5 +80,7 @@ def test_ts_runtime_exports_the_frozen_surface():
         "setVariable",
         "get degree",
         "get neighbors",
+        "setStarFlag",
+        "hasStarFlag",
     ):
         assert needle in text, needle

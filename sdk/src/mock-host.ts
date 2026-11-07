@@ -30,6 +30,8 @@ export interface MockState {
   calls: MockCall[];
   degree: number;
   neighbors: number[];
+  /** Flags set through `__neo_system_set_flag`; `has_flag` reads this map. */
+  flags: Record<string, boolean>;
   betweenness: number;
   chokepoint: boolean;
   apiVersion: number;
@@ -48,6 +50,7 @@ globalThis.__neo_mock = {
   calls: [],
   degree: ${MOCK_DEGREE},
   neighbors: ${JSON.stringify(MOCK_NEIGHBORS)},
+  flags: {},
   betweenness: ${MOCK_BETWEENNESS},
   chokepoint: ${MOCK_CHOKEPOINT ? "true" : "false"},
   apiVersion: ${MOCK_API_VERSION}
@@ -108,6 +111,26 @@ globalThis.__neo_api_version = function () {
   globalThis.__neo_mock.apiVersionCalls += 1;
   globalThis.__neo_mock.calls.push({ fn: "__neo_api_version" });
   return globalThis.__neo_mock.apiVersion;
+};
+`,
+  __neo_system_set_flag: `
+globalThis.__neo_system_set_flag = function (id, name) {
+  globalThis.__neo_mock.calls.push({
+    fn: "__neo_system_set_flag",
+    id: id >>> 0,
+    name: String(name)
+  });
+  globalThis.__neo_mock.flags[String(name)] = true;
+};
+`,
+  __neo_system_has_flag: `
+globalThis.__neo_system_has_flag = function (id, name) {
+  globalThis.__neo_mock.calls.push({
+    fn: "__neo_system_has_flag",
+    id: id >>> 0,
+    name: String(name)
+  });
+  return globalThis.__neo_mock.flags[String(name)] === true;
 };
 `,
 };
