@@ -1,0 +1,8 @@
+{
+  "id": "{{ID}}",
+  "entry": "main.js",
+  "scope": ["system"],
+  "permissions": ["graph.read", "log"],
+  "engine": "4.4.4",
+  "runtime": ">=0.1"
+}

@@ -1,0 +1,10 @@
+# {{NAME}} — monthly driver for the runtime JS host.
+#
+# 4.4.4 on_action bodies only accept `events` / `random_events`; the effect
+# lives in a hidden event (events/{{ID}}_events.txt) so `every_system` can
+# enter a system scope first.
+on_monthly_pulse = {
+	events = {
+		{{ID}}.1
+	}
+}
