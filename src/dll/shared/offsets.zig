@@ -409,6 +409,39 @@ comptime {
     if (@sizeOf(usize) != 8) @compileError("graph offsets assume a 64-bit target: pointers are 8 bytes wide");
 }
 
+/// 官方 **flag 名表**(`0x326D110`:名字 → u16 flag id)与它的三个原语。
+/// [VERIFIED 4.4.4 STATIC] `evidence/analysis/flag_store_4_4_4.md` §2.3 / §4.2 / §6。
+///
+/// 这张表与 lexer token 表(`0x37347A0`,`0x1D13270` 发号)**是两个对象**:地址不同、
+/// 元素步长不同(0x40 vs 0x30)、发号器不同。P2-1b 两发实机判负的根因就是拿 token id
+/// 当 flag id 用(写进 `+0x5F8` 的号与官方脚本解析出的号永不相等)。
+/// 表作 map 用:`+8` 桶数组、`+0x10` size(= 下一个 id)、`+0x14` mask、
+/// `+0x18` tail(探测距离上限)、`+0x1c` 装填因子(0.9f)。
+pub const flag_ids = struct {
+    /// map 对象本体(全局,**不是**指针):0x326D108。
+    pub const RVA_MAP: usize = 0x326D108;
+    /// `+8` 桶数组基址(0x326D110);桶步长 0x40。
+    pub const RVA_BUCKETS: usize = 0x326D110;
+    /// `+0x10` size = **下一个 flag id**(dword;引擎按 word 读)。
+    pub const RVA_NEXT_ID: usize = 0x326D118;
+    /// `+0x14` 桶掩码(dword)。
+    pub const RVA_MASK: usize = 0x326D11C;
+    /// `+0x18` 尾部槽数(byte;`0x1BCF400` 扩容时置为 log2(capacity)+2)。
+    pub const RVA_TAIL: usize = 0x326D120;
+    /// `+0x1c` 装填因子(0.9f)。
+    pub const RVA_LOAD_FACTOR: usize = 0x326D124;
+    /// `0x1BCF030` robin-hood 插入/查找(§6.1;它**自己**递增 `RVA_NEXT_ID`)。
+    pub const RVA_MAP_EMPLACE: usize = 0x1BCF030;
+    /// `0x158300` 把名字 append 进反查 vector(深拷贝,§6.4)。
+    pub const RVA_NAME_APPEND: usize = 0x158300;
+    /// `0x1C9E350` 名字哈希(`hash(seed, chars, len)`,调用点 seed = 0)。
+    pub const RVA_NAME_HASH: usize = 0x1C9E350;
+    /// 反查 vector 对象本体(0x2A00DE0):`+8` 数据、`+0x10` 容量、`+0x14` 计数。
+    pub const RVA_NAME_VECTOR: usize = 0x2A00DE0;
+    /// 反查 vector 的元素步长(元素本身是一个 0x30 B 的引擎串)。
+    pub const NAME_ELEMENT_STRIDE: usize = 0x30;
+};
+
 /// CEffect object offsets.
 /// [FALSIFIED 3.x] 4.4.4 has NO central dispatch switch — effects are polymorphic
 /// CEffect::Execute via vtable call (evidence/analysis/runtime_444_structures.md).
