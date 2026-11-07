@@ -284,7 +284,8 @@ fn appendToFile(line: []const u8) void {
     _ = CloseHandle(handle);
 }
 
-fn emit(comptime fmt: []const u8, args: anytype) void {
+/// 一行日志的公共出口(host 的失败面与 loader 的 `NEO_JS_INSTALL_SKIP` 共用)。
+pub fn emit(comptime fmt: []const u8, args: anytype) void {
     var buf: [384]u8 = undefined;
     const line = std.fmt.bufPrint(&buf, fmt ++ "\n", args) catch return;
     writeLine(line);
