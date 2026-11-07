@@ -31,6 +31,14 @@ fence:
 host-tests:
     cd scripts/windows && python3 -m pytest tests -q
 
+# SDK gate (Track B): Node 24 + the exact versions in sdk/package-lock.json.
+# `npm test` type-checks the SDK, builds the examples in a temp dir, and runs the
+# bundle inside a real QuickJS context with the mock host (`neo check`).  Kept
+# out of `check`/`check-full` on purpose: the Zig gate must stay runnable on a
+# machine with no npm registry.
+sdk-test:
+    cd sdk && npm ci && npm test
+
 # Score-table drift fence: regenerate src/dll/c2/chokepoint_table.zig in memory and compare.
 chokepoints-check:
     python3 scripts/chokepoints_emit.py --tsv evidence/xrefs/chokepoint_scores_4_4_4.tsv --out src/dll/c2/chokepoint_table.zig --save-sha 6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e --check
