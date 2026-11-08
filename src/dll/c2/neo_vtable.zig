@@ -136,6 +136,18 @@ pub fn systemScopeId(scope: u64) ?u32 {
     return readU32(s, SCOPE_ID_OFF);
 }
 
+/// 只读:scope 的两个格子(`+0x08` mask / `+0x10` id,§80.2 的形状)。
+///
+/// 与 `systemScopeId` 的区别是**不筛 mask** —— 它给「这一趟不是 system scope」的
+/// 诊断用(Task 3 的 `NEO_SCOPE_OTHER`):拿不到就返回 `null`,宁可整行不打,
+/// 也不打一行读错的数。`+0x10` 对非 system 一族**只是同一格的值**,不是 id。
+pub fn scopeFields(scope: u64) ?[2]u32 {
+    if (scope == 0) return null;
+    const s: usize = @intCast(scope);
+    if (!scopeReadable(s)) return null;
+    return .{ readU32(s, SCOPE_MASK_OFF), readU32(s, SCOPE_ID_OFF) };
+}
+
 fn recordHit(id: u32) void {
     const nth = @atomicRmw(u64, &hit_count, .Add, 1, .monotonic);
     if (nth < RULE_HITS) hits[@intCast(nth)] = id;
@@ -357,6 +369,7 @@ pub fn runBody(scope: u64, a3: u64) u64 {
     }
     if (!isSystemScope(readU32(@intCast(scope), SCOPE_MASK_OFF))) {
         _ = @atomicRmw(u64, &stat_non_system_scope, .Add, 1, .monotonic);
+        notifyOtherScope(scope);
         return 0;
     }
     const id = readU32(@intCast(scope), SCOPE_ID_OFF);
@@ -474,6 +487,25 @@ fn notifyHost(id: u32, scope: u64) void {
         return;
     }
     if (comptime is_windows) neo_js_host.onSystem(id, scope);
+}
+
+/// 非 system scope 的只读诊断出口(Task 3)。分两层,理由与 `notifyHost` 相同:
+/// 生产走 `neo_js_host.noteOtherScope`(QuickJS 只在 Windows 分支被拉进来 ——
+/// `c2_tests` 根不链 QuickJS,无条件调用会让那个根链接失败);测试经
+/// `setOtherScopeHookForTest` 换成一个记录器,于是 Linux 上也能钉住「`runBody` 的
+/// 非 system 分支真的把它交了出去」。
+var other_scope_hook: ?*const fn (scope: u64) void = null;
+
+pub fn setOtherScopeHookForTest(h: ?*const fn (scope: u64) void) void {
+    other_scope_hook = h;
+}
+
+fn notifyOtherScope(scope: u64) void {
+    if (other_scope_hook) |h| {
+        h(scope);
+        return;
+    }
+    if (comptime is_windows) neo_js_host.noteOtherScope(scope);
 }
 
 // ---------------------------------------------------------------------------
@@ -829,6 +861,47 @@ test "runBody hands the same id and scope to the Runtime JS host, after the offi
     try std.testing.expectEqual(@as(u64, @intFromPtr(&scope)), host_hook_scope);
     // Order is load-bearing: the engine's own `log` line is written first.
     try std.testing.expect(seq_log < seq_host);
+}
+
+var other_scope_calls: usize = 0;
+var other_scope_arg: u64 = 0;
+
+fn otherScopeHook(scope: u64) void {
+    other_scope_calls += 1;
+    other_scope_arg = scope;
+}
+
+test "runBody hands a non-system scope to the scope diagnostic and skips the rest" {
+    resetForTest();
+    defer {
+        setOtherScopeHookForTest(null);
+        resetForTest();
+    }
+    // No log address and no rule: the only way anything can be counted below is
+    // the non-system branch itself.
+    log_effect_addr = 0;
+    setOtherScopeHookForTest(&otherScopeHook);
+    other_scope_calls = 0;
+    other_scope_arg = 0;
+
+    var country: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, country[SCOPE_MASK_OFF..][0..4], 0x04, .little);
+    std.mem.writeInt(u32, country[SCOPE_ID_OFF..][0..4], 42, .little);
+    _ = runBody(@intFromPtr(&country), 0);
+
+    try std.testing.expectEqual(@as(usize, 1), other_scope_calls);
+    try std.testing.expectEqual(@as(u64, @intFromPtr(&country)), other_scope_arg);
+    try std.testing.expectEqual(@as(u64, 1), nonSystemScopes());
+    // A non-system scope must not be counted as a matched system, whatever the rule.
+    try std.testing.expectEqual(@as(u64, 0), matched());
+
+    // A system scope takes the normal path: the diagnostic is not consulted.
+    other_scope_calls = 0;
+    var system: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, system[SCOPE_MASK_OFF..][0..4], 0x80, .little);
+    std.mem.writeInt(u32, system[SCOPE_ID_OFF..][0..4], 7, .little);
+    _ = runBody(@intFromPtr(&system), 0);
+    try std.testing.expectEqual(@as(usize, 0), other_scope_calls);
 }
 
 test "runBody does not reach the host when the rule rejects the system" {

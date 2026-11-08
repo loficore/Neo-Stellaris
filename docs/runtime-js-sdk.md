@@ -79,6 +79,72 @@ NEO_CHECK ok dir=/abs/path/examples/chokepoint handler=1 calls=6
 
 A failure prints `NEO_CHECK fail: <reason>` and exits `2`.
 
+## One-click install (players)
+
+`scripts/windows/neo_install.py` plus its `neo.bat` wrapper is the player entry
+point: double-click the `.bat`, and it installs the mod, injects the runtime and
+launches the game. One line on stdout, always:
+
+```
+NEO_PLAY ok dll=8c774e60b36c2969 mod=neo_events pid=4242
+NEO_PLAY fail reason=version_unsupported
+```
+
+`pid=0` means "this run did not start the game" (`--dry-run`, or `--no-launch`
+with nothing running) — not an error.
+
+**What it installs — two halves, both required.** The official half
+(`descriptor.mod`, `common/`, `events/`, `localisation/`) goes into
+`<Documents>/Paradox Interactive/Stellaris/mod/<id>/`, a `<id>.mod` descriptor
+points at it, and `dlc_load.json` gets the entry — without this the engine never
+loads the mod. The runtime half (`<project>/neo/`) goes to
+`C:/temp/neo_mods/<id>/neo/`, the fixed location the injected loader reads, and
+the DLL to `C:/temp/`.
+
+```
+python C:/temp/neo_install.py                       # double-click equivalent
+python C:/temp/neo_install.py --dry-run --debug     # print the plan, write nothing
+python C:/temp/neo_install.py --mod C:/temp/mods/my_mod --no-launch
+```
+
+Operators reach the same file through the existing wire, not a new `just`
+recipe (a second world-changing verb outside the `game` recipe is exactly what
+`world_state`'s fence exists to prevent):
+
+```bash
+just deploy                                   # ships neo_install.py + neo.bat to C:/temp
+just win "python C:/temp/neo_install.py --no-launch --debug"
+```
+
+**Version gate.** The exe's sha256 must be in `SUPPORTED_SHA256`
+(`4.4.4 = 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56`,
+the digest `docs/offline-tooling.md` records). Anything else is
+`version_unsupported` and **nothing is written** — a wrong-version install is how
+a save gets hurt.
+
+**Failure tags.** Each one is a single word because the player gets one line:
+
+| Tag | Meaning |
+|---|---|
+| `game_not_found` | `stellaris.exe` not at `--exe`, `NS_STELLARIS_EXE`, `--game-root` or the Steam defaults |
+| `version_unsupported` | the exe's sha256 is not in `SUPPORTED_SHA256` (nothing written) |
+| `dll_missing` | no `stellaris_quickjs.dll` next to the script, in `NEO_DLL`, or in `zig-out/bin` |
+| `dll_locked` | the copy failed with a sharing/permission error — usually a running game holding the old DLL |
+| `mod_missing` | no project directory (`descriptor.mod` absent) |
+| `manifest_invalid` | `neo/mod.json` unreadable, or `id` outside `[a-z0-9][a-z0-9_]{0,63}` |
+| `bundle_missing` | `neo/<entry>` is absent — run `neo build` first |
+| `python_missing` | printed by `neo.bat` itself when neither `python` nor `py -3` exists |
+| `bridge_failed` | the launch/inject channel returned non-zero (`session_bridge` → `c2_boot_inject`) |
+| `internal` | anything else; `--debug` prints the traceback |
+
+The tag table is executable: `scripts/test_neo_install.py` fails when a tag is
+raised that is not in `FAILURE_TAGS`, and when `neo.bat` prints one that is not.
+
+**One thing the installer cannot do:** mod files are read at game start, so a
+game that is already running when you install will not see them. The installer
+launches the game when nothing is running; if you used `--no-launch`, restart it
+yourself before expecting the events.
+
 ## Project layout
 
 ```
@@ -170,6 +236,68 @@ allowance is deleted at integration.
 | `__neo_system_neighbors` | `u32` | `array<u32>` |
 | `__neo_system_set_flag` | `u32`, `string` | `void` |
 | `__neo_system_has_flag` | `u32`, `string` | `bool` |
+
+
+## Event bridge (slice 1): JS decides, official script fires
+
+A runtime JS mod cannot draw UI and does not need to. The shape that works is:
+**JS writes an official state value, official script reads it back and fires a
+real event.** `examples/neo_events/` is the complete, buildable example.
+
+```
+on_monthly_pulse                       (common/on_actions/neo_events_on_actions.txt)
+  └─ neo_events.100 (hidden, events/neo_events.txt)
+       ├─ random_system { every_system { neo_action = { } } }
+       │    └─ the injected host calls onSystem once per system
+       │       └─ JS writes neo_event_pick = 0 | 1 | 2  on system 82
+       └─ every_country { limit = { is_ai = no … }
+            any_system { check_variable = { which = neo_event_pick value = 1 } }
+            └─ country_event = { id = neo_events.2 } }
+```
+
+Two details are load-bearing and were both learned the hard way:
+
+- `every_system` **must** be wrapped in `random_system` when the event has no
+  system scope; from a no-scope event body it iterates once, not 788 times.
+- the event must land on a **country the player controls**. A country event
+  fired at an AI country never draws a window, so the example fires on
+  `is_ai = no` and reads the system variable through the `any_system` trigger
+  instead of firing on `owner`. (The plan's first sketch used
+  `owner = { country_event = … }`; that is only visible when the owning country
+  is the player.)
+
+### What the player sees (the judgement, not the log)
+
+| Reading | Where | Verdict if absent |
+|---|---|---|
+| an event window with one option, title/description in English | the game UI | the chain is broken (scope / namespace / localisation), not "the JS did not run" |
+| the option is clickable and closes the window | the game UI | localisation key or option effect is malformed |
+| `NEO_EVENT_PICK <0\|1\|2>` | `game.log`, written by the option's `log` | the event fired but the effect did not run |
+| `neo_event_last` = the same number | the save (`c5_variable_probe.py --name neo_event_last`) | the effect ran on another scope |
+| `NEO_EVENT_PICK source=js system=82 pick=<n>` | `C:/temp/neo_js.log` | the JS half never ran |
+| `pick=` equals the `NEO_EVENT_PICK <n>` in `game.log` | the pair above | the two halves disagree — that is a real defect, not a demo quirk |
+
+The two `NEO_EVENT_PICK` lines are deliberately distinct (`source=js … pick=` vs
+a bare number) so the cross-check is mechanical; both keep the fixed log word.
+
+### Building and installing it
+
+```bash
+node sdk/dist/cli.js build --dir examples/neo_events
+# NEO_BUILD ok dir=/abs/examples/neo_events out=/abs/examples/neo_events/neo/main.js
+node sdk/dist/cli.js check --dir examples/neo_events
+# NEO_CHECK ok dir=/abs/examples/neo_events handler=1 calls=2
+```
+
+`calls=2` is this example's shape: the check drives the handler with system id
+`7`, which only reads `betweenness` and `degree` (the variable is written for
+system `82` alone, so the mock records no write). `handler=1` is the part that
+must be true.
+
+The bundle (`neo/main.js`) is committed so a player can install without Node,
+but it is **generated**: edit `src/main.ts` and re-run `neo build`. `neo check`
+does not compare the committed bundle with the source; a stale bundle builds
+green and behaves like the last edit you forgot.
 
 
 ## Manifest
@@ -417,7 +545,12 @@ not run, so this remains an offline-pinned design.
   proven live** — the flag shot (Task C) has not run. Limits: names are 1–15 lowercase bytes, must
   be string literals, and may not collide with an official keyword (build-time gate); a
   `0xFFFF`/`0` id from the table is a hard failure (`no_flag_token`).
-- No country / fleet / planet / pop scopes; system scope only.
+- No country / fleet / planet / pop scopes; system scope only. A dispatch that
+  arrives with a non-system scope is currently **logged** and dropped:
+  `NEO_SCOPE_OTHER mask=0x<mm> id=<n>` (read-only — the two scope cells at `+8`
+  and `+0x10`, nothing written). That line is what slice 2 measures; there is no
+  country API behind it yet, and the country object's resource/relation fields
+  are still unresolved (`evidence/analysis/country_scope_4_4_4.md` §8).
 - No `onMonthly` or any global tick hook. The monthly driver is a generated `on_action` + hidden
   `event` pair, i.e. the official script path.
 - No `dlc_load.json` parsing and no inter-mod JS calls; the Phase 2 host loads up to 8 isolated
