@@ -1,0 +1,9 @@
+{
+  "id": "neo_scope_probe",
+  "entry": "main.js",
+  "scope": ["system"],
+  "permissions": ["log"],
+  "engine": "4.4.4",
+  "runtime": ">=0.1",
+  "flags": []
+}

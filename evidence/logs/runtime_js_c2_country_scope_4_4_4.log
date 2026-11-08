@@ -1,0 +1,208 @@
+# C2 — country scope 实机一发(4.4.4,只读;2026-11-08)
+
+#
+# 授权原话：「那先打C1」之后的同一轮点名 —— C2 只读一发(country scope 送达 + 指纹)。
+# 分支 feat/c2-scope,提交基线 5f261f1。
+# DLL: zig-out/bin/stellaris_quickjs.dll
+#      sha256 0e09ad40343dbbaba3d52484418e73110f0bad9c87744017e9ae043bd22f6278
+#      (本机构建 `zig build` 为缓存命中,sha 与任务给的成品一致;部署名 C:/temp/sqjs_c2d.dll,
+#       远端 Get-FileHash 相等)
+# 口径:一次启动、不重试;只读(不写引擎状态、不 patch);`taskkill /F`;永不 FreeLibrary。
+#
+# 这一发回答的唯一问题: `every_country = { neo_action = { } }` 能不能把国家 scope 送进 host,
+# 以及那个 scope 的指纹是什么。
+#
+# 结论:**能。** 判词是下面这一行(3 次逐字相同):
+#
+#   NEO_SCOPE_OTHER mask=0x04 id=0 vtable_rva=0x24e9068 u08=0x00000004 u10=0x00000000 u18=0x00000000 u20=0x00000000 u28=0x00000000
+#
+# `mask=0x04` 与 `evidence/analysis/country_scope_4_4_4.md` §6 的静态预测一致(国家 mask 0x04,
+# system 是 0x80)。控制组与实验组各自的读数见「读数」一节;经济/外交的字段层仍 deferred(见「边界」)。
+
+## 装配
+
+探针 mod(一次性,不进产品面):
+`scripts/scratch/2026-11_country_scope/mod/neo_scope_probe/`
+
+- `descriptor.mod` — `name="Neo Country Scope Probe"`、`supported_version="4.4.*"`
+- `common/on_actions/neo_scope_on_actions.txt` — `on_monthly_pulse = { events = { neo_scope.100 } }`
+- `events/neo_scope.txt` — **无类型** `event = { … }`(C1 的 `on no_scope` 错就是写成 `country_event`),
+  `immediate` 两组、顺序固定:
+  1. 控制组 `random_system = { log = "NEO_C2_CTRL_SCOPE_ENTER" every_system = { neo_action = { } } }`
+  2. 实验组 `every_country = { limit = { is_ai = no } log = "NEO_C2_EXP_COUNTRY_ENTER" neo_action = { } }`
+- `neo/mod.json` + `neo/main.js` — 只注册 `onSystem`、handler 为空(只读;存在只是为了让 host 有
+  active session ⇒ `state=ready` ⇒ 控制组的 `NEO_JS_CALL` 可读)。manifest:
+  `id=neo_scope_probe entry=main.js scope=["system"] permissions=["log"] engine=4.4.4 runtime=">=0.1"`.
+
+部署(全部 scp,远端 sha 核对过):
+- `C:/temp/neo_install.py`(= 本分支 `scripts/windows/neo_install.py`,sha256 `c9f16e63…f97e20b`;
+  远端此前是 C1 的旧版 `fb6a38bd…`)
+- `C:/temp/sqjs_c2d.dll`(新 DLL)
+- `C:/temp/neo_scope_probe/`(探针 mod 的源目录)
+- `C:/temp/c2_boot_inject.py`、`C:/temp/session_bridge.py` 与仓库逐字节相同,未重传
+
+射击前的环境状态:pid 0(无 stellaris);`dlc_load.json` 原有 2 个 mod
+(`mod/neo_ps_probe.mod`、`mod/neo_events.mod`),备份到 `C:/temp/dlc_load.before_c2.json`;
+旧 `C:/temp/neo_js.log`(C1 的 1,267,643 B)改名 `C:/temp/neo_js.log.prev_c1`。
+
+## 安装回执(逐字)
+
+```
+NEO_PLAY ok dll=0e09ad40343dbbab mod=neo_scope_probe pid=0
+```
+
+stderr 三步提示(源文本;远端控制台是 cp936,ssh 回显为乱码):
+
+```
+NEXT 1) 打开启动器 → 播放集 → 勾选 neo_scope_probe（启动器会重写 dlc_load.json）
+NEXT 2) 运行 neo.bat（安装 + 启动 + 注入；或手动跑 c2_boot_inject.py）
+NEXT 3) 进游戏后确认 C:/temp/neo_js.log 出现 NEO_JS_INIT_OK
+```
+
+安装后 `dlc_load.json` = 原有两项 + `mod/neo_scope_probe.mod`;官方半边落在
+`Documents/…/Stellaris/mod/neo_scope_probe/`(descriptor/common/events),运行时半边落在
+`C:/temp/neo_mods/neo_scope_probe/neo/`。
+
+## 启动与解暂停(逐字回执)
+
+```
+python C:/temp/session_bridge.py --timeout-s 900 C:/temp/c2_boot_inject.py C:/temp/sqjs_c2d.dll \
+  --launch D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe \
+  --launch-args=--continuelastsave --allow-window --act log --rule 1:0
+```
+
+```
+[boot] dll=C:/temp/sqjs_c2d.dll sha16=0e09ad40343dbbab
+[boot] launched pid=22896 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+[boot] pid=22896
+[boot] gate skipped by operator override (--allow-window)
+BOOT dll=sqjs_c2d.dll sha=0e09ad40343dbbab effect_id=19343 set_id=19344 install_rc=0 alive=1
+EXIT=0
+```
+
+exe sha256 由安装器版本门核对:`9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56`(4.4.4)。
+
+解暂停(一次即生效;C1 的「载入中要按两次」这次没有出现,载入已完成):
+
+```
+python C:/temp/session_bridge.py --timeout-s 60 C:/temp/neo_focus_space.py
+PIDS [22896]
+HWND 22896 394278
+STEP switch_refused
+STEP attach
+SPACE sent via attach
+EXIT=0
+```
+
+## 读数(全部逐字)
+
+### 判词行 —— `C:/temp/neo_js.log`(3 次,逐字相同)
+
+```
+NEO_SCOPE_OTHER mask=0x04 id=0 vtable_rva=0x24e9068 u08=0x00000004 u10=0x00000000 u18=0x00000000 u20=0x00000000 u28=0x00000000
+NEO_SCOPE_OTHER mask=0x04 id=0 vtable_rva=0x24e9068 u08=0x00000004 u10=0x00000000 u18=0x00000000 u20=0x00000000 u28=0x00000000
+NEO_SCOPE_OTHER mask=0x04 id=0 vtable_rva=0x24e9068 u08=0x00000004 u10=0x00000000 u18=0x00000000 u20=0x00000000 u28=0x00000000
+```
+
+`NEO_SCOPE_OTHER_SEEN` = **0 行**(指纹之后每 500 次才落一行计数 ⇒ 这一窗的非 system 派发总数
+在 3..502 之间;按月标记数它正好是 13)。
+
+### 日志头 5 行(逐字)
+
+```
+NEO_JS_MODS n=2
+NEO_JS_INIT_OK id=neo_events api=1
+NEO_JS_LOG NEO_C2_SESSION_READY
+NEO_JS_INIT_OK id=neo_scope_probe api=1
+NEO_JS_CALL id=0
+```
+
+两个 session = 常驻的 `neo_events` 运行时 + 本探针;两者都 `INIT_OK`,探针的
+`NEO_C2_SESSION_READY` 落盘 ⇒ 探针 bundle 被加载且运行到注册点。
+
+### 控制组(必须过)
+
+| 读数 | 值 |
+|---|---|
+| `NEO_JS_CALL` 行数(`^NEO_JS_CALL`) | **30,732** = 13 × 2,364 |
+| `NEO_C2_CTRL_SCOPE_ENTER`(game.log) | **13** |
+| `Neo: system <id>`(game.log,runBody 的官方 log 体) | 10,244 |
+| `PS_HIT`(另一个驱动 mod,对照) | 10,192 |
+
+控制组通过:`NEO_JS_CALL` 从 0 长到 30,732,且每个月的 `NEO_C2_CTRL_SCOPE_ENTER` 与
+`NEO_C2_EXP_COUNTRY_ENTER` 成对出现 13 次(月 2278.8.1 … 2279.8.1,13 个月度脉冲)。
+
+### 实验组
+
+| 读数 | 值 |
+|---|---|
+| `NEO_C2_EXP_COUNTRY_ENTER`(game.log) | **13**(每月 1 次) |
+| `NEO_SCOPE_OTHER mask=…` 完整指纹 | **3**(前 3 次非 system 派发) |
+| `NEO_SCOPE_OTHER_SEEN` | 0 |
+
+实验组通过:月度脉冲里 `every_country` 的 body 确实跑进国家 scope(13 条 marker),其中
+**13 次派发全部是非 system scope**,前 3 次留下完整指纹且**逐字相同**。
+
+### `NEO_C2` 标记的逐字样本(首尾各一对)
+
+```
+[13:35:14][effect_impl.cpp:21978]: [2278.8.1] Log effect, file: events/neo_scope.txt line: 39. NEO_C2_CTRL_SCOPE_ENTER
+[13:35:14][effect_impl.cpp:21978]: [2278.8.1] Log effect, file: events/neo_scope.txt line: 50. NEO_C2_EXP_COUNTRY_ENTER
+…
+[13:37:38][effect_impl.cpp:21978]: [2279.8.1] Log effect, file: events/neo_scope.txt line: 39. NEO_C2_CTRL_SCOPE_ENTER
+[13:37:38][effect_impl.cpp:21978]: [2279.8.1] Log effect, file: events/neo_scope.txt line: 50. NEO_C2_EXP_COUNTRY_ENTER
+```
+
+## `game.log` / `error.log` 的解析错误
+
+| 检查 | 读数 |
+|---|---|
+| `game.log` 里 `Unexpected token` | **0** |
+| `game.log` 里 `Script Error` | **0** |
+| `error.log` 里含 `neo_scope` 的行 | **0** |
+| `error.log` 里 `Unexpected token` | **0** |
+| `error.log` 总行数 | 39(全部是启动期的 mod/dlc 警告与 `neo_events.1/2/3 has no pictures`) |
+
+⇒ 探针 mod 在 4.4.4 里解析成功,没有 C1 那类 `country_event … on no_scope` 或未知效果报错。
+
+## 边界(这一发不能说的)
+
+1. **`id=0` 不等于「已证实的国家 id」。** 本行只证明:每月恰好 1 次非 system 派发,与
+   `limit = { is_ai = no }`(1 个人类国家)一致;`+0x10` 对非 system 一族按 §9 只是「同一格的值」。
+   `id=0` 与「人类玩家国家 id = 0」相符,但**这一发没有独立证人**。
+2. **`vtable_rva=0x24e9068` 是派发点那个对象首 qword 的值**,不是「scope 类的身份」。
+   该 RVA 出现在 `evidence/xrefs/ceffect_vtable_map_4_4_4.txt`(`slot0 0x00395FF0`,
+   `ExecuteActual(slot2) 0x00396460`),同一个 RVA 也在 `runtime_444_c1_validation.md` §73.3 以
+   `source=helper off=0x10 vptr_rva=0x24e9068 slot2_rva=0x396460` 出现过。⇒ 「派发点的对象带
+   CEffect 家族的 vtable」是读数;「它就是 `CEventScope`」**仍未收口**(AGENTS 段3 那格不变)。
+3. **这是「迭代器把这一轮送到我们的派发入口」,不是「donor class 自己接受国家 scope」。**
+   token detour 在 `0x3B0F80` 里先于引擎自己的 scope 门 `call [child+0xa8]` 返回
+   (`src/dll/c2/neo_dispatch.zig` 头部已把这个代价写死)。
+4. **一次战役、一份存档、13 个月、1 个人类国家。** 没有第二个非 AI 国家、没有多边/多人场景。
+5. **`NEO_JS_CALL`(30,732)与 `Neo: system`(10,244)不成 1:1**:前者 = 13 × 2,364(三个启用 mod
+   各 788 id 的合计),后者 = 13 × 788。差值在本发**没有追**(不在判据里);`NEO_JS_CALL` 才是控制组
+   的判据。
+6. 能量币 / 关系值两个字段仍 **unresolved**(`country_scope_4_4_4.md` §8)⇒ 经济/外交的**字段层**
+   deferred。C2 拿到的只是「国家 scope 能到 host + 三个指纹(mask/id/vtable)」这层地基。
+
+## 收尾
+
+- `taskkill /F /PID 22896` → `procs=0`;**没有** FreeLibrary(进程结束即卸载,DLL 与进程同生命周期)。
+- `dlc_load.json` 已从 `C:/temp/dlc_load.before_c2.json` 恢复为原有两项
+  (`mod/neo_ps_probe.mod`、`mod/neo_events.mod`)。
+- 探针官方半边 `Documents/…/Stellaris/mod/neo_scope_probe/` 与 `mod/neo_scope_probe.mod` 已删;
+  运行时半边 `C:/temp/neo_mods/neo_scope_probe/` 已删(否则后续 shot 会继续加载它的 session)。
+- 保留:`C:/temp/sqjs_c2d.dll`(成品副本)、`C:/temp/neo_scope_probe/`(探针源目录)、
+  `C:/temp/neo_js.log`(本发 61,510 行)、`C:/temp/neo_js.log.prev_c1`(C1 的旧日志)。
+
+## 复现(读同一份产物的命令)
+
+```sh
+# 判词行
+Select-String -Path C:/temp/neo_js.log -Pattern "^NEO_SCOPE_OTHER mask"
+# 控制组
+(Select-String -Path C:/temp/neo_js.log -Pattern "^NEO_JS_CALL").Count
+# 实验组 marker
+Select-String -Path "$env:USERPROFILE/Documents/Paradox Interactive/Stellaris/logs/game.log" `
+  -Pattern "NEO_C2_CTRL_SCOPE_ENTER","NEO_C2_EXP_COUNTRY_ENTER" | ForEach-Object {$_.Line}
+```

@@ -1,0 +1,9 @@
+# C2 country-scope probe — one-shot, read-only.
+#
+# 4.4.4 on_action bodies only accept `events` / `random_events` (2026-11-01,
+# §89), so the whole probe lives in one hidden event.
+on_monthly_pulse = {
+	events = {
+		neo_scope.100
+	}
+}
