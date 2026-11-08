@@ -8,7 +8,8 @@
 //      `document.`, `import(` (none of those exist in the host context), and the
 //      flag-name gate (literal names only, no official-keyword collisions);
 //   3. eval in QuickJS with the mock host — registration, handler execution
-//      with a fake system id, and the API version.
+//      with a fake id, and the API version. Either `onSystem` or `onCountry`
+//      may be the single registered handler (never both).
 //
 // The check exits 0/2 and prints exactly one line; the author-facing detail is
 // collapsed onto that line so a CI log cannot hide the reason.
@@ -105,17 +106,18 @@ const PROBE = `
 (function () {
   var m = globalThis.__neo_mock;
   var id = ${CHECK_SYSTEM_ID};
-  if (!m || typeof m.handler !== "function") {
-    return JSON.stringify({ error: "no handler registered (onSystem was never called)" });
+  if (!m || (typeof m.handler !== "function" && typeof m.countryHandler !== "function")) {
+    return JSON.stringify({ error: "no handler registered (onSystem/onCountry was never called)" });
   }
+  var handler = m.handler || m.countryHandler;
   try {
-    m.handler(id);
+    handler(id);
   } catch (e) {
     return JSON.stringify({ error: "handler threw: " + (e && e.message ? e.message : String(e)) });
   }
   var version = __neo_api_version();
   return JSON.stringify({
-    registrations: m.registers,
+    registrations: m.registers + m.countryRegisters,
     calls: m.calls,
     apiVersion: version
   });
@@ -212,7 +214,7 @@ export async function runCheck(options: CheckOptions): Promise<CheckResult> {
     const calls = probe.calls ?? [];
     const apiVersion = Number(probe.apiVersion ?? 0);
     if (registrations !== 1) {
-      return fail(`expected exactly one onSystem handler, got ${registrations}`);
+      return fail(`expected exactly one handler (onSystem/onCountry), got ${registrations}`);
     }
     if (apiVersion !== expectedVersion) {
       return fail(`api version mismatch: native returned ${apiVersion}, contract is ${expectedVersion}`);

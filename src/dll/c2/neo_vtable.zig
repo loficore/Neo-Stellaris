@@ -370,6 +370,11 @@ pub fn runBody(scope: u64, a3: u64) u64 {
     if (!isSystemScope(readU32(@intCast(scope), SCOPE_MASK_OFF))) {
         _ = @atomicRmw(u64, &stat_non_system_scope, .Add, 1, .monotonic);
         notifyOtherScope(scope);
+        // C2(2026-11-08):`every_country` 给这一趟打的是 `mask = 0x04`。诊断行只管
+        // 「scope 来了没有」;这一条才是把国家派发**接进** host 的接线点。
+        if (readU32(@intCast(scope), SCOPE_MASK_OFF) == offsets.country.SCOPE_MASK) {
+            notifyCountry(readU32(@intCast(scope), SCOPE_ID_OFF), scope);
+        }
         return 0;
     }
     const id = readU32(@intCast(scope), SCOPE_ID_OFF);
@@ -508,6 +513,23 @@ fn notifyOtherScope(scope: u64) void {
     if (comptime is_windows) neo_js_host.noteOtherScope(scope);
 }
 
+/// country 派发的接收端。与 `notifyHost` / `notifyOtherScope` 同一套两层结构:
+/// 生产走 `neo_js_host.onCountry`(QuickJS 只在 Windows 分支里被拉进来),
+/// 测试用 `setCountryHookForTest` 换成一个记录器。
+var country_hook: ?*const fn (id: u32, scope: u64) void = null;
+
+pub fn setCountryHookForTest(h: ?*const fn (id: u32, scope: u64) void) void {
+    country_hook = h;
+}
+
+fn notifyCountry(id: u32, scope: u64) void {
+    if (country_hook) |h| {
+        h(id, scope);
+        return;
+    }
+    if (comptime is_windows) neo_js_host.onCountry(id, scope);
+}
+
 // ---------------------------------------------------------------------------
 // Readouts (the stats line lives in neo_dispatch.zig, which owns the hook state)
 // ---------------------------------------------------------------------------
@@ -589,6 +611,8 @@ pub fn resetForTest() void {
     last_id = 0;
     hit_count = 0;
     host_hook = null;
+    other_scope_hook = null;
+    country_hook = null;
     @memset(std.mem.asBytes(&hits), 0);
 }
 
@@ -902,6 +926,55 @@ test "runBody hands a non-system scope to the scope diagnostic and skips the res
     std.mem.writeInt(u32, system[SCOPE_ID_OFF..][0..4], 7, .little);
     _ = runBody(@intFromPtr(&system), 0);
     try std.testing.expectEqual(@as(usize, 0), other_scope_calls);
+}
+
+var country_hook_calls: usize = 0;
+var country_hook_id: u32 = 0;
+var country_hook_scope: u64 = 0;
+
+fn countryHook(id: u32, scope: u64) void {
+    country_hook_calls += 1;
+    country_hook_id = id;
+    country_hook_scope = scope;
+}
+
+test "a country scope reaches the country host hook and still leaves the fingerprint" {
+    resetForTest();
+    defer {
+        setCountryHookForTest(null);
+        setOtherScopeHookForTest(null);
+        resetForTest();
+    }
+    log_effect_addr = 0;
+    setCountryHookForTest(&countryHook);
+    setOtherScopeHookForTest(&otherScopeHook);
+    country_hook_calls = 0;
+    country_hook_id = 0xFFFF_FFFF;
+    country_hook_scope = 0;
+    other_scope_calls = 0;
+
+    var country: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, country[SCOPE_MASK_OFF..][0..4], offsets.country.SCOPE_MASK, .little);
+    std.mem.writeInt(u32, country[SCOPE_ID_OFF..][0..4], 42, .little);
+    _ = runBody(@intFromPtr(&country), 0);
+
+    // 两只记录器都必须收到同一次派发:诊断行保留(C2 的读数口径不变),
+    // country 接线同时发生。
+    try std.testing.expectEqual(@as(usize, 1), country_hook_calls);
+    try std.testing.expectEqual(@as(u32, 42), country_hook_id);
+    try std.testing.expectEqual(@as(u64, @intFromPtr(&country)), country_hook_scope);
+    try std.testing.expectEqual(@as(usize, 1), other_scope_calls);
+    try std.testing.expectEqual(@as(u64, 1), nonSystemScopes());
+
+    // 其它 mask(0x02)只走诊断,不进 country 接线:那是别的 scope 一族。
+    country_hook_calls = 0;
+    other_scope_calls = 0;
+    var planet: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, planet[SCOPE_MASK_OFF..][0..4], 0x02, .little);
+    std.mem.writeInt(u32, planet[SCOPE_ID_OFF..][0..4], 9, .little);
+    _ = runBody(@intFromPtr(&planet), 0);
+    try std.testing.expectEqual(@as(usize, 0), country_hook_calls);
+    try std.testing.expectEqual(@as(usize, 1), other_scope_calls);
 }
 
 test "runBody does not reach the host when the rule rejects the system" {

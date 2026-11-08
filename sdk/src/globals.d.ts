@@ -16,3 +16,8 @@ declare function __neo_api_version(): number;
 declare function __neo_system_neighbors(id: number): number[];
 declare function __neo_system_set_flag(id: number, name: string): void;
 declare function __neo_system_has_flag(id: number, name: string): boolean;
+// v1.1 country surface (2026-11-08): registration + the two read-only opinion
+// cells. A refused read returns `undefined` — the SDK maps it to `null`.
+declare function __neo_register_country(fn: (id: number) => void): void;
+declare function __neo_country_opinion(self: number, target: number): number | undefined;
+declare function __neo_country_their_opinion(self: number, target: number): number | undefined;

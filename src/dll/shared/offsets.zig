@@ -442,6 +442,19 @@ pub const flag_ids = struct {
     pub const NAME_ELEMENT_STRIDE: usize = 0x30;
 };
 
+/// 国家 scope 的两个常数(`every_country` 那一族)。
+///
+/// **[VERIFIED 4.4.4]** `evidence/analysis/country_fields_4_4_4.md` §2/§3.1。
+pub const country = struct {
+    /// opinion 矩阵描述符(`{n@+0x00, int32* base@+0x08}`,键 `row*n+col`,
+    /// 哨兵 `0x7fffffff` = 未计算)。这一格是**指针**,静态文件里未初始化 ——
+    /// 值只能运行期读,runtime BSS ⇒ 读不到就 fail-closed(不是 0)。
+    pub const OPINION_DESCRIPTOR: usize = 0x33794D0;
+    /// 国家 scope 的 mask(`every_country` 写死;system 是 `0x80`)。
+    /// 这就是 C2 实机读数里的那一格(`country_scope_4_4_4.md` §11)。
+    pub const SCOPE_MASK: u32 = 4;
+};
+
 /// CEffect object offsets.
 /// [FALSIFIED 3.x] 4.4.4 has NO central dispatch switch — effects are polymorphic
 /// CEffect::Execute via vtable call (evidence/analysis/runtime_444_structures.md).

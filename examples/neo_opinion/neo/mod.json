@@ -1,0 +1,9 @@
+{
+  "id": "neo_opinion",
+  "entry": "main.js",
+  "scope": ["country"],
+  "permissions": ["opinion.read", "log"],
+  "engine": "4.4.4",
+  "runtime": ">=0.1",
+  "flags": []
+}

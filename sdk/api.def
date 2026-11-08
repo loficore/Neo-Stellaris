@@ -10,6 +10,9 @@
     {"name": "__neo_api_version", "params": [], "returns": "u32"},
     {"name": "__neo_system_neighbors", "params": ["u32"], "returns": "array<u32>"},
     {"name": "__neo_system_set_flag", "params": ["u32", "string"], "returns": "void"},
-    {"name": "__neo_system_has_flag", "params": ["u32", "string"], "returns": "bool"}
+    {"name": "__neo_system_has_flag", "params": ["u32", "string"], "returns": "bool"},
+    {"name": "__neo_register_country", "params": ["function"], "returns": "void"},
+    {"name": "__neo_country_opinion", "params": ["u32", "u32"], "returns": "i32|null"},
+    {"name": "__neo_country_their_opinion", "params": ["u32", "u32"], "returns": "i32|null"}
   ]
 }

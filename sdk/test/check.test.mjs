@@ -18,7 +18,7 @@ const sdkRoot = path.join(repo, "sdk");
 const exampleDir = path.join(repo, "examples", "chokepoint");
 const KEYWORDS_TSV = path.join(repo, "evidence", "xrefs", "keyword_behaviour_registration_4_4_4.tsv");
 
-function writeProject(source, flags) {
+function writeProject(source, flags, extra = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "neo-check-"));
   mkdirSync(path.join(dir, "src"), { recursive: true });
   mkdirSync(path.join(dir, "neo"), { recursive: true });
@@ -43,7 +43,7 @@ function writeProject(source, flags) {
       2,
     ),
   );
-  const manifest = { id: "tmp", entry: "main.js" };
+  const manifest = { id: "tmp", entry: "main.js", ...extra };
   if (flags !== undefined) manifest.flags = flags;
   writeFileSync(path.join(dir, "neo", "mod.json"), `${JSON.stringify(manifest)}\n`);
   return dir;
@@ -63,6 +63,22 @@ test("check passes the chokepoint example and records the example's calls", asyn
     { fn: "__neo_log", message: "NEO_HUB 7 250" },
     { fn: "__neo_api_version" },
   ]);
+});
+
+test("check accepts a country bundle and records the opinion read", async () => {
+  const dir = writeProject(
+    'import { log, onCountry } from "@neo/runtime";\nonCountry((c) => { const v = c.opinionOf(c.id); log(`NEO_OPINION ${c.id} ${v === null ? "null" : v}`); });\n',
+    undefined,
+    { scope: ["country"], permissions: ["opinion.read", "log"] },
+  );
+  const result = await runCheck({ dir });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.registrations, 1);
+  assert.equal(result.apiVersion, 1);
+  assert.ok(
+    result.calls.some((c) => c.fn === "__neo_country_opinion" && c.id === 7),
+    JSON.stringify(result.calls),
+  );
 });
 
 test("check catches a missing native API", async () => {
