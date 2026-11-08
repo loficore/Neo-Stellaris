@@ -1,0 +1,14 @@
+# Neo Events — the monthly driver.
+#
+# 4.4.4 on_action bodies only accept `events` / `random_events`, so the whole
+# chain lives in one hidden event (`neo_events.100`): first the runtime JS pass
+# (`neo_action`), then the official read of the value JS wrote.
+#
+# `neo_events.100` is the driver.  `neo_events.1` / `.2` / `.3` are the three
+# player-visible events; the number is the pick the JS handler wrote into the
+# system variable `neo_event_pick`.
+on_monthly_pulse = {
+	events = {
+		neo_events.100
+	}
+}

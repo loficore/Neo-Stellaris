@@ -1,0 +1,10 @@
+﻿l_english:
+ neo_events.1.title:0 "Signal on the Hyperlane"
+ neo_events.1.desc:0 "A courier drone drops out of hyperspace carrying a chart we did not draw.\n\nSomebody out there already knows which systems every ship must cross. The chart names one of them."
+ neo_events.1.a:0 "File it with the navy."
+ neo_events.2.title:0 "The Bottleneck Report"
+ neo_events.2.desc:0 "Our traffic analysts have finished counting. One system carries more crossings than any other in the galaxy, and every route through it can be watched from a single station.\n\nThey want permission to build it."
+ neo_events.2.a:0 "Approve the station."
+ neo_events.3.title:0 "A Map We Did Not Make"
+ neo_events.3.desc:0 "The chart is complete. It is not a map of stars — it is a map of the ways between them, and it says which ones we cannot avoid.\n\nSomeone left it where we would find it."
+ neo_events.3.a:0 "Keep it, and say nothing."

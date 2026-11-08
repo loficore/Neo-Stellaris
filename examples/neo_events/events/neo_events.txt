@@ -1,0 +1,107 @@
+# Neo Events — the event half of the slice-1 demo (Stellaris 4.4.4).
+#
+# The chain, in order, once a month:
+#
+#   on_monthly_pulse -> neo_events.100 (hidden)
+#       (a) `every_system { neo_action = { } }` hands every system to the injected
+#           QuickJS host, which writes `neo_event_pick` (0/1/2) on system 82;
+#       (b) official script reads that value back and fires ONE of
+#           neo_events.1 / .2 / .3 on the player country.
+#
+# `neo_action` is the effect the injected host registers.  Without the injection
+# the parser reports it as an unknown effect — that log line is expected for a
+# runtime-JS mod and is not a syntax error here.  The body is an empty block on
+# purpose: `neo_action = yes` is rejected at parse time because the registered
+# class parses an assignment block.
+#
+# `every_system` is wrapped in `random_system` because a no-scope event body
+# iterates systems once, not 788 times (2026-11-01 reading).
+#
+# Why the driver fires on the player country instead of `owner`: a country event
+# fired at an AI country never draws a window, so "the event really popped" — the
+# whole judgement of slice 1 — would be unobservable whenever system 82 happens
+# to be AI-owned.  `any_system` is the trigger-side iterator (163 vanilla uses),
+# so the value is read in a system scope while the event lands on the player.
+#
+# `neo_event_done` makes the demo fire once per campaign: a monthly window that
+# keeps reopening would say nothing new and would keep the game paused.
+
+namespace = neo_events
+
+country_event = {
+	id = neo_events.100
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		# (a) the JS pass: writes neo_event_pick on system 82
+		random_system = {
+			every_system = {
+				neo_action = { }
+			}
+		}
+
+		# (b) the official read: one event per value, on the player country
+		every_country = {
+			limit = {
+				is_ai = no
+				NOT = { has_variable = neo_event_done }
+				any_system = { check_variable = { which = neo_event_pick value >= 0 } }
+			}
+			if = {
+				limit = { any_system = { check_variable = { which = neo_event_pick value = 0 } } }
+				country_event = { id = neo_events.1 }
+			}
+			else_if = {
+				limit = { any_system = { check_variable = { which = neo_event_pick value = 1 } } }
+				country_event = { id = neo_events.2 }
+			}
+			else_if = {
+				limit = { any_system = { check_variable = { which = neo_event_pick value = 2 } } }
+				country_event = { id = neo_events.3 }
+			}
+		}
+	}
+}
+
+country_event = {
+	id = neo_events.1
+	title = neo_events.1.title
+	desc = neo_events.1.desc
+	is_triggered_only = yes
+
+	option = {
+		name = neo_events.1.a
+		log = "NEO_EVENT_PICK 0"
+		set_variable = { which = neo_event_last value = 0 }
+		set_variable = { which = neo_event_done value = 1 }
+	}
+}
+
+country_event = {
+	id = neo_events.2
+	title = neo_events.2.title
+	desc = neo_events.2.desc
+	is_triggered_only = yes
+
+	option = {
+		name = neo_events.2.a
+		log = "NEO_EVENT_PICK 1"
+		set_variable = { which = neo_event_last value = 1 }
+		set_variable = { which = neo_event_done value = 1 }
+	}
+}
+
+country_event = {
+	id = neo_events.3
+	title = neo_events.3.title
+	desc = neo_events.3.desc
+	is_triggered_only = yes
+
+	option = {
+		name = neo_events.3.a
+		log = "NEO_EVENT_PICK 2"
+		set_variable = { which = neo_event_last value = 2 }
+		set_variable = { which = neo_event_done value = 1 }
+	}
+}
