@@ -53,6 +53,7 @@
 //   NEO_JS_NEIGHBORS_TRUNC id=<id> total=<n> written=<n>
 //   NEO_JS_LOG <text>
 //   NEO_JS_ERROR id=<id> mod=<mod> <message> | NEO_JS_TIMEOUT id=<id> mod=<mod>
+//   NEO_SCOPE_OTHER mask=0x<mm> id=<n>   非 system scope 的只读诊断(切片 2;每次派发一行)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -584,6 +585,22 @@ pub fn onSystem(id: u32, scope: u64) void {
     }
 }
 
+/// Slice 2 的**只读**诊断:引擎把我们注册的 effect 派发进一个**非 system** scope
+/// (C2 的驱动 `every_country = { neo_action = { } }` 就是这一趟)时落一行。
+///
+/// 只读两个格子(`neo_vtable.scopeFields`),不写引擎内存、不改 scope、不调任何 body。
+/// 拿不到就整行不打 —— 一行读错的数比没有更糟。
+///
+/// **判据只认 `mask`。** `mask=` 是这次要量的事实(引擎给这一趟的 scope 打了什么记号);
+/// `id=` 是 `+0x10` 那个 u32 —— 对 system 一族它是系统 id,对**别的** scope 它只是同一格
+/// 的值,所以「id 就是国家 id」这句话不在本行的判据里(取证卷
+/// `country_scope_4_4_4.md` 的 unresolved 项)。
+pub fn noteOtherScope(scope: u64) void {
+    const fields = neo_vtable.scopeFields(scope) orelse return;
+    if (neo_vtable.isSystemScope(fields[0])) return;
+    emit("NEO_SCOPE_OTHER mask=0x{x:0>2} id={d}", .{ fields[0], fields[1] });
+}
+
 /// 跑一个 session 的 handler。异常/超时只禁用**这个** session。
 fn runSession(index: usize, id: u32) void {
     active_index = index;
@@ -1005,6 +1022,32 @@ fn systemScope(id: u32) [0x20]u8 {
     std.mem.writeInt(u32, scope[neo_vtable.SCOPE_MASK_OFF..][0..4], 0x80, .little);
     std.mem.writeInt(u32, scope[neo_vtable.SCOPE_ID_OFF..][0..4], id, .little);
     return scope;
+}
+
+test "noteOtherScope logs mask+id for a non-system scope and is silent otherwise" {
+    var cap = Capture{};
+    armCapture(&cap);
+    defer resetForTest();
+
+    // A country scope: `0x04` is what the `every_country` loop writes into
+    // `[scope+0x08]` (`0x1A7AF78`, the system twin writes `0x80` at `0x1A79928`).
+    // The line reports what the engine wrote — the diagnostic never assumes it.
+    var country: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, country[neo_vtable.SCOPE_MASK_OFF..][0..4], 0x04, .little);
+    std.mem.writeInt(u32, country[neo_vtable.SCOPE_ID_OFF..][0..4], 42, .little);
+    noteOtherScope(@intFromPtr(&country));
+    try testing.expect(cap.contains("NEO_SCOPE_OTHER mask=0x04 id=42"));
+
+    // A system scope is the normal path: no diagnostic, ever.
+    cap.len = 0;
+    const system = systemScope(7);
+    noteOtherScope(@intFromPtr(&system));
+    try testing.expect(!cap.contains("NEO_SCOPE_OTHER"));
+
+    // An unreadable pointer is silence, not a guessed line.
+    cap.len = 0;
+    noteOtherScope(0x1000);
+    try testing.expect(!cap.contains("NEO_SCOPE_OTHER"));
 }
 
 test "apiVersion is the frozen v1 contract value" {
