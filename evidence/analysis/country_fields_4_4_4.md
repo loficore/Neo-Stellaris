@@ -442,3 +442,169 @@ write_path     = 无独立写路径;值是懒填缓存(0x743bb0 + 两个取值�
    (`0x743bea`),与 `country_scope_4_4_4.md` §11 实机记到的那一格同值。本卷**不**据此改
    §11 的"CEffect 家族"判读,也不主张它是 scope —— 只登记这个重合,留给后面的卷子。
 
+---
+
+## §3 判决表 + `C2bReadProbe` 规格 + `onCountry` 契约草案
+
+> 这一节**只写规格**,不执行:没有代码、没有 shot、没有进程。§1/§2 的每条读数都能用表里的
+> 命令复算。
+
+### §3.1 判决表(一项一行,grade 必填)
+
+| 字段 | 读数 | 等级 | 复算命令 | 能不能进 host |
+|---|---|---|---|---|
+| 国家 id(对照行,前卷) | `scope+0x10` / 对象 `+0x20` | B+ | `disrva.py 0x393e40 --len=0x70` | **是**(已在读,§11 实机) |
+| 存量 · 资源持有者 | `[country+0x2c68]`(指针) | B | `disrva.py 0x1adf73b` 上下 / `0x8437b0` | 否(只是中间指针) |
+| **存量 · 容器** | **`blocked_on`**:`econ->vfn[+0x90](&vec,0)` 填充;槽目标只有运行期能拿 | — | `disrva.py 0x1adf690 --end=0x1adf7af`、`disrva.py 0x8437b0 --end=0x8439f7` | **否** |
+| 存量 · 索引字段 | `[resource_obj+0x18]` | **A** | 读 `0x1adf774` / 写 `0x843904` | 否(缺容器) |
+| 存量 · 步长 | 8 B | **A** | `0x1adf788` / `0x84390f` | 否(缺容器) |
+| 存量 · 定点标度 | 100000 | B+ | `0x1afed43`(`imul …,0x186a0`) | 否(缺容器) |
+| 收入 · 容器 | `[country+0x2530]`(**与 `+0x2570` 冲突**) | B | `disrva.py 0x1ac52f0 --end=0x1ac5345` | **否**(候选) |
+| 能量 · 资源对象 | `[[0x33746f0]+0x20]` = `find(db,"energy")` | **A** | `disrva.py 0x3b8640 …`(init)、`0x3b8750`、`0x3b8820` | **是** |
+| **能量 · 索引数值** | `[[0x33746f0]+0x20]+0x18`,静态不可读 | **C** | 同上;文件序候选 = 0 | **否** |
+| opinion · 表基址 | `{n=[d]; base=[d+8]},d=[0x33794d0]` | **A** | `disrva.py 0x1ab04f0 --end=0x1ab05b1` | **是** |
+| opinion · 键编码 | `row*n + col`,id = `[obj+0x20]&0xffffff` | **A** | 同上 `0x1ab05aa`/`0x1ab05b6` | **是** |
+| opinion · 步长 | 4 B(int32) | **A** | 同上 `0x1ab05bc` | **是** |
+| opinion · 值偏移 | `0`(值就是元素) | **A** | 同上 | **是** |
+| opinion · 方向 | 两向**互为转置**(A);"己对目标"是哪一向只到 B | **A / B** | `disrva.py 0x1ab1340 --end=0x1ab1401` | **是**(按引擎名暴露) |
+| opinion · 未计算哨兵 | `0x7fffffff`;唯一写点 = 两个取值体的懒填 | **A** | `0x1ab05bf`/`0x1ab05d4` | **是**(必须 fail-closed) |
+| opinion · level 阈值 | 4 个 dword,`0x326178c/90/94/9c` | C(BSS) | `disrva.py 0x1ab1050 --len=0x80` | **否** |
+| 反例 · modifier 容器 | `[country+0x2c78]→+0x10→+0x2d78` 链式列表 | **A** | `disrva.py 0x1ac8f70 --len=0x120` + `riprefs.py 0x33794d0` | 否(证明"不是同一个容器") |
+
+**一句话判决:** `OpinionRead` 的**表基址 / 键编码 / 步长 / 值偏移**四项全 A(方向是
+"转置 A + 谁对谁 B")⇒ 这一族可以按引擎名进契约;`EnergyRead` 的**形状**全 A,但**存量容器**
+卡在运行期 vtable、**能量索引**卡在运行期序号 ⇒ 两项都**不进**契约。**写路径照旧不开。**
+
+### §3.2 `C2bReadProbe` 规格(只写规格,不执行)
+
+**什么时候读。** 复用 C2 已有的国家 scope 派发点(`0x3B0F80`,与 `every_system` 同一张槽表),
+在 `mask == 0x04` 的那一条上读。**不要**新开 hook:§11 已经证明这条路径每月每国一次。
+
+**先拿到对象(不调 0x393dd0 的缓存快速路径)。**
+
+```
+id  = scope+0x10                          ; 已有的那一格
+T   = [0x3260FD8]                         ; 国家对象表
+if id >= [T+0x20] -> fail(越界)
+obj = [[T+0x18] + id*0x10 + 8]            ; entry 步长 0x10,取 +8
+if obj == 0 || [obj+0x20] != id -> fail   ; id 复核(§7)
+if !obj->vfn[+0x08]() -> fail             ; 合法性门(§7)
+```
+
+**格 1..3:存量(预期 `blocked`,这一档就是去把它变成 A 的)。**
+
+```
+db  = [0x33746F0]
+n   = [db+0x14]                           ; 资源条数
+idx = [[db+0x20]+0x18]                    ; ← 能量索引(**本次要读数**)
+E   = [obj+0x2C68]
+if !E->vfn[+0x80]() -> 退到全局 0x325FF70  ; 与引擎同一条回退
+buf = n*8,先清零                          ; 引擎 0x1adf513-0x1adf52a 就是清零这个栈向量
+vec = { data: buf, size: n, cap: n }      ; 24 B:ptr + 两个 u32(引擎在 rbp+8/+0x10/+0x14 造这个)
+E->vfn[+0x90](E, &vec, 0)                 ; rdx = &vec,与 0x1adf760 同一个调用口径
+print idx, buf[idx]                       ; ← 存量(÷100000)
+```
+
+**格 4..5:两个"收入"容器(把冲突变成读数)。**
+
+```
+for off in (0x2530, 0x2570):
+    c = [obj+off]; if c == 0 -> skip
+    if idx < [c+0xC]: print off, [ [c+0] + idx*8 ]     ; 同一个 idx
+```
+
+**格 6..7:opinion(双向,含哨兵)。**
+
+```
+d = [0x33794D0]; if d == 0 -> skip
+n2 = [d]; base = [d+8]
+me = id; other = <同派发轮里另一个国家 id>(见"判据 3")
+cell(a,b) = base + (a*n2 + b)*4
+v = cell(me, other)      ; 引擎的 their_opinion 那一格
+w = cell(other, me)      ; 引擎的 opinion 那一格
+if v == 0x7FFFFFFF or w == 0x7FFFFFFF -> print "sentinel"(不算、不写)
+```
+
+> 这两行的**名字**按 §2.3 的读数写:`opinion` 的 key 是 `目标*n + 己`,即 `cell(目标, 己)`;
+> `their_opinion` 是 `cell(己, 目标)`。哪一格是"人话里的我们看他们"由判据 3 定,**不预先假设**。
+
+**判据(每条都要有独立 oracle,不许只看"值看起来合理"):**
+
+1. **存量**:同一个 mod 里写一条一次性 effect
+   `export_resource_stockpile_to_variable = { resource = energy variable = neo_probe_energy }`,
+   然后**同轮**用引擎自己的 trigger 扫边界:
+   `has_country_resource = { type = energy amount >= k }`,取 `k = 我们的值` 与 `k = 我们的值+1`,
+   两次求值必须**恰好翻转**。翻不过去 ⇒ 偏移/索引错。
+2. **收入**:`has_monthly_income = { resource = energy value >= k }` 同样的 `k / k+1` 翻转法
+   (它在 `+0x2570` 上);`income >= k` 同样的翻转法(它在 `+0x2530` 上)。
+   **两条各自翻转** ⇒ 冲突 1 被解释成两个量而不是"抄错偏移"。
+3. **opinion(这一条同时给 §2.3 的 B 定型)**:`opinion = { who = X value > k }` 与
+   `their_opinion = { who = X value > k }`,各扫 `k / k+1`。
+   - **定向**:需要一个**不对称**的对 `(A, B)`(A 对 B 有 +N,B 对 A 是 0 或另一个数)。
+     在 A 的 scope 里跑 `opinion = { who = B … }` 与 `their_opinion = { who = B … }`,
+     翻转点分别 `= cell(B, A)` 还是 `= cell(A, B)` —— **哪一格就是"某一向"**,由读数定,
+     不由函数名定。
+   - 单国战役(§11 那种)只有一个国家时**做不了这条**,要两个非 AI 国或玩家 + 一个 AI 国。
+4. **索引交叉**:同一轮再算一次 `[[db+8+0*8]+0x18]`(资源表第 0 个)与
+   `[[db+0x20]+0x18]`;若两者相等,则"文件序 energy 第一"的候选(§1.6 的 0)被证实;
+   不等则 index = 资源表里的位置,与文件序无关。
+5. **只读**:全部是"读 + 引擎自己求值",**不调** `0x743BB0`(它会写缓存)、**不调** `add_resource`。
+
+**判负长什么样(写进日志,不要写成"没有"):**
+
+| 现象 | 判词 |
+|---|---|
+| `E` 为空 / `vfn[+0x80]` false 且回落对象也不合法 | `stockpile_holder_invalid`(国家对象版本或战役未载入) |
+| `idx` 读出负数/越界 | `energy_index_out_of_range`(§1.6 的对象不是 energy,或表结构变了) |
+| 翻转点 = 我们的值 ±1 之外的任何位置 | `offset_mismatch` |
+| opinion 两向相等 | `orientation_unresolved`(§2.3 的转置假设在该存档上不成立) |
+| 一次 shot 里 `mask=0x04` 的行数 = 0 | `no_country_scope`(不是判负,是没打上) |
+
+### §3.3 `onCountry` 的字段契约草案
+
+**现状(必须一起读):** host 侧现在只把非 system 派发当**诊断** —— `NEO_SCOPE_OTHER` 那一行
+(`src/dll/c2/neo_js_host.zig` 的 `noteOtherScope` + `neo_vtable.zig` 的非 system 分支)。
+**契约未实现**,也没有任何字段被 JS 看见;本节的"可进"指的是**允许开始实现**,不是已实现。
+
+**A 级 —— 可进契约(本轮只有这一族):**
+
+```
+onCountry.country_id             ; scope+0x10(与对象 +0x20 复核一致才用)
+onCountry.opinion[target]        ; int32,引擎 `opinion` 那一格 = base[(target*n + id)]
+onCountry.their_opinion[target]  ; int32,引擎 `their_opinion` 那一格 = base[(id*n + target)]
+                                 ; base = [[0x33794d0]+8],n = [[0x33794d0]+0]
+```
+
+**名字按引擎的函数取名,不按"我们/他们"取名** —— §2.3 的"哪一向 = 己对目标"是 B,
+实机不对称对(§3.2 判据 3)之前不许在契约里写成人话方向。
+
+三条硬性约束(写进契约注释):
+
+1. **哨兵 fail-closed**:读到 `0x7fffffff` 必须返回 `unavailable`,**不许**把它当 `-1`,
+   也**不许**为了取值去调 `0x743bb0`(它会写缓存,违反 C2 的只读口径)。
+2. **界**:`target >= n || id >= n` ⇒ `unavailable`(引擎自己是 `jae` 之后走回退,不是读越界)。
+3. **表可能为空**:`[0x33794d0] == 0`(主菜单/未载入战役)⇒ `unavailable`,不是 0。
+
+**B 级 —— 候选,不进契约:**
+
+- `income_container = [country+0x2530]` / `[country+0x2570]`(8 B 元素,按 `[res+0x18]` 索引):
+  形状是 A,但"哪一个叫月度收入"只有单侧证人,且两个容器互相冲突。**§3.2 的判据 2 通过后才升 A。**
+- `stockpile_holder = [country+0x2c68]`:指针本身 B;容器要经 virtual,+0x90 槽目标未定位。
+- 存量定点标度 100000:与存量容器一起卡住。
+
+**C 级 —— 不出现(连"候选"都不标):**
+
+- `energy_index` 的**数值**(文件序候选 0 不作数);
+- 矩阵的 `n` 与四个 level 阈值(**运行期**才有的数值);
+- `0x743bb0`(opinion 计算器)的内部组成。
+
+### §3.4 roadmap
+
+`OpinionRead` 的表基址/键编码/步长/值偏移四项是 A,方向是"A(互为转置)+ B(谁对谁)" ⇒
+按计划 Step 5(有 A 级才改)在 `docs/roadmap.md` **第 120 行**(「运行时 JS 的判据」)
+**行内追加**一句字段层状态;**文件仍 140 行**。`EnergyRead` 的 `blocked_on` 写进同一句,
+免得读者把"字段层有 A"读成"两个字段都通了"。
+
+**本节不能说的:** 契约草案里的 `target` 是谁由调用方决定;C2 现在拿到的 `id` 只有
+`country_scope_4_4_4.md` §11 那一个(玩家国,`id=0`),**没有第二个国家** ⇒ §2.3 的方向
+(B)在实机上要**一个不对称的国家对**才能验,单国战役验不了。§3.2 判据 3 已按这个前提写。
