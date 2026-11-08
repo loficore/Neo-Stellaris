@@ -1936,7 +1936,43 @@ opencode mcp list                  # 期望 win-desktop connected
 `win-desktop` 只做**需要人眼人手**的那一层(认元素、点选项、在控制台里打字)。它不替代、
 也不修改 `world_state` 的判据。
 
+## 玩家入口:一键安装(`scripts/windows/neo_install.py` + `neo.bat`)
+
+玩家侧的唯一入口。它把两半都装上:**官方那一半**(`descriptor.mod` / `common/` / `events/` /
+`localisation/` → `<Documents>/Paradox Interactive/Stellaris/mod/<id>/`,外加一个
+`<id>.mod` 指回它、并把 `mod/<id>.mod` 写进 `dlc_load.json`)与**运行时那一半**
+(`<project>/neo/` → `C:/temp/neo_mods/<id>/neo/`,DLL → `C:/temp/`)。只装后者会得到
+「安装成功但引擎从不加载」—— 那正是这个工具要消灭的形状。
+
+```
+python C:/temp/neo_install.py                        # 双击等价:找游戏、找最新项目、装、启动、注入
+python C:/temp/neo_install.py --dry-run --debug      # 只过门 + 打计划,不写、不启动
+python C:/temp/neo_install.py --no-launch --mod C:/temp/mods/my_mod
+```
+
+输出恒为一行:`NEO_PLAY ok dll=<sha16> mod=<id> pid=<pid>` 或
+`NEO_PLAY fail reason=<tag>`;tag 表在 `docs/runtime-js-sdk.md`(那里是唯一权威,本文不复述)。
+`pid=0` = 这一趟没有启动游戏,不是错误。
+
+**判读陷阱(四条):**
+
+1. **mod 文件在游戏启动时读一次。** 安装时游戏已经在跑 ⇒ 这一局看不到事件,必须重启。
+   工具在「没有进程」时会自己拉起游戏;用了 `--no-launch` 就要自己重启。
+2. **`neo/main.js` 必须先生成。** `bundle_missing` 就是在说这件事:先 `neo build`。
+   仓库里的示例 bundle 是提交进 git 的产物,改了 `src/main.ts` 不重建 ⇒ 空转(老 bundle 照跑)。
+3. **版本门没有覆盖开关。** sha256 不在 `SUPPORTED_SHA256` 就 `version_unsupported`,**一个字节
+   都不写** —— 加一行才能让新构建可玩,这是刻意没有 `--force`。
+4. **它不在 justfile 里。** 玩家走 `.bat`,`AGENTS.md` 的 wire 约定照旧:`just deploy` 会把它
+   和 `neo.bat` 一起 scp 到 `C:/temp/`;操作者用
+   `just win "python C:/temp/neo_install.py --no-launch"`。**不新增 `just neo` 之类的第二道
+   改世界的动词** —— `world_state` 的状态机与 R-verbs 围栏只盯着 `game` 那一条。
+
+围栏:`scripts/test_neo_install.py`(22 条:版本门、路径推导、项目挑选、清单校验、两半安装计划、
+`dlc_load` 幂等、一行回执、`--debug` 才出 traceback、`dll_locked` 映射、`neo.bat` 的 tag 必须
+在表里)。`just deploy` 必须带上这两个文件(R-deploy)。
+
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
+
 
 一个长驻在 Windows 机上的小循环:每 tick 读右上角暂停图标、读事件窗口带、消费一次命令文件,然后把
 「想要的状态」推到游戏上。给 agent 用 —— 它把「事件弹出导致暂停、要人点选项」这种原本必须人盯的环节
@@ -1945,7 +1981,7 @@ opencode mcp list                  # 期望 win-desktop connected
 宿主侧经根目录 `justfile` 调用(`NS_WIN_HOST` 可覆盖主机名):
 
 ```
-just deploy                  # scp scripts/windows/ 的 7 个维护中脚本到 C:/temp/(含 popup_geometry.py:game_supervisor.py 第 25 行 import 它,漏了就 ModuleNotFoundError)
+just deploy                  # scp scripts/windows/ 的每个维护中脚本到 C:/temp/(含 popup_geometry.py:game_supervisor.py 第 25 行 import 它,漏了就 ModuleNotFoundError;清单由 R-deploy 围栏对着目录核对,别在这里数个数)
 just launch                  # 经 Steam 拉起游戏(launcher 点击 + 30 s 观察窗,启动后仍是暂停)
 just game start              # schtasks 拉起守护进程,见到状态心跳才返回
 just game status             # 一行摘要:state/note/pid/hwnd/age/want/policy/handled/cmd/speed
