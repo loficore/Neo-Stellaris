@@ -10,9 +10,10 @@
 //
 // 纪律:
 //   * `api.def` 的 7 个 native 由 host 持有;本模块只交出「源码 + 权限」。
-//   * **严格字段**:6 个字段全必填,未知字段 / 未知 permission / 非 system scope /
+//   * **严格字段**:6 个字段全必填,未知字段 / 未知 permission / 未知或重复的 scope /
 //     非 4.4.4 engine / 不满足的 runtime 都是具名错误 —— 每一种在 host 侧落一行日志
-//     (计划 Review Focus 7:loader 的失败面必须可判读)。
+//     (计划 Review Focus 7:loader 的失败面必须可判读)。`scope` 是位集
+//     (`system` / `country`,可同时声明),不是单值。
 //   * `id` 是**路径片段**:只允许 `[A-Za-z0-9_-]`,长度 1..64。`entry` v1 只认
 //     `main.js`(目录写死,不接受任意路径)。
 //   * Windows 文件 I/O 用 Phase 0 spike 的 `CreateFileA`/`ReadFile` 形状(Zig 0.16
@@ -36,11 +37,12 @@ const is_windows = builtin.os.tag == .windows;
 
 /// host 侧的类型,不是复制品 —— 合同漂移的第一道防线。
 pub const Permissions = host.Permissions;
+/// 同上:`scope` 的位集也只有 host 一份定义。
+pub const Scopes = host.Scopes;
 
 pub const MODS_ROOT = "C:/temp/neo_mods/";
 pub const ENTRY_NAME = "main.js";
 pub const EXPECTED_ENGINE = "4.4.4";
-pub const EXPECTED_SCOPE = "system";
 
 pub const MAX_ID_LEN: usize = 64;
 pub const MAX_MANIFEST_BYTES: usize = 4096;
@@ -74,7 +76,9 @@ pub const ListStats = struct {
 pub const Manifest = struct {
     id: []const u8,
     entry: []const u8,
-    scope: []const u8,
+    /// 这个 mod 要接哪几种派发(`system` / `country`,可以同时要)。v1 的
+    /// `"system"` 与 `["system"]` 两种写法都仍然合法。
+    scopes: Scopes,
     permissions: Permissions,
     engine: []const u8,
     runtime: []const u8,
@@ -195,8 +199,7 @@ fn parseManifestRetained(bytes: []const u8) ParseError!Manifest {
     const entry = try asString(obj.get("entry").?);
     if (!std.mem.eql(u8, entry, ENTRY_NAME)) return error.BadEntry;
 
-    const scope = try scopeName(obj.get("scope").?);
-    if (!std.mem.eql(u8, scope, EXPECTED_SCOPE)) return error.BadScope;
+    const scopes = try scopeNames(obj.get("scope").?);
 
     const permissions = try parsePermissions(obj.get("permissions").?);
 
@@ -211,7 +214,7 @@ fn parseManifestRetained(bytes: []const u8) ParseError!Manifest {
     return .{
         .id = id,
         .entry = entry,
-        .scope = scope,
+        .scopes = scopes,
         .permissions = permissions,
         .engine = engine,
         .runtime = runtime,
@@ -262,15 +265,35 @@ fn asString(v: std.json.Value) ParseError![]const u8 {
     };
 }
 
-/// `"system"` 与 `["system"]` 都算合法。计划冻结的 `Manifest.scope` 是字符串,
-/// 而 Track B 的示例 `mod.json` 写的是数组 —— 两种形状必须都能载入,否则示例在
-/// 实机上会以「坏 manifest」失败。数组只允许**恰好一个**元素。
-fn scopeName(v: std.json.Value) ParseError![]const u8 {
-    return switch (v) {
-        .string => |s| s,
-        .array => |a| if (a.items.len == 1) asString(a.items[0]) else error.BadScope,
-        else => error.BadScope,
-    };
+/// `"system"` 与 `["system"]` 都算合法(v1 的两种写法),`["system","country"]`
+/// 是 v1.1 的多 scope 形状(Track B 的示例 `mod.json` 写的就是数组)。
+///
+/// 纪律:每个元素只允许 `system` / `country`;**重复**与**未知**名字都是
+/// `error.BadScope`,空数组也是 —— 一个都没声明 = 这个 mod 永远不会被派发,
+/// 与其静默装上一个不跑的 session,不如在载入期报错。
+fn scopeNames(v: std.json.Value) ParseError!Scopes {
+    var out = Scopes{};
+    switch (v) {
+        .string => |s| try addScope(&out, s),
+        .array => |a| {
+            if (a.items.len == 0 or a.items.len > 2) return error.BadScope;
+            for (a.items) |item| try addScope(&out, try asString(item));
+        },
+        else => return error.BadScope,
+    }
+    return out;
+}
+
+fn addScope(out: *Scopes, name: []const u8) ParseError!void {
+    if (std.mem.eql(u8, name, "system")) {
+        if (out.system) return error.BadScope;
+        out.system = true;
+    } else if (std.mem.eql(u8, name, "country")) {
+        if (out.country) return error.BadScope;
+        out.country = true;
+    } else {
+        return error.BadScope;
+    }
 }
 
 fn parsePermissions(v: std.json.Value) ParseError!Permissions {
@@ -291,6 +314,8 @@ fn parsePermissions(v: std.json.Value) ParseError!Permissions {
                     p.flag_read = true;
                 } else if (std.mem.eql(u8, name, "log")) {
                     p.log = true;
+                } else if (std.mem.eql(u8, name, "opinion.read")) {
+                    p.opinion_read = true;
                 } else {
                     return error.UnknownPermission;
                 }
@@ -609,7 +634,8 @@ test "a legal manifest parses into all six fields" {
     const m = try parseManifest(legal_array_scope);
     try testing.expectEqualStrings("chokepoint", m.id);
     try testing.expectEqualStrings("main.js", m.entry);
-    try testing.expectEqualStrings("system", m.scope);
+    try testing.expect(m.scopes.system);
+    try testing.expect(!m.scopes.country);
     try testing.expectEqualStrings("4.4.4", m.engine);
     try testing.expectEqualStrings(">=0.1", m.runtime);
     try testing.expect(m.permissions.graph_read);
@@ -623,8 +649,39 @@ test "a string scope is accepted as well as the one-element array" {
         \\{"id":"a","entry":"main.js","scope":"system","permissions":[],"engine":"4.4.4","runtime":">=0.1"}
     ;
     const m = try parseManifest(src);
-    try testing.expectEqualStrings("system", m.scope);
+    try testing.expect(m.scopes.system);
+    try testing.expect(!m.scopes.country);
     try testing.expectEqual(Permissions{}, m.permissions);
+}
+
+test "scope accepts country and a two-element system+country array" {
+    defer releaseManifest();
+    const m = try parseManifest(
+        \\{"id":"a","entry":"main.js","scope":["system","country"],"permissions":[],"engine":"4.4.4","runtime":">=0.1"}
+    );
+    try testing.expect(m.scopes.system and m.scopes.country);
+
+    const bare = try parseManifest(
+        \\{"id":"a","entry":"main.js","scope":"country","permissions":[],"engine":"4.4.4","runtime":">=0.1"}
+    );
+    try testing.expect(!bare.scopes.system);
+    try testing.expect(bare.scopes.country);
+}
+
+test "scope rejects unknown names, duplicates and an empty array" {
+    defer releaseManifest();
+    try testing.expectError(error.BadScope, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":["fleet"],"permissions":[],"engine":"4.4.4","runtime":">=0.1"}
+    ));
+    try testing.expectError(error.BadScope, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":["system","system"],"permissions":[],"engine":"4.4.4","runtime":">=0.1"}
+    ));
+    try testing.expectError(error.BadScope, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":[],"permissions":[],"engine":"4.4.4","runtime":">=0.1"}
+    ));
+    try testing.expectError(error.BadScope, parseManifest(
+        \\{"id":"a","entry":"main.js","scope":["system","country","country"],"permissions":[],"engine":"4.4.4","runtime":">=0.1"}
+    ));
 }
 
 test "every field is required" {
@@ -653,7 +710,7 @@ test "an unknown permission is an error, not a silently dropped bit" {
     try testing.expectError(error.UnknownPermission, parseManifest(src));
 }
 
-test "a non-system scope is an error" {
+test "an unknown or malformed scope is an error" {
     const bodies = [_][]const u8{
         \\{"id":"a","entry":"main.js","scope":["fleet"],"permissions":[],"engine":"4.4.4","runtime":">=0.1"}
         ,
@@ -750,7 +807,7 @@ test "MAX_MODS is the frozen Phase 2 bound" {
 test "the Phase 2 permission bits parse from the manifest" {
     defer releaseManifest();
     const src =
-        \\{"id":"a","entry":"main.js","scope":["system"],"permissions":["graph.read","variable.write","variable.read","flag.write","flag.read","log"],"engine":"4.4.4","runtime":">=0.1"}
+        \\{"id":"a","entry":"main.js","scope":["system"],"permissions":["graph.read","variable.write","variable.read","flag.write","flag.read","log","opinion.read"],"engine":"4.4.4","runtime":">=0.1"}
     ;
     const m = try parseManifest(src);
     try testing.expect(m.permissions.graph_read);
@@ -759,6 +816,7 @@ test "the Phase 2 permission bits parse from the manifest" {
     try testing.expect(m.permissions.flag_write);
     try testing.expect(m.permissions.flag_read);
     try testing.expect(m.permissions.log);
+    try testing.expect(m.permissions.opinion_read);
 }
 
 test "off Windows the multi-mod list has no filesystem either" {

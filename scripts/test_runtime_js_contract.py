@@ -39,6 +39,7 @@ ADDITIVE = [
     "__neo_system_neighbors",
     "__neo_system_set_flag",
     "__neo_system_has_flag",
+    "__neo_register_country",
 ]
 
 

@@ -17,6 +17,7 @@
 //   __neo_system_neighbors(id) -> array<u32>   系统边容器 `+0x588/+0x590/+0x59C`
 //   __neo_system_set_flag(id, name)            官方 `set_star_flag` `+0x48` body
 //   __neo_system_has_flag(id, name) -> bool    系统 flag 容器 `+0x5f8`
+//   __neo_register_country(fn)                 country 派发 handler(`scope:["country"]`)
 // `s.name` / `s.variable` 在 A1 静态侦察里是 deferred(没有可安全调用的官方
 // read path),**不实现**。`sdk/api.def` 由 Track B 补齐;在那之前这 3 个名字只
 // 存在于本文件的加法表里(冻结合同表仍是 7 个,见 `native_names`)。
@@ -46,6 +47,8 @@
 //   NEO_JS_NO_MOD / NEO_JS_TOO_MANY_MODS n=<n> / NEO_JS_MODS n=<n>
 //   NEO_JS_BAD_MANIFEST / NEO_JS_MISSING_ENTRY / NEO_JS_API_MISMATCH
 //   NEO_JS_CALL id=<id>           每次 onSystem 一行(不管几个 session)
+//   NEO_JS_CALL_COUNTRY id=<id>   每次 onCountry 一行(mask==0x04 的派发)
+//   NEO_JS_REGISTER_REJECT id=<mod> scope=country  bundle 没声明 country 却注册了 handler
 //   NEO_JS_WRITE id=<id> name=<name> [kind=flag]
 //   NEO_JS_WRITE_REJECT … reason=<tag> [kind=flag]
 //   NEO_JS_FLAG_REJECT id=<id> name=<name> reason=no_permission|no_flag_token
@@ -86,6 +89,21 @@ pub const Permissions = packed struct {
     flag_write: bool = false,
     flag_read: bool = false,
     log: bool = false,
+    /// v1.1(2026-11-08):只读 opinion 矩阵。**只有读**,没有任何写位 ——
+    /// 写路径不开(计划 Global Constraints)。
+    opinion_read: bool = false,
+};
+
+/// 一个 bundle 声明要接哪几种派发。`packed struct` 与 `Permissions` 同一个理由:
+/// 一份位集就能原子地描述「这个 session 该被谁调用」。
+///
+/// 声明与 handler 必须匹配:只声明 `country` 的 bundle 不会被 `onSystem` 调用,
+/// 反过来 `__neo_register_country` 在没有 `country` 声明的 session 里落一行
+/// `NEO_JS_REGISTER_REJECT`(而不是静默待用 —— 那会让「为什么我的 handler 不跑」
+/// 变成一条无法判读的静默失败)。
+pub const Scopes = packed struct {
+    system: bool = false,
+    country: bool = false,
 };
 
 pub const MAX_VAR_NAME: usize = neo_state.SSO_MAX;
@@ -150,6 +168,7 @@ const additive_native_table = [_]AdditiveEntry{
     .{ .js_name = "__neo_system_neighbors", .func = nativeSystemNeighbors, .length = 1 },
     .{ .js_name = "__neo_system_set_flag", .func = nativeSystemSetFlag, .length = 2 },
     .{ .js_name = "__neo_system_has_flag", .func = nativeSystemHasFlag, .length = 2 },
+    .{ .js_name = "__neo_register_country", .func = nativeRegisterCountry, .length = 1 },
 };
 
 pub const additive_names = blk: {
@@ -173,7 +192,11 @@ pub const Session = struct {
     id: []const u8,
     runtime: quickjs.Runtime,
     handler: c.JSValue = c.JS_UNDEFINED,
+    /// `onCountry` 的 handler。`undefined` = 这个 session 没注册(不是错)。
+    country_handler: c.JSValue = c.JS_UNDEFINED,
     permissions: Permissions = .{},
+    /// bundle 声明的派发位集:只有声明了的那一族才会被调用。
+    scopes: Scopes = .{ .system = true },
     /// `false` = 被禁用(异常/超时/越权/坏 bundle):`onSystem` 跳过它。
     active: bool = false,
     /// 一次 handler 调用里已经用掉的 native 调用次数(第二道闸)。
@@ -337,6 +360,10 @@ pub fn canReadFlag(p: Permissions) bool {
     return p.flag_read;
 }
 
+pub fn canReadOpinion(p: Permissions) bool {
+    return p.opinion_read;
+}
+
 /// `graph.betweenness(s)` 的来源 = C5-SCORE 的同一个 `scoreFor`(烘焙表或 live 源)。
 pub fn betweennessFor(p: Permissions, id: u32) u32 {
     if (!canReadGraph(p)) return 0;
@@ -443,6 +470,8 @@ pub const Bundle = struct {
     /// bundle 的 JS 源码(必须是 sentinel 终止,`JS_Eval` 要 `[:0]const u8`)。
     source: [:0]const u8,
     permissions: Permissions,
+    /// 缺省 = 只接 system —— Phase 1/2 的旧调用点语义不变。
+    scopes: Scopes = .{ .system = true },
 };
 
 /// 建一个 QuickJS session(context)、注册 native、eval bundle、取回 handler。
@@ -470,6 +499,7 @@ pub fn startSession(bundle: Bundle) bool {
         .id = bundle.id,
         .runtime = rt,
         .permissions = bundle.permissions,
+        .scopes = bundle.scopes,
         .active = false,
     };
     session_len = idx + 1;
@@ -491,7 +521,7 @@ pub fn startSession(bundle: Bundle) bool {
         },
     }
 
-    if (sessions[idx].handler.isUndefined()) {
+    if (sessions[idx].handler.isUndefined() and sessions[idx].country_handler.isUndefined()) {
         emit("NEO_JS_NO_HANDLER id={s}", .{bundle.id});
         state = .failed;
         return false;
@@ -527,6 +557,7 @@ fn ensureLoaded() void {
             .id = loaded.manifest.id,
             .source = loaded.source,
             .permissions = loaded.manifest.permissions,
+            .scopes = loaded.manifest.scopes,
         };
         if (startSession(bundle)) ready = true;
     }
@@ -581,6 +612,8 @@ pub fn onSystem(id: u32, scope: u64) void {
     var i: usize = 0;
     while (i < session_len) : (i += 1) {
         if (!sessions[i].active) continue;
+        // 声明与派发必须匹配:只声明 `country` 的 bundle 不能接 system 派发。
+        if (!sessions[i].scopes.system) continue;
         if (sessions[i].handler.isUndefined()) {
             emit("NEO_JS_NO_HANDLER id={d} mod={s}", .{ id, sessions[i].id });
             sessions[i].active = false;
@@ -588,6 +621,39 @@ pub fn onSystem(id: u32, scope: u64) void {
         }
         runSession(i, id);
     }
+}
+
+/// 一次 country 派发(游戏主线程,`mask == 0x04` 的那条路径)。
+///
+/// 与 `onSystem` 同形:一行 `NEO_JS_CALL_COUNTRY`,然后把当次 scope 放进
+/// `current_scope`(natives 只在这条同步区间里读它),只调用**声明了 country**
+/// 且注册了 handler 的 session。`id` 是引擎写在 `scope+0x10` 的那个值 ——
+/// `opinion` 读器会拿它和 JS 传回来的 `self` 核对(不一致就拒读)。
+pub fn onCountry(id: u32, scope: u64) void {
+    ensureLoaded();
+    if (state != .ready) return;
+
+    _ = @atomicRmw(u64, &country_call_count, .Add, 1, .monotonic);
+    emit("NEO_JS_CALL_COUNTRY id={d}", .{id});
+
+    const saved_scope = current_scope;
+    current_scope = scope;
+    defer current_scope = saved_scope;
+
+    var i: usize = 0;
+    while (i < session_len) : (i += 1) {
+        const s = &sessions[i];
+        if (!s.active or !s.scopes.country) continue;
+        if (s.country_handler.isUndefined()) continue; // 没注册不是错
+        runCountrySession(i, id);
+    }
+}
+
+var country_call_count: u64 = 0;
+
+/// `onCountry` 的读数(诊断/测试)。
+pub fn countryCalls() u64 {
+    return @atomicLoad(u64, &country_call_count, .monotonic);
 }
 
 /// Slice 2 的**只读**诊断:引擎把我们注册的 effect 派发进一个**非 system** scope
@@ -659,6 +725,15 @@ fn committed(addr: usize) bool {
 
 /// 跑一个 session 的 handler。异常/超时只禁用**这个** session。
 fn runSession(index: usize, id: u32) void {
+    runHandler(index, id, sessions[index].handler);
+}
+
+/// `onCountry` 的同形入口:只有 handler 不同。
+fn runCountrySession(index: usize, id: u32) void {
+    runHandler(index, id, sessions[index].country_handler);
+}
+
+fn runHandler(index: usize, id: u32, handler: c.JSValue) void {
     active_index = index;
     const s = &sessions[index];
     s.sessions_calls += 1;
@@ -668,7 +743,7 @@ fn runSession(index: usize, id: u32) void {
     var args = [_]c.JSValue{c.JSValue.int32(@intCast(@min(id, 0x7FFF_FFFF)))};
     interrupt_fired = false;
     interrupt_deadline = nowNs() + CALL_BUDGET_NS;
-    const result = c.JS_Call(ctx, s.handler, c.JS_UNDEFINED, 1, &args);
+    const result = c.JS_Call(ctx, handler, c.JS_UNDEFINED, 1, &args);
     interrupt_deadline = 0;
 
     if (interrupt_fired) {
@@ -776,6 +851,26 @@ fn nativeRegisterSystem(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, ar
     const s = currentSession() orelse return c.JS_ThrowInternalError(ctx, "neo: no session");
     if (!s.handler.isUndefined()) c.JS_FreeValue(ctx, s.handler);
     s.handler = c.JS_DupValue(ctx, argv[0]);
+    return c.JS_UNDEFINED;
+}
+
+/// Phase 2 C2 — `onCountry` 的注册 native。与 `nativeRegisterSystem` 同一套
+/// Dup/释放口径,多一道「这个 bundle 声明了 country 吗」的门:
+/// 没声明就落 `NEO_JS_REGISTER_REJECT … scope=country` 并返回 `undefined`
+/// **但不处死 session** —— 声明不匹配是作者写错了 scope,不是越权。
+fn nativeRegisterCountry(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    if (charge(ctx)) |exc| return exc;
+    if (argc < 1 or !c.JS_IsFunction(ctx, argv[0])) {
+        return c.JS_ThrowTypeError(ctx, "onCountry expects a function");
+    }
+    const s = currentSession() orelse return c.JS_ThrowInternalError(ctx, "neo: no session");
+    if (!s.scopes.country) {
+        emit("NEO_JS_REGISTER_REJECT id={s} scope=country", .{s.id});
+        return c.JS_UNDEFINED;
+    }
+    if (!s.country_handler.isUndefined()) c.JS_FreeValue(ctx, s.country_handler);
+    s.country_handler = c.JS_DupValue(ctx, argv[0]);
     return c.JS_UNDEFINED;
 }
 
@@ -981,6 +1076,7 @@ pub fn sessionTimeouts(index: usize) u64 {
 /// 释放掉,免得每个用例都留下 8 个 runtime。
 pub fn resetForTest() void {
     other_scope_count = 0;
+    country_call_count = 0;
     if (comptime !is_windows) {
         var i: usize = 0;
         while (i < session_len) : (i += 1) {
@@ -990,6 +1086,10 @@ pub fn resetForTest() void {
             if (!s.handler.isUndefined()) {
                 c.JS_FreeValue(s.runtime.ctx, s.handler);
                 s.handler = c.JS_UNDEFINED;
+            }
+            if (!s.country_handler.isUndefined()) {
+                c.JS_FreeValue(s.runtime.ctx, s.country_handler);
+                s.country_handler = c.JS_UNDEFINED;
             }
             s.runtime.deinit();
         }
@@ -1640,12 +1740,13 @@ test "the additive v1.1 natives are registered separately from the frozen seven"
         "__neo_system_neighbors",
         "__neo_system_set_flag",
         "__neo_system_has_flag",
+        "__neo_register_country",
     };
     try testing.expectEqual(expected.len, additive_names.len);
     for (expected, 0..) |name, i| try testing.expectEqualStrings(name, additive_names[i]);
     // The Phase 1 contract table stays exactly seven names.
     try testing.expectEqual(@as(usize, 7), native_names.len);
-    try testing.expectEqual(@as(usize, 3), additive_native_table.len);
+    try testing.expectEqual(@as(usize, 4), additive_native_table.len);
 }
 
 var host_flag_calls: usize = 0;
@@ -1852,4 +1953,68 @@ test "a flag name the table refuses is no_flag_token, not a write" {
     try testing.expectEqual(@as(u64, 0), writes());
     // 16 字节的名字超过引擎 SSO 边界,同样拿不到号(不发号、不插表)。
     try testing.expectEqual(FlagResult.bad_name, setSystemFlag(p, 7, "0123456789abcdef", @intFromPtr(&scope)));
+}
+
+// ---------------------------------------------------------------------------
+// country scope 派发(Task 1:多 scope + country 接线)
+// ---------------------------------------------------------------------------
+
+test "onCountry runs only country-scope sessions and logs CALL_COUNTRY once" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    // A 只声明 country:它的 handler 就是 country_handler,没有 system 那一只。
+    try testing.expect(startSession(.{
+        .id = "c",
+        .source = "__neo_register_country(function(id){ __neo_log('country ' + id); });",
+        .permissions = .{ .log = true },
+        .scopes = .{ .country = true },
+    }));
+    // B 只声明 system,却也尝试注册 country —— 那一次落 REGISTER_REJECT,
+    // session 本身继续活着(system handler 在)。
+    try testing.expect(startSession(.{
+        .id = "s",
+        .source = "__neo_register_system(function(id){ __neo_log('system ' + id); }); __neo_register_country(function(id){ __neo_log('wrong ' + id); });",
+        .permissions = .{ .log = true },
+    }));
+    try testing.expect(cap.contains("NEO_JS_REGISTER_REJECT id=s scope=country"));
+    try testing.expectEqual(@as(usize, 2), activeSessions());
+
+    var country: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, country[neo_vtable.SCOPE_MASK_OFF..][0..4], 0x04, .little);
+    std.mem.writeInt(u32, country[neo_vtable.SCOPE_ID_OFF..][0..4], 42, .little);
+    onCountry(42, @intFromPtr(&country));
+
+    try testing.expectEqual(@as(u64, 1), countryCalls());
+    try testing.expectEqual(@as(usize, 1), countOccurrences(cap.text(), "NEO_JS_CALL_COUNTRY id=42"));
+    try testing.expect(cap.contains("NEO_JS_LOG country 42"));
+    // B 的 country 注册被拒 ⇒ 它的 'wrong' handler 不存在,一行都不该出现。
+    try testing.expect(!cap.contains("NEO_JS_LOG wrong"));
+
+    // 反过来:system 派发只喂 B,A 的 country handler 不被调用。
+    cap.len = 0;
+    const system = systemScope(7);
+    onSystem(7, @intFromPtr(&system));
+    try testing.expect(cap.contains("NEO_JS_LOG system 7"));
+    try testing.expect(!cap.contains("NEO_JS_LOG country"));
+}
+
+test "registerCountry without the country scope logs a reject and leaves the session active" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    try testing.expect(startSession(.{
+        .id = "sysonly",
+        .source = "__neo_register_system(function(id){}); __neo_register_country(function(id){});",
+        .permissions = .{},
+    }));
+    try testing.expectEqual(@as(usize, 1), activeSessions());
+    try testing.expect(cap.contains("NEO_JS_REGISTER_REJECT id=sysonly scope=country"));
+    // 声明不匹配是作者写错了 scope,不是越权:session 不被处死。
+    try testing.expectEqual(@as(usize, 1), sessionCount());
+    try testing.expectEqual(Status.ready, status());
 }
