@@ -53,7 +53,7 @@ mov [obj],rax` → 字段清零。census 的 `arg_reads` 五格全是 `False`,�
 ### §1.2 一个必须先说清的偏差:取值点不在 factory 里
 
 计划 Step 3 的 Expected 写的是「`call` 目标里出现 `0x1ababb0` 与/或一个明显的取值序列」。
-`0x1ababb0` 是**基类构造函数**(census 的 callee 列,五个 factory 里四个都调它),它出现在
+`0x1ababb0` 是**基类构造函数**(census 的 callee 列,五个 factory 里三个调它),它出现在
 factory 里**不指示任何读点**;factory 体内也**没有** `[obj+X]` 的取值读。
 
 真正的取值点在 vtable 里,而且**每一个 class 分三层**(与 `country_scope_4_4_4.md` §14 的
@@ -113,7 +113,7 @@ python3 scripts/disrva.py 0x8437b0 --end=0x8439f7      # ← 写库函数
 ```
 
 链路:`0x260e520 → 0x189d0d0(factory) → vptr 0x25fa4c0 / 0x25f7148(+0x8) → slot[2]
-0x1870f90 → 0x1870ff0 → 0x8437b0(country, 0, 0, &[self+0xc0]))`
+0x1870f90 → 0x1870ff0 → 0x8437b0(country, 0, 0, &[self+0xc0])`
 
 `0x8437b0` 的读写点与 §1.3 **同一个容器、同一个索引字段、同一个步长**:
 
@@ -127,7 +127,7 @@ python3 scripts/disrva.py 0x8437b0 --end=0x8439f7      # ← 写库函数
 
 资源表本身:`0x33746f0`(`[+0x14]` = 条数 dword,`[+8]` = 资源对象指针数组)。
 
-### §1.5 收入(income)`income` / `has_monthly_income`:另一条链,另一套容器
+### §1.5 收入:`income` / `has_monthly_income` —— 另一条链,另一套容器
 
 ```bash
 python3 scripts/vtable.py 0x26895f0 --slots 40          # income
@@ -247,3 +247,198 @@ energy_index                      = [[0x33746f0]+0x20]+0x18  (grade C:数值只�
 2. `0x2530` / `0x2570` 只证明"逐资源、8 B、按 `+0x18` 索引";哪一个叫 income 没证。
 3. `energy_index` 的 **0** 是游戏数据顺序的候选,不是读数。
 4. `income` 的标度没单独证明。
+
+---
+
+## §2 opinion 关系值:一张行主序的 int32 缓存矩阵(§2 判决)
+
+### §2.1 输入:三个 donor + 一个反例(计划 Step 1 / Step 2)
+
+```bash
+awk -F'\t' '$5==11614 || $5==18076 || $5==11615 || $5==18176' \
+  evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv
+for a in 0x269ee08 0x269edb8 0x269ed98 0x269e518; do
+  grep -m1 "^$a	" evidence/xrefs/class_info_census_4_4_4.tsv; done
+```
+
+| token | keyword | class_info | factory | size | vtable |
+|---|---|---|---|---|---|
+| 11614 | `opinion` | `0x269ee08` | `0x1b21900` | `0x448` | `0x2696428` |
+| 18076 | `their_opinion` | `0x269edb8` | `0x1b21a10` | `0x448` | `0x2696610`(先写 `0x2696428` 再覆盖) |
+| 11615 | `opinion_level` | `0x269ed98` | `0x1b21960` | `0x220` | `0x2696520` |
+| 18176 | `has_opinion_modifier`(**反例**) | `0x269e518` | `0x1b24b40` | `0x258` | `0x26a10f0` |
+
+factory 长度 `0x51 / 0x5b / 0x5c / 0x7a`(`python3 scripts/pdata.py`),四个都只是构造函数。
+`their_opinion` 的 factory 先 `mov [obj],0x2696428` 再 `mov [obj],0x2696610` —— **方向不是运行时
+flag,是 vtable 换了一个**(`0x2696610` 只覆盖 parse 与 slot[0x1e] 两格)。
+
+### §2.2 读点:三件事分别读出来(计划 Step 3)
+
+```bash
+python3 scripts/vtable.py 0x2696428 --slots 36        # opinion
+python3 scripts/disrva.py 0x1ab04f0 --end=0x1ab05b1   # opinion 的 slot[0x1e] 取值体
+python3 scripts/vtable.py 0x2696610 --slots 36        # their_opinion
+python3 scripts/disrva.py 0x1ab1340 --end=0x1ab1401   # their_opinion 的 slot[0x1e]
+```
+
+`opinion` 的 slot[0x1e] `0x1ab04f0`(**`str "opinion target"`**):
+
+```
+01ab050c  call 0x393dd0                     ; rdi = "我们"这个国家对象
+01ab0529  call 0x35eee0                     ; rbx = 目标国家对象(self+0x2a8, ctx, self+0x40, "opinion target")
+01ab0581  r8  = [0x33794d0]                 ; ← **表描述符全局**
+01ab058d  ecx = [rbx+0x20] & 0xffffff       ; ← **row = 目标国家 id**(24 位截断)
+01ab0590  eax = dword [r8]                  ; ← **n = 行数(也是列数)**
+01ab059d  edx = [rdi+0x20] & 0xffffff       ; ← **col = 我们 id**
+01ab05a8  cmp/jae  ecx,eax / edx,eax        ; 双向界检查
+01ab05aa  imul  ecx,eax                     ; row * n
+01ab05b6  add   ecx,edx                     ; + col
+01ab05b8  rax  = [r8+8]                     ; ← **矩阵基址**
+01ab05bc  eax  = dword [rax + rcx*4]        ; ← **元素 4 B,值就在元素里**
+01ab05bf  cmp   eax,0x7fffffff              ; ← **0x7fffffff = "没算过"**
+01ab05cf  call  0x743bb0 (rcx=我们, rdx=目标) ; 现算
+01ab05d4  mov   [rsi],eax                   ; 顺手写回缓存
+```
+
+`their_opinion` 的 `0x1ab1340` **逐指令同形,只有两个操作数互换**:
+`0x1ab13dd` 取 `[rdi+0x20]`(我们)当 **row**,`0x1ab13ed` 取 `[rbx+0x20]`(目标)当 **col**;
+重算调用的两个实参也跟着互换(`0x1ab1421`:`rcx=rbx=目标, rdx=rdi=我们`)。
+
+⇒ 三件事都读到了:键 = `row*n+col` 的 24 位国家 id 对;基址 = `[[0x33794d0]+8]`;
+元素 = `4 B`;值偏移 = `0`(元素本身)。
+
+### §2.3 方向:两侧互为转置(A);"谁对谁"只到 B(计划 Step 4 的判据)
+
+| 键 | `opinion` | `their_opinion` |
+|---|---|---|
+| `row`(乘 n 的那一个) | **目标**国家(`[rbx+0x20]`) | **我们**(`[rdi+0x20]`) |
+| `col`(加上的那一个) | **我们**(`[rdi+0x20]`) | **目标**(`[rbx+0x20]`) |
+| 重算实参 `0x743bb0(rcx,rdx)` | `(我们, 目标)` | `(目标, 我们)` |
+
+**A:两格互为转置。** 同一份代码的两个变体在**同一条链**上给出相反的键序;`0x743bb0` 的实参
+也跟着换;`0x743bb0` 自己再把两个国家各包一个 `{type=4, id=[obj+0x20]}` 的 scope
+(`0x743ecb` 用 `[rsi+0x20]`、`0x743ef9` 用 `[r14+0x20]`)交给 `0x7440a0`。**这三处都是"转置"的
+证人,不是"哪一向"的证人。**
+
+**B:哪一向叫"我们对他们"。** 两个 docstring 说 `opinion` 是"the country's opinion of the target"、
+`their_opinion` 是"target country's opinion of the current country";重算实参的顺序(`opinion`
+传 `(我们,目标)`,自然读法是"第一个是持有者")也与之一致。但**矩阵内部约定**
+(格子 `[row][col]` 到底存"row 对 col"还是"col 对 row")**没有独立的静态证人** ——
+按 `Review Focus 5` 的规矩,这一条**不许靠命名定**,所以标 **B**。
+
+⇒ 契约侧的做法:按**引擎自己的名字**暴露两格(`opinion` / `their_opinion`),把"人话方向"标成
+待定,由 §3.2 的**不对称国家对**在实机上定;不要写成 `us/them`。`opinion_level` 用两格之和
+(§2.4),天然不受这条影响。
+
+### §2.4 比较器:`opinion_level` 用的是同格之和(计划 Step 4 的后半)
+
+```bash
+python3 scripts/vtable.py 0x2696520 --slots 34          # opinion_level
+python3 scripts/disrva.py 0x1ab08e0 --end=0x1ab0997     # slot[3] 比较体
+python3 scripts/disrva.py 0x1ab0ea0 --end=0x1ab0f20     # 它调的取值/分级体
+python3 scripts/disrva.py 0x1ab1050 --len=0x80          # 分级梯子
+```
+
+`0x1ab0ea0` 在**一个函数里同时**读了两格:
+
+```
+01ab0f6e  imul eax,ebp                 ; target_id * n
+01ab0f7b  add  eax,r15d                ; + self_id      → [target][self]
+01ab0faf  imul ecx,r15d                ; self_id * n
+01ab0fb3  add  ecx,ebp                 ; + target_id    → [self][target]
+01ab0fd8  add  eax,r12d                ; ← **两格相加**
+01ab1033  cmp  eax,[0x326179c]         ; level 4
+01ab1044  cmp  eax,[0x3261790]         ; level 3
+01ab1050  cmp  eax,[0x3261794]         ; …
+01ab105c  cmp  eax,[0x326178c]         ; 最低一档
+```
+
+`opinion_level` 的阈值是 **BSS 里的四个 dword**(`0x3261790/94/9c/8c`,文件里为零 ⇒ 运行期灌),
+所以"level 的阈值"本卷给 **C**;但"level 建立在两格之和上"是 **A**(同一函数内两个方向的索引
+都在,谁也不可能靠命名伪造)。
+
+`0x1ab08e0` 再拿这个 byte 与 `[self+0x7c]`(脚本常量,`opinion_level` factory 里默认 `5`)
+按 operator 比(`[self+0x78]`),`sete/setl/setg/setle/setge/setne` 六个分支与 §1.2 的 enum 同形。
+
+### §2.5 反例:modifier 容器 ≠ opinion 表(计划 Step 5,Review Focus 4)
+
+```bash
+python3 scripts/vtable.py 0x26a10f0 --slots 34          # has_opinion_modifier
+python3 scripts/disrva.py 0x1ac8f70 --len=0x120         # slot[3] 求值体
+python3 scripts/riprefs.py 0x33794d0 --verify           # ← 全量 rip 引用
+```
+
+`has_opinion_modifier`(**`str "HAS_OPINION_MODIFIER"`**)的容器是**链式列表**:
+
+```
+01ac8fa2  call 0x393dd0                 ; country
+01ac8fb1  rcx = [country+0x2c78]        ; ← 另一个子对象(不是 §1.3 的 +0x2c68)
+01ac8fd5  rbp = [holder+0x10]
+01ac8fdb  n = [rbp+0x2d84]              ; 外层条数
+01ac8ffb  e  = [[rbp+0x2d78] + i*8]     ; 外层 = 指针数组
+01ac901d  m = [e+0x24]                  ; 内层条数
+01ac9026  list = [e+0x18]
+01ac9037  cmp [list[j]+8], rdi          ; ← 比的是 **[self+0x218] 那个 modifier 句柄**
+```
+
+`riprefs 0x33794d0` 的读数把这条反例钉成**穷举**而不是抽样:
+
+```
+== 12 refs to 33794d0 (.text) [verified] ==
+  func 265dd0..2676af / bee450..bee6b1 (各 3) / bfe0c0 / c079d0 / c16bea
+  func 1ab04f0..1ab05b1 (opinion) / func 1ab0f20..1ab0f3d / func 1ab1340..1ab1401 (their_opinion)
+```
+
+**8 个函数、12 条引用,0x1ac8xxx 族一个都没有。** ⇒ `modifier_container != opinion_table`,
+不是"看起来不同",是全表扫过没有。
+
+### §2.6 写路径:值不是被"写"进去的,是**懒填缓存**(计划 Step 6)
+
+```bash
+awk -F'\t' '$5==10193 || $5==10330' evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv
+grep -E "^0x260f710|^0x260f700" evidence/xrefs/class_info_census_4_4_4.tsv
+python3 scripts/vtable.py 0x2613638 --slots 12          # add_opinion_modifier 的 effect vtable
+python3 scripts/disrva.py 0x183a8a0 --end=0x183a946     # slot[2] ExecuteActual
+```
+
+- `add_opinion_modifier`(token 10193,class_info `0x260f710`,factory `0x1898450`,vtable `0x2613638`)
+  的 Execute **不碰** `0x33794d0`(§2.5 的 12 条引用里没有它):它只是把解析结果搬进对象字段
+  (`0x183a8a0` 的 `0x2ea5` 分支把名字串写到 `self+0xc8`;描述符 parse 在 `0x183ab60`,
+  描述符名 `ADD_OPINION_MODIFIER`)。⇒ **关系值没有独立写路径**,它是**派生值**。
+- 矩阵格的**唯一**写点就是 §2.2 里那两个取值体的
+  `if (cell == 0x7fffffff) { cell = 0x743bb0(self, other); }`
+  —— 即"**懒填缓存**"。`0x743bb0`(`0x4ed B`)是唯一的计算器(它按 `(A,B)` 两参调用,
+  返回值被写回 `[base+idx*4]`)。
+- `remove_opinion_modifier`(10330)与它同构(factory `0x18984e0`),同样不写矩阵。
+
+⇒ 结论写成:`write_unresolved` **不适用**;正确说法是 **`value_is_derived_lazy_cache`**
+(值由 `0x743bb0` 现算、写回 `[[0x33794d0]+8]+idx*4`)。
+
+### §2.7 `OpinionRead` 判决行
+
+```
+OpinionRead = {table_base, key_encoding, stride, value_offset, orientation}
+table_base     = [[0x33794d0]];描述符 {+0x00 = n (u32, 行列同值), +0x08 = int32* data}   (A)
+                 (0x33794d0 本身在 .data 未初始化尾部 ⇒ 值只能运行期读)
+key_encoding   = row*n + col;row/col = 国家对象 +0x20 的 **低 24 位**;双向下标界检查         (A)
+stride         = 4 B(int32)                                                                (A)
+value_offset   = 0(值就是元素)                                                             (A)
+sentinel       = 0x7fffffff = 未计算;命中时调 0x743bb0 现算并写回                            (A)
+orientation    = opinion 与 their_opinion 读**互为转置**的两格(row/col 互换 + 重算实参互换)  (A)
+                 "哪一向 = 己对目标" 只有 docstring + 参数序两条单侧证人 ⇒ (B),见 §2.3
+level_basis    = v(目标,己) + v(己,目标) vs 4 个 BSS 阈值                                    (A: 求和;B/C: 阈值数值)
+not_modifier   = 0x33794d0 全量 12 条 rip 引用 / 8 个函数,has_opinion_modifier 族 0 条        (A)
+write_path     = 无独立写路径;值是懒填缓存(0x743bb0 + 两个取值体的写回)                     (A)
+```
+
+**这一节不能说的:**
+
+1. `n`(维度)与四个 level 阈值都在 BSS,**静态拿不到数值**;`table_base` 是**指针**,不是常量。
+2. 矩阵里的 int32 **是不是**就直接等于 UI 上的 opinion 数值(有没有额外缩放)本卷没有证人;
+   两个取值体读出来就原样交给比较器,但比较器的阈值来自脚本常量,单位没有独立对照。
+3. `0x743bb0` 是"权威计算"是**单侧**证人(只有它是唯一被两个取值体调用的计算器),
+   它的内部没有逐条读完 —— 不影响"值从哪一格来"的判决,但**不能**据此说"opinion 由哪些项组成"。
+4. 一条**不在判决内**的旁证:`0x743bb0` 在栈上构造的临时对象把 vptr 设成 **`0x24e9068`**
+   (`0x743bea`),与 `country_scope_4_4_4.md` §11 实机记到的那一格同值。本卷**不**据此改
+   §11 的"CEffect 家族"判读,也不主张它是 scope —— 只登记这个重合,留给后面的卷子。
+
