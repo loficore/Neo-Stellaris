@@ -58,6 +58,8 @@
 //   NEO_JS_ERROR id=<id> mod=<mod> <message> | NEO_JS_TIMEOUT id=<id> mod=<mod>
 //   NEO_SCOPE_OTHER mask=0x<mm> … vtable_rva/6×u32  非 system scope 的只读指纹(前 3 次)
 //   NEO_SCOPE_OTHER_SEEN n=<n>                       之后每 500 次一行计数
+//   NEO_JS_OPINION_REJECT self=<s> target=<t> reason=<tag>
+//       tag = no_permission | scope_mismatch | table_null | out_of_range | not_computed
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -69,6 +71,8 @@ const neo_state = @import("neo_state.zig");
 const graph_probe = @import("graph_probe.zig");
 const loader = @import("neo_js_loader.zig");
 const flag_ids = @import("flag_ids.zig");
+const offsets = @import("../shared/offsets.zig");
+const opinion_table = @import("opinion_table.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -169,6 +173,8 @@ const additive_native_table = [_]AdditiveEntry{
     .{ .js_name = "__neo_system_set_flag", .func = nativeSystemSetFlag, .length = 2 },
     .{ .js_name = "__neo_system_has_flag", .func = nativeSystemHasFlag, .length = 2 },
     .{ .js_name = "__neo_register_country", .func = nativeRegisterCountry, .length = 1 },
+    .{ .js_name = "__neo_country_opinion", .func = nativeCountryOpinion, .length = 2 },
+    .{ .js_name = "__neo_country_their_opinion", .func = nativeCountryTheirOpinion, .length = 2 },
 };
 
 pub const additive_names = blk: {
@@ -793,8 +799,17 @@ fn reportException(ctx: ?*c.JSContext, id: u32, mod_id: []const u8) void {
 // ---------------------------------------------------------------------------
 
 fn argU32(argc: c_int, argv: [*]c.JSValue) ?u32 {
-    if (argc < 1) return null;
-    const v = argv[0];
+    return argU32At(argc, argv, 0);
+}
+
+/// 按下标取一个 u32(逻辑与 `argU32` 相同)。`argc <= idx` 一律 null:
+/// 少一个实参是「这次读不出来」,不是一个默认值。
+fn argU32At(argc: c_int, argv: [*]c.JSValue, idx: usize) ?u32 {
+    if (argc <= idx) return null;
+    return valueU32(argv[idx]);
+}
+
+fn valueU32(v: c.JSValue) ?u32 {
     if (v.isInt32()) {
         const i = v.u.i32;
         return if (i < 0) null else @intCast(i);
@@ -1024,6 +1039,137 @@ fn nativeApiVersion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: 
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2 C2 — opinion 只读 native(哨兵/越界/空表/无权限一律 fail-closed)
+// ---------------------------------------------------------------------------
+//
+// 两个 native 只有「哪一向当 row」这一处不同(§2.3:`opinion` 与 `their_opinion`
+// 读互为**转置**的两格)。名字按引擎的 keyword 取,**不**按「我们/他们」取:
+// 「哪一向 = 己对目标」只有 B 级证人,契约里不许写成事实。
+//
+// 只读面:不调懒填计算器 `0x743bb0`(它会写缓存),不改 scope,不写引擎内存。
+
+/// 测试注入:合成矩阵的读面 + 描述符地址。非 Windows 上 `moduleBase()` 恒为 0,
+/// 所以测试**必须**两个都注入,否则只能测到 `table_null` 这一档。
+var opinion_memory: ?opinion_table.Memory = null;
+var opinion_descriptor: ?u64 = null;
+
+pub fn setOpinionTableForTest(mem: ?opinion_table.Memory, descriptor: ?u64) void {
+    opinion_memory = mem;
+    opinion_descriptor = descriptor;
+}
+
+/// 生产读面:host 自己的 `readU32Safe`/`readU64Safe`(Windows 上带 `isCommitted`)。
+var production_ctx: u8 = 0;
+
+fn productionReadU32(ctx: *anyopaque, addr: u64) ?u32 {
+    _ = ctx;
+    return readU32Safe(addr);
+}
+
+fn productionReadU64(ctx: *anyopaque, addr: u64) ?u64 {
+    _ = ctx;
+    return readU64Safe(addr);
+}
+
+fn productionReadI32(ctx: *anyopaque, addr: u64) ?i32 {
+    _ = ctx;
+    const v = readU32Safe(addr) orelse return null;
+    return @bitCast(v);
+}
+
+fn opinionMemory() opinion_table.Memory {
+    if (opinion_memory) |m| return m;
+    return .{
+        .ctx = @ptrCast(&production_ctx),
+        .read_u32 = productionReadU32,
+        .read_u64 = productionReadU64,
+        .read_i32 = productionReadI32,
+    };
+}
+
+/// 模块基址(绝对值)。非 Windows 返回 0 —— 读器于是拿不到描述符,只能 `table_null`。
+fn moduleBase() u64 {
+    if (comptime !is_windows) return 0;
+    const p = windows.moduleFunction(0) catch return 0;
+    return @intFromPtr(p);
+}
+
+fn descriptorAddr() ?u64 {
+    if (opinion_descriptor) |a| return a;
+    const base = moduleBase();
+    if (base == 0) return null;
+    return std.math.add(u64, base, offsets.country.OPINION_DESCRIPTOR) catch null;
+}
+
+/// `LookupError` → 日志里的 snake_case 理由词。**不用** `@errorName`:它的输出是
+/// 错误标签原样(`NotComputed`),而日志口径是 `not_computed` —— 读数按行 grep,
+/// 两种拼法会让「哨兵命中了没有」在日志里对不上。
+fn lookupTag(e: opinion_table.LookupError) []const u8 {
+    return switch (e) {
+        error.TableNull => "table_null",
+        error.OutOfRange => "out_of_range",
+        error.NotComputed => "not_computed",
+    };
+}
+
+/// 具名拒绝行:`reason` 取 `lookupTag`,外加两档纯 JS 侧的
+/// `no_permission` / `scope_mismatch`。
+fn opinionReject(self: u32, target: u32, reason: []const u8) void {
+    emit("NEO_JS_OPINION_REJECT self={d} target={d} reason={s}", .{ self, target, reason });
+}
+
+/// 两个 native 的公共体。`swap` 只决定 row/col 的取法:
+///   `opinion`        = base[(target, self)](引擎 `opinion` 那一格)
+///   `their_opinion`  = base[(self, target)](引擎 `their_opinion` 那一格)
+fn readOpinion(argc: c_int, argv: [*]c.JSValue, swap: bool) c.JSValue {
+    const self = argU32At(argc, argv, 0) orelse return c.JS_UNDEFINED;
+    const target = argU32At(argc, argv, 1) orelse return c.JS_UNDEFINED;
+
+    // 只读越权**不**处死 session(与写路径相反:一次读没有副作用,
+    // 而且写侧那一条是"这个 mod 想改世界",性质不同)。
+    if (!canReadOpinion(currentPermissions())) {
+        opinionReject(self, target, "no_permission");
+        return c.JS_UNDEFINED;
+    }
+
+    // JS 传回来的 `self` 必须就是当次派发的那个国家,否则读的是别人的行。
+    const scope = current_scope;
+    if (scope == 0 or readU32Safe(scope + neo_vtable.SCOPE_ID_OFF) != self) {
+        opinionReject(self, target, "scope_mismatch");
+        return c.JS_UNDEFINED;
+    }
+
+    const addr = descriptorAddr() orelse {
+        opinionReject(self, target, "table_null");
+        return c.JS_UNDEFINED;
+    };
+    const table = opinion_table.load(opinionMemory(), addr) catch |e| {
+        opinionReject(self, target, lookupTag(e));
+        return c.JS_UNDEFINED;
+    };
+
+    const row = if (swap) target else self;
+    const col = if (swap) self else target;
+    const v = opinion_table.value(opinionMemory(), table, row, col) catch |e| {
+        opinionReject(self, target, lookupTag(e));
+        return c.JS_UNDEFINED;
+    };
+    return c.JSValue.int32(v);
+}
+
+fn nativeCountryOpinion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    if (charge(ctx)) |exc| return exc;
+    return readOpinion(argc, argv, false);
+}
+
+fn nativeCountryTheirOpinion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    if (charge(ctx)) |exc| return exc;
+    return readOpinion(argc, argv, true);
+}
+
+// ---------------------------------------------------------------------------
 // Readouts
 // ---------------------------------------------------------------------------
 
@@ -1103,6 +1249,8 @@ pub fn resetForTest() void {
     clock = null;
     sink = null;
     flag_ids.resetCache();
+    opinion_memory = null;
+    opinion_descriptor = null;
     @atomicStore(u64, &call_count, 0, .monotonic);
     @atomicStore(u64, &write_count, 0, .monotonic);
     @atomicStore(u64, &error_count, 0, .monotonic);
@@ -1741,12 +1889,14 @@ test "the additive v1.1 natives are registered separately from the frozen seven"
         "__neo_system_set_flag",
         "__neo_system_has_flag",
         "__neo_register_country",
+        "__neo_country_opinion",
+        "__neo_country_their_opinion",
     };
     try testing.expectEqual(expected.len, additive_names.len);
     for (expected, 0..) |name, i| try testing.expectEqualStrings(name, additive_names[i]);
     // The Phase 1 contract table stays exactly seven names.
     try testing.expectEqual(@as(usize, 7), native_names.len);
-    try testing.expectEqual(@as(usize, 4), additive_native_table.len);
+    try testing.expectEqual(@as(usize, 6), additive_native_table.len);
 }
 
 var host_flag_calls: usize = 0;
@@ -2017,4 +2167,126 @@ test "registerCountry without the country scope logs a reject and leaves the ses
     // 声明不匹配是作者写错了 scope,不是越权:session 不被处死。
     try testing.expectEqual(@as(usize, 1), sessionCount());
     try testing.expectEqual(Status.ready, status());
+}
+
+// ---------------------------------------------------------------------------
+// opinion 只读 native(Task 2:哨兵 / 越界 / scope 不一致 / 无权限)
+// ---------------------------------------------------------------------------
+
+fn countryScope(id: u32) [0x20]u8 {
+    var scope: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, scope[neo_vtable.SCOPE_MASK_OFF..][0..4], offsets.country.SCOPE_MASK, .little);
+    std.mem.writeInt(u32, scope[neo_vtable.SCOPE_ID_OFF..][0..4], id, .little);
+    return scope;
+}
+
+test "nativeCountryOpinion requires opinion.read and rejects a mismatched scope" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    var matrix = opinion_table.FakeMatrix.init(3);
+    matrix.wire();
+    matrix.set(0, 0, 11);
+    setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
+
+    // 1) 没有 opinion.read:每次读都 undefined + no_permission,session **不被禁用**。
+    try testing.expect(startSession(.{
+        .id = "noperm",
+        .source = "__neo_register_country(function(id){ if (__neo_country_opinion(id, id) !== undefined) throw new Error('value'); });",
+        .permissions = .{},
+        .scopes = .{ .country = true },
+    }));
+    const scope0 = countryScope(0);
+    onCountry(0, @intFromPtr(&scope0));
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expectEqual(@as(usize, 1), activeSessions());
+    try testing.expect(cap.contains("NEO_JS_OPINION_REJECT self=0 target=0 reason=no_permission"));
+
+    // 2) 有权限,但 JS 传的 self 与当次派发的 scope 不是同一个国家。
+    resetForTest();
+    armCapture(&cap);
+    setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
+    try testing.expect(startSession(.{
+        .id = "scoped",
+        .source = "__neo_register_country(function(id){ if (__neo_country_opinion(id, 1) !== undefined) throw new Error('value'); });",
+        .permissions = .{ .opinion_read = true },
+        .scopes = .{ .country = true },
+    }));
+    const wrong = countryScope(9); // 派发的 scope 说 9,JS 看到的是 7
+    onCountry(7, @intFromPtr(&wrong));
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expect(cap.contains("NEO_JS_OPINION_REJECT self=7 target=1 reason=scope_mismatch"));
+
+    // 3) 没注入表(等价于生产上拿不到描述符):table_null,不是 0 分。
+    resetForTest();
+    armCapture(&cap);
+    try testing.expect(startSession(.{
+        .id = "notable",
+        .source = "__neo_register_country(function(id){ if (__neo_country_opinion(id, 1) !== undefined) throw new Error('value'); });",
+        .permissions = .{ .opinion_read = true },
+        .scopes = .{ .country = true },
+    }));
+    const scope1 = countryScope(1);
+    onCountry(1, @intFromPtr(&scope1));
+    try testing.expect(cap.contains("NEO_JS_OPINION_REJECT self=1 target=1 reason=table_null"));
+    try testing.expectEqual(@as(u64, 0), errors());
+}
+
+test "nativeCountryOpinion returns undefined for sentinel and out-of-range" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    var matrix = opinion_table.FakeMatrix.init(3);
+    matrix.wire();
+    // (row=1,col=2) 是哨兵:opinion(1,2) 的 row=self=1、col=target=2。
+    matrix.set(1, 2, opinion_table.SENTINEL);
+    // 转置的两格:opinion(1,2)=77、their_opinion(1,2)=[2][1]=-9。
+    matrix.set(2, 1, -9);
+    setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
+
+    // 哨兵 → undefined + not_computed。
+    try testing.expect(startSession(.{
+        .id = "sentinel",
+        .source = "__neo_register_country(function(id){ if (__neo_country_opinion(id, 2) !== undefined) throw new Error('value'); });",
+        .permissions = .{ .opinion_read = true },
+        .scopes = .{ .country = true },
+    }));
+    const scope1 = countryScope(1);
+    onCountry(1, @intFromPtr(&scope1));
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expect(cap.contains("NEO_JS_OPINION_REJECT self=1 target=2 reason=not_computed"));
+
+    // row = n(=3) → out_of_range(界是逐维查的,不是只查乘积)。
+    resetForTest();
+    armCapture(&cap);
+    setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
+    try testing.expect(startSession(.{
+        .id = "range",
+        .source = "__neo_register_country(function(id){ if (__neo_country_opinion(id, 0) !== undefined) throw new Error('value'); });",
+        .permissions = .{ .opinion_read = true },
+        .scopes = .{ .country = true },
+    }));
+    const scope3 = countryScope(3);
+    onCountry(3, @intFromPtr(&scope3));
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expect(cap.contains("NEO_JS_OPINION_REJECT self=3 target=0 reason=out_of_range"));
+
+    // 正读:两个 native 落在互为转置的两格(Review Focus 5 的本地落点)。
+    resetForTest();
+    armCapture(&cap);
+    matrix.set(1, 2, 77);
+    setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
+    try testing.expect(startSession(.{
+        .id = "both",
+        .source = "__neo_register_country(function(id){ var a = __neo_country_opinion(id, 2); var b = __neo_country_their_opinion(id, 2); if (a !== 77 || b !== -9) throw new Error('a=' + a + ' b=' + b); });",
+        .permissions = .{ .opinion_read = true },
+        .scopes = .{ .country = true },
+    }));
+    onCountry(1, @intFromPtr(&scope1));
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expectEqual(@as(usize, 1), activeSessions());
 }

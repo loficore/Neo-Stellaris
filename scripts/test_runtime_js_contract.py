@@ -3,8 +3,9 @@
 Phase 1 的 native 名字是冻结合同。TS 包、Zig host 和 mock host 三边只要有一边
 改名/少一个，构建期检查就会绿着跑错 API。这里只做纯文本/JSON 检查，不起进程。
 
-Phase 2 的 v1.1 是**加法**：`api.def` 的头部仍是 v1 的七项，尾部追加三项
-（neighbors → set_flag → has_flag）。围栏读 host 的两张表——冻结的
+Phase 2 的 v1.1 是**加法**：`api.def` 的头部仍是 v1 的七项，之后按 host 的注册顺序
+追加（neighbors → set_flag → has_flag → register_country → country_opinion →
+country_their_opinion）。围栏读 host 的两张表——冻结的
 `native_table`（`.name =`）与加法的 `additive_native_table`（`.js_name =`）——
 要求 `api.def == FROZEN_V1 + ADDITIVE`，且两侧逐项同序。
 
@@ -40,6 +41,8 @@ ADDITIVE = [
     "__neo_system_set_flag",
     "__neo_system_has_flag",
     "__neo_register_country",
+    "__neo_country_opinion",
+    "__neo_country_their_opinion",
 ]
 
 
