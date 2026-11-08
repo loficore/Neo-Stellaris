@@ -337,3 +337,24 @@ def test_copy_or_replace_is_a_noop_for_the_same_path(tmp_path):
     target.write_bytes(b"x")
     mod._copy_or_replace(target, target)  # must not raise
     assert target.read_bytes() == b"x"
+
+
+def test_real_install_prints_the_three_steps_on_stderr(tmp_path, capsys, monkeypatch):
+    mod = _make_mod(tmp_path / "proj", "neo_events")
+    argv = [a for a in _dry_run_args(tmp_path, mod) if a != "--dry-run"]
+    argv.append("--no-launch")
+    monkeypatch.setitem(neo.SUPPORTED_SHA256, "test", neo.sha256_file(tmp_path / "stellaris.exe"))
+    code = neo.main(argv)
+    out = capsys.readouterr()
+    assert code == 0
+    assert out.out.count("\n") == 1
+    assert out.err.count("NEXT ") == 3
+    assert "neo_events" in out.err
+
+
+def test_next_steps_are_three_and_name_the_mod():
+    lines = neo.next_steps("neo_events")
+    assert len(lines) == 3
+    assert "neo_events" in lines[0]
+    assert "neo.bat" in lines[1]
+    assert "NEO_JS_INIT_OK" in lines[2]

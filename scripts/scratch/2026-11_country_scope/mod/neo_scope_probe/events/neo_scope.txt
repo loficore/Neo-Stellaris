@@ -1,0 +1,54 @@
+# C2 — country-scope delivery probe (Stellaris 4.4.4, read-only).
+#
+# The one question this file answers: does `every_country = { neo_action = { } }`
+# hand a *country* scope to the injected host, and what fingerprint does that
+# scope carry?
+#
+# Two groups, fixed order (plan: C2 country scope):
+#   1. CONTROL   `random_system = { every_system = { neo_action = { } } }`
+#                — the C1/C5 shape. Proves `neo_action` parses inside THIS event
+#                and that system dispatches reach the host (`NEO_JS_CALL` grows,
+#                plus one `NEO_C2_CTRL_SCOPE_ENTER` line per pulse).
+#   2. EXPERIMENT `every_country = { limit = { is_ai = no } neo_action = { } }`
+#                — the country pass. Body logs `NEO_C2_EXP_COUNTRY_ENTER` first,
+#                then the same registered effect.
+#
+# `event = {` is untyped on purpose: an on_action has no scope, and C1 lost a
+# run to `country_event = {` ("fire country scope event ... on no_scope").
+#
+# `random_system` wraps `every_system` because a no-scope body iterates systems
+# once (2026-11-01 reading).
+#
+# `every_system` from inside `random_system` and `every_country` from the event
+# body are both official iterator effects — nothing here is new syntax.
+# `neo_action` is the effect the injected host registers; its body is an empty
+# block on purpose (the registered class parses an assignment block).
+#
+# No localisation, no options, no engine writes: the probe is read-only.
+
+namespace = neo_scope
+
+event = {
+	id = neo_scope.100
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		# --- group 1: control (system scope) --------------------------------
+		random_system = {
+			log = "NEO_C2_CTRL_SCOPE_ENTER"
+			every_system = {
+				neo_action = { }
+			}
+		}
+
+		# --- group 2: experiment (country scope) ----------------------------
+		every_country = {
+			limit = {
+				is_ai = no
+			}
+			log = "NEO_C2_EXP_COUNTRY_ENTER"
+			neo_action = { }
+		}
+	}
+}

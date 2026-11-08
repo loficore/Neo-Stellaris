@@ -117,6 +117,8 @@ host 存活;**§50 压测**让另 7 条 `container_of` 路径在实机跑满(`C2
 - **Zig `extern fn` 绑 QuickJS C 函数会崩 ⇒ 绕行使它长期延后(全部 QuickJS 调用走 `src/dll/quickjs/quickjs_wrapper.c` 的 C 包装),机制已静态排除(§65 `abi_closed_static`)**
   (ABI 不匹配假设由 §65 排除;TLS 初始化不在该节口径内)。这是旧计划 §3 阻塞表里唯一还活着的实现约束,`src/` 注释的出处就指这一条,禁令(`exports.zig:351-353`)未放宽。
 
+- **运行时 JS 的判据(2026-11-08 社区读数,不进仓库的调研)**:Steam 最受好评前 29 全是 UI/美术/全面转换/内容扩展/优化/框架 ⇒ 官方 DSL 已覆盖内容型需求,我们的增量只在计算型/全局型玩法,而**注入形态不可订阅**是决定性闸门;「构建期 TS→官方 DSL」= 跟随 P社,不做;唯一值得继续的形态是 **loader 化 + 一个 DSL 表达不出的机制** 的端到端验证,否则停止项目。;**C1/C2 实机已落(2026-11-08)**:JS 决策→官方事件可见→选项回读,国家 scope 到 host(`mask=0x04`、`vtable_rva=0x24e9068`),经济/外交**字段层仍 deferred**(`evidence/logs/runtime_js_events_c1_4_4_4.log`、`runtime_js_c2_country_scope_4_4_4.log`、`evidence/analysis/country_scope_4_4_4.md` §11)。
+
 ## 6. 新旧 § 映射
 
 本表左列的「旧 §N」指**根目录那份 449 行叙述性计划**的段号,不是 evidence 的 §(旧名→新名的对照记在
