@@ -62,7 +62,8 @@
 //       C3 国家侦察(前 3 个国家):[country+0x2c68] 经济持有者 + 两个槽目标(只读指针)
 //   NEO_C3_RES db_n=<n> energy_obj=0x<x> energy_idx=<n|na>
 //       资源库条数 / `[[0x33746F0]+0x20]` / 能量索引(与 ECON 同一行组,只打 3 国)
-//   NEO_C3_OPINION self=<id> target=0 a=<n|na> b=<n|na>
+//   NEO_C3_OPINION self=<id> target=0 a=<n|na:t|na:o|na:n> b=<同左>
+//       na 的三档:t=table_null / o=out_of_range / n=not_computed(ids 已按 24 位掩过)
 //       opinion 双向(a = 引擎 `opinion`,b = `their_opinion`;前 40 个国家)
 //   NEO_JS_OPINION_REJECT self=<s> target=<t> reason=<tag>
 //       tag = no_permission | scope_mismatch | table_null | out_of_range | not_computed
@@ -772,15 +773,19 @@ fn countryProbeAddresses() country_probe.Addresses {
 }
 
 /// 一个 opinion 格子的打印文本:`<n>` 或 `na`(任何失败 —— 空表/越界/哨兵/读不到)。
-fn opinionText(buf: []u8, v: ?i32) []const u8 {
-    const value = v orelse return "na";
+fn opinionText(buf: []u8, v: opinion_table.LookupError!i32) []const u8 {
+    const value = v catch |e| return switch (e) {
+        error.TableNull => "na:t",
+        error.OutOfRange => "na:o",
+        error.NotComputed => "na:n",
+    };
     return std.fmt.bufPrint(buf, "{d}", .{value}) catch "na";
 }
 
-fn c3Opinion(row: u32, col: u32) ?i32 {
-    const addr = descriptorAddr() orelse return null;
-    const table = opinion_table.load(opinionMemory(), addr) catch return null;
-    return opinion_table.value(opinionMemory(), table, row, col) catch null;
+fn c3Opinion(row: u32, col: u32) opinion_table.LookupError!i32 {
+    const addr = descriptorAddr() orelse return error.TableNull;
+    const table = try opinion_table.load(opinionMemory(), addr);
+    return opinion_table.value(opinionMemory(), table, row & 0xffff_ff, col & 0xffff_ff);
 }
 
 fn emitCountryProbe(id: u32) void {
@@ -1261,8 +1266,10 @@ fn readOpinion(argc: c_int, argv: [*]c.JSValue, swap: bool) c.JSValue {
         return c.JS_UNDEFINED;
     };
 
-    const row = if (swap) target else self;
-    const col = if (swap) self else target;
+    // C3 实机(2026-11-08):`scope+0x10` 的高 8 位带标签,矩阵的键只用低 24 位
+    // (`[obj+0x20] & 0xffffff`,§2.2)。不掩就会把一半国家读成 out_of_range。
+    const row = (if (swap) target else self) & 0xffff_ff;
+    const col = (if (swap) self else target) & 0xffff_ff;
     const v = opinion_table.value(opinionMemory(), table, row, col) catch |e| {
         opinionReject(self, target, lookupTag(e));
         return c.JS_UNDEFINED;
@@ -2413,6 +2420,30 @@ test "nativeCountryOpinion returns undefined for sentinel and out-of-range" {
 // ---------------------------------------------------------------------------
 // C3(2026-11-08)— 国家侦察行(上限 3/40,只读)
 // ---------------------------------------------------------------------------
+
+test "nativeCountryOpinion masks the 24-bit country id before indexing the matrix" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    var matrix = opinion_table.FakeMatrix.init(3);
+    matrix.wire();
+    // raw id 0x01000002(self) / 0x01000001(target) -> 掩后 self=2、target=1；
+    // 引擎 opinion 的键 = row(target=1) * n + col(self=2)。
+    matrix.set(1, 2, 77);
+    setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
+
+    try testing.expect(startSession(.{
+        .id = "masked",
+        .source = "__neo_register_country(function(id){ if (__neo_country_opinion(id, 0x01000001) !== 77) throw new Error('mask'); });",
+        .permissions = .{ .opinion_read = true },
+        .scopes = .{ .country = true },
+    }));
+    var scope: [0x20]u8 align(8) = countryScope(0x01000002);
+    onCountry(0x01000002, @intFromPtr(&scope));
+    try testing.expectEqual(@as(u64, 0), errors());
+}
 
 test "a country dispatch emits the C3 econ and opinion lines and caps them" {
     resetForTest();

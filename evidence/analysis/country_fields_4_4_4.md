@@ -640,3 +640,13 @@ onCountry.their_opinion[target]  ; int32,引擎 `their_opinion` 那一格 = base
 3. **高位的含义**:本发量到高 8 位有三种取值(`0x01`/`0x04`/`0x06`),**没有**判定它是什么
    (国家类型?实例代号?);只判定「低 24 位是国家 id」这一条对查表可用。
 4. **单战役/单存档/9 个月**;39→41 国的变化只说明这一份存档不静默,不外推到其它存档。
+
+**2026-11-08 修正（同分支离线，未重打）。** 本节的读数不改写；上面「下一步」里的三处仪器缺陷已经在
+`feat/c3-country-probe` 修掉并加测试：
+
+1. `country_probe.zig` 的槽取法由 `[E+0x90]` 改回引擎的 `[[E]+0x90]`（`0x1adf75d`/`0x1adf767`）；
+2. `readOpinion` / `c3Opinion` 的 `self`/`target` 先按低 24 位掩再查表（与 `[obj+0x20] & 0xffffff` 同口径）；
+3. `NEO_C3_OPINION` 的 `na` 拆成 `na:t`（table_null）/ `na:o`（out_of_range）/ `na:n`（not_computed）。
+
+`zig build test` = **1042/1042**（含一条「raw id 0x01000002 / 0x01000001 掩后命中 [1][2]」的回归测试）。
+下一发（若点名）应看到：`s90/s98` 非 0、opinion 出数字或带理由词；**本发不重试**的约束不变。

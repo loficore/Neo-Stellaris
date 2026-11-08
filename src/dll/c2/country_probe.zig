@@ -7,7 +7,9 @@
 //                entry = [root + id*0x10 + 8]（步长 0x10，取 +8 那一格）
 //                id 复核：`[entry+0x20] == id`（Review Focus 2）
 //   经济持有者   E = [obj+0x2c68]             `country_fields_4_4_4.md` §1.3/§1.8（B）
-//                [E] = vtable；[E+0x90] / [E+0x98] = 两个槽目标（只读指针，**不调用**）
+//                vt = [E]；[vt+0x90] / [vt+0x98] = 两个槽目标（只读指针，**不调用**）
+//                （C3 实机 2026-11-08 抓到：本文件原先读 [E+0x90]，那是对象字段；
+//                 引擎在 0x1adf75d/0x1adf767 读的是 [[E]+0x90]，槽在 vtable 上）
 //   资源库       db = [0x33746F0]             `country_fields_4_4_4.md` §1.4/§1.6
 //                res_n = [db+0x14]；energy_obj = [db+0x20]；energy_idx = [energy_obj+0x18]
 //
@@ -99,8 +101,10 @@ fn readObject(mem: Memory, addrs: Addresses, country_id: u32, module_base: u64, 
 
     const vt = mem.read_u64(mem.ctx, econ) orelse 0;
     r.econ_vtable_rva = rva(vt, module_base);
-    r.slot90_rva = rva(mem.read_u64(mem.ctx, add64(econ, 0x90) orelse 0) orelse 0, module_base);
-    r.slot98_rva = rva(mem.read_u64(mem.ctx, add64(econ, 0x98) orelse 0) orelse 0, module_base);
+    if (vt != 0) {
+        r.slot90_rva = rva(mem.read_u64(mem.ctx, add64(vt, 0x90) orelse 0) orelse 0, module_base);
+        r.slot98_rva = rva(mem.read_u64(mem.ctx, add64(vt, 0x98) orelse 0) orelse 0, module_base);
+    }
 }
 
 fn readResources(mem: Memory, addrs: Addresses, r: *Reading) void {
@@ -207,10 +211,10 @@ test "country_probe resolves the object through the country table and reads the 
     // 对象 +0x20 = id；+0x2c68 = 0x4000
     m.putDword(0x3020, 2);
     m.putQword(0x3000 + 0x2c68, 0x4000);
-    // 0x4000 的 [0] = vtable 0x5000；[0x90] = base+0x1234；[0x98] = base+0x5678
+    // 0x4000 的 [0] = vtable 0x5000；槽在 vtable 上：[0x5000+0x90] / [+0x98]
     m.putQword(0x4000, 0x5000);
-    m.putQword(0x4090, 0x1000 + 0x1234);
-    m.putQword(0x4098, 0x1000 + 0x5678);
+    m.putQword(0x5090, 0x1000 + 0x1234);
+    m.putQword(0x5098, 0x1000 + 0x5678);
 
     const r = collect(m.memory(), .{ .country_table = 0x1000, .resource_db = 0 }, 2, 0x1000);
 
