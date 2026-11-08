@@ -174,6 +174,7 @@ Cross-reference work prefers the offline scripts (约束 2)。
 | `0x1B5B10` | `CScriptedEffectTemplateDatabase` ctor(中可信度) | `anchors_4_4_4` |
 | `0x5BBF80` | token-id 二分查找派发树 — **不是 keyword 注册表** | §17 |
 | `0x9F5750` / `0x9F6420` / `0x9F65E0` | Event command handlers(需更深 trace 选点) | `anchors_4_4_4` |
+| `0x33794D0` | **opinion 矩阵描述符**:`{n@+0x00, int32* base@+0x08}`,键 `row*n+col`;哨兵 `0x7fffffff` = 未计算 | `country_fields_4_4_4.md` §2 |
 
 ### 运行时星连图(静态定形 **+ 2026-11-04 实机两发**)
 

@@ -1,7 +1,7 @@
-# Runtime JS SDK (v1.1 — system scope)
+# Runtime JS SDK (v1.1 — system + country scope)
 
 Authoring SDK for **runtime JS mods**: TypeScript compiled by `neo build`, evaluated by the
-injected QuickJS host on the game's main thread, once per system.
+injected QuickJS host on the game's main thread, once per system and once per country.
 
 > **Status (2026-11-07).** v1 is live-accepted (Phase 1 C1, below). v1.1 is the SDK half of
 > Phase 2 and is **additive**: `API_VERSION` stays `1`; the new members are `System.neighbors`,
@@ -210,6 +210,10 @@ onSystem((s) => {
 | `System.setVariable` | `(name: string, value: number) => void` | Writes through the official `set_variable` body for the current system. |
 | `System.setStarFlag` | `(name: string) => void` | Sets the official star flag `name` through the `set_star_flag` body. Needs `flag.write`. The name is resolved to a u16 id by the engine's **flag-name table** (`flag_ids.ensure`); a name the table has never seen is inserted at first use (that is what the engine does when a script writes the same literal), then the u16 goes into the official body. **No live reading since the keyspace fix** — the 2026-11-08 pair of shots was taken with the old (token-id) resolution; see the status note. The name must be a **string literal** of 1–15 lowercase bytes and must not collide with an official keyword — see the build-time gate below. Failure to get an id is `no_flag_token`; the handler never falls back to a lexer token. |
 | `System.hasStarFlag` | `(name: string) => boolean` | Reads the official star flag `name` from the flag container. Needs `flag.read`. **Read-only:** the name is resolved with `flag_ids.lookup`, which never inserts — a name with no id in the flag table reads `false` and logs `reason=no_flag_token`. A name that *has* an id but is absent from the container (or whose container cannot be read) also reads `false` (fail-closed). Same literal rules as the write. |
+| `onCountry` | `(handler: (c: Country) => void) => void` | Registers the per-country handler. Needs `"country"` in the manifest's `scope`; a system-only bundle that calls it logs `NEO_JS_REGISTER_REJECT … scope=country` and stays inert (the session is **not** disabled). |
+| `Country.id` | `number` | The engine country id for this call (the dispatched scope's `+0x10`). The only handle the SDK retains. |
+| `Country.opinionOf` | `(targetId: number) => number \| null` | Engine `opinion` keyword: one int32 cell of the matrix, key `target * n + self`. **`null` = fail-closed**, never `0` — not computed (engine sentinel `0x7fffffff`), either id out of range, matrix not built (main menu / no campaign), session without `opinion.read`, or the id not matching the dispatched country; every refusal also logs `NEO_JS_OPINION_REJECT … reason=<tag>`. **Read-only:** the cell is a lazily-filled engine cache and we never call its calculator. |
+| `Country.theirOpinionOf` | `(targetId: number) => number \| null` | Engine `their_opinion` keyword — the **transpose** of `opinionOf` (`self * n + target`). Same fail-closed rules. Which of the two means "our opinion of them" is **not** established; see Known limitations. |
 | `graph.betweenness` | `(s: System) => number` | Graph score for the system (same source as the C5-SCORE path). |
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200` — the T2 threshold; a constant, not a tuning knob in v1. |
 | `log` | `(message: string) => void` | Appends `NEO_JS_LOG <text>` to `C:/temp/neo_js.log`. |
@@ -217,12 +221,11 @@ onSystem((s) => {
 
 ### Native contract
 
-The SDK is a shim over ten globals installed by the host. `sdk/api.def` is the single source of
+The SDK is a shim over thirteen globals installed by the host. `sdk/api.def` is the single source of
 truth (`version: 1`); the TypeScript surface, the mock host, and the Zig host must all match it.
 The seven v1 names come first, unchanged; the v1.1 additions are appended **after** them in the
-host's own order (`neighbors`, `set_flag`, `has_flag`). The host side of the additions is Track
-A's (A2), so the Python fence allows them to be declared before they are implemented, and that
-allowance is deleted at integration.
+host's own order (`neighbors`, `set_flag`, `has_flag`, `register_country`, `country_opinion`,
+`country_their_opinion`).
 
 | Native | Params | Returns |
 |---|---|---|
@@ -236,6 +239,9 @@ allowance is deleted at integration.
 | `__neo_system_neighbors` | `u32` | `array<u32>` |
 | `__neo_system_set_flag` | `u32`, `string` | `void` |
 | `__neo_system_has_flag` | `u32`, `string` | `bool` |
+| `__neo_register_country` | `function` | `void` |
+| `__neo_country_opinion` | `u32`, `u32` | `i32 \| null` (`undefined` = refused) |
+| `__neo_country_their_opinion` | `u32`, `u32` | `i32 \| null` (`undefined` = refused) |
 
 
 ## Event bridge (slice 1): JS decides, official script fires
@@ -318,11 +324,16 @@ green and behaves like the last edit you forgot.
 
 - `id` — directory name and log tag. Required.
 - `entry` — the bundle filename the loader evaluates. Required.
-- `scope` — v1 accepts `["system"]` only. Required.
-- `permissions` — any of `graph.read`, `variable.write`, `flag.read`, `flag.write`, `log`. A
+- `scope` — `"system"`, `"country"`, or `["system","country"]` (the string forms and the
+  1–2-element array forms are both accepted; each name at most once). A bundle only receives
+  the scopes it declares: a `system`-only bundle is never called by `onCountry`, and
+  `__neo_register_country` from it logs `NEO_JS_REGISTER_REJECT … scope=country`. Required.
+- `permissions` — any of `graph.read`, `variable.write`, `variable.read`, `flag.read`, `flag.write`,
+  `log`, `opinion.read`. A
   native whose permission is absent is refused by the host, and an unknown permission disables
   the mod at load. `degree`, `neighbors`, `betweenness` and `isChokepoint` are `graph.read`;
-  `setStarFlag` is `flag.write`; `hasStarFlag` is `flag.read`.
+  `setStarFlag` is `flag.write`; `hasStarFlag` is `flag.read`; `opinionOf` / `theirOpinionOf`
+  are `opinion.read`.
 - `engine` / `runtime` — compatibility strings; a mismatch disables the mod with a log line.
 - `flags` — **optional** (the 7th field; an old manifest without it still loads). A
   **build-time collision gate**, not a runtime authority: `neo build` records the bundle's
@@ -545,12 +556,22 @@ not run, so this remains an offline-pinned design.
   proven live** — the flag shot (Task C) has not run. Limits: names are 1–15 lowercase bytes, must
   be string literals, and may not collide with an official keyword (build-time gate); a
   `0xFFFF`/`0` id from the table is a hard failure (`no_flag_token`).
-- No country / fleet / planet / pop scopes; system scope only. A dispatch that
-  arrives with a non-system scope is currently **logged** and dropped:
+- **Country scope is read-only and direction is only half-known.** `onCountry` + `Country.opinionOf`
+  / `Country.theirOpinionOf` read one int32 cell of the engine's opinion matrix (table base, key
+  `row*n+col`, stride 4 B and the `0x7fffffff` sentinel are all A-level,
+  `evidence/analysis/country_fields_4_4_4.md` §2). Two boundaries: **(1)** `opinionOf` and
+  `theirOpinionOf` read **transposed** cells (A), but "which one is *our* opinion of them" is
+  **B** — the names are the engine's keywords, not a claim about direction; **(2)** the value's
+  unit/scale has no independent reference, so the number is the engine's int32 as-is. There is
+  **no writer**: the cell is a lazily-filled cache and filling it (`0x743bb0`) is a write.
+  Everything else country-side (resource stockpile, income containers, energy index) stays out of
+  the contract — the containers are still unresolved
+  (`evidence/analysis/country_fields_4_4_4.md` §1/§3). **No live reading yet**: this whole
+  contract is offline-pinned (Linux unit tests + `neo check`), the first shot has not run.
+- No fleet / planet / pop scopes. A dispatch that arrives with a scope outside
+  `{system, country}` is still only **logged** and dropped:
   `NEO_SCOPE_OTHER mask=0x<mm> id=<n>` (read-only — the two scope cells at `+8`
-  and `+0x10`, nothing written). That line is what slice 2 measures; there is no
-  country API behind it yet, and the country object's resource/relation fields
-  are still unresolved (`evidence/analysis/country_scope_4_4_4.md` §8).
+  and `+0x10`, nothing written).
 - No `onMonthly` or any global tick hook. The monthly driver is a generated `on_action` + hidden
   `event` pair, i.e. the official script path.
 - No `dlc_load.json` parsing and no inter-mod JS calls; the Phase 2 host loads up to 8 isolated

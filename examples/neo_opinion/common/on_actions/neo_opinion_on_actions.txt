@@ -1,0 +1,11 @@
+# Neo Opinion — the monthly driver.
+#
+# 4.4.4 on_action bodies only accept `events` / `random_events`, so the whole
+# chain lives in one hidden event (`neo_opinion.100`) whose `immediate` runs the
+# country pass (`neo_action`).  Without the injected host the parser reports
+# `neo_action` as an unknown effect — expected for a runtime-JS mod.
+on_monthly_pulse = {
+	events = {
+		neo_opinion.100
+	}
+}

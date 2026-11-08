@@ -1,0 +1,33 @@
+# Neo Opinion — the read-only half of the country contract (Stellaris 4.4.4).
+#
+#   on_monthly_pulse -> neo_opinion.100 (hidden)
+#       `every_country { limit = { is_ai = no } neo_action = { } }`
+#
+# `every_country`'s own loop hands one `{mask = 0x04, id = <country id>}` scope
+# per country to the dispatch site the injected host already hooks — the same
+# site `every_system` uses (`evidence/analysis/country_scope_4_4_4.md` §11: one
+# delivery per country per monthly pulse).  So there is no `random_country`
+# wrapper here, unlike the `every_system` driver in `examples/neo_events`: that
+# wrapper exists because a no-scope body iterates systems once.
+#
+# `neo_action` is the effect the injected host registers.  Its body is an empty
+# block on purpose: the registered class parses a block, so `neo_action = yes`
+# would be a parse error.
+#
+# This mod only reads.  `onCountry` logs `NEO_OPINION_SELF id=<n> value=<v|null>`
+# to `C:/temp/neo_js.log`; nothing in the campaign is written.
+
+namespace = neo_opinion
+
+event = {
+	id = neo_opinion.100
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		every_country = {
+			limit = { is_ai = no }
+			neo_action = { }
+		}
+	}
+}
