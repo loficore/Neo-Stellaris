@@ -1160,13 +1160,15 @@ fn readOpinion(argc: c_int, argv: [*]c.JSValue, swap: bool) c.JSValue {
 fn nativeCountryOpinion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
     _ = this_val;
     if (charge(ctx)) |exc| return exc;
-    return readOpinion(argc, argv, false);
+    // 引擎 `opinion` 的键序是 row = 目标、col = 我们(§2.3 的 A 级读数),所以这里
+    // 是 `swap = true` —— 换反了就是把转置那一格当成 `opinion` 的读数。
+    return readOpinion(argc, argv, true);
 }
 
 fn nativeCountryTheirOpinion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
     _ = this_val;
     if (charge(ctx)) |exc| return exc;
-    return readOpinion(argc, argv, true);
+    return readOpinion(argc, argv, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -2242,10 +2244,10 @@ test "nativeCountryOpinion returns undefined for sentinel and out-of-range" {
 
     var matrix = opinion_table.FakeMatrix.init(3);
     matrix.wire();
-    // (row=1,col=2) 是哨兵:opinion(1,2) 的 row=self=1、col=target=2。
-    matrix.set(1, 2, opinion_table.SENTINEL);
-    // 转置的两格:opinion(1,2)=77、their_opinion(1,2)=[2][1]=-9。
-    matrix.set(2, 1, -9);
+    // opinion(1,2) 的键是 row=target=2、col=self=1(§2.3):哨兵放在 [2][1]。
+    matrix.set(2, 1, opinion_table.SENTINEL);
+    // 转置的两格:opinion(1,2)=[2][1]、their_opinion(1,2)=[1][2]。
+    matrix.set(1, 2, -9);
     setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
 
     // 哨兵 → undefined + not_computed。
@@ -2278,7 +2280,7 @@ test "nativeCountryOpinion returns undefined for sentinel and out-of-range" {
     // 正读:两个 native 落在互为转置的两格(Review Focus 5 的本地落点)。
     resetForTest();
     armCapture(&cap);
-    matrix.set(1, 2, 77);
+    matrix.set(2, 1, 77);
     setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
     try testing.expect(startSession(.{
         .id = "both",
