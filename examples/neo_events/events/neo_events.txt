@@ -70,6 +70,10 @@ country_event = {
 	desc = neo_events.1.desc
 	is_triggered_only = yes
 
+	immediate = {
+		log = "NEO_EVENT_FIRED 0"
+	}
+
 	option = {
 		name = neo_events.1.a
 		log = "NEO_EVENT_PICK 0"
@@ -84,6 +88,10 @@ country_event = {
 	desc = neo_events.2.desc
 	is_triggered_only = yes
 
+	immediate = {
+		log = "NEO_EVENT_FIRED 1"
+	}
+
 	option = {
 		name = neo_events.2.a
 		log = "NEO_EVENT_PICK 1"
@@ -97,6 +105,10 @@ country_event = {
 	title = neo_events.3.title
 	desc = neo_events.3.desc
 	is_triggered_only = yes
+
+	immediate = {
+		log = "NEO_EVENT_FIRED 2"
+	}
 
 	option = {
 		name = neo_events.3.a
