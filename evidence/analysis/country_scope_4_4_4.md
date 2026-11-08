@@ -10,6 +10,9 @@
 > 派发包装器 `0x3B0F80` **就是**我们已经在 detour 的那一个(与 `every_system` 同一个函数、同一张
 > 槽位表)。所以 C2 **不需要新的 hook** —— 需要的是读数,而读数由 `NEO_SCOPE_OTHER` 那一行给出。
 > 国家 id 有了(`[scope+0x10]`,对象里在 `+0x20`);**能量币与关系值没有找到**,原因见 §8。
+>
+> **2026-11-08 追加:已由 C2 实机一发确认**(`mask=0x04`、每月每国一次、`vtable_rva=0x24e9068`,
+> 逐字读数与全部边界见 **§11**;这一句不改写上面的静态结论,只把它标成「已验」)。
 
 **方法(全部离线,只读 exe 拷贝,`NS_STELLARIS_EXE`)。** 每条都写了复算命令,命令是
 `scripts/` 下的维护中工具,不是一次性探针:
@@ -323,3 +326,48 @@ to the scope diagnostic and skips the rest`(钉住 wiring:非 system 分支**真
    (`0x199E780` + 17 字节后缀串),本章没有逐条读完,因此「`any_country` 的 token/class_info」
    仍是 C 级未决。
 4. **能量币 / 关系值 = unresolved**,理由与下一步见 §8。经济/外交在拿到它们以前**判 deferred**。
+
+---
+
+## §11 C2 实机读数(2026-11-08,一发,只读)
+
+> 本节是**追加**:§1–§10 是离线静态侦察(§10 的第 1/2 条在那里是「还没有读数」)。这一发把
+> §5 的可达性与 §6 的 mask 从静态预测变成实机读数。逐次读数与失败项在
+> `evidence/logs/runtime_js_c2_country_scope_4_4_4.log`。
+
+**装配。** 一次性探针 mod(`scripts/scratch/2026-11_country_scope/mod/neo_scope_probe/`)在
+`on_monthly_pulse` 里跑一个**无类型** `event = { … }`,两组顺序固定:控制组
+`random_system { every_system { neo_action = { } } }`,实验组
+`every_country = { limit = { is_ai = no } neo_action = { } }`。DLL
+`0e09ad40343dbbaba3d52484418e73110f0bad9c87744017e9ae043bd22f6278`,pid 22896,13 个月度脉冲。
+
+**判词(3 次逐字相同,`C:/temp/neo_js.log`):**
+
+```
+NEO_SCOPE_OTHER mask=0x04 id=0 vtable_rva=0x24e9068 u08=0x00000004 u10=0x00000000 u18=0 u20=0 u28=0
+```
+
+**三格读数:**
+
+| 项 | 值 | 把它放在哪一档 |
+|---|---|---|
+| `mask` | **`0x04`** | §6 静态写死的值与实机一致 ⇒ 国家 scope **A**(双侧证人) |
+| 每国一次 | 13 个月 × 1 次 = 13 条 `NEO_C2_EXP_COUNTRY_ENTER`,前 3 次留下指纹,`SEEN=0`(总数落在 3..502) | §10-1「次数还没有」**已答**:每月 1 次 |
+| `vtable_rva` | **`0x24e9068`** | 只等于「派发点对象首 qword」;同值在 `ceffect_vtable_map`(`slot0 0x395FF0`/`slot2 0x396460`)与 c1_validation §73.3 出现过 ⇒ **它是 CEffect 家族的对象,不是「CEventScope 已收口」** |
+| `id` | **`0`** | 与「1 个人类国家、玩家 = 0」相符,但**无独立证人**;§8 的「`+0x10` 对非 system 只是同一格」不变 |
+
+**控制组(同时证明仪器有效):** `NEO_JS_CALL` = **30,732**(13 × 2,364),`NEO_C2_CTRL_SCOPE_ENTER`
+= 13,另一驱动 `PS_HIT` = 10,192;`game.log`/`error.log` 零 `Unexpected token`、零 `Script Error`。
+
+**这一发不能说的(补充 §10,而不是推翻它):**
+
+1. `id=0` 不是「已证实国家 id」—— 见上表。
+2. `vtable_rva` 不是类身份 —— 见上表;AGENTS 段 3 的 `CEventScope` 未定状态**不变**。
+3. 送达的是**迭代器**把这一轮交到我们 detour 的派发入口(`0x3B0F80` 里先于引擎自己的
+   `call [child+0xa8]` 返回),不是「donor class 自己接受国家 scope」。
+4. 一次战役、一份存档、13 个月、1 个人类国家;**没有**第二个非 AI 国家、没有多人。
+5. **能量币 / 关系值仍 unresolved**(§8 的两条下一步不变)⇒ 经济/外交的**字段层** deferred,
+   C2 只拿到「国家 scope 到 host + mask/id/vtable 三个指纹」这一层地基。
+
+**收尾:** `taskkill /F /PID 22896` → `procs=0`,未 FreeLibrary;`dlc_load.json` 已恢复原有两项;
+探针 mod 的官方半边与 `C:/temp/neo_mods/neo_scope_probe/` 均已删除。
