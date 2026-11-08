@@ -57,7 +57,11 @@ EXIT_OK = 0
 EXIT_FAIL = 2
 
 HERE = pathlib.Path(__file__).resolve().parent
-REPO = HERE.parents[1]
+# Deployed as ``C:/temp/neo_install.py`` the tree has no grandparent; the repo
+# layout is only used for *defaults* (examples/, zig-out/), never for the
+# explicit ``--mod`` / ``--dll`` path, so fall back to HERE instead of crashing
+# at import time (C1 live shot, 2026-11-08).
+REPO = HERE.parents[1] if len(HERE.parents) > 1 else HERE
 
 #: ``game version -> sha256 of stellaris.exe``.  Source of truth for the digest:
 #: ``docs/offline-tooling.md`` 「前置条件」.  Adding a row is the *only* way to
