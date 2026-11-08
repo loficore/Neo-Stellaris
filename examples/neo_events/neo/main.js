@@ -37,11 +37,13 @@
 
   // examples/neo_events/src/main.ts
   var DRIVER_SYSTEM = 82;
+  var driver = { id: DRIVER_SYSTEM };
   onSystem((s) => {
-    const betweenness = graph.betweenness(s);
-    const pick = betweenness >= 200 ? 2 : s.degree >= 2 ? 1 : 0;
-    if (s.id !== DRIVER_SYSTEM) return;
+    const betweenness = graph.betweenness(driver);
+    const pick = betweenness >= 200 ? 2 : 1;
     s.setVariable("neo_event_pick", pick);
-    log(`NEO_EVENT_PICK source=js system=${s.id} pick=${pick} betweenness=${betweenness}`);
+    if (s.id === DRIVER_SYSTEM) {
+      log(`NEO_EVENT_PICK source=js system=${s.id} pick=${pick} betweenness=${betweenness}`);
+    }
   });
 })();

@@ -28,7 +28,7 @@
 
 namespace = neo_events
 
-country_event = {
+event = {
 	id = neo_events.100
 	hide_window = yes
 	is_triggered_only = yes
@@ -45,7 +45,7 @@ country_event = {
 		every_country = {
 			limit = {
 				is_ai = no
-				NOT = { has_variable = neo_event_done }
+				NOT = { is_variable_set = neo_event_done }
 				any_system = { check_variable = { which = neo_event_pick value >= 0 } }
 			}
 			if = {
