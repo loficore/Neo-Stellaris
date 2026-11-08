@@ -177,7 +177,10 @@ def test_apply_plan_writes_both_halves(tmp_path):
     assert (paths.official_root / "events" / "x.txt").is_file()
     descriptor = (tmp_path / "mods" / "neo_events.mod").read_text(encoding="utf-8")
     assert 'path="mod/neo_events"' in descriptor
-    load = json.loads((tmp_path / "mods" / "dlc_load.json").read_text(encoding="utf-8"))
+    # ``dlc_load.json`` is a sibling of ``mod/``, not a child: the C1 live shot
+    # (2026-11-08) found the old expectation had pinned the wrong location, and
+    # the game silently ignored the mod as a result.
+    load = json.loads((tmp_path / "dlc_load.json").read_text(encoding="utf-8"))
     assert load["enabled_mods"] == ["mod/neo_events.mod"]
 
 

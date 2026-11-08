@@ -323,7 +323,10 @@ def install_plan(paths):
             steps.append(Step("official", source, paths.official_root / name))
     steps.append(Step("descriptor", None, paths.docs_mod_root / f"{paths.mod_id}.mod",
                       paths.mod_id))
-    steps.append(Step("dlc_load", None, paths.docs_mod_root / "dlc_load.json",
+    # ``dlc_load.json`` lives at ``<Stellaris>/dlc_load.json`` — the *parent* of
+    # the ``mod/`` folder, not inside it (C1 live shot, 2026-11-08: writing it
+    # under ``mod/`` left the mod disabled and the game merely ignored it).
+    steps.append(Step("dlc_load", None, paths.docs_mod_root.parent / "dlc_load.json",
                       paths.mod_file))
     return steps
 
