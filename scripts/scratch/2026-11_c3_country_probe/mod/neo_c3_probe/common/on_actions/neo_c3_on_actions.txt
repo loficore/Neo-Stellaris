@@ -1,0 +1,12 @@
+# C3 country-probe — one-shot, read-only.
+#
+# 4.4.4 on_action bodies only accept `events` / `random_events` (2026-11-01,
+# §89), so the whole probe lives in one hidden event.
+#
+# C2 的 limit 只放行玩家国；C3 要人类 **和** AI 都被递进来，所以事件里
+# **没有** limit（上线前那个 AI 过滤 keyword 的 grep 必须为空）。
+on_monthly_pulse = {
+	events = {
+		neo_c3.100
+	}
+}

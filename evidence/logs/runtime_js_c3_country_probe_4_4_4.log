@@ -1,0 +1,286 @@
+# C3 — 国家侦察发实机读数(4.4.4,只读;2026-11-08)
+
+#
+# 授权:用户点名「四个任务按顺序做」,Task 3 一发只读实机,点名的是
+# 能量索引 / econ 容器指纹 / opinion 双向。
+# 分支 feat/c3-country-probe,基线 3b60f45。
+# 任务 1/2 的提交:
+#   ad91b20 feat(country): 经济侧只读探针（对象解析 / econ vtable / 能量索引）
+#   b220e58 feat(host): 国家侦察行（上限 3/40）
+# DLL: zig-out/bin/stellaris_quickjs.dll(Debug,`zig build`)
+#      sha256 79d6af1f10bec92dced9416ae1e87409c116fcf17887f5438f3b7e4363623c37
+#      部署名 C:/temp/sqjs_c3d.dll,远端 Get-FileHash 相等
+# 口径:一次启动、不重试;只读(零引擎虚函数调用、零引擎内存写、不改存档);
+#       `taskkill /F`;永不 FreeLibrary。宿主测试 1041/1041,布局围栏 38 passed。
+#
+# 这一发回答的四件事:
+#   1. 能量索引的数值(静态 C 级,只到「文件序候选 0」);
+#   2. `[country+0x2c68]` 经济容器的 vtable(槽身份);
+#   3. opinion 双向能不能读出数字(且不对称);
+#   4. 探针去掉 AI 过滤后,AI 国家是否真的被派发。
+#
+# 结论:**1 与 4 拿到读数;2 只拿到容器 vtable(槽目标由该 RVA 离线读出,见下);
+# 3 判负(40 行全 `na`)。** 另有一条计划外的新读数:`scope+0x10` 对国家不是裸 id,
+# 高位带标签,低 24 位才是国家 id —— 这直接解释了 3 的判负与 2 里第三行的 holder=0。
+
+## 装配
+
+探针 mod(一次性,不进产品面):`scripts/scratch/2026-11_c3_country_probe/mod/neo_c3_probe/`
+
+- `descriptor.mod` — `name="Neo C3 Country Probe"`、`supported_version="4.4.*"`
+- `common/on_actions/neo_c3_on_actions.txt` — `on_monthly_pulse = { events = { neo_c3.100 } }`
+- `events/neo_c3.txt` — **无类型** `event = { … }`,`immediate = { every_country = { neo_action = { } } }`。
+  C2 的 limit(AI 过滤)整段删掉 —— 这是本发与 C2 唯一的脚本差异。
+- `neo/mod.json` + `neo/main.js` — `scope:["country"]`、`permissions:["log"]`、
+  `engine:"4.4.4"`、`runtime:">=0.1"`;`main.js` 只 `__neo_register_country(() => {})`。
+
+上线前 grep(判据):
+
+```
+$ grep -r "is_ai" scripts/scratch/2026-11_c3_country_probe/
+$ echo $?
+1
+```
+
+(空输出、退出码 1。脚本里连注释都不含那个 keyword,避免「grep 干净但脚本里留着」的歧义。)
+
+部署(全部 scp,远端 sha 核对过):
+
+- `C:/temp/sqjs_c3d.dll`(新 DLL,`Get-FileHash` = 本地 sha256)
+- `C:/temp/neo_c3_probe/`(探针 mod 源目录,5 个文件)
+- `C:/temp/neo_install.py`、`C:/temp/c2_boot_inject.py`、`C:/temp/session_bridge.py` 与仓库
+  sha256 逐字节相同(`c9f16e63…f97e20b` / `32ec722c…a04151` / `f124a4fe…d6ba251`),未重传
+- `C:/temp/neo_focus_space.py` 已在主机(两次射发的同一份)
+
+射击前的环境状态:无 stellaris 进程(procs=0);`dlc_load.json` 原有 2 个 mod
+(`mod/neo_ps_probe.mod`、`mod/neo_events.mod`),备份到 `C:/temp/dlc_load.before_c3.json`
+(sha256 `CAF49E03DDC8F87666D39BE6FDEA17BA2BCC07F2712DC56B013A39965418AA53`);
+旧 `C:/temp/neo_js.log` 改名 `C:/temp/neo_js.log.prev_c2`(本发从空文件开始)。
+
+## 安装回执(逐字)
+
+```
+NEO_PLAY ok dll=79d6af1f10bec92d mod=neo_c3_probe pid=0
+```
+
+远端控制台是 cp936,`ssh` 回显把安装器的三行中文 `NEXT` 提示打成乱码;源文本与 C2 那次
+相同(NEXT 1/2/3:启动器勾选 → neo.bat 或 c2_boot_inject → 看 NEO_JS_INIT_OK)。安装后
+`dlc_load.json` = 原有两项 + `mod/neo_c3_probe.mod`;官方半边落在
+`Documents/…/Stellaris/mod/neo_c3_probe/`(descriptor/common/events),运行时半边落在
+`C:/temp/neo_mods/neo_c3_probe/neo/`。
+
+## 启动与解暂停(逐字回执)
+
+```
+[boot] dll=C:/temp/sqjs_c3d.dll sha16=79d6af1f10bec92d
+[boot] launched pid=1756 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+[boot] pid=1756
+[boot] gate skipped by operator override (--allow-window)
+BOOT dll=sqjs_c3d.dll sha=79d6af1f10bec92d effect_id=19343 set_id=19344 install_rc=0 alive=1
+EXIT=0
+```
+
+解暂停(**一次**;判据是 `C:/temp/neo_js.log` 字节数从无到有并持续增长):
+
+```
+PIDS [1756]
+HWND 1756 527022
+STEP switch
+SPACE sent via switch
+EXIT=0
+```
+
+启动后约 2 分钟无日志 ⇒ 再按一次 Space 之后日志出现并增长;最终游戏日期到 **2280.4.1**,
+日志 846,849 B / 28,794 行。
+
+## 读数(全部逐字)
+
+### 日志头(逐字;注意前 3 行 C3 先于 `NEO_JS_MODS` —— 诊断行在 session 加载之前就跑了)
+
+```
+NEO_C3_ECON id=0 holder=0x20e2df940 vt_rva=0x2515458 s90=0x0 s98=0x0
+NEO_C3_RES db_n=26 energy_obj=0x1f66d64d0 energy_idx=0
+NEO_C3_OPINION self=0 target=0 a=na b=na
+NEO_SCOPE_OTHER mask=0x04 id=0 vtable_rva=0x24e9068 u08=0x00000004 u10=0x00000000 u18=0x00000000 u20=0x00000000 u28=0x00000000
+NEO_JS_MODS n=2
+NEO_JS_LOG NEO_C3_SESSION_READY
+NEO_JS_INIT_OK id=neo_c3_probe api=1
+NEO_JS_INIT_OK id=neo_events api=1
+NEO_JS_CALL_COUNTRY id=0
+```
+
+### `NEO_C3_ECON` —— 3 行(上限 3,全部)
+
+```
+NEO_C3_ECON id=0 holder=0x20e2df940 vt_rva=0x2515458 s90=0x0 s98=0x0
+NEO_C3_ECON id=1 holder=0x20e4ce630 vt_rva=0x2515458 s90=0x0 s98=0x0
+NEO_C3_ECON id=16777218 holder=0x0 vt_rva=0x0 s90=0x0 s98=0x0
+```
+
+### `NEO_C3_RES` —— 3 行(与 ECON 同一行组,全部)
+
+```
+NEO_C3_RES db_n=26 energy_obj=0x1f66d64d0 energy_idx=0
+NEO_C3_RES db_n=26 energy_obj=0x1f66d64d0 energy_idx=0
+NEO_C3_RES db_n=26 energy_obj=0x1f66d64d0 energy_idx=0
+```
+
+### `NEO_C3_OPINION` —— 40 行(上限 40),**40 行全部 `a=na b=na`**;下面贴前 6 行
+
+```
+NEO_C3_OPINION self=0 target=0 a=na b=na
+NEO_C3_OPINION self=1 target=0 a=na b=na
+NEO_C3_OPINION self=16777218 target=0 a=na b=na
+NEO_C3_OPINION self=16777219 target=0 a=na b=na
+NEO_C3_OPINION self=16777220 target=0 a=na b=na
+NEO_C3_OPINION self=16777221 target=0 a=na b=na
+```
+
+### 计数(逐字命令与值)
+
+| 读数 | 值 |
+|---|---|
+| `^NEO_C3_ECON` | **3** |
+| `^NEO_C3_RES` | **3** |
+| `^NEO_C3_OPINION` | **40** |
+| `^NEO_SCOPE_OTHER ` | **3** |
+| `^NEO_JS_CALL_COUNTRY` | **355** |
+| `^NEO_JS_CALL ` | **14,184** |
+| `^NEO_JS_ERROR` / `^NEO_JS_TIMEOUT` / `^NEO_JS_EVAL_FAIL` | **0 / 0 / 0** |
+
+### 国家派发(9 个月度脉冲)
+
+`NEO_JS_CALL_COUNTRY` 的 `id=0` 出现在第 1/40/79/118/157/196/235/276/316 条 ⇒ **9 个脉冲**,
+前 8 个各 39 个国家,第 9 个 40 个(期间国家数从 39 涨到 41:低 24 位 id 由 `0..39`(缺 23)
+变成 `0..40`)。
+
+### 脚本侧错误面
+
+| 检查 | 读数 |
+|---|---|
+| `game.log` 里 `Unexpected token` | **0** |
+| `game.log` 里 `Script Error` | **0** |
+| `game.log` 里含 `neo_c3` 的行 | 0(探针事件本身不写 `log`,靠派发计数判读) |
+| `error.log` 里含 `neo_c3` 的行 | **0** |
+| `error.log` 里 `Unexpected token` | **0** |
+
+⇒ 探针 mod 在 4.4.4 里解析成功;C2 那种「脚本在插入前引用新词」不会发生在这一发
+(`Unexpected token` = 0)。
+
+## 四项判据(读数与判词)
+
+### 1. 能量索引(`NEO_C3_RES energy_idx`)—— **C → A**
+
+`db_n=26`(= `common/strategic_resources/00_strategic_resources.txt` 的 26 条)、
+`energy_obj=0x1f66d64d0`、`energy_idx=0`;`0 < 26`。索引从「文件序候选 0」变成**运行期读数 0**;
+对象身份仍是 §1.6 的 A 级链(`[0x33746F0]+0x20` = `find(db,"energy")`)。
+**这一发没有**读 `[[0x33746F0]+8+0*8]+0x18` 做交叉(计划 Task 1 不含),所以
+「索引 0 就是文件序第 0 个」仍不是本发的读数 —— 升 A 的是**数值**这一格。
+
+### 2. 经济容器指纹(`NEO_C3_ECON`)—— **容器 vtable 拿到;两个槽目标由该 RVA 离线读出**
+
+- `[country+0x2c68]` 在两国上分别是 `0x20e2df940` / `0x20e4ce630`,两者的容器 vtable
+  **同值** `base+0x2515458` ⇒ 同一个类,与 §1.8 的 B 级「同一子对象」一致。
+- 行内 `s90=0x0 s98=0x0` 是**仪器口径错**,不是引擎事实:计划的 Step 3 写的是
+  「读 `[econ+0x90]`」,而引擎用的是 `mov rax,[econ]; call [rax+0x90]`(`disrva.py 0x1adf690`
+  的 `01adf742`/`01adf745`/`01adf767`)—— 槽在 **vtable** 上,不在对象上。对象 `+0x90`
+  在两国上都是 0。
+- 槽目标用运行期给的 RVA **离线**读出(这是计划允许的「打印值 + 离线复算」):
+
+```
+$ python3 scripts/vtable.py 0x2515458 --slots 24
+  [0x11] +0x88 -> 844890  ...
+  [0x12] +0x90 -> 844200  bounds 844200..844297     ← 填充调用方向量的那个槽
+  [0x13] +0x98 -> 8442a0  bounds 8442a0..84438b     ← 写回同一容器的槽
+```
+
+`0x844200` 体内第一件事就是 `mov r10,[0x33746f0]`(资源库)并操作 `rsi+0x10` 的向量
+⇒ 与 §1.3 的「`+0x90` 填充调用方提供的向量」形状一致;`0x8442a0` 同形(写回)。
+**判词**:容器身份 = `vtable 0x2515458`(B,运行期读数);`+0x90=0x844200` / `+0x98=0x8442a0`
+是**这一对槽的离线目标**(B;「它是不是读体/写体」由静态形状判,未在活体调用)。
+
+### 3. opinion 双向 —— **判负(全 `na`)**
+
+40 行全部 `a=na b=na`,没有一对数字,也没有不对称对。原因分两档:
+
+- **可判定**:**15 行**(self ∈ {16777218…16777229, 67108885, 100663316, 16777247})的 `self`
+  带高位,远超矩阵维数 ⇒ 必为 `out_of_range`。
+- **本仪器无法区分**:其余 **25 行**(`self` 是低 24 位 id)的 `na` 同时可能来自 `table_null`
+  (描述符/表未建)或 `not_computed`(哨兵 `0x7fffffff`,懒填)。宿主这一行把三档合并成
+  `na`,**没有**留理由词 —— 这是下一轮要改的仪器口径(见 `country_fields_4_4_4.md` §12)。
+
+**不重试**(计划硬约束):这一格照实记负,没有第二次启动。
+
+### 4. AI 国家被派发 —— **是**
+
+- 9 个月度脉冲、355 次 `NEO_JS_CALL_COUNTRY`,低 24 位 id 覆盖 `0..40`(第 1 个脉冲 39 国,
+  缺 23;到第 9 个脉冲 40 国,出现 40)—— 远多于 C2 的 1 个(只有人类)。
+- 人类国(id=0)与其它 38–40 个国家在同一脉冲里各收到一次派发 ⇒ **AI 国家确实被递到 host**。
+
+## 计划外的新读数:`scope+0x10` 对国家不是裸 id
+
+三个 `NEO_SCOPE_OTHER` 指纹逐字:
+
+```
+NEO_SCOPE_OTHER mask=0x04 id=0        vtable_rva=0x24e9068 u08=0x00000004 u10=0x00000000 u18=0x00000000 u20=0x00000000 u28=0x00000000
+NEO_SCOPE_OTHER mask=0x04 id=1        vtable_rva=0x24e9068 u08=0x00000004 u10=0x00000001 u18=0x00000000 u20=0x00000000 u28=0x00000000
+NEO_SCOPE_OTHER mask=0x04 id=16777218 vtable_rva=0x24e9068 u08=0x00000004 u10=0x01000002 u18=0x00000000 u20=0x00000000 u28=0x00000000
+```
+
+`u10`(= `scope+0x10`)在第三个派发上是 `0x01000002`。全脉冲 39 个 id 的低 24 位恰好是
+`0..39`(缺 23),高位的三种取值:
+
+| 原始 id | 低 24 位 | 高位 |
+|---|---|---|
+| `16777218` … `16777229` | 2 … 13 | `0x01` |
+| `67108885` | 21 | `0x04` |
+| `100663316` | 20 | `0x06` |
+| `16777247` | 31 | `0x01` |
+
+⇒ `scope+0x10` 的高 8 位是国家类型/标签,低 24 位才是国家 id。这与 §2.2 的
+「opinion 键里的 id = `[obj+0x20] & 0xffffff`」是同一套 24 位口径。
+**本发没有**把它写进代码(Task 1/2 已按计划的字面 id 实现);这是下一轮的第一项修正。
+
+## 边界(这一发不能说的)
+
+1. **单战役、单存档**:`--continuelastsave` 这一份;没有第二份存档/新开局,不能外推到
+   「所有存档的 id 布局都带高位」(高位出现的最小充分证据是这一份的 39 国)。
+2. **9 个月**:2280.4.1 收尾;`NEO_JS_CALL_COUNTRY` 的增量只在这 9 个脉冲里量过。
+3. **人类↔AI 只有单向对**:`target` 固定为 0,即只尝试了「每个国家 vs 人类」这一列;
+   没有任意两国对,也没有多边场景。
+4. **槽身份**:`0x844200` / `0x8442a0` 是**离线**从 vtable 读出的目标,没有在活体调用;
+   「它们是读体/写体」是静态形状判词(与 §1.3 的调用点同形),不是行为读数。
+5. **opinion 的 `na` 没有理由词**:三档(`table_null` / `out_of_range` / `not_computed`)在
+   日志里不可分;只有带高位的 12 行能判 `out_of_range`。
+6. **零引擎调用**:这一发没有调任何引擎虚函数(尤其没有调 `[econ+0x90]` —— 它会填充
+   调用方向量),没有写引擎内存,没有改存档;唯一写动作在 `C:/temp` 与探针日志。
+
+## 收尾
+
+```
+taskkill /F /PID 1756
+成功: 已终止 PID 为 1756 的进程。        (cp936 源文本;ssh 回显为乱码)
+```
+
+- `Get-Process stellaris` = **0**;没有 FreeLibrary(进程结束即卸载,DLL 与进程同生命周期)。
+- `dlc_load.json` 已从 `C:/temp/dlc_load.before_c3.json` 恢复,sha256 与备份相同
+  (`CAF49E03…18AA53`)。
+- 探针官方半边 `Documents/…/Stellaris/mod/neo_c3_probe/` 与 `mod/neo_c3_probe.mod` 已删;
+  运行时半边 `C:/temp/neo_mods/neo_c3_probe/` 已删 ⇒ 后续 shot 不会继续加载它的 session。
+- 保留:`C:/temp/sqjs_c3d.dll`(成品副本)、`C:/temp/neo_c3_probe/`(探针源目录)、
+  `C:/temp/neo_js.log`(本发 846,849 B / 28,794 行)、`C:/temp/neo_js.log.prev_c2`(旧日志)。
+
+## 复现(读同一份产物的命令)
+
+```powershell
+Select-String -Path C:/temp/neo_js.log -Pattern '^NEO_C3_' | ForEach-Object {$_.Line}
+(Select-String -Path C:/temp/neo_js.log -Pattern '^NEO_JS_CALL_COUNTRY').Count
+(Select-String -Path C:/temp/neo_js.log -Pattern '^NEO_JS_CALL_COUNTRY id=0$').LineNumber
+```
+
+```sh
+# 槽目标(运行期给 RVA,离线复算)
+python3 scripts/vtable.py 0x2515458 --slots 24
+# 容器 +0x90 的调用口径(证明槽在 vtable 上)
+python3 scripts/disrva.py 0x1adf690 --end=0x1adf7af
+```
