@@ -357,6 +357,11 @@ def apply_plan(steps, dry_run=False):
 def _copy_or_replace(src, dst):
     src = pathlib.Path(src)
     dst = pathlib.Path(dst)
+    if src.resolve() == dst.resolve():
+        # The DLL is already sitting where the loader expects it (C1 shot,
+        # 2026-11-08).  Copying a file onto itself is a PermissionError on
+        # Windows, which would surface as a bogus ``dll_locked``.
+        return
     dst.parent.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
         if dst.exists():

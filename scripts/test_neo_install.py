@@ -314,3 +314,23 @@ def _make_mod(root: pathlib.Path, mod_id):
         manifest["id"] = mod_id
     (root / "neo" / "mod.json").write_text(json.dumps(manifest), encoding="utf-8")
     return root
+
+
+def test_copy_or_replace_is_a_noop_for_the_same_path(tmp_path):
+    """C1 live shot: --dll already in the temp root must not fail as dll_locked."""
+    import importlib.util
+    import pathlib as _p
+
+    here = _p.Path(__file__).with_name("windows") / "neo_install.py"
+    import sys
+
+    spec = importlib.util.spec_from_file_location("neo_install_mod", here)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules["neo_install_mod"] = mod  # dataclasses resolves annotations via sys.modules
+    spec.loader.exec_module(mod)
+
+    target = tmp_path / "sqjs.dll"
+    target.write_bytes(b"x")
+    mod._copy_or_replace(target, target)  # must not raise
+    assert target.read_bytes() == b"x"
