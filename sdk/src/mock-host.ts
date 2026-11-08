@@ -14,6 +14,8 @@ export const MOCK_NEIGHBORS: readonly number[] = [1, 2];
 export const MOCK_BETWEENNESS = 250;
 export const MOCK_CHOKEPOINT = true;
 export const MOCK_API_VERSION = 1;
+/** What `__neo_country_opinion` returns before a test overrides it. */
+export const MOCK_OPINION = 7;
 
 export interface MockCall {
   fn: string;
@@ -26,6 +28,9 @@ export interface MockCall {
 export interface MockState {
   handler: ((id: number) => void) | null;
   registers: number;
+  /** `onCountry`'s handler (`__neo_register_country`). */
+  countryHandler: ((id: number) => void) | null;
+  countryRegisters: number;
   apiVersionCalls: number;
   calls: MockCall[];
   degree: number;
@@ -35,6 +40,11 @@ export interface MockState {
   betweenness: number;
   chokepoint: boolean;
   apiVersion: number;
+  /**
+   * What the opinion natives return. `undefined` reproduces a refused read —
+   * the native returns `undefined` and the SDK must map it to `null`.
+   */
+  opinion: number | undefined;
 }
 
 export interface MockHostOptions {
@@ -46,6 +56,8 @@ const STATE_SOURCE = `
 globalThis.__neo_mock = {
   handler: null,
   registers: 0,
+  countryHandler: null,
+  countryRegisters: 0,
   apiVersionCalls: 0,
   calls: [],
   degree: ${MOCK_DEGREE},
@@ -53,7 +65,8 @@ globalThis.__neo_mock = {
   flags: {},
   betweenness: ${MOCK_BETWEENNESS},
   chokepoint: ${MOCK_CHOKEPOINT ? "true" : "false"},
-  apiVersion: ${MOCK_API_VERSION}
+  apiVersion: ${MOCK_API_VERSION},
+  opinion: ${MOCK_OPINION}
 };
 `;
 
@@ -131,6 +144,35 @@ globalThis.__neo_system_has_flag = function (id, name) {
     name: String(name)
   });
   return globalThis.__neo_mock.flags[String(name)] === true;
+};
+`,
+  __neo_register_country: `
+globalThis.__neo_register_country = function (fn) {
+  if (typeof fn !== "function") {
+    throw new TypeError("__neo_register_country expects a function");
+  }
+  globalThis.__neo_mock.countryRegisters += 1;
+  globalThis.__neo_mock.countryHandler = fn;
+};
+`,
+  __neo_country_opinion: `
+globalThis.__neo_country_opinion = function (self, target) {
+  globalThis.__neo_mock.calls.push({
+    fn: "__neo_country_opinion",
+    id: self >>> 0,
+    name: String(target >>> 0)
+  });
+  return globalThis.__neo_mock.opinion;
+};
+`,
+  __neo_country_their_opinion: `
+globalThis.__neo_country_their_opinion = function (self, target) {
+  globalThis.__neo_mock.calls.push({
+    fn: "__neo_country_their_opinion",
+    id: self >>> 0,
+    name: String(target >>> 0)
+  });
+  return globalThis.__neo_mock.opinion;
 };
 `,
 };

@@ -29,9 +29,12 @@ test("api.def is v1 plus the v1.1 additive tail", () => {
       { name: "__neo_system_neighbors", params: ["u32"], returns: "array<u32>" },
       { name: "__neo_system_set_flag", params: ["u32", "string"], returns: "void" },
       { name: "__neo_system_has_flag", params: ["u32", "string"], returns: "bool" },
+      { name: "__neo_register_country", params: ["function"], returns: "void" },
+      { name: "__neo_country_opinion", params: ["u32", "u32"], returns: "i32|null" },
+      { name: "__neo_country_their_opinion", params: ["u32", "u32"], returns: "i32|null" },
     ],
   });
-  assert.equal(new Set(def.functions.map((f) => f.name)).size, 10);
+  assert.equal(new Set(def.functions.map((f) => f.name)).size, 13);
 });
 
 test("API_VERSION mirrors api.def", () => {
@@ -124,4 +127,52 @@ test("apiVersion delegates to __neo_api_version", () => {
   const before = state.apiVersionCalls;
   assert.equal(runtime.apiVersion(), 1);
   assert.equal(mockState().apiVersionCalls, before + 1);
+});
+
+test("onCountry registers the country handler exactly once", () => {
+  let seen = null;
+  runtime.onCountry((c) => {
+    seen = { id: c.id, v: c.opinionOf(c.id) };
+  });
+  const state = mockState();
+  assert.equal(state.countryRegisters, 1);
+
+  state.calls.length = 0;
+  state.countryHandler(42);
+  assert.deepEqual(seen, { id: 42, v: state.opinion });
+  assert.deepEqual(state.calls, [
+    { fn: "__neo_country_opinion", id: 42, name: "42" },
+  ]);
+});
+
+test("opinionOf maps a rejected read to null", () => {
+  const state = mockState();
+  const saved = state.opinion;
+  state.opinion = undefined; // the native returns undefined = refused
+  try {
+    let got = "unset";
+    runtime.onCountry((c) => {
+      got = c.opinionOf(3);
+    });
+    state.calls.length = 0;
+    state.countryHandler(1);
+    assert.equal(got, null);
+    assert.deepEqual(state.calls, [{ fn: "__neo_country_opinion", id: 1, name: "3" }]);
+  } finally {
+    state.opinion = saved;
+  }
+});
+
+test("theirOpinionOf calls its own native, not opinion's", () => {
+  const state = mockState();
+  let got = null;
+  runtime.onCountry((c) => {
+    got = c.theirOpinionOf(5);
+  });
+  state.calls.length = 0;
+  state.countryHandler(2);
+  assert.equal(got, state.opinion);
+  assert.deepEqual(state.calls, [
+    { fn: "__neo_country_their_opinion", id: 2, name: "5" },
+  ]);
 });
