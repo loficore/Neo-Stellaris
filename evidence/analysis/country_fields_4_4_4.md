@@ -608,3 +608,45 @@ onCountry.their_opinion[target]  ; int32,引擎 `their_opinion` 那一格 = base
 **本节不能说的:** 契约草案里的 `target` 是谁由调用方决定;C2 现在拿到的 `id` 只有
 `country_scope_4_4_4.md` §11 那一个(玩家国,`id=0`),**没有第二个国家** ⇒ §2.3 的方向
 (B)在实机上要**一个不对称的国家对**才能验,单国战役验不了。§3.2 判据 3 已按这个前提写。
+
+---
+
+## §12 C3 国家侦察发读数(2026-11-08,实机一发,只读)
+
+> 这一节只追加读数与判词;§1/§3.1 的旧判决**不改写**。产物:
+> `evidence/logs/runtime_js_c3_country_probe_4_4_4.log`(DLL sha `79d6af1f…623c37`、
+> pid 1756、9 个月度脉冲、355 次国家派发)。计划 = `2026-11-08-c3-country-probe-shot.md`。
+
+| 项 | 读数 | 等级 | 复算 | 下一步 |
+|---|---|---|---|---|
+| 能量索引(数值) | **`energy_idx=0`**,`db_n=26`(同一条读数里),`energy_obj=[[0x33746F0]+0x20]=0x1f66d64d0` | **A**(原 C:文件序候选 0 不作数) | 日志 `^NEO_C3_RES`(3 行同值);`grep -n "^[a-z_]* = {" /var/lofibass_ssd/data/stellaris/4.4.4/common/strategic_resources/00_strategic_resources.txt \| head -1` | 下一发补 §3.2 判据 4 的交叉(`[[0x33746F0]+8+0*8]+0x18`);本条只把**数值**升 A,「0 = 文件序第 0 个」仍未证 |
+| `[country+0x2c68]` 持有者 | 两国分别 `0x20e2df940` / `0x20e4ce630`;同 vtable | **B**(不变) | 日志 `^NEO_C3_ECON`(前 2 行) | 只在两国上量过;稀疏/空持有者未遇到 |
+| 经济容器 vtable | **`base+0x2515458`**(两国同值)⇒ 同一类 | **B**(新读数;运行期) | 日志 `^NEO_C3_ECON` 的 `vt_rva` | 用一个第三国/月确认同值(本发已 2/2) |
+| 经济容器 `+0x90` / `+0x98` 槽目标 | **`0x844200` / `0x8442A0`** —— 用上面运行期 RVA **离线**读出 | **B**(离线,静态形状;未在活体调用) | `python3 scripts/vtable.py 0x2515458 --slots 24`(slot 0x12/0x13);`python3 scripts/disrva.py 0x1adf690 --end=0x1adf7af`(`mov rax,[rcx]; call [rax+0x90]` 证明槽在 vtable 上) | 活体验证「`+0x90` 填充 / `+0x98` 写回」需要下一次只读发(本发零引擎调用) |
+| 经济容器槽(宿主行) | 行内 `s90=0x0 s98=0x0` **不是引擎事实**:行读的是 `[econ+0x90]`(对象字段),引擎读的是 `[[econ]+0x90]` | — | 同上 `disrva.py` 的 `01adf75d`/`01adf767` | 修 `country_probe.zig` 的槽取法(`[[econ]+0x90]`)后重打 |
+| opinion 双向 | **40 行全 `a=na b=na`**;15 行 `self` 带高位(必 `out_of_range`),25 行低 id 无法区分 `table_null` / `not_computed` | **仍 B**(方向);本次读取**判负** | 日志 `^NEO_C3_OPINION`(40 行) | ①宿主把 `na` 拆成 `table_null/out_of_range/not_computed` 三个词;②`self`/`target` 取 `&0xffffff` 后再查表;③仍不调 `0x743bb0` |
+| 国家 id 编码 | **`scope+0x10` 不是裸 id**:同脉冲 39 个值里 `0x01000002…0x0100000D`、`0x0100001F`、`0x04000015`、`0x06000014`;低 24 位恰好 `0..39`(缺 23) | **A**(实机,本发新读数) | 日志 `^NEO_SCOPE_OTHER` 第 3 行 `u10=0x01000002`;`NEO_JS_CALL_COUNTRY` 全序列按 `&0xffffff` 去重 = 0..39 | 对象表/矩阵查表一律用低 24 位(与 §2.2 的 `[obj+0x20] & 0xffffff` 同口径) |
+| AI 派发 | **355 次 = 9 个月度脉冲 × 39–40 国**;低 24 位 id 覆盖 `0..40`(C2 只有人类 1 国) | **A**(实机) | 日志 `^NEO_JS_CALL_COUNTRY`;`id=0` 的行号 1/40/79/118/157/196/235/276/316 | 无;AI 递送这一格收口 |
+| 脚本解析 | `Unexpected token` / `Script Error` / `error.log` 的 `neo_c3` 行全 **0** | **A** | `evidence/logs/runtime_js_c3_country_probe_4_4_4.log` 的「脚本侧错误面」 | 无 |
+| opinion 矩阵 `n` / level 阈值 | 未读(本发不导出描述符内容) | **C**(不变) | — | 需要把 `n` 打进一条只读行(下一发) |
+
+**这一节不能说的:**
+
+1. **opinion 的方向仍未实机**。40 行里没有一对数字,`a != b` 无从判定;§2.3 的「互为转置 A」
+   仍是静态判决,「谁对谁 B」仍未收口。
+2. **`0x2515458` 的类名**:本发只证明「两国共享这个 vtable 且 `+0x90` 目标是 `0x844200`」;
+   这个 RVA 也出现在 `ceffect_vtable_map_4_4_4.txt`(slot1 = `0x1D08520`),**不**据此改
+   「经济容器」的类身份判读 —— 类名仍未定。
+3. **高位的含义**:本发量到高 8 位有三种取值(`0x01`/`0x04`/`0x06`),**没有**判定它是什么
+   (国家类型?实例代号?);只判定「低 24 位是国家 id」这一条对查表可用。
+4. **单战役/单存档/9 个月**;39→41 国的变化只说明这一份存档不静默,不外推到其它存档。
+
+**2026-11-08 修正（同分支离线，未重打）。** 本节的读数不改写；上面「下一步」里的三处仪器缺陷已经在
+`feat/c3-country-probe` 修掉并加测试：
+
+1. `country_probe.zig` 的槽取法由 `[E+0x90]` 改回引擎的 `[[E]+0x90]`（`0x1adf75d`/`0x1adf767`）；
+2. `readOpinion` / `c3Opinion` 的 `self`/`target` 先按低 24 位掩再查表（与 `[obj+0x20] & 0xffffff` 同口径）；
+3. `NEO_C3_OPINION` 的 `na` 拆成 `na:t`（table_null）/ `na:o`（out_of_range）/ `na:n`（not_computed）。
+
+`zig build test` = **1042/1042**（含一条「raw id 0x01000002 / 0x01000001 掩后命中 [1][2]」的回归测试）。
+下一发（若点名）应看到：`s90/s98` 非 0、opinion 出数字或带理由词；**本发不重试**的约束不变。

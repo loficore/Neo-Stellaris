@@ -1,0 +1,31 @@
+# C3 — 国家侦察发（Stellaris 4.4.4, read-only）.
+#
+# The one thing this file does: hand **every** country scope (human and AI) to
+# the injected host once per monthly pulse.
+#
+# C2's event carried a limit that kept non-player countries out, so only one
+# country reached the host. C3 deliberately has **no** limit: every country,
+# AI included, must reach the host. The pre-flight grep for that AI filter
+# keyword must return empty (plan Task 3 Step 1 / Review Focus 5).
+#
+# `event = {` is untyped on purpose: an on_action has no scope, and C1 lost a
+# run to `country_event = {` ("fire country scope event ... on no_scope").
+#
+# `every_country` is an official iterator effect and `neo_action` is the effect
+# the injected host registers; its body is an empty block on purpose (the
+# registered class parses an assignment block). Nothing here is new syntax and
+# nothing here writes engine state.
+
+namespace = neo_c3
+
+event = {
+	id = neo_c3.100
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		every_country = {
+			neo_action = { }
+		}
+	}
+}
