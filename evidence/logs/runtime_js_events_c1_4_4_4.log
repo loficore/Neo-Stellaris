@@ -1,0 +1,77 @@
+# C1 — 事件闭环实机（4.4.4，2026-11-08）
+
+#
+# 授权原话：「那先打C1」。
+# 分支：feat/mechanic-bet；DLL sha256 f64c03f39545b63a18ea1c59cbf7e2df7eac87900b2893e4aa9806754aea6b3e
+# （部署名 C:/temp/sqjs_p2d.dll，远端 Get-FileHash 相等）。
+# 口径：--act log --rule 1:0 --allow-window；每发 taskkill /F；不 FreeLibrary。
+#
+# 结论：**C1 通过。** JS 的图度量决定「哪一个事件」；事件在游戏里以中文标题/正文/选项弹出；
+# 点击选项后官方日志落下与 JS 相同的数字。
+#
+# 这一发不是一个进程打完的：前两次启动暴露了 5 个集成缺陷（3 个脚本、2 个安装器），
+# 修完第三次才通过。过程照实记，见「迭代」一节。
+
+## 装配
+
+- DLL：`zig-out/bin/stellaris_quickjs.dll` sha256 `f64c03f3…4aea6b3e`
+- mod：`examples/neo_events`（`neo build` / `neo check` 均 exit 0，`handler=1 calls=3`）
+- 安装器：`scripts/windows/neo_install.py`（本分支新增），`--no-launch` 只做安装：
+  - 官方半边：`descriptor.mod` / `common/` / `events/` / `localisation/` → `Documents/.../Stellaris/mod/neo_events/`，
+    生成 `mod/neo_events.mod`，把 `mod/neo_events.mod` 写进 **`Documents/.../Stellaris/dlc_load.json`**
+  - 运行时半边：`neo/` → `C:/temp/neo_mods/neo_events/neo/`，DLL → `C:/temp/sqjs_p2d.dll`
+  - 回执：`NEO_PLAY ok dll=f64c03f39545b63a mod=neo_events pid=0`
+- 启动：`c2_boot_inject.py … --launch … --launch-args=--continuelastsave`，
+  回执 `BOOT dll=sqjs_p2d.dll sha=f64c03f39545b63a effect_id=19343 set_id=19344 install_rc=0 alive=1`
+- 解暂停：`session_bridge` + `neo_focus_space.py`（`AttachThreadInput` 强聚焦后发 Space）
+
+## 链路（三段，逐段有读数）
+
+1. **JS 决策**（`neo/main.js`）：每个月对每个星系写 `neo_event_pick`，
+   值来自 `graph.betweenness({id:82})`：`>= 200 → 2`，否则 `1`；
+   在系统 82 上落一行 `NEO_EVENT_PICK source=js …`。
+2. **官方脚本**（`events/neo_events.txt`，`neo_events.100` 由 `on_monthly_pulse` 触发）：
+   先 `every_system { neo_action = { } }`，再用 `any_system { check_variable … }` 读回，按值发
+   `neo_events.1/2/3` 给玩家国家。
+3. **玩家可见**：事件窗口（截图）+ 选项点击 → 选项里 `log = "NEO_EVENT_PICK <n>"`。
+
+## 最终读数（第三发，pid 21704）
+
+`C:/temp/neo_js.log`：
+
+    NEO_JS_INIT_OK id=neo_events api=1
+    NEO_JS_LOG NEO_EVENT_PICK source=js system=82 pick=2 betweenness=236
+
+`logs/game.log`：
+
+    [10:13:46][effect_impl.cpp:21978]: [2278.2.1] … NEO_EVENT_FIRED 2
+    [10:27:29][effect_impl.cpp:21978]: [2278.2.1] … NEO_EVENT_PICK 2      ← 选项点击
+
+截图（`c1_event3.png`）：事件标题「一张不属于我们的地图」、正文与选项「收下它，什么也别说。」
+都以中文渲染（`localisation/simp_chinese/`），不是 raw key。
+
+同时存活：旧驱动 mod `neo_ps_probe` 的 `PS_HIT = 784` ⇒ 两个 `on_monthly_pulse`
+（`neo_ps_probe` 与 `neo_events`）在 4.4.4 下**合并**，没有互相覆盖。
+
+## 迭代：前两次启动抓到并修掉的 5 个缺陷
+
+| # | 读数 | 缺陷 | 修法 |
+|---|---|---|---|
+| 1 | `IndexError: 1` at import | 安装器部署到 `C:/temp` 后 `REPO = HERE.parents[1]` 不存在 | 无祖父目录时回退 `HERE` |
+| 2 | `NEO_PLAY fail reason=dll_locked` | `--dll` 已在 temp root，`copy2` 源=目标在 Windows 报 PermissionError | 同路径跳过拷贝 |
+| 3 | `dlc_load.json` 里没有 `mod/neo_events.mod` | 写到了 `<Stellaris>/mod/dlc_load.json` | 改到 `<Stellaris>/dlc_load.json` |
+| 4 | `Script Error … fire country scope event neo_events.100 on no_scope` | 驱动事件写成 `country_event`，on_action 无 scope | 改无类型 `event = { … }`（与 `neo_ps.1` 同形） |
+| 5 | `Scripted Trigger has_variable is invalid` + 缺本地化 key | `has_variable` 在 4.4.4 不存在；`localisation/english` 在中文客户端不加载 | 用 `is_variable_set`；补 `localisation/simp_chinese` |
+
+附带一条：`check_variable` 对未设置变量的系统会报错，所以 JS 改成**每个系统都写同一个全局值**，
+而不是只写系统 82。
+
+## 边界（不能说）
+
+- 这是**第三个进程**才通过的（前两发各暴露一批缺陷）；C1 不是“一发命中”。
+- 选项点击需要**按 DPI 缩放换算坐标**（物理 2160×1440，逻辑 1440×960；150%）。
+  直接按截图坐标点击无效——这是仪器坑，已记在这里。
+- 本地化只证明中文客户端；英文客户端的 `localisation/english` 没在实机验过。
+- 事件文本仍然是官方 `.txt` 写死的；JS 决定的是**哪一个**事件，不是生成文本。
+- 战役推进到 2278.02；自动存档池已滚动。
+- 一次点击在日志里出现两行 `NEO_EVENT_PICK 2`（选项 `log` 与触发路径各一行），不是两次点击。
