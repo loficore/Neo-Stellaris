@@ -395,6 +395,22 @@ def receipt_fail(tag):
     return f"NEO_PLAY fail reason={tag}"
 
 
+def next_steps(mod_id):
+    """The three steps the *player* still owns after a successful install.
+
+    "One click" is not true and never was: the Stellaris launcher keeps its own
+    playset database and rewrites ``dlc_load.json`` when the player applies it,
+    so the mod has to be ticked in the launcher.  Injection is a separate entry
+    point (``neo.bat``).  This text is the contract, printed to stderr so the
+    one-line stdout receipt stays machine-readable.
+    """
+    return [
+        f"NEXT 1) 打开启动器 → 播放集 → 勾选 {mod_id}（启动器会重写 dlc_load.json）",
+        "NEXT 2) 运行 neo.bat（安装 + 启动 + 注入；或手动跑 c2_boot_inject.py）",
+        "NEXT 3) 进游戏后确认 C:/temp/neo_js.log 出现 NEO_JS_INIT_OK",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # launch + inject (Windows only, not exercised offline)
 # ---------------------------------------------------------------------------
@@ -499,6 +515,10 @@ def main(argv=None):
         print(receipt_fail("internal"))
         return EXIT_FAIL
     print(receipt_ok(sha256_file(paths.dll)[:16], paths.mod_id, pid))
+    if not args.dry_run:
+        # Dry-run is a plan preview; a real install owns the reminder.
+        for line in next_steps(paths.mod_id):
+            print(line, file=sys.stderr)
     return EXIT_OK
 
 

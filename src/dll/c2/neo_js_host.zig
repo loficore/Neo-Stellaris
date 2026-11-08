@@ -53,7 +53,8 @@
 //   NEO_JS_NEIGHBORS_TRUNC id=<id> total=<n> written=<n>
 //   NEO_JS_LOG <text>
 //   NEO_JS_ERROR id=<id> mod=<mod> <message> | NEO_JS_TIMEOUT id=<id> mod=<mod>
-//   NEO_SCOPE_OTHER mask=0x<mm> id=<n>   非 system scope 的只读诊断(切片 2;每次派发一行)
+//   NEO_SCOPE_OTHER mask=0x<mm> … vtable_rva/6×u32  非 system scope 的只读指纹(前 3 次)
+//   NEO_SCOPE_OTHER_SEEN n=<n>                       之后每 500 次一行计数
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -566,6 +567,10 @@ pub fn onSystem(id: u32, scope: u64) void {
     ensureLoaded();
     if (state != .ready) return;
 
+    // C2: 引擎把 effect 派发进非 system scope（`every_country`）时落一行只读指纹。
+    // 放在 session 循环之前 —— 判词是「scope 长什么样」，与有没有 mod 无关。
+    noteOtherScope(scope);
+
     _ = @atomicRmw(u64, &call_count, .Add, 1, .monotonic);
     emit("NEO_JS_CALL id={d}", .{id});
 
@@ -598,7 +603,58 @@ pub fn onSystem(id: u32, scope: u64) void {
 pub fn noteOtherScope(scope: u64) void {
     const fields = neo_vtable.scopeFields(scope) orelse return;
     if (neo_vtable.isSystemScope(fields[0])) return;
-    emit("NEO_SCOPE_OTHER mask=0x{x:0>2} id={d}", .{ fields[0], fields[1] });
+
+    // C2(2026-11-08): 只看 mask 只能回答「scope 来了没有」,回答不了「字段在哪」。
+    // 前 3 次落完整指纹(vtable + 6 个候选 u32),之后只落计数 —— 一个月的
+    // `every_country` 会把这条路径跑几百次,逐次全打会把日志淹掉。
+    const seen = @atomicRmw(u64, &other_scope_count, .Add, 1, .monotonic);
+    if (seen >= OTHER_SCOPE_FINGERPRINTS) {
+        if (seen % OTHER_SCOPE_SUMMARY_EVERY == 0) {
+            emit("NEO_SCOPE_OTHER_SEEN n={d} mask=0x{x:0>2}", .{ seen + 1, fields[0] });
+        }
+        return;
+    }
+
+    const base: usize = if (windows.moduleFunction(0)) |fn_ptr| @intFromPtr(fn_ptr) else |_| 0;
+    const vtable = readU64Safe(scope) orelse 0;
+    const vtable_rva: u64 = if (base != 0 and vtable >= base and vtable - base < 0x4000_0000) vtable - base else 0;
+    emit(
+        "NEO_SCOPE_OTHER mask=0x{x:0>2} id={d} vtable_rva=0x{x} u08=0x{x:0>8} u10=0x{x:0>8} u18=0x{x:0>8} u20=0x{x:0>8} u28=0x{x:0>8}",
+        .{
+            fields[0],
+            fields[1],
+            vtable_rva,
+            readU32Safe(scope + 0x08) orelse 0,
+            readU32Safe(scope + 0x10) orelse 0,
+            readU32Safe(scope + 0x18) orelse 0,
+            readU32Safe(scope + 0x20) orelse 0,
+            readU32Safe(scope + 0x28) orelse 0,
+        },
+    );
+}
+
+/// 前几次落完整指纹;之后每 N 次一行计数。数字是判据的一部分,不要随手改。
+const OTHER_SCOPE_FINGERPRINTS: u64 = 3;
+const OTHER_SCOPE_SUMMARY_EVERY: u64 = 500;
+
+var other_scope_count: u64 = 0;
+
+fn readU64Safe(addr: u64) ?u64 {
+    const p: usize = @intCast(addr);
+    if (!committed(p)) return null;
+    return @as(*align(1) const u64, @ptrFromInt(p)).*;
+}
+
+fn readU32Safe(addr: u64) ?u32 {
+    const p: usize = @intCast(addr);
+    if (!committed(p)) return null;
+    return @as(*align(1) const u32, @ptrFromInt(p)).*;
+}
+
+fn committed(addr: usize) bool {
+    if (addr == 0) return false;
+    if (comptime builtin.os.tag != .windows) return true;
+    return windows.isCommitted(addr);
 }
 
 /// 跑一个 session 的 handler。异常/超时只禁用**这个** session。
@@ -924,6 +980,7 @@ pub fn sessionTimeouts(index: usize) u64 {
 /// handler 上,而且这个 runtime 与进程同生命周期,永不 FreeLibrary);宿主测试里
 /// 释放掉,免得每个用例都留下 8 个 runtime。
 pub fn resetForTest() void {
+    other_scope_count = 0;
     if (comptime !is_windows) {
         var i: usize = 0;
         while (i < session_len) : (i += 1) {
@@ -1025,6 +1082,7 @@ fn systemScope(id: u32) [0x20]u8 {
 }
 
 test "noteOtherScope logs mask+id for a non-system scope and is silent otherwise" {
+    resetForTest();
     var cap = Capture{};
     armCapture(&cap);
     defer resetForTest();
@@ -1035,8 +1093,25 @@ test "noteOtherScope logs mask+id for a non-system scope and is silent otherwise
     var country: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
     std.mem.writeInt(u32, country[neo_vtable.SCOPE_MASK_OFF..][0..4], 0x04, .little);
     std.mem.writeInt(u32, country[neo_vtable.SCOPE_ID_OFF..][0..4], 42, .little);
+    // vtable + the candidate field cells: the fingerprint half of the line.
+    std.mem.writeInt(u64, country[0..8], 0x140000000 + 0x1234, .little);
+    // +0x08 is the mask itself and +0x10 is the id; the rest are free cells.
+    std.mem.writeInt(u32, country[0x18..][0..4], 0xAAAA_0018, .little);
     noteOtherScope(@intFromPtr(&country));
     try testing.expect(cap.contains("NEO_SCOPE_OTHER mask=0x04 id=42"));
+    try testing.expect(cap.contains("vtable_rva=0x0")); // off Windows there is no module base
+    try testing.expect(cap.contains("u08=0x00000004"));
+    try testing.expect(cap.contains("u10=0x0000002a")); // the id lives at +0x10
+    try testing.expect(cap.contains("u18=0xaaaa0018"));
+
+    // Only the first three are full fingerprints; the fourth is silent here
+    // (the count line starts at 500).
+    cap.len = 0;
+    noteOtherScope(@intFromPtr(&country));
+    noteOtherScope(@intFromPtr(&country));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, cap.text(), "NEO_SCOPE_OTHER mask="));
+    noteOtherScope(@intFromPtr(&country));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, cap.text(), "NEO_SCOPE_OTHER mask="));
 
     // A system scope is the normal path: no diagnostic, ever.
     cap.len = 0;
@@ -1048,6 +1123,26 @@ test "noteOtherScope logs mask+id for a non-system scope and is silent otherwise
     cap.len = 0;
     noteOtherScope(0x1000);
     try testing.expect(!cap.contains("NEO_SCOPE_OTHER"));
+}
+
+test "onSystem logs NEO_SCOPE_OTHER when the dispatch carries a non-system scope" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    _ = startSession(.{
+        .id = "probe",
+        .source = "__neo_register_system(function(id){});",
+        .permissions = .{},
+    });
+
+    var country: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, country[neo_vtable.SCOPE_MASK_OFF..][0..4], 0x04, .little);
+    std.mem.writeInt(u32, country[neo_vtable.SCOPE_ID_OFF..][0..4], 42, .little);
+    onSystem(42, @intFromPtr(&country));
+
+    try testing.expect(cap.contains("NEO_SCOPE_OTHER mask=0x04"));
+    try testing.expect(cap.contains("NEO_JS_CALL id=42"));
 }
 
 test "apiVersion is the frozen v1 contract value" {
