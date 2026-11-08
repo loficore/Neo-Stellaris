@@ -58,6 +58,12 @@
 //   NEO_JS_ERROR id=<id> mod=<mod> <message> | NEO_JS_TIMEOUT id=<id> mod=<mod>
 //   NEO_SCOPE_OTHER mask=0x<mm> … vtable_rva/6×u32  非 system scope 的只读指纹(前 3 次)
 //   NEO_SCOPE_OTHER_SEEN n=<n>                       之后每 500 次一行计数
+//   NEO_C3_ECON id=<id> holder=0x<x> vt_rva=0x<x> s90=0x<x> s98=0x<x>
+//       C3 国家侦察(前 3 个国家):[country+0x2c68] 经济持有者 + 两个槽目标(只读指针)
+//   NEO_C3_RES db_n=<n> energy_obj=0x<x> energy_idx=<n|na>
+//       资源库条数 / `[[0x33746F0]+0x20]` / 能量索引(与 ECON 同一行组,只打 3 国)
+//   NEO_C3_OPINION self=<id> target=0 a=<n|na> b=<n|na>
+//       opinion 双向(a = 引擎 `opinion`,b = `their_opinion`;前 40 个国家)
 //   NEO_JS_OPINION_REJECT self=<s> target=<t> reason=<tag>
 //       tag = no_permission | scope_mismatch | table_null | out_of_range | not_computed
 
@@ -73,6 +79,7 @@ const loader = @import("neo_js_loader.zig");
 const flag_ids = @import("flag_ids.zig");
 const offsets = @import("../shared/offsets.zig");
 const opinion_table = @import("opinion_table.zig");
+const country_probe = @import("country_probe.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -676,6 +683,12 @@ pub fn noteOtherScope(scope: u64) void {
     const fields = neo_vtable.scopeFields(scope) orelse return;
     if (neo_vtable.isSystemScope(fields[0])) return;
 
+    // C3(2026-11-08): 国家派发(mask == 0x04)额外落三行只读读数。放在指纹闸门
+    // **之前** —— 指纹只打前 3 次,而 opinion 行要打到前 40 个国家;放在闸门之后就
+    // 会被 `seen >= OTHER_SCOPE_FINGERPRINTS` 的 return 吞掉(计划 Task 2 的 40 条
+    // 上限测试正是盯着这一点)。
+    if (fields[0] == offsets.country.SCOPE_MASK) emitCountryProbe(fields[1]);
+
     // C2(2026-11-08): 只看 mask 只能回答「scope 来了没有」,回答不了「字段在哪」。
     // 前 3 次落完整指纹(vtable + 6 个候选 u32),之后只落计数 —— 一个月的
     // `every_country` 会把这条路径跑几百次,逐次全打会把日志淹掉。
@@ -710,6 +723,106 @@ const OTHER_SCOPE_FINGERPRINTS: u64 = 3;
 const OTHER_SCOPE_SUMMARY_EVERY: u64 = 500;
 
 var other_scope_count: u64 = 0;
+
+// ---------------------------------------------------------------------------
+// C3(2026-11-08)— 国家侦察行(经济容器指纹 + 能量索引 + opinion 双向)
+// ---------------------------------------------------------------------------
+//
+// 三行的上限是判据的一部分:完整经济行只打前 3 个国家(econ 持有者/槽目标对
+// 大多数国家是同一个类,重复没有信息量),opinion 行只打前 40 个 —— 一个月的
+// `every_country` 会跑「国家数 × 月数」次,不限就是 200+ 行一脉冲。
+//
+// 只读:全部经 `country_probe.collect`(仅 `read_u32/read_u64`),**不调用**任何
+// 引擎虚函数(尤其不碰 `[econ+0x90]`,它会填充调用方向量)。
+
+/// 前 3 个国家打完整经济行;之后不再打。
+const C3_ECON_LIMIT: u64 = 3;
+/// 前 40 个国家打 opinion 行;之后不再打。
+const C3_OPINION_LIMIT: u64 = 40;
+
+var c3_econ_count: u64 = 0;
+var c3_opinion_count: u64 = 0;
+
+/// 测试注入的读面/地址(非 Windows 上 `moduleBase()` 恒为 0,生产口径只能读 `na`)。
+var c3_memory: ?country_probe.Memory = null;
+var c3_addresses: ?country_probe.Addresses = null;
+
+pub fn setCountryProbeForTest(mem: ?country_probe.Memory, addrs: ?country_probe.Addresses) void {
+    c3_memory = mem;
+    c3_addresses = addrs;
+}
+
+fn countryProbeMemory() country_probe.Memory {
+    if (c3_memory) |m| return m;
+    return .{
+        .ctx = @ptrCast(&production_ctx),
+        .read_u32 = productionReadU32,
+        .read_u64 = productionReadU64,
+    };
+}
+
+fn countryProbeAddresses() country_probe.Addresses {
+    if (c3_addresses) |a| return a;
+    const base = moduleBase();
+    if (base == 0) return .{ .country_table = 0, .resource_db = 0 };
+    return .{
+        .country_table = std.math.add(u64, base, country_probe.RVA_COUNTRY_TABLE) catch 0,
+        .resource_db = std.math.add(u64, base, country_probe.RVA_RESOURCE_DB) catch 0,
+    };
+}
+
+/// 一个 opinion 格子的打印文本:`<n>` 或 `na`(任何失败 —— 空表/越界/哨兵/读不到)。
+fn opinionText(buf: []u8, v: ?i32) []const u8 {
+    const value = v orelse return "na";
+    return std.fmt.bufPrint(buf, "{d}", .{value}) catch "na";
+}
+
+fn c3Opinion(row: u32, col: u32) ?i32 {
+    const addr = descriptorAddr() orelse return null;
+    const table = opinion_table.load(opinionMemory(), addr) catch return null;
+    return opinion_table.value(opinionMemory(), table, row, col) catch null;
+}
+
+fn emitCountryProbe(id: u32) void {
+    const reading = country_probe.collect(
+        countryProbeMemory(),
+        countryProbeAddresses(),
+        id,
+        moduleBase(),
+    );
+
+    if (@atomicRmw(u64, &c3_econ_count, .Add, 1, .monotonic) < C3_ECON_LIMIT) {
+        emit("NEO_C3_ECON id={d} holder=0x{x} vt_rva=0x{x} s90=0x{x} s98=0x{x}", .{
+            id,
+            reading.econ,
+            reading.econ_vtable_rva,
+            reading.slot90_rva,
+            reading.slot98_rva,
+        });
+        if (reading.energy_idx) |idx| {
+            emit("NEO_C3_RES db_n={d} energy_obj=0x{x} energy_idx={d}", .{
+                reading.res_n,
+                reading.energy_obj,
+                idx,
+            });
+        } else {
+            emit("NEO_C3_RES db_n={d} energy_obj=0x{x} energy_idx=na", .{
+                reading.res_n,
+                reading.energy_obj,
+            });
+        }
+    }
+
+    if (@atomicRmw(u64, &c3_opinion_count, .Add, 1, .monotonic) < C3_OPINION_LIMIT) {
+        // 引擎 `opinion` 的键序是 row = 目标、col = 我们(§2.3 A 级);target 固定取 0
+        // —— 人类玩家在 C2 的实机读数里就是 id=0,这一发就是拿它与 AI 国对读。
+        var a_buf: [16]u8 = undefined;
+        var b_buf: [16]u8 = undefined;
+        const a = opinionText(&a_buf, c3Opinion(0, id)); // opinion     = cell(target, self)
+        const b = opinionText(&b_buf, c3Opinion(id, 0)); // their_opinion = cell(self, target)
+        emit("NEO_C3_OPINION self={d} target=0 a={s} b={s}", .{ id, a, b });
+    }
+}
 
 fn readU64Safe(addr: u64) ?u64 {
     const p: usize = @intCast(addr);
@@ -1224,6 +1337,8 @@ pub fn sessionTimeouts(index: usize) u64 {
 /// 释放掉,免得每个用例都留下 8 个 runtime。
 pub fn resetForTest() void {
     other_scope_count = 0;
+    c3_econ_count = 0;
+    c3_opinion_count = 0;
     country_call_count = 0;
     if (comptime !is_windows) {
         var i: usize = 0;
@@ -1253,6 +1368,8 @@ pub fn resetForTest() void {
     flag_ids.resetCache();
     opinion_memory = null;
     opinion_descriptor = null;
+    c3_memory = null;
+    c3_addresses = null;
     @atomicStore(u64, &call_count, 0, .monotonic);
     @atomicStore(u64, &write_count, 0, .monotonic);
     @atomicStore(u64, &error_count, 0, .monotonic);
@@ -2291,4 +2408,58 @@ test "nativeCountryOpinion returns undefined for sentinel and out-of-range" {
     onCountry(1, @intFromPtr(&scope1));
     try testing.expectEqual(@as(u64, 0), errors());
     try testing.expectEqual(@as(usize, 1), activeSessions());
+}
+
+// ---------------------------------------------------------------------------
+// C3(2026-11-08)— 国家侦察行(上限 3/40,只读)
+// ---------------------------------------------------------------------------
+
+test "a country dispatch emits the C3 econ and opinion lines and caps them" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    // opinion 的两格按 §2.3 的键序布:opinion = cell(target, self)、their_opinion = cell(self, target)。
+    var matrix = opinion_table.FakeMatrix.init(3);
+    matrix.wire();
+    matrix.set(0, 1, 40);
+    matrix.set(1, 0, 0);
+    setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
+
+    var scope: [0x20]u8 align(8) = countryScope(1);
+    noteOtherScope(@intFromPtr(&scope));
+    try testing.expect(cap.contains("NEO_C3_ECON id=1"));
+    try testing.expect(cap.contains("NEO_C3_RES"));
+    try testing.expect(cap.contains("NEO_C3_OPINION self=1 target=0 a=40 b=0"));
+
+    // 再打 39 次:OPINION 行恰好 40 条;第 41 次不再出现。
+    var i: usize = 0;
+    while (i < 39) : (i += 1) noteOtherScope(@intFromPtr(&scope));
+    try testing.expectEqual(@as(usize, 40), countOccurrences(cap.text(), "NEO_C3_OPINION "));
+    noteOtherScope(@intFromPtr(&scope));
+    try testing.expectEqual(@as(usize, 40), countOccurrences(cap.text(), "NEO_C3_OPINION "));
+}
+
+test "the C3 econ line stops after three countries" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    var id: u32 = 0;
+    while (id < 4) : (id += 1) {
+        var scope: [0x20]u8 align(8) = countryScope(id);
+        noteOtherScope(@intFromPtr(&scope));
+    }
+    try testing.expectEqual(@as(usize, 3), countOccurrences(cap.text(), "NEO_C3_ECON "));
+    try testing.expectEqual(@as(usize, 3), countOccurrences(cap.text(), "NEO_C3_RES "));
+    // 第 4 个国家(id=3)没有完整经济行。
+    try testing.expect(!cap.contains("NEO_C3_ECON id=3"));
+
+    // system scope(mask 0x80)不进这条路径。
+    var system: [0x20]u8 align(8) = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, system[neo_vtable.SCOPE_MASK_OFF..][0..4], 0x80, .little);
+    noteOtherScope(@intFromPtr(&system));
+    try testing.expectEqual(@as(usize, 3), countOccurrences(cap.text(), "NEO_C3_ECON "));
 }
