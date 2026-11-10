@@ -84,8 +84,8 @@ onSystem((s) => {
 | `System.setStarFlag` | `(name: string) => void` | 经 `set_star_flag` 函数体设置官方标记 `name`。需要 `flag.write`。名字由引擎的标记名表解析为 `u16` id;表里没见过的名字会在首次使用时插入(脚本写同一个字面量时引擎就是这么做的)。名字必须是 **1–15 个小写字节的字符串字面量**,且不得与官方 keyword 撞名。拿不到 id 时报 `no_flag_token`。 |
 | `System.hasStarFlag` | `(name: string) => boolean` | 从标记容器里读官方标记 `name`。需要 `flag.read`。**只读:**名字用不插入的查找解析——表里没有 id 的名字读出 `false` 并记 `reason=no_flag_token`。有 id 但容器里没有(或容器读不了)同样读出 `false`(fail-closed)。字面量规则与写入相同。 |
 | `onCountry` | `(handler: (c: Country) => void) => void` | 注册按国家的处理函数。需要清单的 `scope` 里有 `"country"`;只声明 system 的 bundle 调用它会记 `NEO_JS_REGISTER_REJECT … scope=country` 并保持惰性(会话**不会**被禁用)。 |
-| `Country.id` | `number` | 本次调用的引擎国家 id(被派发作用域的 `+0x10`)。SDK 唯一留存的句柄。 |
-| `Country.opinionOf` | `(targetId: number) => number \| null` | 引擎 `opinion` keyword:矩阵里的一个 `int32` 格,键是 `target * n + self`(两个 id 都掩到低 24 位——引擎的键空间;直接传 `Country.id`)。**`null` = fail-closed**,绝不是 `0`:未计算(引擎哨兵 `0x7fffffff`)、任一 id 越界、矩阵没建(主菜单/没有战役)、会话没有 `opinion.read`,或 id 与被派发的国家不符。每次拒绝还会记 `NEO_JS_OPINION_REJECT … reason=<tag>`。**只读:**这一格是惰性填充的引擎缓存,宿主从不调它的计算器。 |
+| `Country.id` | `number` | 本次调用的引擎国家 id:被派发作用域 `+0x10` 的**低 24 位**(高 8 位是引擎的类型标签——C3 读数 `0x01000002 → 2`)。SDK 唯一留存的句柄。 |
+| `Country.opinionOf` | `(targetId: number) => number \| null` | 引擎 `opinion` keyword:矩阵里的一个 `int32` 格,键是 `target * n + self`(两个 id 都掩到低 24 位——常量是 `offsets.country` 的 `SCOPE_ID_MASK`;宿主自己掩,引擎不替我们掩;直接传 `Country.id`)。**`null` = fail-closed**,绝不是 `0`:未计算(引擎哨兵 `0x7fffffff`)、任一 id 越界、矩阵没建(主菜单/没有战役)、会话没有 `opinion.read`,或 id 与被派发的国家不符。每次拒绝还会记 `NEO_JS_OPINION_REJECT … reason=<tag>`。**只读:**这一格是惰性填充的引擎缓存,宿主从不调它的计算器。 |
 | `Country.theirOpinionOf` | `(targetId: number) => number \| null` | 引擎 `their_opinion` keyword——`opinionOf` 的**转置**(`self * n + target`)。同样的 fail-closed 规则。哪一个才表示「我们对他们的看法」**尚未确立**;见[已知限制](/zh/guide/known-limits)。 |
 | `graph.betweenness` | `(s: System) => number` | 该星系的图分数(与交通要道打分同源)。 |
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200`——一个固定阈值,不是 v1 里的可调参数。 |

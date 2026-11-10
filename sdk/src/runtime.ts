@@ -37,6 +37,11 @@ export interface System {
  * (`0x743bb0`) is a write.
  */
 export interface Country {
+  /**
+   * Engine country id for this call: the **low 24 bits** of the dispatched
+   * scope's `+0x10` (the high 8 bits are an engine type tag). Masked by the
+   * host with `SCOPE_ID_MASK`, so it is also the id the opinion readers expect.
+   */
   readonly id: number;
   /**
    * Engine `opinion` keyword for this country.

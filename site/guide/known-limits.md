@@ -68,6 +68,12 @@ Two boundaries on the read side:
 2. The value's unit and scale have no independent reference: the number is the
    engine's own `int32`, unscaled.
 
+The **id convention** has been measured: the C3 reconnaissance recorded 39
+countries, and the low 24 bits of `scope+0x10` ran `0..39` with 23 missing — so
+the host now applies `SCOPE_ID_MASK` before handing `Country.id` to the bundle.
+The opinion **values** themselves still have no live reading in either
+direction.
+
 Everything else country-side — resource stockpiles, income containers, the
 energy index — is not in the contract.
 
