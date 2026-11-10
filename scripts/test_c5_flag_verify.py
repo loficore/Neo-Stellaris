@@ -48,3 +48,22 @@ def test_verdict_reports_a_save_gap_even_when_the_logs_agree():
 def test_every_tag_is_in_the_domain():
     assert set(mod.VERDICTS) >= {"flags_end_to_end", "our_read_missing",
                                  "official_control_failed", "save_missing"}
+
+
+def test_save_missing_carries_the_flags_block_control():
+    """`save_missing` 有两种来源:真的没写进存档,和「根本没找到 flags 块」。
+
+    后者是解析形状(换版本、换存档布局),与引擎行为无关 —— 所以判词要把
+    `flag_scan` 的第二个返回(带 `flags` 块的系统数)带出来,像 `c5_variable_probe`
+    的 `flags_blocks=0` 一样把两者分开。
+    """
+    tag, detail = mod.verdict(official_hits=1, js_reads=[82], official_readback=1,
+                              save_official=[], save_ours=[82], save_flags_blocks=0,
+                              official="neo_probe", ours="neo_probe2")
+    assert tag == "save_missing"
+    assert "flags_blocks=0" in detail
+    tag, detail = mod.verdict(official_hits=1, js_reads=[82], official_readback=1,
+                              save_official=[], save_ours=[82], save_flags_blocks=586,
+                              official="neo_probe", ours="neo_probe2")
+    assert tag == "save_missing"
+    assert "flags_blocks=586" in detail

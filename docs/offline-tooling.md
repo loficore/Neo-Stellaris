@@ -450,9 +450,14 @@ C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从�
 ```bash
 python3 scripts/c5_flag_verify.py --game-log game.log --js-log neo_js.log \
   --sav autosave.sav --offset 1048576
-FLAG_VERIFY flags_end_to_end official_hits=12 official_readback=1 \
-  js_reads=437 save_official=217 save_ours=82 detail=flags_end_to_end:official=neo_probe:ours=neo_probe2
+FLAG_VERIFY flags_end_to_end official_hits=NN official_readback=NN \
+  js_reads=… save_official=… save_ours=… save_flags_blocks=NN \
+  detail=flags_end_to_end:official=neo_probe:ours=neo_probe2
 ```
+
+**本工具还没有实机读数**（2026-11-10 只做出工具与探针，实机那一发在计划 Task 5、未执行）——
+上面的数字是字段名示意，不是任何一次窗口的读数。判词工具本身零游戏，`scripts/test_c5_flag_verify.py`
+用合成日志钉住每个判词。
 
 四条判据(只查「有 / 无」,不查次数):
 
@@ -487,9 +492,10 @@ FLAG_VERIFY flags_end_to_end official_hits=12 official_readback=1 \
 4. **月度重跑会累加。** flag 持久化、事件每月重跑,所以 `official_hits` / `save_official` 会随窗口长度
    增长;判据只认「≥1」。要只判当期,用 `--offset`(窗口开始前记下的 `game.log` 字节偏移),否则上个月
    的读数会算进来。
-5. **`.sav` 的 `flags=` 是 `名字=时间戳`。** 判据只查名字在不在,时间戳语义(当期日期)不在这四条里;
-   `flag_scan` 的第二个返回 `flags_blocks=` 不进判词,但它是「没有 flag」与「根本没找到 flags 块」的分界
-   (见上一节陷阱 5)。
+5. **`.sav` 的 `flags=` 是 `名字=时间戳`。** 判据只查名字在不在,时间戳语义(当期日期)不在这四条里。
+   `save_missing` 时 detail 会带上 `flags_blocks=N`(`flag_scan` 的第二个返回):`0` = **根本没找到**
+   `flags` 块(解析形状,换版本/换存档布局),非 0 而目标名字不在里面才是真的没写进存档 ——
+   与上一节陷阱 5 同一个分界,别把解析形状读成引擎行为。
 
 **探针在哪**:`scripts/scratch/2026-11_flag_verify/`(一次性,自带 README:两个半边、四条判据、产物名、
 用完要删)。产物按惯例留在 `evidence/logs/`(`flag_store_verify_4_4_4.log`),探针本身不进仓。

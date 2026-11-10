@@ -106,8 +106,15 @@ def js_flag_lines(log_text: str, name: str) -> list[int]:
 
 def verdict(*, official_hits: int, js_reads: list[int], official_readback: int,
             save_official: list[int], save_ours: list[int],
+            save_flags_blocks: int = 0,
             official: str, ours: str) -> tuple[str, str]:
-    """`(tag, detail)` — 判据按上游→下游排,第一个不成立的那条给出判词。"""
+    """`(tag, detail)` — 判据按上游→下游排,第一个不成立的那条给出判词。
+
+    `save_flags_blocks` 是 `flag_scan` 的第二个返回(带 `flags` 块的系统数):`0`
+    表示**根本没找到** flags 块(解析形状,不是引擎行为),非 0 而目标名字不在里面
+    才是真的没写进存档。判词不变(仍是 `save_missing`),但 detail 把控制数带出来,
+    让两义可分。
+    """
     if official_hits == 0:
         return ("official_control_failed",
                 f"official_control_failed:official_hits=0:official={official}")
@@ -120,7 +127,9 @@ def verdict(*, official_hits: int, js_reads: list[int], official_readback: int,
     missing = [name for name, ids in ((official, save_official), (ours, save_ours))
                if not ids]
     if missing:
-        return ("save_missing", "save_missing:missing_sav=" + ",".join(missing))
+        return ("save_missing",
+                "save_missing:missing_sav=" + ",".join(missing)
+                + f":flags_blocks={save_flags_blocks}")
     return ("flags_end_to_end", f"flags_end_to_end:official={official}:ours={ours}")
 
 
@@ -160,11 +169,12 @@ def main(argv: list[str] | None = None) -> int:
     official_hits = official_hit_count(game_log, args.official)
     official_readback = official_hit_count(game_log, args.ours)
     js_reads = js_flag_lines(js_log, args.official)
-    save_official = flag_scan(gamestate, args.official)[0]
+    save_official, save_flags_blocks = flag_scan(gamestate, args.official)
     save_ours = flag_scan(gamestate, args.ours)[0]
     tag, detail = verdict(official_hits=official_hits, js_reads=js_reads,
                           official_readback=official_readback,
                           save_official=save_official, save_ours=save_ours,
+                          save_flags_blocks=save_flags_blocks,
                           official=args.official, ours=args.ours)
     print(" ".join([
         "FLAG_VERIFY", tag,
@@ -173,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         f"js_reads={_fmt(js_reads)}",
         f"save_official={_fmt(save_official)}",
         f"save_ours={_fmt(save_ours)}",
+        f"save_flags_blocks={save_flags_blocks}",
         f"detail={detail}",
     ]))
     return 0 if tag == "flags_end_to_end" else 1
