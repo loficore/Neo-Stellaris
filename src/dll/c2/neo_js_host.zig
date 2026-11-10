@@ -795,7 +795,7 @@ fn opinionText(buf: []u8, v: opinion_table.LookupError!i32) []const u8 {
 fn c3Opinion(row: u32, col: u32) opinion_table.LookupError!i32 {
     const addr = descriptorAddr() orelse return error.TableNull;
     const table = try opinion_table.load(opinionMemory(), addr);
-    return opinion_table.value(opinionMemory(), table, row & 0xffff_ff, col & 0xffff_ff);
+    return opinion_table.value(opinionMemory(), table, countryId(row), countryId(col));
 }
 
 fn emitCountryProbe(id: u32) void {
