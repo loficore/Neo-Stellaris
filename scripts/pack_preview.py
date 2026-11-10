@@ -39,7 +39,10 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 #: Files that must exist, by path relative to ``--root``.  ``sdk/package-lock.json``
 #: is here because the author flow documented on the site starts with
 #: ``cd sdk && npm ci``; ``libs/quickjs/LICENSE`` because the DLL embeds QuickJS
-#: and `THIRD-PARTY-NOTICES.md` promises that licence travels with the bytes.
+#: and `THIRD-PARTY-NOTICES.md` promises that licence travels with the bytes; the
+#: keyword TSV because ``neo check``'s flag-name gate reads it from
+#: ``<package root>/evidence/xrefs/`` (``sdk/src/flags.ts``), so a package
+#: without it cannot check any bundle that writes a star flag.
 REQUIRED_FILES = (
     "README.md",
     "LICENSE",
@@ -48,6 +51,7 @@ REQUIRED_FILES = (
     "sdk/package.json",
     "sdk/package-lock.json",
     "libs/quickjs/LICENSE",
+    "evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv",
 )
 
 #: Directories copied wholesale (files only, one level of recursion), by path

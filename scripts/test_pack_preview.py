@@ -115,3 +115,16 @@ def test_zip_entries_are_sorted_and_stamped(tmp_path):
     assert names == sorted(names)
     assert {info.date_time for info in infos} == {pack_preview.ZIP_EPOCH}
     assert {info.compress_type for info in infos} == {zipfile.ZIP_DEFLATED}
+
+
+def test_the_flag_gate_table_ships(tmp_path):
+    """`neo check`'s flag-name gate reads the keyword TSV from the package root.
+
+    Without it, an unpacked package cannot check any bundle that writes a star
+    flag — the check fails with the path it looked for.
+    """
+    tree = _fake_tree(tmp_path)
+    assert pack_preview.main(_args(tree)) == 0
+    with zipfile.ZipFile(pathlib.Path(tree["out"]) / ZIP_NAME) as zf:
+        names = zf.namelist()
+    assert "evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv" in names
