@@ -66,7 +66,10 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: sdk/package-lock.json
+          # Two independent npm packages: the SDK (Track B) and the docs site.
+          cache-dependency-path: |
+            sdk/package-lock.json
+            site/package-lock.json
 
       - name: npm ci (sdk)
         working-directory: sdk
@@ -79,6 +82,18 @@ jobs:
         # byte-identical.  No extra step, so no second copy of the command list.
         working-directory: sdk
         run: npm test
+
+      # The docs site is a second, independent npm package under `site/`.  It is
+      # built here (not inside `just check-full`) because `check-full` must stay
+      # npm-free — same ruling as `sdk-test`.  A VitePress build fails on a dead
+      # internal link, so the build itself is one of the site's doors.
+      - name: npm ci (site)
+        working-directory: site
+        run: npm ci
+
+      - name: npm run build (site)
+        working-directory: site
+        run: npm run build
 
       # Every hosted run starts on a fresh machine, so the QuickJS recompile is
       # the dominant cost (~2 min cold).  The cache is content-addressed by zig,
@@ -134,6 +149,14 @@ jobs:
         # is the main reason this pipeline exists.
         run: just check-full
 
+      - name: docs-site + preview-pack fences
+        # Named explicitly even though `just check-full` already collects them:
+        # the site/preview doors are the two new delivery surfaces, and a step
+        # that names them is the one a reader can find in the log.  Requires the
+        # venv pytest installed above, which is why it does not sit next to the
+        # `npm` steps.
+        run: python3 -m pytest scripts/test_docs_site.py scripts/test_pack_preview.py -q
+
       - name: zig build abi-probe (manual dispatch only)
         # Non-default step, never shipped, and by far the most expensive thing
         # here: measured 72 s cold vs 24 s for the whole `zig build test`.  Kept
@@ -174,6 +197,48 @@ jobs:
             exit 1
           fi
 
+  pages:
+    # The docs site.  Separate from `gate` because a deployment is a side effect
+    # outside the repo and only meaningful on `main` or a manual dispatch — the
+    # gate itself must stay a pure read.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: gate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: npm ci (site)
+        working-directory: site
+        run: npm ci
+
+      - name: npm run build (site)
+        working-directory: site
+        run: npm run build
+
+      # Pinned to a commit like every other action here.  `v3`/`v4` are the pair
+      # whose artifact format is known to match; bumping either major is a
+      # deliberate edit, not a floating tag.
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: site/.vitepress/dist
+
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
   release:
     # A GitHub Release is the only thing here with a side effect outside the repo, so
     # it is tag-only.  `needs: gate` is the whole point: the exact bytes that passed
@@ -187,10 +252,38 @@ jobs:
       contents: write
 
     steps:
+      # checkout FIRST: it cleans the workspace, so anything downloaded before it
+      # would be wiped.  The repo is needed for `scripts/pack_preview.py`, the
+      # SDK sources and the docs page the generated INSTALL.md comes from.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-binaries
           path: dist
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Build the SDK
+        # `sdk/dist` is gitignored (it is build output), so the packages that go
+        # into the preview zip have to be produced here, from the same commit.
+        working-directory: sdk
+        run: npm ci && npm run build
+
+      - name: Pack the developer preview
+        # The version comes from the tag, never from a literal: v0.1.0-preview.1
+        # packs as 0.1.0-preview.1, which is what the zip name and INSTALL.md say.
+        run: |
+          set -euo pipefail
+          python3 scripts/pack_preview.py \
+            --version "${GITHUB_REF_NAME#v}" \
+            --dll dist/stellaris_quickjs.dll \
+            --inject dist/inject.exe \
+            --out dist
 
       - name: Publish release
         env:
@@ -201,4 +294,5 @@ jobs:
             --verify-tag \
             --generate-notes \
             --clobber \
-            dist/stellaris_quickjs.dll dist/inject.exe dist/sha256sums.txt
+            dist/stellaris_quickjs.dll dist/inject.exe dist/sha256sums.txt \
+            dist/neo-stellaris-preview-*.zip dist/SHA256SUMS

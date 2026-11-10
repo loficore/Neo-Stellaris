@@ -80,6 +80,20 @@ jobs:
       - name: "just check-full (same gate as .github/workflows/ci.yml)"
         run: just check-full
 
+      # The docs-site half of the gate, mirrored from the GitHub copy.  Requires
+      # Node 24 in the `ns-ci` image (`ci/runner/Dockerfile`); a runner without
+      # npm fails here loudly rather than skipping the site door silently.
+      - name: npm ci (site)
+        working-directory: site
+        run: npm ci
+
+      - name: npm run build (site)
+        working-directory: site
+        run: npm run build
+
+      - name: docs-site + preview-pack fences
+        run: python3 -m pytest scripts/test_docs_site.py scripts/test_pack_preview.py -q
+
       - name: Artifact fingerprints
         run: sha256sum zig-out/bin/stellaris_quickjs.dll zig-out/bin/inject.exe | tee /tmp/sha256sums.txt
 
