@@ -68,6 +68,13 @@ Two boundaries on the read side:
 2. The value's unit and scale have no independent reference: the number is the
    engine's own `int32`, unscaled.
 
+The **id convention** has been measured: the C3 reconnaissance recorded 39
+countries, and the low 24 bits of `scope+0x10` ran `0..39` with 23 missing — so
+the host now applies `SCOPE_ID_MASK` before handing `Country.id` to the bundle.
+The `NEO_JS_CALL_COUNTRY id=` log line carries the same masked id; logs taken
+before this change (the C3 reconnaissance) show the raw value. The opinion
+**values** themselves still have no live reading in either direction.
+
 Everything else country-side — resource stockpiles, income containers, the
 energy index — is not in the contract.
 
@@ -133,6 +140,7 @@ Useful lines:
 | Line | Meaning |
 |---|---|
 | `NEO_JS_CALL` | the handler ran for one scope |
+| `NEO_JS_CALL_COUNTRY` | a country dispatch; `id=` is the masked country id (raw in older logs) |
 | `NEO_JS_WRITE … kind=variable` | a variable write went through the official body |
 | `NEO_JS_ERROR` | the handler threw; the session was disabled |
 | `NEO_JS_TIMEOUT` | the handler exceeded 10 ms; the session was disabled |
