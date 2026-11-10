@@ -1,0 +1,32 @@
+# R1 — 存档侧读回（C6-3 的判据 2: 值落进 `variables={}` 且逐系统 = 系统 id）
+#
+# 存档（本发窗口结束后由游戏自己写的 autosave）
+#   Windows: C:\Users\13229\Documents\Paradox Interactive\Stellaris\save games\_1474567734\autosave_2294.07.01.sav
+#   size=3,657,722
+#   sha256=da2f0f71e3632bcc36b8c28932badf147d5c7988526a092a24e807bccee77644
+#   写入窗口: 进程 22:48:56 起，存档 mtime 22:53:14（窗口内；我们 23 个月共 18,124 次写入）
+#
+# 命令与逐字输出
+#   $ python3 scripts/c5_variable_probe.py --sav <sav> --name neo_mark
+neo_mark: systems=788 min=0 max=787 sample=0,1,2,3,4
+#
+# 同存档的独立解析（分母与图形态; 不是 C6-3 的判据, 只用来说明「788」不是抄来的）
+#   $ python3 scripts/save_hypergraph.py <sav> --edges /tmp/e.tsv --stats
+#   systems=788
+#   directed_entries=2446
+#   undirected_edges=1219
+#   components=1
+#   isolates=0
+#   self_loops=0
+#   duplicate_entries=8
+#   asymmetric_edges=0
+#   conflicting_edges=0
+#   replacement_chars=0
+#
+# 读数
+#   systems=788 == 同一进程 `--stats` 的容器原始条数 788（last_id=787, 0 基）
+#   min=0 / max=787 == 0..n-1；逐项值=id 由 scripts/c6_acceptance.py 的 find_variables 判
+#   判词: neo_state_written（C6-3 通过面）
+#
+# 不能说（照 docs/c6-acceptance.md §2 C6-3 的边界）
+#   只证值落在存档可读的 `variables={}`；不证 >786 或负数的编码成立；不证这个变量名不会被别的 mod 覆写。

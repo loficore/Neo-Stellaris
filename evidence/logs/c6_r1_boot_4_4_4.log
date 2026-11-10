@@ -1,0 +1,73 @@
+BOOT dll=sqjs_live.dll sha=a318686563d1b511 effect_id=19343 set_id=19344 install_rc=0 alive=1
+calls=18124 matched=18124 log_calls=18124 last_id=787 rule_hits=64 installed=1 verify=0 dispatched=123615 null_scope=0 mask_odd=0 writes=18124 skipped=0 score_writes=18101 score_skipped=23 set_calls=0 set_runs=0
+UNINSTALL rc=0 verify=0 alive=1
+
+# R1 — C6-1 / C6-3 / C6-6 实机窗口（Stellaris 4.4.4, 2026-11-10）
+#
+# 授权（逐字）
+#   2026-11-10，用户指令：「Windows已经上线了，继续派发实机任务。实际任务都要使用code-reverse模型」
+#   R1 T1 注入的当场授权（问答逐字）:
+#     问: R1 的 T1 约束和状态机互斥：keyword 必须在脚本解析前注册（这一发已有实机证据：
+#         error.log 判 `Invalid scripted effect: neo_action`，PS_HIT=65,856 但 calls=0），
+#         而解析发生在存档载入时，那一刻状态机还不是 IN_GAME_RUNNING。§93/§94 的既有做法是
+#         启动期注入 + `c2_boot_inject --allow-window`（人当场声明前提）。下一次 R1 是否授权
+#         我用 `--allow-window` 做启动期注入？
+#     答: 授权（推荐）
+#
+# 归属: worker term_bce23319 / 分支 loficore/live-window / 模型 aigw-main/code-reverse
+# DLL:  C:/temp/sqjs_live.dll sha256=a318686563d1b51186ed9f147b7b7a052888c298d1d92b247c61c7f7e83a3c48
+# 驱动 mod: mod/neo_ps_probe.mod（dlc_load.json 的 enabled_mods 只有这一条；
+#          neo_events/neo_flag_probe 残留在窗口开始时被本发禁用，见下「探针残留」）
+#
+# 这一 R 一共四发（前三次按 void 记，理由逐条写在下面；只有第四发是本文件的读数）
+#   attempt#1  pid 6656  运行期注入, `BOOT ... install_rc=0` 成立
+#             -> 21:47:19 一个**外部** supervisor 命令 `quit`（不是本 worker 发的）杀掉进程,
+#                来不及 `--stats`/`--uninstall` => 环境档 void
+#   attempt#2  pid 17884 未装成: 屏幕采样把前台浏览器/iShell dock 读成 dialog, `assert-ready` exit 2
+#             -> 21:54:28 又一个外部 `quit` 杀掉进程 => 环境档 void
+#   attempt#3  pid 6156  运行期注入（存档已于 22:27:56 解析完）
+#             -> error.log: `Script Error: Invalid scripted effect: neo_action ... line: 33`；
+#                `PS_HIT` 65,856 行（mod 每月都跑）而 `calls=0` / `writes=0`
+#             -> 时序档 void：T1 要求注入早于脚本解析（§93/§94 的既有形状）
+#             （该发 `--uninstall` 仍打 `UNINSTALL rc=0 verify=0 alive=1`）
+#   attempt#4  pid 1712  T1 启动期注入 + `--allow-window`（本文件读数）
+#
+# 窗口
+#   进程/解析起点: 22:48:56（error.log 首行时间；`--continuelastsave` 直起 exe）
+#   窗口终点:      22:54:12（game.log mtime）
+#   game.log:      7,247,760 bytes @ 22:54:12（每 run 新建，起点即进程启动）
+#   error.log:     3,302 bytes；`Invalid scripted effect: neo_action` = 0，
+#                  `Unexpected token` = 0（T1 生效的判据）
+#   容器原始条数:  788（同一进程 `--stats` 的 `last_id=787`，0 基）
+#
+# T1 启动期注入回执（driver stdout 逐字）
+#   [boot] dll=C:/temp/sqjs_live.dll sha16=a318686563d1b511
+#   [boot] launched pid=1712 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+#   [boot] pid=1712
+#   [boot] gate skipped by operator override (--allow-window)
+#
+# 同一进程两次 `--stats`（不重启, pid 1712）
+#   13 个月: calls=10244 matched=10244 log_calls=10244 last_id=787 rule_hits=64 installed=1 verify=0
+#            dispatched=70444 null_scope=0 mask_odd=0 writes=10244 skipped=0 score_writes=10231 score_skipped=13
+#            （10244 = 788 × 13；score 少 13 次 = id 787 每月没有分数可写）
+#   23 个月: 上面第 2 行（18124 = 788 × 23）
+#
+# 读数（本发的判据）
+#   C6-1  pass: install_rc=0, effect_id=19343>0, set_id=19344>0, alive=1;
+#               error.log 零晚注册签名（`Invalid scripted effect`/`Unexpected token` 都为 0）
+#   C6-3  pass: writes==matched（18124==18124）, skipped=0; 存档 `neo_mark` 覆盖 788 个系统、
+#               min=0 max=787（逐项值=id 由 c6_acceptance.py 的 find_variables 判，见
+#               evidence/logs/c6_acceptance_r1_4_4_4.tsv）
+#   C6-6  pass: UNINSTALL rc=0 verify=0 alive=1; 全程未 FreeLibrary，收尾后 taskkill 到 procs=0
+#
+# 存档（R1 的 C6-3 读回源）
+#   Windows: C:\Users\13229\Documents\Paradox Interactive\Stellaris\save games\_1474567734\autosave_2294.07.01.sav
+#   size=3,657,722  sha256=da2f0f71e3632bcc36b8c28932badf147d5c7988526a092a24e807bccee77644
+#   工具: python3 scripts/c5_variable_probe.py --sav <sav> --name neo_mark
+#   读数: neo_mark: systems=788 min=0 max=787 sample=0,1,2,3,4
+#
+# 探针残留（Review Focus 5）
+#   窗口开始时 dlc_load.json 里有三条: neo_ps_probe / neo_events / neo_flag_probe。
+#   本发用 `scripts/scratch/2026-11_live_window/lw_set_mods.py neo_ps_probe.mod` 只留驱动；
+#   neo_events / neo_flag_probe 的 .mod 与目录都没有删除（R6 那一发还要用 flag 探针），
+#   只从 enabled_mods 里摘掉。下一发之前要重新核对 enabled_mods。
