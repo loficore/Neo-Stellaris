@@ -2664,6 +2664,53 @@ python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbba0 40       #
 5. 想验证「0 条 → 1」可以拿 RVA 0,但它走的是 section 门,不是 capstone 解失败;两条路都退出 1,
    理由不同,不要混成一条判据。
 
+## `scripts/c6_acceptance.py` —— C6 六道门的台帐
+
+把 `docs/c6-acceptance.md` 的六道门判成 `pass` / `fail` / `cannot_say`，每门一行、末行一条汇总。
+它**只读文件**：不起进程、不联网、不 import `frida` / `c2_harness`。输入全是别人点名之后留下的
+产物 —— 它本身不产生任何读数，也不新增 shot 授权。
+
+```
+python3 scripts/c6_acceptance.py --boot BOOT.txt --uninstall UNINSTALL.txt \
+    --exec-caller exec_caller.tsv --stats stats.txt --sav autosave.sav \
+    --systems <这一场的容器原始条数> --reconcile reconcile.txt \
+    --base-log base.log --with-log with_dll.log \
+    --base-error base_error.log --with-error with_dll_error.log \
+    --out evidence/logs/c6_acceptance_4_4_4.tsv
+```
+
+| 参数 | 喂什么 | 门 |
+|---|---|---|
+| `--boot` | `c2_boot_inject.py` 的 `BOOT …` 回执一行 | C6-1 |
+| `--exec-caller` | `c2_exec_caller_probe.py` 的 artifact（`#meta` 台帐） | C6-2 |
+| `--stats` | 同一进程 `C2NeoStatsInto` 那一行（含 `writes` / `matched` / `skipped`） | C6-3 |
+| `--sav` | 同一场的 `.sav`（内部走 `c5_variable_probe.read_gamestate`） | C6-3 |
+| `--var-name` | C6-3 的变量名，默认 `neo_mark` | C6-3 |
+| `--systems` | **这一场的容器原始条数**，必填、无默认值 | C6-2 / C6-3 |
+| `--reconcile` | `c2_graph_reconcile.py` 的 stdout 或 `--out` 文件 | C6-4 |
+| `--base-log` / `--with-log` | 未装 / 装了 DLL 两趟的 `game.log` | C6-5 |
+| `--base-error` / `--with-error` | 同两趟的 `error.log` | C6-5 |
+| `--uninstall` | `c2_boot_inject.py --uninstall` 的 `UNINSTALL …` 行 | C6-6 |
+| `--out` | 台帐另写一份（先 `print` 再写，LF 换行） | — |
+
+**三个退出码**：`0` 六门全 `pass`；`1` 有 `fail`；`2` 没有 `fail` 但有 `cannot_say`
+（「还缺读数」与「判负」是两件事，所以它们不共用一个码）。
+
+**判读陷阱：**
+1. **`--systems` 必须现场取。** 它是这一场容器的原始条数（上一场是 788，§95 的分母是 787），工具
+   **不**读存档反推 —— 反推在旧存档上会让「集合相等」假通过。
+2. **官方 marker 只排 `NEO_` 前缀。** 装了 DLL 的那一趟会多出 `NEO_JS_*`；那是我们的行，不是官方
+   脚本的行。`PS_HIT` 是 **mod** 写的，两趟都在，不许排。已查
+   `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`：官方 keyword 里没有 `NEO_` 前缀。
+3. **半场读数是 `cannot_say`，不是 `fail`。** 只给了一个输入（比如有 `BOOT` 没 `UNINSTALL`）时，
+   缺的那几门保持 `cannot_say`；`--base-error ""` 是合法读数（空 `error.log` 正是「零错误」），
+   只有**没给**（`None`）才是缺输入。
+4. **台帐里的两个数就是判据。** C6-2 只比 `distinct_ids` 与 `container_raw_count`（不重算 id 集合、
+   不数 artifact 行数）；C6-3 的 `writes == matched` 与 `skipped == 0` 只从 `C2NeoStatsInto` 那一行来，
+   不拿存档行数反推。
+5. **`error.log` 判的是行数差**，不是两份总行数相等 —— 两份日志长度本来就不同。C6-4 同理：多窗口时
+   一条 `tiers_counts` 或 `tiers_partial` 就够把整门降成 `cannot_say`（计数相等不等于逐名相等）。
+
 ## IDA headless 现状(环境状态,非规则)
 
 **IDA MCP**: registered in `~/.qoder/settings.json` (`/home/lofibass/.local/bin/idalib-mcp --stdio --unsafe`).
