@@ -158,6 +158,15 @@
 | `world_probe.py` | 取一次状态读数：复用 `game_supervisor.py` 的像素分类器（**阈值一个不改**），证据里保留全部原始计数与 `crop_sha256`；`ns_world.py` 的读数那一半 |
 | `session_bridge.py` | SSH 落在 session 0、游戏在 session 1 时的那条通道（`schtasks /run /I`）；没有它 `ns_world.py` 在 agent 的实际工作方式下不可用 |
 
+## 发布打包
+
+| 文件 | 干什么 | 产出 |
+|---|---|---|
+| `pack_preview.py` | 按显式清单把 DLL、注入器、SDK、示例与许可证打成一个**确定性** zip（固定时间戳、按 arcname 排序、0644、`ZIP_DEFLATED`；缺文件即退出码 1） | `dist/neo-stellaris-preview-<v>.zip` + `dist/SHA256SUMS`（两个二进制 + zip 自身三行） |
+
+用法与三条判读陷阱见 `docs/offline-tooling.md` 的同名一节；围栏是
+`scripts/test_pack_preview.py`（缺清单文件失败、两次打包字节相同、`SHA256SUMS` 三行排序）。
+
 ## 一次性探针：`scratch/`
 
 | 目录 | 内容 |
