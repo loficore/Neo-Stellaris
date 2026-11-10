@@ -63,3 +63,22 @@ install_rc=0  uninstall_rc=0  gate=operator_override
 C6-2 这一门在本窗口仍是**没有读数**（不是 fail）。下一发的正确形状：
 **一个 boot 期注册成功的进程**（`BOOT … install_rc=0` 先行确认），再在同一进程里
 跑 `c2_exec_caller_probe.py`（换模块名 `sqjs_lw2.dll`），并且开轮询前确认 `pause=playing`。
+
+## 第三发（按「boot 期注册成功」的正确形状重打，2026-11-11 00:4x）
+
+boot 腿这次**注册成功**了：`BOOT dll=sqjs_lw1.dll sha=01deb02f30077176 effect_id=19343 set_id=19344 install_rc=0 alive=1`
+（同一进程 pid 22904）。随后在同一进程里跑 `c2_exec_caller_probe.py`（模块名 `sqjs_lw2.dll`，
+`--systems 788 --allow-window`），驱动走到 `C2Sanity == 42, game alive — dispatch authorized`，
+但 artifact 仍是：
+
+```
+overall_verdict=no_calls  calls=0  marker_hits=0  distinct_ids=0  container_raw_count=788
+install_rc=0  uninstall_rc=0  gate=operator_override
+```
+
+**这一发把归因往前推了一格**：注册已成立，靶仍然零调用 ⇒ 剩下的解释是
+**那一窗里游戏没有真的推进**（mod 的每月 `log = "PS_HIT"` 没跑）。窗口期桌面焦点被
+agent 自己的 UI 抢走、游戏自暂停，是最可能的原因（本轮 `unpause` 的回执被丢弃，没能自证）。
+`game.log` 的 `PS_HIT` 增量是这一格的直接判据，下一发开轮询前必须先读到它在涨。
+
+artifact（本表 `evidence/logs/c6_r2_exec_caller_4_4_4.tsv`）= 第三发，sha256 `2e0fbd7402b82ea3c36cb78136227b8330b9dd3682199fc7f4448233d435b707`。
