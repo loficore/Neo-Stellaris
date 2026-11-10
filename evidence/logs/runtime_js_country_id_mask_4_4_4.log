@@ -1,0 +1,233 @@
+# country id 24 位掩码(R7,4.4.4)—— 判据 ① 过、② ③ 判负(`table_null`)
+
+> 计划:`docs/superpowers/plans/2026-11-10-country-id-24bit-mask.md` Task 3
+> (窗台账:`2026-11-10-live-window-runbook.md` Task 7)。
+> 授权:协调者 2026-11-10 点名「R6/R7 依赖已合并,可以继续做」。
+> 口径:一次启动、不重试;`taskkill /F`;永不 `FreeLibrary`;探针用完即删。
+
+## 结论(先说)
+
+三条判据里 **①过、②③不过**,按计划「判负不重试」归因到
+`country_fields_4_4_4.md` §2.7 的 falsifier(`table_null`)。
+
+| # | 判据 | 读数 | 判决 |
+|---|---|---|---|
+| ① | `NEO_JS_CALL_COUNTRY id=` 全部落在 `0..39`(不再出现 8 位十六进制量级) | 156 条,id ∈ `0..40 \ {23}`;`id=` 后接 3 位以上的行 **0** 条 | **过** |
+| ② | 至少一行 `op=<整数>` | `op=undefined` **273** 行;`op=<数字或负号>` **0** 行 | **不过** |
+| ③ | `NEO_JS_OPINION_REJECT reason=` 只允许 `no_permission` | 156 条拒绝,**全部 `reason=table_null`**;`no_permission` 0、`scope_mismatch` 0 | **不过** |
+
+**判负的原因不是掩码,是 opinion 矩阵没建**:`opinion_table.zig` 的 `TableNull` 档 =
+`[[0x33794d0]]` 描述符为 0,或 `n == 0`,或 `base == 0`。
+
+**这一发的一条正面读数(判据之外)**:`reason=scope_mismatch` **0 条** ⇒ `readOpinion` 的
+`countryId(raw_scope_id) != self` 这条核对在 156 次派发上**全部通过** —— 即 JS 拿到的
+(掩码后)id 与引擎写在 `scope+0x10` 的 raw dword 在低 24 位上逐次相等。这正是计划 Review Focus 2
+要的正向那半(「同国、高位不同」必须通过),现在是实机读数而不是单测。
+
+## 装配
+
+DLL:与 R6 **同一份字节**(`sha256 a318686563d1b51186ed9f147b7b7a052888c298d1d92b247c61c7f7e83a3c48`,
+`C:/temp/sqjs_lw2.dll`,远端 sha 相等)。这份 DLL 含 `offsets.country.SCOPE_ID_MASK = 0x00FF_FFFF`
+与 `neo_js_host.zig` 的 `countryId()`,两处调用点(`onCountry` 的日志/派发 id、`readOpinion` 的 self 核对)。
+
+探针 mod(一次性,进 scratch):`scripts/scratch/2026-11_country_id_mask/mod/neo_cid_probe/`
+
+- `descriptor.mod` / `common/on_actions/neo_cid_on_actions.txt`(`on_monthly_pulse` → `neo_cid.100`)
+- `events/neo_cid.txt` — 无类型 `event = { … }`,`immediate = { every_country = { neo_action = { } } }`,
+  **无 limit**(与 C3 同形:AI 国家也要递进来)
+- `neo/mod.json` — `scope:["country"]`、`permissions:["log","opinion.read"]`、`engine:"4.4.4"`
+- `neo/main.js`(手写,零 npm):
+
+```js
+__neo_register_country(function (id) {
+  __neo_log("COUNTRY id=" + id + " op=" + __neo_country_opinion(id, 0));
+});
+```
+
+静态自检:`node --check …/neo/main.js` → rc=0。
+
+安装:安装器回执里 `NEO_PLAY` 那一行被本发用的 `tail -2` 截掉了(只看到两行 `NEXT`),
+**以两处实物为证**:`dlc_load.json` 出现 `"mod/neo_cid_probe.mod"`,
+`C:/temp/neo_mods/neo_cid_probe/neo/` 里有 `main.js`(1250 B)与 `mod.json`(159 B)。
+
+## 启动与注入
+
+**第一次尝试出现两个 `stellaris.exe`**(`--launch` 的回执 `launched pid=13812`,随后注入到
+`pid=17980`;两条进程同时在列)。按「一进程一 install」纪律把未被注入的那个
+(`taskkill /F /PID 13812`)清掉后,那一场的 `neo_js.log` **始终没有出现**(注入的确在 17980 里:
+`dlls 17980` → `C:\temp\sqjs_lw2.dll`),因此那一场作废、不作读数。
+
+第二次(干净单进程)逐字:
+
+```
+[boot] dll=C:/temp/sqjs_lw2.dll sha16=a318686563d1b511
+[boot] launched pid=6656 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+[boot] pid=6656
+[boot] gate skipped by operator override (--allow-window)
+BOOT dll=sqjs_lw2.dll sha=a318686563d1b511 effect_id=19343 set_id=19344 install_rc=0 alive=1
+EXIT=0
+```
+
+`ns_world assert-ready --action install --guard flag` 与 R6 同:注入在 `NO_GAME` 时就发生,
+状态机按定义不可能放行(逐字见 R6 的那一份),故仍走**操作者声明前提**(`--allow-window`)。
+
+## 挡住这一发的那个窗(以及怎么处理的)
+
+启动后 `neo_js.log` 一直不出现,`neo_focus_space.py` 连 `switch/attach/click` 三条焦点路线全被拒:
+
+```
+PIDS [6656]
+HWND 6656 591656
+STEP switch_refused
+STEP attach_refused
+STEP click_refused
+FOCUS FAILED
+EXIT=2
+```
+
+监督器读数给出窗口身份:
+
+```
+STATUS=paused note=popup_hold_unclassified pid=6656 hwnd=591656 … window=dialog bbox=[542, 404, 1939, 904]
+```
+
+—— 一个**认不出**的对话窗抢着焦点,监督器按设计**停手**(`popup_hold_unclassified`)。用台账里的
+一次性人工动作收掉(`game_supervisor.py dismiss`)之后:
+
+```
+STATUS=playing note=ok pid=6656 hwnd=591656 … window=none bbox=None
+```
+
+随后 `neo_js.log` 立刻出现(`NEO_CID_SESSION_READY` + `NEO_JS_INIT_OK id=neo_cid_probe`)。
+**这是本发唯一一次「人工动作」**,不属于绕过世界状态机:它作用在窗口本身,不是 install/uninstall 门。
+
+## 读数(逐字)
+
+### 会话加载
+
+```
+NEO_JS_MODS n=2
+NEO_JS_LOG NEO_CID_SESSION_READY
+NEO_JS_INIT_OK id=neo_cid_probe api=1
+NEO_JS_INIT_OK id=neo_events api=1
+```
+
+### 派发 id(判据 ①)
+
+```
+NEO_JS_CALL_COUNTRY id=0
+NEO_JS_CALL_COUNTRY id=1
+NEO_JS_CALL_COUNTRY id=2
+NEO_JS_CALL_COUNTRY id=3
+NEO_JS_CALL_COUNTRY id=4
+NEO_JS_CALL_COUNTRY id=5
+```
+
+| 检查 | 读数 |
+|---|---|
+| `NEO_JS_CALL_COUNTRY` 总行数 | **156**(12 个月度脉冲 × 13 国) |
+| `CALL_COUNTRY id=[0-9][0-9][0-9]`(3 位以上) | **0** |
+| `CALL_COUNTRY id=1[0-9][0-9][0-9]`(8 位量级) | **0** |
+| `id=0` / `id=39` / `id=40` / `id=41` | 12 / 12 / 12 / 0 ⇒ id 集 `0..40`,缺 **23**(与 C3 同) |
+
+### JS 侧(判据 ②)
+
+```
+NEO_JS_CALL_COUNTRY id=0
+NEO_JS_LOG COUNTRY id=0 op=undefined
+NEO_JS_CALL_COUNTRY id=1
+NEO_JS_LOG COUNTRY id=1 op=undefined
+NEO_JS_CALL_COUNTRY id=2
+NEO_JS_LOG COUNTRY id=2 op=undefined
+```
+
+`op=undefined` **273** 行;`op=<数字>` **0** 行 ⇒ 判据 ② 不过。
+
+### 拒绝理由(判据 ③)
+
+```
+NEO_JS_OPINION_REJECT self=0 target=0 reason=table_null
+NEO_JS_OPINION_REJECT self=1 target=0 reason=table_null
+NEO_JS_OPINION_REJECT self=2 target=0 reason=table_null
+NEO_JS_OPINION_REJECT self=3 target=0 reason=table_null
+NEO_JS_OPINION_REJECT self=4 target=0 reason=table_null
+NEO_JS_OPINION_REJECT self=5 target=0 reason=table_null
+```
+
+| 理由词 | 行数 |
+|---|---|
+| `reason=table_null` | **156** |
+| `reason=no_permission` | **0** |
+| `reason=scope_mismatch` | **0** |
+| `reason=out_of_range` | **0** |
+| `reason=not_computed` | **0** |
+
+⇒ 判据 ③ 不过(只允许 `no_permission`,实际是 `table_null`);**但 `scope_mismatch = 0` 是本发的
+正面读数**:掩码后的 `self` 与 raw scope cell 的低 24 位逐次相等。
+
+### C3 那条诊断行(对照,`self` 仍是 raw)
+
+```
+NEO_C3_OPINION self=0 target=0 a=na:t b=na:t
+NEO_C3_OPINION self=1 target=0 a=na:t b=na:t
+NEO_C3_OPINION self=16777218 target=0 a=na:t b=na:t
+NEO_C3_OPINION self=16777219 target=0 a=na:t b=na:t
+NEO_C3_OPINION self=16777220 target=0 a=na:t b=na:t
+```
+
+`a=na:t` 的 `:t` 是 2026-11-10 之后加上的理由尾标(`t` = `table_null`)—— C3 那 40 行
+「三档不可分」的 `na` 现在**可以分了**:这一发**全部**是 `table_null`,没有一条 `out_of_range`
+(高位那 15 行也一样:因为读器在读表之前就拒了,理由统一落在表这一档)。
+
+### 错误面
+
+| 检查 | 读数 |
+|---|---|
+| `NEO_JS_ERROR` | 0 |
+| `game.log` `Unexpected token` | 0 |
+| `NEO_JS_INIT_OK` | 2(= 探针 + `neo_events`) |
+
+## 归因(按 `country_fields_4_4_4.md` §2.7)
+
+§2.7 的 `OpinionRead` 判决行把表基址写成 `[[0x33794d0]]`,描述符 `{+0x00 = n, +0x08 = int32* data}`,
+并明说「`0x33794d0` 本身在 `.data` 未初始化尾部 ⇒ 值只能运行期读」。本发读到的就是 `TableNull`
+这一档(描述符 0 / `n == 0` / `base == 0`),即**这一场战役里矩阵从未被建起来**。
+
+三条不能说的,按 §2.7 的口径照抄一遍(它们正是本发不重试的理由):
+
+1. `n` 与四个 level 阈值都在 BSS,**静态拿不到数值**;`table_base` 是**指针**,不是常量。
+2. 矩阵里的 int32 **是不是**直接等于 UI 上的 opinion 值,本卷没有证人(单位没有独立对照)。
+3. `0x743bb0` 是「权威计算器」只有单侧证人;本发**没有**调它(只读纪律:命中哨兵也不代算)。
+
+⇒ 下一步不是再打一发同样的 shot,而是要先回答「4.4.4 里这张矩阵在什么条件下才会被建」
+(§2.6 的懒填缓存只在引擎自己取过一次该格之后才写)。在那之前,`op=` 这一格**判负不可升级**。
+
+## 收尾(逐字)
+
+```
+UNINSTALL rc=0 verify=0 alive=1
+EXIT=0
+```
+
+- `game_supervisor.py quit` 之后进程仍在(supervisor 记 `status stopped`),`taskkill /F /PID 6656`
+  收尾;`Get-Process stellaris` = **0**。
+- 进程里当时有 **两份**我们的 DLL:`C:\temp\sqjs_lw2.dll`(本发)与 `C:\temp\sqjs_live.dll`
+  (mtime 1794317335 = 21:28:55,**不是本发产生的**;R6 窗口期内出现)。本发的读数只取自己打的
+  `NEO_*` 行;但这一格要在窗口台上记一笔。
+- `dlc_load.json` 已恢复为 `["mod/neo_ps_probe.mod", "mod/neo_events.mod"]`,sha256 与
+  `C:/temp/dlc_load.before_flag.json` 相同(`caf49e03…18aa53`)。
+- 探针两侧已删:`Documents/…/Stellaris/mod/neo_cid_probe/`、`mod/neo_cid_probe.mod`、
+  `C:/temp/neo_mods/neo_cid_probe/`、`C:/temp/neo_cid_probe/` ⇒ **探针已删除**。
+
+## 复现
+
+```powershell
+# 判据 ①:不应有 3 位以上 id
+python C:/temp/ns_admin.py count C:/temp/neo_js.log "CALL_COUNTRY id=[0-9][0-9][0-9]"
+# 判据 ②
+python C:/temp/ns_admin.py count C:/temp/neo_js.log "op=undefined"
+python C:/temp/ns_admin.py count C:/temp/neo_js.log "op=[0-9-]"
+# 判据 ③
+python C:/temp/ns_admin.py grep C:/temp/neo_js.log "NEO_JS_OPINION_REJECT" 6
+python C:/temp/ns_admin.py count C:/temp/neo_js.log "reason=scope_mismatch"
+```

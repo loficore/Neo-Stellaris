@@ -26,7 +26,7 @@ Two more things follow from the same shape: the DLL is **injection-only** and is
 never unloaded, because patched engine objects would jump into an unmapped page
 after a `FreeLibrary`. Do not try to unload it.
 
-## Star flags have no live reading yet
+## Star flags have one live reading (2026-11-10)
 
 `System.setStarFlag` and `System.hasStarFlag` are in the contract, and the
 build-time gate around them is real: `neo check` refuses a computed flag name
@@ -48,8 +48,14 @@ So, today:
   successful write;
 - names are 1–15 lowercase bytes and must be string literals.
 
-Treat the two flag calls as unproven: a mod that depends on them can pass every
-offline gate and still not observe the flag in the official script path.
+One live reading now exists (2026-11-10, a probe mod carrying both halves in one
+campaign): the official script wrote `neo_probe` and read it back, the runtime
+wrote `neo_probe2` and read it back, the official script then saw `neo_probe2`,
+and both names were in the autosave — verdict `FLAG_VERIFY flags_end_to_end`
+(`evidence/logs/flag_store_verify_4_4_4.log`).
+
+Treat the two flag calls as **verified once, on one campaign**: the reading covers
+the keyspace, not every engine version, save or mod combination.
 
 ## Country scope is read-only, and its direction is only half known
 
@@ -72,8 +78,12 @@ The **id convention** has been measured: the C3 reconnaissance recorded 39
 countries, and the low 24 bits of `scope+0x10` ran `0..39` with 23 missing — so
 the host now applies `SCOPE_ID_MASK` before handing `Country.id` to the bundle.
 The `NEO_JS_CALL_COUNTRY id=` log line carries the same masked id; logs taken
-before this change (the C3 reconnaissance) show the raw value. The opinion
-**values** themselves still have no live reading in either direction.
+before this change (the C3 reconnaissance) show the raw value. A 2026-11-10
+shot confirmed the masking end to end — 156 dispatches, every one passing the
+scope check (`scope_mismatch=0`) — and the opinion **values** are still
+unreadable in both directions: every read returns `table_null`, because the
+matrix has not been built
+(`evidence/logs/runtime_js_country_id_mask_4_4_4.log`).
 
 Everything else country-side — resource stockpiles, income containers, the
 energy index — is not in the contract.

@@ -1,0 +1,23 @@
+# R7 — country id 24-bit mask (Stellaris 4.4.4, read-only).
+#
+# The one thing this file does: hand **every** country scope (human and AI) to
+# the injected host once per monthly pulse. Copied from the C3 probe
+# (`scripts/scratch/2026-11_c3_country_probe/`) — same shape, same reason for
+# `event = {` being untyped (an on_action has no scope) and for `every_country`
+# carrying no limit (C3's whole point was that AI countries are dispatched too).
+#
+# Nothing here is new syntax and nothing here writes engine state.
+
+namespace = neo_cid
+
+event = {
+	id = neo_cid.100
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		every_country = {
+			neo_action = { }
+		}
+	}
+}
