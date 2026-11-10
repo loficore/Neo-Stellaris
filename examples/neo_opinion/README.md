@@ -57,7 +57,7 @@ python C:/temp/neo_install.py --mod C:/temp/neo_opinion                     # in
 ```
 
 It prints one line, `NEO_PLAY ok dll=<sha16> mod=neo_opinion pid=<pid>` or
-`NEO_PLAY fail reason=<tag>`. The tag table is in `docs/runtime-js-sdk.md`.
+`NEO_PLAY fail reason=<tag>`. The tag table is in `site/reference/sdk.md`.
 
 ## What "it worked" means
 

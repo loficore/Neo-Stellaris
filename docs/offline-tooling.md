@@ -1951,7 +1951,7 @@ python C:/temp/neo_install.py --no-launch --mod C:/temp/mods/my_mod
 ```
 
 输出恒为一行:`NEO_PLAY ok dll=<sha16> mod=<id> pid=<pid>` 或
-`NEO_PLAY fail reason=<tag>`;tag 表在 `docs/runtime-js-sdk.md`(那里是唯一权威,本文不复述)。
+`NEO_PLAY fail reason=<tag>`;tag 表在 `site/reference/sdk.md`(那里是唯一权威,本文不复述)。
 `pid=0` = 这一趟没有启动游戏,不是错误。
 
 **判读陷阱(四条):**

@@ -30,7 +30,7 @@ set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
     echo.
     echo Neo did not start: the NEO_PLAY line above says why.
-    echo The tag table is in docs\runtime-js-sdk.md.
+    echo The tag table is at https://loficore.github.io/Neo-Stellaris/reference/sdk
     echo %* | findstr /c:"--debug" >nul || pause
 )
 exit /b %RC%

@@ -1,3 +1,6 @@
+> **Legacy (2026-11-10).** 本文记录旧的 `Stellaris.*` 桥（v0 实验面），**不属于**运行时 JS SDK。
+> 现行契约见 `site/reference/sdk.md` 与 `sdk/api.def`；本文不随 SDK 更新。
+
 # API Reference
 
 Complete reference for the stellaris-quickjs JavaScript API. All functions are available on the global `Stellaris` object after the DLL is injected and the QuickJS runtime is initialized.
