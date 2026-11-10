@@ -442,6 +442,64 @@ C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从�
    的残留。要和离线 tier 集合逐项比对时用 `--flag … --all` 拿全量 id,而不是只看 `sample=`。
 7. **id 是存档局部的。** 这里的 system id 只对这份存档(与它的 sha256)有意义,不能当跨战役常量。
 
+### `scripts/c5_flag_verify.py --game-log PATH --js-log PATH --sav PATH [--official N] [--ours N] [--offset BYTES]`
+
+2026-11-08 flag 键空间修复的**判词工具**:吃三份实机产物,吐一行判词。纯 stdlib + 上一节的
+`c5_variable_probe`(复用 `read_gamestate` / `flag_scan`),零游戏、零 Windows。
+
+```bash
+python3 scripts/c5_flag_verify.py --game-log game.log --js-log neo_js.log \
+  --sav autosave.sav --offset 1048576
+FLAG_VERIFY flags_end_to_end official_hits=NN official_readback=NN \
+  js_reads=… save_official=… save_ours=… save_flags_blocks=NN \
+  detail=flags_end_to_end:official=neo_probe:ours=neo_probe2
+```
+
+**本工具还没有实机读数**（2026-11-10 只做出工具与探针，实机那一发在计划 Task 5、未执行）——
+上面的数字是字段名示意，不是任何一次窗口的读数。判词工具本身零游戏，`scripts/test_c5_flag_verify.py`
+用合成日志钉住每个判词。
+
+四条判据(只查「有 / 无」,不查次数):
+
+1. **官方写→读(控制组)**:`game.log` 里有 `NEO_FLAG_OFFICIAL name=<官方名>`;
+2. **我们的 native 读官方的**:`neo_js.log` 里有 `NEO_FLAG_READ name=<官方名> present=true`;
+3. **官方读我们的**:`game.log` 里有 `NEO_FLAG_OFFICIAL name=<我们名>`;
+4. **两个名字都进存档**:`.sav` 的 `flags={}` 按键名查(`flag_scan`)。
+
+判词按上游→下游排,**第一个不成立的那条**给出判词,所以判负能指名是哪一条链断的:
+
+| 判词 | 含义 | 归因 |
+|---|---|---|
+| `official_control_failed` | 官方自己写自己的 flag 都读不回来 | 这一发作废(不是键空间问题):先查事件顺序与 on_action 是否真跑 |
+| `our_read_missing` | 我们看不见官方写的 | `flag_store_4_4_4.md` §2.1 —— 我们的 lookup 与官方写入的键不同 |
+| `official_readback_missing` | 官方看不见我们写的 | §3.1 —— 我们的 ensure 落到了别的编号 |
+| `save_missing` | 日志对、存档没有 | §4.5 第 2 条(序列化/时间戳仍标 `static_inference`)⇒ 文档降级,**不重试** |
+| `flags_end_to_end` | 四条全通 | — |
+
+**退出码**:`0` 当且仅当 `flags_end_to_end`;`1` = 判负(判词仍在 stdout);`2` = 硬错误(读不到文件、
+不是 ZIP、`gamestate` 是二进制)—— 不把「读不到」伪装成「flag 不存在」。
+
+**判读陷阱:**
+
+1. **两个名字互为前缀,只能按 token 完整值比。** 探针用 `neo_probe`(官方写)/ `neo_probe2`(我们写),
+   `neo_probe` 是另一个的前缀 —— `log_text.count("name=neo_probe")` 会把 `name=neo_probe2` 的行也算进来。
+   两个计数都按行拆 token、要求 `name=<name>` 是**完整** token(测试钉住这条)。
+2. **时序在脚本里,工具看不见。** 「官方读我们写的」那一遍必须排在 runtime 写之后(驱动事件体的第 3 步
+   才把 scope 交给 runtime);顺序写反的现象是 `official_readback_missing` 而 `our_read_missing` 正常,
+   与「我们的 ensure 落错编号」**看起来一样**。读这个判词时先核事件体顺序。
+3. **`random_system` 的落点是随机的。** 官方写的那个 flag 落在哪个星系不定,所以第 2 条只有
+   「`present=true` 至少一行」的意义,`js_reads=` 里的 id 不能钉死;能钉 82 的只有我们自己写的那条。
+4. **月度重跑会累加。** flag 持久化、事件每月重跑,所以 `official_hits` / `save_official` 会随窗口长度
+   增长;判据只认「≥1」。要只判当期,用 `--offset`(窗口开始前记下的 `game.log` 字节偏移),否则上个月
+   的读数会算进来。
+5. **`.sav` 的 `flags=` 是 `名字=时间戳`。** 判据只查名字在不在,时间戳语义(当期日期)不在这四条里。
+   `save_missing` 时 detail 会带上 `flags_blocks=N`(`flag_scan` 的第二个返回):`0` = **根本没找到**
+   `flags` 块(解析形状,换版本/换存档布局),非 0 而目标名字不在里面才是真的没写进存档 ——
+   与上一节陷阱 5 同一个分界,别把解析形状读成引擎行为。
+
+**探针在哪**:`scripts/scratch/2026-11_flag_verify/`(一次性,自带 README:两个半边、四条判据、产物名、
+用完要删)。产物按惯例留在 `evidence/logs/`(`flag_store_verify_4_4_4.log`),探针本身不进仓。
+
 ### `scripts/chokepoint_scores.py <edges.tsv> --out <scores.tsv> [--top N]`
 
 只读边表(无表头;第一行全是数字就当数据),算 `degree`、无向无权 Brandes `betweenness`、Tarjan

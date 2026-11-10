@@ -1,0 +1,14 @@
+# Flag-keyspace probe — the official half's only driver.
+#
+# 4.4.4 on_action bodies accept `events` / `random_events` only (2026-11-01,
+# §89.1/§89.2): an `effect` block here is rejected and lands as an
+# `Unexpected token` line in error.log. The whole probe therefore lives in one
+# hidden event, and this file only schedules it.
+#
+# `on_monthly_pulse` is the pulse the C2/C3/C5 probes already ran on; a flag is
+# persistent, so a month boundary is all the timing this shot needs.
+on_monthly_pulse = {
+	events = {
+		neo_flag.100
+	}
+}
