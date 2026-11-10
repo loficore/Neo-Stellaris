@@ -106,3 +106,5 @@ flag 不会被持久化带进下一局 —— 它**就是**会持久化。
 **不能说**：「不留下必须卸载的钩子」指的是 `C2NeoUninstall` 之后 `C2NeoVerify==0`，
 **不是**「DLL 可以 `FreeLibrary`」—— 后者永远不行（约束 5：引擎持有 class_info 与
 vtable 副本的生命周期，超过我们 DLL 的卸载点）。
+
+跑法见 `docs/offline-tooling.md` 的 `c6_acceptance.py` 一节（`--systems` 必填；缺产物降 `cannot_say`，不是 `fail`）。
