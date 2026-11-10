@@ -38,3 +38,28 @@ host 活着，但 120 s 轮询窗里靶函数一次都没被调用 ⇒ 这一发
 2. **这一窗的另一半事实**：agent 自己的 UI 就在同一张桌面上，抢焦点会让游戏自暂停，
    于是 `pause` 分类器读到 `red_px=0/green_px=0`（unreadable）。**读数前先看
    `pause=playing` 是否成立**，不要只看 `window=`。
+
+## 第二发（环境档重跑一次，2026-11-11 00:2x）
+
+按计划「环境档可以带原因重跑一次」，同一组参数、只改两处环境：
+①把游戏换成 **boot 期注入我们 DLL 的进程**（这样 mod 里的 `neo_action` 有 token，测试 mod 才解析得过）；
+②先确认游戏真的在跑（`pause=playing`）再开轮询。
+
+回执（`/tmp` 里拉的同一形状 artifact，`C:/temp/c6_r2b.tsv`，sha256 `af98dd6d…`）：
+
+```
+overall_verdict=no_calls  calls=0  marker_hits=0  distinct_ids=0  container_raw_count=788
+install_rc=0  uninstall_rc=0  gate=operator_override
+```
+
+**还是 `no_calls`，还是环境档。** 归因（已定位到机制，不是猜测）：测试 mod 的
+`every_system { neo_action = { } }` 里 `neo_action` 是**我们注册的 effect**；
+没有 boot 期注册，这一条在解析期就是未知词 ⇒ 整个 mod 的事件不成立 ⇒ 每月那行
+`log = "PS_HIT"` 永远不会跑 ⇒ 被钩的官方 `log` 效果 `0x185BF60` 零调用。
+第二次尝试里 boot 注入那一腿**没有打出 `BOOT` 回执**（驱动退出码 1），所以
+注册没有发生，靶自然还是 0 次。
+
+**判负/重试纪律**：环境档已用满一次 ⇒ 按计划不再重试、不改判据、不改 `--systems`。
+C6-2 这一门在本窗口仍是**没有读数**（不是 fail）。下一发的正确形状：
+**一个 boot 期注册成功的进程**（`BOOT … install_rc=0` 先行确认），再在同一进程里
+跑 `c2_exec_caller_probe.py`（换模块名 `sqjs_lw2.dll`），并且开轮询前确认 `pause=playing`。
