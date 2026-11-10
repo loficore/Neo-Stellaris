@@ -1,0 +1,40 @@
+# R2 —— C6-2（逐系统调用）实机窗口，4.4.4
+
+> 授权记录（逐字）：2026-11-10，用户指令：「Windows已经上线了，继续派发实机任务。实际任务都要使用code-reverse模型」；
+> 2026-11-11 00:0x「现在没有竞争了 / 现在你等10秒就可以操作了」。
+
+本发编号：**R2**。本发问的是：**`log` 效果的实现 `0x185BF60` 每月被谁逐系统调用，拿到的 id 集是否
+⊆ 银河容器且去重后等于容器原始条数。**
+
+## 回执（`#meta` 逐字，artifact = `c6_r2_exec_caller_4_4_4.tsv`）
+
+```
+overall_verdict=no_calls   install_rc=0   uninstall_rc=0   verify_rc=0   host_alive=1
+layout_target_rva=0x185bf60  mode=watch  rule=100:0
+container_raw_count=788  systems=788  distinct_ids=0  entries=0  entries_error=0
+stats_delta=calls=0 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=0 last_caller=0
+gate=operator_override
+```
+
+## 判决词
+
+**`no_calls` —— 环境档，不是 C6-2 的证据，也不是判负。**
+驱动装上了（`install_rc=0`、`patch_size=15`、`installed=1`）、拆干净了（`uninstall_rc=0`/`verify_rc=0`）、
+host 活着，但 120 s 轮询窗里靶函数一次都没被调用 ⇒ 这一发**没有回答** C6-2 的问题。
+
+最可能的原因（未验证，按顺序）：①轮询窗期间游戏没有真正推进（`--allow-window` 跳过了门，
+但门跳过后游戏仍可能因失焦自暂停：本发前后屏幕一直被别的窗口占着，见下）；
+②测试 mod 的 `log` 行这一窗没跑到。**下一发只改一处**：先确认 `pause=playing` 并自己看到
+`game.log` 的 `PS_HIT` 在涨，再打这一发（不改参数、不改判据）。
+
+## 两处必须写在读数旁边的事实
+
+1. **门是 `gate=operator_override`**：状态机在这一窗把洁净星图读成 `window=dialog`
+   （`gold_px=2112..13405`、`row_count=7..20`，对应屏幕上密集的舰队条/星系铭牌），
+   `assert-ready` 逐次 `exit 2`（`WINDOW_UNSTABLE` / `BLOCKED_WITH_EVIDENCE unreadable pause`）。
+   操作者当场确认过屏幕（MCP 截图：普通星图、无事件窗），因此按文档的
+   「状态机与屏幕矛盾且人当场确认」这一档带 `--allow-window`。**判据没有被放宽**：
+   `--systems 788` 是这一场活体容器读数，`distinct_ids`/`container_raw_count` 仍是两个原样的数。
+2. **这一窗的另一半事实**：agent 自己的 UI 就在同一张桌面上，抢焦点会让游戏自暂停，
+   于是 `pause` 分类器读到 `red_px=0/green_px=0`（unreadable）。**读数前先看
+   `pause=playing` 是否成立**，不要只看 `window=`。
