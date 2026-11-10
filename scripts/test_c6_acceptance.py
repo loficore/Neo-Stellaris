@@ -72,3 +72,45 @@ def test_parse_meta_reads_only_the_meta_lines():
     meta = c6.parse_meta(ARTIFACT)
     assert meta["overall_verdict"] == "dispatch_named"
     assert "0x3b101f" not in meta
+
+
+def _save(body):
+    return "galactic_object={ " + " ".join(
+        f'{i}={{ variables={{ neo_mark={v} }} }}' for i, v in body) + " }"
+
+
+STATS_OK = ("calls=9444 matched=9444 log_calls=9444 last_id=786 rule_hits=0 installed=1 "
+            "verify=0 dispatched=30518 null_scope=0 mask_odd=0 writes=9444 skipped=0 "
+            "score_writes=0 score_skipped=0 set_calls=0 set_runs=0")
+
+
+def test_c6_3_passes_when_every_system_holds_its_own_id():
+    text = _save([(0, 0), (1, 1), (2, 2)])
+    gate = c6.gate_state_written(text, "neo_mark", 3, c6.parse_stats(STATS_OK))
+    assert (gate.gate, gate.status) == ("C6-3", c6.PASS)
+
+
+def test_c6_3_fails_when_a_value_is_not_the_id():
+    text = _save([(0, 0), (1, 7), (2, 2)])
+    gate = c6.gate_state_written(text, "neo_mark", 3, c6.parse_stats(STATS_OK))
+    assert gate.status == c6.FAIL
+    assert "first_bad=1" in gate.detail
+
+
+def test_c6_3_fails_when_a_system_is_missing():
+    assert c6.gate_state_written(_save([(0, 0), (2, 2)]), "neo_mark", 3,
+                                 c6.parse_stats(STATS_OK)).status == c6.FAIL
+
+
+def test_c6_3_fails_when_skipped_is_not_zero_or_writes_differ():
+    text = _save([(0, 0), (1, 1), (2, 2)])
+    skipped = c6.parse_stats(STATS_OK.replace(" skipped=0 ", " skipped=3 "))
+    assert c6.gate_state_written(text, "neo_mark", 3, skipped).status == c6.FAIL
+    short = c6.parse_stats(STATS_OK.replace("writes=9444", "writes=9440"))
+    assert c6.gate_state_written(text, "neo_mark", 3, short).status == c6.FAIL
+
+
+def test_c6_3_cannot_say_without_a_save_or_stats():
+    assert c6.gate_state_written("", "neo_mark", 3, c6.parse_stats(STATS_OK)).status == c6.CANNOT_SAY
+    text = _save([(0, 0), (1, 1), (2, 2)])
+    assert c6.gate_state_written(text, "neo_mark", 3, {}).status == c6.CANNOT_SAY

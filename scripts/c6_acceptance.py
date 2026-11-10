@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import collections
 
+from c5_variable_probe import find_variables
+
 Gate = collections.namedtuple("Gate", "gate status detail")
 
 PASS = "pass"
@@ -131,3 +133,46 @@ def gate_per_system(meta: dict[str, str], systems: int) -> Gate:
     if container_n != systems or distinct_n != systems:
         return Gate("C6-2", FAIL, detail)
     return Gate("C6-2", PASS, detail)
+
+
+def parse_stats(line: str) -> dict[str, int]:
+    """`C2NeoStatsInto` 那一行的 `k=v` 计数；非数字键丢掉，空行/垃圾行返回 `{}`。"""
+    stats: dict[str, int] = {}
+    for token in line.split():
+        key, sep, value = token.partition("=")
+        if not sep or not key:
+            continue
+        try:
+            stats[key] = int(value)
+        except ValueError:
+            continue
+    return stats
+
+
+def gate_state_written(text: str, name: str, systems: int,
+                       stats: dict[str, int]) -> Gate:
+    """C6-3：状态写进存档。系统集合与容器逐项相等、值 = 系统 id，写入计数闭合。
+
+    存档那一侧用 `c5_variable_probe.find_variables` 读同一份 `.sav` 的 gamestate；
+    写入计数只从同一进程的 `C2NeoStatsInto` 行来，不拿存档行数反推。
+    """
+    if not text.strip() or not {"writes", "matched", "skipped"} <= set(stats):
+        return Gate("C6-3", CANNOT_SAY, "missing_input")
+    found = find_variables(text, name)
+    bad = next((system_id for system_id in sorted(found)
+                if not isinstance(found[system_id], int)
+                or found[system_id] != system_id), None)
+    if bad is None:
+        first_bad = "-"
+    elif not isinstance(found[bad], int):
+        first_bad = "not_an_id"
+    else:
+        first_bad = str(bad)
+    detail = (f"systems={len(found)} expected={systems} writes={stats['writes']} "
+              f"matched={stats['matched']} skipped={stats['skipped']} "
+              f"first_bad={first_bad}")
+    failed = (stats["skipped"] != 0
+              or stats["writes"] != stats["matched"]
+              or set(found) != set(range(systems))
+              or bad is not None)
+    return Gate("C6-3", FAIL if failed else PASS, detail)
