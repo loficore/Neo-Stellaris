@@ -1,0 +1,75 @@
+# Flag-keyspace probe — one hidden event, four steps in a fixed order.
+#
+# The question this mod asks (spec: the 2026-11-08 flag keyspace fix):
+#   the official `set_star_flag` / `has_star_flag` and our native
+#   `__neo_system_set_flag` / `__neo_system_has_flag` must resolve names
+#   through the SAME engine table, so each side sees the other's flag and both
+#   land in the save.
+#
+# Four steps, order is the criterion (plan Review Focus 2) — an official read
+# placed before the native write can only fail and would look like a keyspace
+# bug:
+#   1. `set_star_flag = neo_probe`  — the flag the OFFICIAL script writes.
+#      `random_system` picks the system at random (Review Focus 3), so the
+#      read-back below may only claim "any system matched", never a fixed id.
+#   2. official read-back of its own flag — the control group. If this fails
+#      the whole shot is void (event never ran / order wrong / on_action not
+#      registered), and the verdict says `official_control_failed`.
+#   3. `neo_action = { }` hands every system scope to the injected host (the
+#      runtime half writes `neo_probe2` on system 82 there).
+#   4. official reads the flag our native wrote.
+#
+# `event = {` is untyped on purpose: an on_action has no scope, and C1 lost a
+# run to `country_event = {` ("fire country scope event ... on no_scope").
+#
+# Each `every_system` is wrapped in `random_system` because a no-scope body
+# iterates systems exactly ONCE (2026-11-01 reading, §89.2: 1 line/month bare
+# vs 784 lines/month wrapped). A bare `every_system` here would check one
+# arbitrary system and the control group would fail for the wrong reason.
+#
+# Nothing here is new syntax: `set_star_flag` / `has_star_flag` / `log` /
+# `random_system` / `every_system` are all official keywords, and `neo_action`
+# is the one the injected host registers (its body is an empty block on
+# purpose — the registered class parses an assignment block).
+
+namespace = neo_flag
+
+event = {
+	id = neo_flag.100
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		# --- 1. official write ----------------------------------------------
+		random_system = {
+			set_star_flag = neo_probe
+		}
+
+		# --- 2. official read-back of its own write (control group) ---------
+		random_system = {
+			every_system = {
+				limit = {
+					has_star_flag = neo_probe
+				}
+				log = "NEO_FLAG_OFFICIAL name=neo_probe"
+			}
+		}
+
+		# --- 3. hand every system scope to the runtime half -----------------
+		random_system = {
+			every_system = {
+				neo_action = { }
+			}
+		}
+
+		# --- 4. official reads what our native wrote ------------------------
+		random_system = {
+			every_system = {
+				limit = {
+					has_star_flag = neo_probe2
+				}
+				log = "NEO_FLAG_OFFICIAL name=neo_probe2"
+			}
+		}
+	}
+}
