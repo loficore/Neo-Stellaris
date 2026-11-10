@@ -1,0 +1,47 @@
+# R4 —— issue #46 活体验证（`--mutate-collide`），4.4.4
+
+> 授权记录（逐字）：2026-11-10，用户指令：「Windows已经上线了，继续派发实机任务。实际任务都要使用code-reverse模型」
+
+本发编号：**R4**。本发问的是：**同一窗口里把一条边加上再删掉（中间不夹读），缓存键（指纹）回到原值之后，
+边集哈希是不是也回到原值 —— 也就是旧缓存会不会在「指纹相同、图不同」那一格漏掉重算。**
+
+- 时间：2026-11-10 23:37–23:39（主机本地）。
+- 进程：pid 7888，本仓库 `zig build` 产物 `C:/temp/sqjs_lw1.dll`
+  （sha256 `01deb02f300771764e664f7d59d4a91ad6bcc0d9c567c4302207896663b017f4`），
+  **boot 期注入**并已 `--act write --score-source 1` 跑过 3 个月（`score_writes=2364`，
+  live 缓存因此有真值；`fingerprint=0` 的仪器档就是「本进程还没读过图」）。
+- 边对：`(0, 787)` —— 先从这一窗口的 base 边表里验过**不存在**（1219 条边逐条比对）。
+- 挂载方式：`--attach`（同一进程里我们自己的模块，不二次注入、不 `gate_install`；
+  `C2Sanity==42` 之后才授权读）。
+
+## 回执原文
+
+```
+[graph] attach: sqjs_lw1.dll resident at 0x7ff80c710000 — no injection
+[graph] C2Sanity == 42, game alive — read authorized
+[graph] verdict=graph_collision_named  fingerprint 3991881723736717560 -> 3991881723736717560; hash cec23a9e2b0a890d -> cec23a9e2b0a890d; edges 1219 -> 1219
+```
+
+## 判决词
+
+**`graph_collision_named`**：指纹相等**且**哈希相等、边数 1219 → 1219
+⇒ 这一对「加一条再删同一条」之后，图**真的原样**（不是只把指纹糊回去）。
+
+这一格**没有**触发 `graph_collision_suspicious`（指纹相等但哈希不等 = 旧缓存会漏的那一格）。
+按计划口径：`suspicious` 不是失败、是 §7 的「不能说」被换成正读数的档；本发拿到的是更强的
+`named`（哈希也相等），所以 #46 的那个漏格在**这一对边**上**没有出现** ——
+这不等于「不存在」，只是这一发没撞上（`--rewire` 的保度 2-switch 是专门构造那一格的另一发，
+本窗口没有跑）。
+
+## 两处必须写在读数旁边的事实
+
+1. **这一发的前置是本仓库 `c2_graph_read.py` 的一个崩溃修复。** `read_live_pair()` 原本调
+   `struct.unpack("<QQ", buf, 0)` —— `unpack` 没有 offset 参数（那是 `unpack_from`），
+   所以整条 `--mutate-collide` 路径在主机上直接 `TypeError`（第一发就是这么死的）。
+   修复 = 去掉第三个实参，并补一条 `test_read_live_pair_returns_fingerprint_and_hash`
+   （该函数此前**没有任何**测试，所以这个缺陷活到了实机）。判词不受影响：修复只让本该跑的那条路跑起来。
+2. **同一台主机上还有第二个操作者在驱动同一个游戏。** 本轮观测到：游戏进程在我没有下达命令时
+   自行换了 pid（17980 → 6656 → 17884 → 18736），`ns_game_cmd.txt` 里出现不是我写的
+   `choose 1` / `dismiss` / `quit` / `click 800 500`。本发的读数来自**我自己** boot 注入的
+   pid 7888（装前 `PROCS count=0`、装后 `#meta host_alive=1`、收尾 `PROCS count=0`），
+   但「同一主机上还有人在动这个游戏」这件事必须与读数一起记 —— 它是**环境**事实，不是判负。

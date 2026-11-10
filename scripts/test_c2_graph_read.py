@@ -358,3 +358,29 @@ def test_restore_judge_uses_the_graph_rows_not_the_live_hash():
     block = src.split("restore_ok = (", 1)[1].split("live_hash_caught_up", 1)[0]
     assert "restore_rows" in block
     assert 'restored["hash"]' not in block
+
+
+def test_read_live_pair_returns_fingerprint_and_hash(monkeypatch):
+    """`read_live_pair` is the collide shot's premise reader.
+
+    It used to call `struct.unpack(fmt, buf, 0)`; `unpack` takes no offset (that is
+    `unpack_from`), so the whole `--mutate-collide` path raised TypeError on the
+    host (2026-11-10 window, R4).  This fence pins the two words it must return.
+    """
+    import c2_harness as harness
+
+    stats_blob = struct.pack("<8Q", *range(1, 9))
+    hash_blob = struct.pack("<QQ", 0xDEADBEEF, 1234)
+    blobs = {}
+
+    def fake_call(pid, base, rva, buf):
+        blobs["called"] = blobs.get("called", []) + [rva]
+        return 0
+
+    def fake_read(pid, addr, size):
+        return stats_blob if size == mod.LIVE_STATS_SIZE else hash_blob
+
+    monkeypatch.setattr(harness, "call_remote_with_arg", fake_call)
+    monkeypatch.setattr(harness, "read_memory", fake_read)
+    exports = {"C2NeoLiveStatsInto": 1, "C2NeoLiveHashInto": 2}
+    assert mod.read_live_pair(1, 0, exports, 0x1000, 0x2000) == (8, 0xDEADBEEF)

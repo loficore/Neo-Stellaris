@@ -224,6 +224,59 @@ def snap(dst: str, width: int = 700, quality: int = 45) -> int:
     return 0
 
 
+def cpnewest(dst: str) -> int:
+    """Copy the newest .sav to a space-free path (the probe takes an argv path)."""
+    import shutil
+
+    rows = []
+    for root, _dirs, files in os.walk(SAVES):
+        for name in files:
+            if name.lower().endswith(".sav"):
+                path = os.path.join(root, name)
+                rows.append((os.path.getmtime(path), path))
+    rows.sort(reverse=True)
+    src = rows[0][1]
+    shutil.copyfile(src, dst)
+    print(f"CPNEWEST src={os.path.basename(src)} bytes={os.path.getsize(dst)} dst={dst}")
+    return 0
+
+
+def cp(src: str, dst: str) -> int:
+    """Copy a file whose path has spaces to a space-free path."""
+    import shutil
+
+    shutil.copyfile(src, dst)
+    print(f"CP bytes={os.path.getsize(dst)} src={src} dst={dst}")
+    return 0
+
+
+def pickpair(tsv: str) -> int:
+    """Pick a pair of system ids that is NOT an edge in the edge table.
+
+    `--mutate-collide FROM,TO` adds then removes that very edge, so a pair that
+    already exists would delete a real edge and leave the graph dirty."""
+    edges = set()
+    rows = 0
+    with open(tsv, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            try:
+                a, b = int(parts[0]), int(parts[1])
+            except ValueError:
+                continue
+            rows += 1
+            edges.add((min(a, b), max(a, b)))
+    print(f"EDGES rows={rows} distinct={len(edges)}")
+    for a, b in ((0, 700), (1, 750), (2, 780), (3, 600), (0, 400), (5, 500)):
+        if (min(a, b), max(a, b)) not in edges:
+            print(f"PAIR {a},{b} absent=yes")
+            return 0
+    print("PAIR none")
+    return 2
+
+
 def nsstate() -> int:
     """The world-state file's leases/armed/blocks, one short line each."""
     path = r"C:\\temp\\ns_world.json"
@@ -414,6 +467,12 @@ def main(argv=None) -> int:
     if verb == "snap":
         return snap(rest[0], int(rest[1]) if len(rest) > 1 else 700,
                     int(rest[2]) if len(rest) > 2 else 45)
+    if verb == "cpnewest":
+        return cpnewest(rest[0])
+    if verb == "cp":
+        return cp(rest[0], rest[1])
+    if verb == "pickpair":
+        return pickpair(rest[0])
     if verb == "nsstate":
         return nsstate()
     if verb == "fg":
