@@ -169,3 +169,19 @@ def test_c6_5_cannot_say_when_a_pair_is_missing():
     gate = c6.gate_official_unchanged(
         base_log=None, with_log=WITH, base_err="", with_err="")
     assert gate.status == c6.CANNOT_SAY
+
+
+def test_render_is_six_lines_plus_a_summary():
+    gates = [c6.Gate(f"C6-{i}", c6.PASS, "x") for i in range(1, 7)]
+    text = c6.render(gates)
+    assert text.splitlines()[-1] == "C6 SUMMARY pass=6 fail=0 cannot_say=0"
+
+
+def test_exit_code_separates_fail_from_cannot_say(tmp_path):
+    boot = tmp_path / "boot.txt"
+    boot.write_text("BOOT dll=x sha=0 effect_id=1 set_id=1 install_rc=0 alive=1")
+    common = ["--boot", str(boot), "--systems", "3"]
+    assert c6.main(common) == 2                       # 其余五门 cannot_say
+    uninstall = tmp_path / "u.txt"
+    uninstall.write_text("UNINSTALL rc=1 verify=0 alive=1")
+    assert c6.main([*common, "--uninstall", str(uninstall)]) == 1

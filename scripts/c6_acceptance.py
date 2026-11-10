@@ -12,10 +12,12 @@
 """
 from __future__ import annotations
 
+import argparse
 import collections
+import pathlib
 import re
 
-from c5_variable_probe import find_variables
+from c5_variable_probe import find_variables, read_gamestate
 
 Gate = collections.namedtuple("Gate", "gate status detail")
 
@@ -248,3 +250,100 @@ def gate_official_unchanged(*, base_log: str | None, with_log: str | None,
               f"error_delta={error_delta}")
     failed = bool(missing) or bool(extra) or error_delta != 0
     return Gate("C6-5", FAIL if failed else PASS, detail)
+
+
+def _read(path: str | None) -> str | None:
+    """`None`（没给）或读不到都返回 `None`；调用方据此说 `cannot_say`。"""
+    if path is None:
+        return None
+    try:
+        return pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def evaluate(args: argparse.Namespace) -> list[Gate]:
+    """六道门各判一次，按 C6-1 … C6-6 的顺序返回。"""
+    boot = _read(args.boot)
+    uninstall = _read(args.uninstall)
+    exec_caller = _read(args.exec_caller)
+    stats = parse_stats(_read(args.stats) or "")
+
+    gamestate = ""
+    if args.sav is not None:
+        try:
+            gamestate = read_gamestate(pathlib.Path(args.sav))
+        except (OSError, ValueError):
+            gamestate = ""
+
+    base_log = _read(args.base_log)
+    with_log = _read(args.with_log)
+    base_error = _read(args.base_error)
+    with_error = _read(args.with_error)
+
+    return [
+        gate_registration(parse_boot(boot or "")),
+        gate_per_system(parse_meta(exec_caller or ""), args.systems),
+        gate_state_written(gamestate, args.var_name, args.systems, stats),
+        gate_official_readback(_read(args.reconcile) or ""),
+        gate_official_unchanged(base_log=base_log, with_log=with_log,
+                                base_err=base_error, with_err=with_error),
+        gate_teardown(uninstall or ""),
+    ]
+
+
+def render(gates: list[Gate]) -> str:
+    """每门一行 `gate status detail`，末行汇总三档计数。"""
+    lines = [f"{gate.gate} {gate.status} {gate.detail}" for gate in gates]
+    counts = collections.Counter(gate.status for gate in gates)
+    lines.append(f"C6 SUMMARY pass={counts[PASS]} fail={counts[FAIL]} "
+                 f"cannot_say={counts[CANNOT_SAY]}")
+    return "\n".join(lines) + "\n"
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--boot", default=None,
+                        help="c2_boot_inject.py 的 BOOT 回执（C6-1）")
+    parser.add_argument("--uninstall", default=None,
+                        help="c2_boot_inject.py --uninstall 的 UNINSTALL 回执（C6-6）")
+    parser.add_argument("--exec-caller", default=None,
+                        help="c2_exec_caller_probe.py 的 artifact（C6-2）")
+    parser.add_argument("--stats", default=None,
+                        help="同一进程 C2NeoStatsInto 那一行（C6-3 的写入计数）")
+    parser.add_argument("--sav", default=None, help="同一场的 .sav（C6-3）")
+    parser.add_argument("--var-name", default="neo_mark",
+                        help="C6-3 的变量名（默认 neo_mark）")
+    parser.add_argument("--systems", type=int, required=True,
+                        help="这一场的容器原始条数；无默认值，必须现场取")
+    parser.add_argument("--reconcile", default=None,
+                        help="c2_graph_reconcile.py 的 stdout 或 --out 文件（C6-4）")
+    parser.add_argument("--base-log", default=None, help="未装 DLL 那趟的 game.log（C6-5）")
+    parser.add_argument("--with-log", default=None, help="装了 DLL 那趟的 game.log（C6-5）")
+    parser.add_argument("--base-error", default=None, help="未装 DLL 那趟的 error.log（C6-5）")
+    parser.add_argument("--with-error", default=None, help="装了 DLL 那趟的 error.log（C6-5）")
+    parser.add_argument("--out", default=None,
+                        help="把台帐另写一份（evidence/logs/c6_acceptance_4_4_4.tsv）")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    gates = evaluate(args)
+    text = render(gates)
+    print(text, end="")
+    if args.out:
+        # 3.9 的 `Path.write_text` 没有 `newline=`（3.10 才加），台帐要 LF 而不是
+        # Windows 的 CRLF，所以走 `open`。
+        with open(args.out, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+    statuses = [gate.status for gate in gates]
+    if FAIL in statuses:
+        return 1
+    if CANNOT_SAY in statuses:
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
