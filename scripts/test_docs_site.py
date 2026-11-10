@@ -71,3 +71,20 @@ def test_nav_targets_exist():
 
 def test_no_internal_links():
     assert no_internal_links() == []
+
+
+# --- 防 API 面漂移:sdk/api.def 里的每个名字必须在两页 SDK 参考里都出现 ------------
+
+API_DEF = REPO / "sdk" / "api.def"
+SDK_PAGES = ("reference/sdk.md", "zh/reference/sdk.md")
+
+
+def api_def_covered():
+    names = [f["name"] for f in json.loads(API_DEF.read_text(encoding="utf-8"))["functions"]]
+    return [(page, name) for page in SDK_PAGES
+            for name in names
+            if name not in (SITE / page).read_text(encoding="utf-8")]
+
+
+def test_api_def_covered():
+    assert api_def_covered() == []
