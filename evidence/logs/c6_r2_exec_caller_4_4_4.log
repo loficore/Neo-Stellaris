@@ -82,3 +82,23 @@ agent 自己的 UI 抢走、游戏自暂停，是最可能的原因（本轮 `un
 `game.log` 的 `PS_HIT` 增量是这一格的直接判据，下一发开轮询前必须先读到它在涨。
 
 artifact（本表 `evidence/logs/c6_r2_exec_caller_4_4_4.tsv`）= 第三发，sha256 `2e0fbd7402b82ea3c36cb78136227b8330b9dd3682199fc7f4448233d435b707`。
+
+## 第四发（PS_HIT 判据先行）—— 拿到真读数：`caller_unnamed`
+
+前两发的归因（「那一窗游戏没真推进」）**在这一发被证实并修掉**：先用 MCP 把游戏窗口提到前台
+（agent 自己的 UI 盖住游戏，盲点会点到 UI 上），看到右上角 `▶ 2311.01.10 常速`（真在跑），
+再开轮询。artifact 从 860 B 变成 51,472 B：
+
+```
+overall_verdict=caller_unnamed   calls=7092   distinct_ids=683
+container_raw_count=788  systems=788  install_rc=0  uninstall_rc=0  verify_rc=0  host_alive=1
+gate=operator_override
+```
+
+**判词 `caller_unnamed`（仪器档，不是判负）**：靶确实在逐系统路径上 —— `calls=7092 = 9 个月 × 788`，
+这是 C6-2 要的那一半；`distinct_ids=683` 说明 id 也读到了（683/788，去重后不满，与
+`rule=100:0` 的采样口径一致）。**缺的一格是「谁在派发」**：返回地址列没有给出唯一 RVA
+（`caller_unnamed` 的定义），所以这一发**没有**把 C6-2 判成 `dispatch_named`。
+
+下一发只改一处：把 `caller_rva` 列按频次摊开（`c6_r2_exec_caller_4_4_4.tsv` 里已经有 7092 行），
+判断是「一层虚派发 ⇒ 需要再往上走一层」（陷阱 1）还是「混了两个来源」。判据、分母、采样规则都不动。
