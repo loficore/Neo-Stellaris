@@ -6,6 +6,13 @@ zig-out/
 .zig-cache/
 **/__pycache__/
 
+# === Docs site (npm package under site/) ===
+site/node_modules/
+site/.vitepress/dist/
+site/.vitepress/cache/
+# preview-package output (scripts/pack_preview.py --out dist)
+/dist/
+
 # === Python tool caches ===
 .pytest_cache/
 .ruff_cache/

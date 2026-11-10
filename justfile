@@ -39,6 +39,19 @@ host-tests:
 sdk-test:
     cd sdk && npm ci && npm test
 
+# Docs site (site/): an independent npm package, so `check`/`check-full` stay
+# npm-free (same ruling as `sdk-test`).  `site-test` is the gate: exact versions
+# from site/package-lock.json, a real build (VitePress fails on a dead link),
+# then the pure-Python fences the site is policed by.
+site-dev:
+    cd site && npm run dev
+
+site-build:
+    cd site && npm run build
+
+site-test:
+    cd site && npm ci && npm run build && cd .. && python3 -m pytest scripts/test_docs_site.py -q
+
 # Score-table drift fence: regenerate src/dll/c2/chokepoint_table.zig in memory and compare.
 chokepoints-check:
     python3 scripts/chokepoints_emit.py --tsv evidence/xrefs/chokepoint_scores_4_4_4.tsv --out src/dll/c2/chokepoint_table.zig --save-sha 6f271294bcfe3620a5e7da367a7f3fb0891c77315baffa28601ca48ec5d8d94e --check

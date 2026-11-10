@@ -1,0 +1,24 @@
+{
+  "en": [
+    {"text": "Guide", "items": [
+      {"text": "Install", "link": "/guide/install"},
+      {"text": "Your first mod", "link": "/guide/first-mod"},
+      {"text": "Examples", "link": "/guide/examples"},
+      {"text": "Known limits", "link": "/guide/known-limits"}
+    ]},
+    {"text": "Reference", "items": [
+      {"text": "SDK", "link": "/reference/sdk"}
+    ]}
+  ],
+  "zh": [
+    {"text": "指南", "items": [
+      {"text": "安装", "link": "/zh/guide/install"},
+      {"text": "第一个 mod", "link": "/zh/guide/first-mod"},
+      {"text": "示例", "link": "/zh/guide/examples"},
+      {"text": "已知限制", "link": "/zh/guide/known-limits"}
+    ]},
+    {"text": "参考", "items": [
+      {"text": "SDK", "link": "/zh/reference/sdk"}
+    ]}
+  ]
+}
