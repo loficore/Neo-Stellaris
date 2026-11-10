@@ -71,7 +71,7 @@ SUPPORTED_SHA256 = {
 }
 
 #: Every tag ``receipt_fail`` may print.  A tag outside this set would be one the
-#: player cannot look up in ``docs/runtime-js-sdk.md``.
+#: player cannot look up in ``site/reference/sdk.md``.
 FAILURE_TAGS = (
     "game_not_found",
     "version_unsupported",

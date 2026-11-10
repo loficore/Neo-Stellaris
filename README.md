@@ -1,8 +1,10 @@
 # stellaris-quickjs-extension
 
+**Docs site:** https://loficore.github.io/Neo-Stellaris/ · **Download (developer preview):** https://github.com/loficore/Neo-Stellaris/releases/latest
+
 A Zig-based DLL extension for Stellaris that embeds a QuickJS JavaScript runtime, enabling modders to write custom effects, triggers, and UI logic in JavaScript while hooking into the Clausewitz engine's CEffect/CTrigger dispatch pipeline.
 
-Runtime mods written in TypeScript use the **runtime JS SDK** in `sdk/`: see [docs/runtime-js-sdk.md](docs/runtime-js-sdk.md) for the API, the manifest format, and `neo new` / `neo build` / `neo check` / `neo pack`. The developer-preview package (issue #39) is specified — and currently **blocked** — in [docs/runtime-js-preview.md](docs/runtime-js-preview.md).
+Runtime mods written in TypeScript use the **runtime JS SDK** in `sdk/`: the author-facing documentation is the docs site — [SDK reference](https://loficore.github.io/Neo-Stellaris/reference/sdk) for the API, the manifest format and `neo new` / `neo build` / `neo check` / `neo pack`, [Install](https://loficore.github.io/Neo-Stellaris/guide/install) for the player route. The developer-preview package (DLL + injector + SDK + examples) is published as a GitHub Release asset — [latest release](https://github.com/loficore/Neo-Stellaris/releases/latest).
 
 ## Features
 

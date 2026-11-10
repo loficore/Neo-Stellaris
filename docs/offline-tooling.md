@@ -1951,7 +1951,7 @@ python C:/temp/neo_install.py --no-launch --mod C:/temp/mods/my_mod
 ```
 
 输出恒为一行:`NEO_PLAY ok dll=<sha16> mod=<id> pid=<pid>` 或
-`NEO_PLAY fail reason=<tag>`;tag 表在 `docs/runtime-js-sdk.md`(那里是唯一权威,本文不复述)。
+`NEO_PLAY fail reason=<tag>`;tag 表在 `site/reference/sdk.md`(那里是唯一权威,本文不复述)。
 `pid=0` = 这一趟没有启动游戏,不是错误。
 
 **判读陷阱(四条):**
@@ -1970,6 +1970,34 @@ python C:/temp/neo_install.py --no-launch --mod C:/temp/mods/my_mod
 围栏:`scripts/test_neo_install.py`(22 条:版本门、路径推导、项目挑选、清单校验、两半安装计划、
 `dlc_load` 幂等、一行回执、`--debug` 才出 traceback、`dll_locked` 映射、`neo.bat` 的 tag 必须
 在表里)。`just deploy` 必须带上这两个文件(R-deploy)。
+
+## 开发者预览包:`scripts/pack_preview.py`
+
+把 DLL、注入器、SDK、示例与许可证打成一个**确定性** zip 加一份 `SHA256SUMS`。纯 stdlib
+(`zipfile`/`hashlib`),不读 exe、不起进程、零实机;tag-only 的 `release` job 就是调它。
+
+```
+just preview-pack --version 0.1.0-preview.1 --out dist        # 版本号 = tag 去掉前导 v
+python3 scripts/pack_preview.py --version 9.9.9 --root <tree> --dll X --inject Y --out <dir>
+```
+
+`--root` 默认本仓库根(从脚本位置推);`--dll`/`--inject` 默认
+`zig-out/bin/stellaris_quickjs.dll` 与 `zig-out/bin/inject.exe`,都按**相对 root** 解析,进 zip 的
+顶层用各自的 basename;`--out` 默认 `dist/`。清单是**显式**的(脚本顶部 `REQUIRED_FILES` /
+`REQUIRED_DIRS` 两张表);`INSTALL.md` 由 `site/guide/install.md` 在内存里加一行
+`<!-- preview <version> -->` 生成,**不提交**。
+
+**判读陷阱(三条):**
+
+1. **清单缺文件是失败,不是跳过。** 退出码 1,stderr 逐条列出缺的路径,一个字节都不写。`zig-out/bin/`
+   与 `sdk/dist/` 都是构建产物:先 `zig build`,再 `cd sdk && npm ci && npm run build`;本地复现时这两步
+   不能省,否则读到的是「昨天没打出来」而不是「包坏了」。
+2. **确定性靠固定时间戳。** 1980-01-01、按 arcname 排序、0644、`ZIP_DEFLATED` level 9。改压缩参数、
+   或者把构建时钟读进产物,`SHA256SUMS` 当场漂移;`scripts/test_pack_preview.py` 打两次比 sha 就是
+   为了钉住这条。
+3. **`SHA256SUMS` 恰好三行**(两个二进制 + zip 自身),按名字排序,格式 `<digest><两个空格><name>`。
+   二进制的哈希算的是**进 zip 的那份字节**,不是磁盘上另找的一份,所以重新 `zig build` 之后旧的和
+   新的不会混在一张表里。
 
 ## 实机调试:游戏监督器(`scripts/windows/game_supervisor.py`)
 

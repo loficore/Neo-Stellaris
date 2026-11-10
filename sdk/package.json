@@ -2,6 +2,7 @@
   "name": "@neo/runtime",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Runtime JS SDK for the Neo-Stellaris QuickJS host (v1: system scope only)",
   "type": "module",
   "bin": {
