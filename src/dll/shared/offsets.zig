@@ -453,6 +453,10 @@ pub const country = struct {
     /// 国家 scope 的 mask(`every_country` 写死;system 是 `0x80`)。
     /// 这就是 C2 实机读数里的那一格(`country_scope_4_4_4.md` §11)。
     pub const SCOPE_MASK: u32 = 4;
+    /// `scope+0x10` 对国家**不是**裸 id：高 8 位是类型/标签，低 24 位才是 id
+    /// （`runtime_js_c3_country_probe_4_4_4.log` 的 39 国读数；与 opinion 键的
+    /// `[obj+0x20] & 0xffffff` 是同一口径）。
+    pub const SCOPE_ID_MASK: u32 = 0x00FF_FFFF;
 };
 
 /// CEffect object offsets.
