@@ -286,13 +286,23 @@ jobs:
             --out dist
 
       - name: Publish release
+        # `gh release create` has no `--clobber` (that flag belongs to
+        # `gh release upload`).  The first tag this job ever saw
+        # (v0.1.0-preview.1, 2026-11-10) failed on exactly that: `unknown flag:
+        # --clobber`, after the gate had passed.  So: create when absent, and
+        # upload with --clobber when re-running the job for the same tag.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
-            --verify-tag \
-            --generate-notes \
-            --clobber \
-            dist/stellaris_quickjs.dll dist/inject.exe dist/sha256sums.txt \
+          files=(
+            dist/stellaris_quickjs.dll dist/inject.exe dist/sha256sums.txt
             dist/neo-stellaris-preview-*.zip dist/SHA256SUMS
+          )
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --clobber "${files[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag --generate-notes --title "$GITHUB_REF_NAME" \
+              "${files[@]}"
+          fi
