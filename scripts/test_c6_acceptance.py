@@ -114,3 +114,21 @@ def test_c6_3_cannot_say_without_a_save_or_stats():
     assert c6.gate_state_written("", "neo_mark", 3, c6.parse_stats(STATS_OK)).status == c6.CANNOT_SAY
     text = _save([(0, 0), (1, 1), (2, 2)])
     assert c6.gate_state_written(text, "neo_mark", 3, {}).status == c6.CANNOT_SAY
+
+
+NAMED = "window=base live=15 host=15 verdict=tiers_named detail=equal\n"
+
+
+def test_c6_4_passes_on_tiers_named():
+    gate = c6.gate_official_readback(NAMED)
+    assert (gate.gate, gate.status) == ("C6-4", c6.PASS)
+
+
+def test_c6_4_fails_on_tiers_disagree():
+    assert c6.gate_official_readback(NAMED.replace("tiers_named", "tiers_disagree")).status == c6.FAIL
+
+
+def test_c6_4_cannot_say_on_counts_only_readings():
+    text = NAMED.replace("tiers_named", "tiers_counts")
+    assert c6.gate_official_readback(text).status == c6.CANNOT_SAY
+    assert c6.gate_official_readback("").status == c6.CANNOT_SAY

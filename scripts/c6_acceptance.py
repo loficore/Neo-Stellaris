@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import collections
+import re
 
 from c5_variable_probe import find_variables
 
@@ -176,3 +177,24 @@ def gate_state_written(text: str, name: str, systems: int,
               or set(found) != set(range(systems))
               or bad is not None)
     return Gate("C6-3", FAIL if failed else PASS, detail)
+
+
+_VERDICT_RE = re.compile(r"verdict=(\w+)")
+
+
+def gate_official_readback(text: str) -> Gate:
+    """C6-4：官方 DSL 读回。输入是 `c2_graph_reconcile` 的整段 stdout / `--out` 文件。
+
+    多窗口时**任何**一条 `tiers_disagree` 就判负（缺口在引擎一侧就是结论）；一条
+    `tiers_counts` / `tiers_partial` 就够把整门降成 `cannot_say` —— 计数相等不等于
+    逐名相等，不能读成通过。
+    """
+    verdicts = _VERDICT_RE.findall(text)
+    detail = f"windows={len(verdicts)} verdicts={','.join(sorted(set(verdicts))) or '-'}"
+    if not verdicts:
+        return Gate("C6-4", CANNOT_SAY, detail)
+    if "tiers_disagree" in verdicts:
+        return Gate("C6-4", FAIL, detail)
+    if all(verdict == "tiers_named" for verdict in verdicts):
+        return Gate("C6-4", PASS, detail)
+    return Gate("C6-4", CANNOT_SAY, detail)
