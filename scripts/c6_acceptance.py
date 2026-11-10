@@ -86,3 +86,48 @@ def gate_teardown(line: str) -> Gate:
     detail = f"rc={fields['rc']} verify={fields['verify']} alive={alive}"
     passed = fields["rc"] == 0 and fields["verify"] == 0
     return Gate("C6-6", PASS if passed else FAIL, detail)
+
+
+#: doc §1 只认这一个判词为通过档。
+EVIDENCE_VERDICTS = ("dispatch_named",)
+#: doc §2 明写这两档是**判负**，不是「还没读数」。
+NEGATIVE_VERDICTS = ("ids_out_of_range", "ids_not_in_container")
+
+
+def parse_meta(text: str) -> dict[str, str]:
+    """artifact 的 `#meta k=v` 台帐；同名键后者覆盖前者，值一律原样保留。"""
+    meta: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.startswith("#meta "):
+            continue
+        key, sep, value = line[len("#meta "):].partition("=")
+        if sep and key:
+            meta[key] = value
+    return meta
+
+
+def gate_per_system(meta: dict[str, str], systems: int) -> Gate:
+    """C6-2：逐系统调用。`--systems` 是这一场的容器原始条数，不接受反推。
+
+    detail 三个数都写（`distinct` / `container` / `systems`），换存档时才读得出
+    是哪一格变了；只比这两个 `#meta` 数，不重算 id 集合、不数 artifact 行数。
+    """
+    if not meta:
+        return Gate("C6-2", CANNOT_SAY, "missing_input")
+    verdict = meta.get("overall_verdict", "")
+    distinct = meta.get("distinct_ids", "?")
+    container = meta.get("container_raw_count", "?")
+    detail = (f"distinct={distinct} container={container} systems={systems} "
+              f"save={meta.get('save_name', '-')} verdict={verdict or '-'}")
+    if verdict in NEGATIVE_VERDICTS:
+        return Gate("C6-2", FAIL, detail)
+    if verdict not in EVIDENCE_VERDICTS:
+        return Gate("C6-2", CANNOT_SAY, detail)
+    try:
+        container_n = int(container)
+        distinct_n = int(distinct)
+    except (TypeError, ValueError):
+        return Gate("C6-2", CANNOT_SAY, detail)
+    if container_n != systems or distinct_n != systems:
+        return Gate("C6-2", FAIL, detail)
+    return Gate("C6-2", PASS, detail)

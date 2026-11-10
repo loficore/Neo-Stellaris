@@ -35,3 +35,40 @@ def test_c6_6_fails_when_a_hook_survives():
 
 def test_c6_6_cannot_say_without_a_receipt():
     assert c6.gate_teardown("").status == c6.CANNOT_SAY
+
+
+ARTIFACT = """#meta act=record
+#meta container_raw_count=788
+#meta distinct_ids=788
+#meta overall_verdict=dispatch_named
+#meta save_name=autosave_2281.01.01.sav
+0x3b101f\t0\t0x80\t4\t0x0\t0x0
+"""
+
+
+def test_c6_2_passes_when_the_id_count_equals_the_container():
+    gate = c6.gate_per_system(c6.parse_meta(ARTIFACT), systems=788)
+    assert (gate.gate, gate.status) == ("C6-2", c6.PASS)
+
+
+def test_c6_2_fails_when_the_container_disagrees():
+    gate = c6.gate_per_system(c6.parse_meta(ARTIFACT), systems=787)
+    assert gate.status == c6.FAIL
+    assert "container=788" in gate.detail and "systems=787" in gate.detail
+
+
+def test_c6_2_fails_on_a_judged_negative_verdict():
+    text = ARTIFACT.replace("dispatch_named", "ids_not_in_container")
+    assert c6.gate_per_system(c6.parse_meta(text), systems=788).status == c6.FAIL
+
+
+def test_c6_2_cannot_say_when_the_artifact_is_missing_or_environmental():
+    assert c6.gate_per_system({}, systems=788).status == c6.CANNOT_SAY
+    env = ARTIFACT.replace("dispatch_named", "window_not_playing")
+    assert c6.gate_per_system(c6.parse_meta(env), systems=788).status == c6.CANNOT_SAY
+
+
+def test_parse_meta_reads_only_the_meta_lines():
+    meta = c6.parse_meta(ARTIFACT)
+    assert meta["overall_verdict"] == "dispatch_named"
+    assert "0x3b101f" not in meta
