@@ -132,3 +132,40 @@ def test_c6_4_cannot_say_on_counts_only_readings():
     text = NAMED.replace("tiers_named", "tiers_counts")
     assert c6.gate_official_readback(text).status == c6.CANNOT_SAY
     assert c6.gate_official_readback("").status == c6.CANNOT_SAY
+
+
+BASE = "EVENT_PICK 1\nPS_HIT\nother line\nGAME_START\n"
+WITH = "EVENT_PICK 1\nPS_HIT\nNEO_JS_CALL id=3\nGAME_START\n"
+
+
+def test_c6_5_passes_when_official_markers_match_and_errors_do_not_grow():
+    gate = c6.gate_official_unchanged(
+        base_log=BASE, with_log=WITH, base_err="", with_err="")
+    assert (gate.gate, gate.status) == ("C6-5", c6.PASS)
+
+
+def test_c6_5_ignores_only_our_dll_prefixes():
+    markers = c6.official_markers(WITH)
+    assert "NEO_JS_CALL" not in markers
+    assert "PS_HIT" in markers          # 我们的 mod 两趟都跑,不能被排除
+    assert "EVENT_PICK" in markers
+
+
+def test_c6_5_fails_when_an_official_marker_disappears():
+    gate = c6.gate_official_unchanged(
+        base_log=BASE, with_log="EVENT_PICK 1\nPS_HIT\n", base_err="", with_err="")
+    assert gate.status == c6.FAIL
+    assert "GAME_START" in gate.detail
+
+
+def test_c6_5_fails_on_one_new_script_error():
+    gate = c6.gate_official_unchanged(
+        base_log=BASE, with_log=WITH, base_err="", with_err="Script Error: x\n")
+    assert gate.status == c6.FAIL
+    assert "error_delta=1" in gate.detail
+
+
+def test_c6_5_cannot_say_when_a_pair_is_missing():
+    gate = c6.gate_official_unchanged(
+        base_log=None, with_log=WITH, base_err="", with_err="")
+    assert gate.status == c6.CANNOT_SAY

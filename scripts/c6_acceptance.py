@@ -198,3 +198,53 @@ def gate_official_readback(text: str) -> Gate:
     if all(verdict == "tiers_named" for verdict in verdicts):
         return Gate("C6-4", PASS, detail)
     return Gate("C6-4", CANNOT_SAY, detail)
+
+
+#: `game.log` 的行首 marker：至少三个字符的大写标识符。
+MARKER_RE = re.compile(r"^([A-Z][A-Z0-9_]{2,})(?:\s|$)")
+#: 装了 DLL 的那一趟会多出 `NEO_JS_*` / `NEO_C*` —— 那是我们的行，不是官方脚本的行。
+#: `PS_HIT` 是 **mod** 写的，两趟都在，不许排。查过
+#: `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`：官方 keyword 里没有 `NEO_` 前缀。
+MARKER_EXCLUDE_PREFIXES = ("NEO_",)
+#: `error.log` 里算「脚本错误」的行；`Unexpected token` 是晚注册的签名（取证卷 §30）。
+ERROR_MARKERS = ("Script Error", "Unexpected token")
+
+
+def official_markers(text: str) -> collections.Counter:
+    """每行行首的官方 marker 计数；我们自己的前缀整行不计。"""
+    markers: collections.Counter = collections.Counter()
+    for line in text.splitlines():
+        match = MARKER_RE.match(line)
+        if not match or match.group(1).startswith(MARKER_EXCLUDE_PREFIXES):
+            continue
+        markers[match.group(1)] += 1
+    return markers
+
+
+def script_errors(text: str) -> int:
+    """含 `Script Error` 或 `Unexpected token` 的行数。"""
+    return sum(1 for line in text.splitlines()
+               if any(marker in line for marker in ERROR_MARKERS))
+
+
+def gate_official_unchanged(*, base_log: str | None, with_log: str | None,
+                            base_err: str | None, with_err: str | None) -> Gate:
+    """C6-5：官方语义不受影响。两组对照只差 DLL 装没装。
+
+    `None` = 文件没给（`cannot_say`）；`""` = 文件存在但为空（合法的「零错误」读数）。
+    判据是官方 marker 集合逐项相等 **且** 脚本错误行数差为 0 —— 不是两份日志总行数相等。
+    """
+    missing_inputs = [name for name, value in (("base_log", base_log), ("with_log", with_log),
+                                               ("base_err", base_err), ("with_err", with_err))
+                      if value is None]
+    if missing_inputs:
+        return Gate("C6-5", CANNOT_SAY, "missing_input:" + ",".join(missing_inputs))
+    base = official_markers(base_log)
+    with_dll = official_markers(with_log)
+    missing = sorted((base - with_dll).elements())
+    extra = sorted((with_dll - base).elements())
+    error_delta = script_errors(with_err) - script_errors(base_err)
+    detail = (f"missing={','.join(missing) or '-'} extra={','.join(extra) or '-'} "
+              f"error_delta={error_delta}")
+    failed = bool(missing) or bool(extra) or error_delta != 0
+    return Gate("C6-5", FAIL if failed else PASS, detail)
