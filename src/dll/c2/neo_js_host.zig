@@ -739,9 +739,15 @@ fn galaxySystemCount() u32 {
 
 /// `(scope, name, value) -> 写成功?`。id 从 scope 自己解,**不从调用方抄** ——
 /// `writeSystemVariable` 会再核对一遍 `scope+0x10 == id`,不一致就 `wrong_scope`。
+///
+/// **权限不从 mod session 借**(2026-11-11 第一发实机读到的 `state:write_rejected`):
+/// `currentPermissions()` 是**当前 JS session** 的权限,没有 JS bundle 的窗口里它全 false,
+/// 于是自检那一次写会在 `canSetVariable` 就死掉 —— 量到的是「这个进程没装 JS mod」,
+/// 不是 `field_value_cell` 那一族结构。spec 授权的正是「自检写一个固定变量」,
+/// 所以这里给的就是那一条权限,其余判定(名字、值、scope/id 一致)照旧走官方漏斗。
 fn capabilityWriteVar(scope: u64, name: []const u8, value: u32) bool {
     const id = neo_vtable.systemScopeId(scope) orelse return false;
-    return writeSystemVariable(currentPermissions(), id, name, @floatFromInt(value), scope) == .ok;
+    return writeSystemVariable(.{ .variable_write = true }, id, name, @floatFromInt(value), scope) == .ok;
 }
 
 /// Slice 2 的**只读**诊断:引擎把我们注册的 effect 派发进一个**非 system** scope
@@ -2630,4 +2636,17 @@ test "onSystem runs the capability self-test even when no JS bundle loaded" {
     onSystem(7, 0);
     try testing.expect(capability.hasRun());
     try testing.expect(cap.contains("NEO_CAP "));
+}
+
+test "the capability self-test's write is authorized by the design, not by a mod session" {
+    // 2026-11-11 第一发实机:没有 JS bundle 的窗口里 `currentPermissions()` 全 false,
+    // 自检那一次写死在 `canSetVariable`(读到 `state:write_rejected`)。这条测试钉住:
+    // 借 session 权限会被 `no_permission` 挡下,而自检用的那条权限能过这道门。
+    var scope = [_]u8{0} ** 0x20;
+    std.mem.writeInt(u32, scope[0x08..][0..4], 0x80, .little);
+    std.mem.writeInt(u32, scope[0x10..][0..4], 42, .little);
+    const scope_addr: u64 = @intFromPtr(&scope);
+
+    try testing.expectEqual(WriteResult.no_permission, writeSystemVariable(currentPermissions(), 42, "neo_cap_probe", 0, scope_addr));
+    try testing.expect(writeSystemVariable(.{ .variable_write = true }, 42, "neo_cap_probe", 0, scope_addr) != .no_permission);
 }

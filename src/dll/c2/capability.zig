@@ -181,6 +181,17 @@ const TOKEN_DB_NAME_TABLE: usize = 0x70;
 /// (`add_modifier` 13 B 带 NUL,16 B 足够;窗口故意开小,好让 9,863 槽各只读一次)。
 const DESCRIPTOR_WINDOW: usize = kr.TOKEN_STR_INLINE + 16;
 
+/// token 名字表的**条目步长**。`offsets.keyword_reg.HOLDER_SIZE`(0x38)是 holder 这个
+/// std::string 的**对象大小**,不是相邻两条之间的距离 —— 2026-11-11 第一发实机读数把两者
+/// 分开了:`holder[10104] @0x510796c0` 与 `holder[10103] @0x51079690` 相差 **0x30**,
+/// 而每个 holder 的字段只到 `+0x30`(+0x00..+0x0f 未用,+0x10 字符、+0x20 size、+0x28 cap)。
+/// 用 0x38 当步长会读到别人的尾巴,再读 `+0x28` 就是垃圾 cap ⇒ 名字判错(`token:mismatch`)。
+const TOKEN_HOLDER_STRIDE: usize = 0x30;
+
+comptime {
+    if (TOKEN_HOLDER_STRIDE != 0x30) @compileError("holder stride drifted from the live reading");
+}
+
 /// 一次自检的全部外部输入。`mem` 是唯一的读通道(生产侧 = `ReadProcessMemory`,
 /// 测试侧 = 合成镜像);`write_var` 是唯一的写通道(生产侧 = `writeSystemVariable`)。
 pub const Env = struct {
@@ -259,7 +270,7 @@ fn checkToken(env: Env, r: *Report) void {
     const base = std.math.cast(usize, table) orelse return r.set(.token, .fail, .mismatch);
     if (base == 0) return r.set(.token, .fail, .unreadable);
 
-    const entry = gg.elemAddr(base, PROBE_KEYWORD_ID, kr.HOLDER_SIZE, 0) orelse
+    const entry = gg.elemAddr(base, PROBE_KEYWORD_ID, TOKEN_HOLDER_STRIDE, 0) orelse
         return r.set(.token, .fail, .out_of_range);
     var buf: [64]u8 = undefined;
     switch (holderName(env, entry, &buf)) {
@@ -572,8 +583,8 @@ fn putQword(buf: []u8, off: usize, v: usize) void {
 test "token check reads add_modifier's name back from the id table" {
     const alloc = testing.allocator;
     var db = [_]u8{0} ** 0x80;
-    const entry_off = PROBE_KEYWORD_ID * kr.HOLDER_SIZE;
-    const holder = try alloc.alloc(u8, entry_off + kr.HOLDER_SIZE);
+    const entry_off = PROBE_KEYWORD_ID * TOKEN_HOLDER_STRIDE;
+    const holder = try alloc.alloc(u8, entry_off + 0x38);
     defer alloc.free(holder);
     @memset(holder, 0);
 
@@ -594,8 +605,8 @@ test "token check reads add_modifier's name back from the id table" {
 test "token check fails when the read-back name is another keyword" {
     const alloc = testing.allocator;
     var db = [_]u8{0} ** 0x80;
-    const entry_off = PROBE_KEYWORD_ID * kr.HOLDER_SIZE;
-    const holder = try alloc.alloc(u8, entry_off + kr.HOLDER_SIZE);
+    const entry_off = PROBE_KEYWORD_ID * TOKEN_HOLDER_STRIDE;
+    const holder = try alloc.alloc(u8, entry_off + 0x38);
     defer alloc.free(holder);
     @memset(holder, 0);
 
