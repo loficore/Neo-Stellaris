@@ -6,6 +6,7 @@ self-证 fence at the bottom reads the pinned 4.4.4 binary and is skipped when n
 copy is reachable through NS_STELLARIS_EXE / the default chain.
 """
 
+import os
 import struct
 
 import pytest
@@ -13,7 +14,8 @@ import pytest
 from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, NodeResult, match_bytes, parse_bytes_pattern, parse_locator,
                          parse_manifest, pdata_index, pe_version, Resolver, substitute_node_refs,
                          decide, evaluate_chain, exit_code, format_report, locator_mix,
-                         REPORT_COLUMNS, main, mask_rel32, report_path_for)
+                         REPORT_COLUMNS, find_exe_or_none, load_image, main,
+                         mask_rel32, report_path_for)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -359,3 +361,23 @@ def test_main_reports_environment_error_when_exe_is_missing(tmp_path):
     man = tmp_path / "m.tsv"
     man.write_text("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
     assert main(["--exe", str(tmp_path / "nope.exe"), "--manifest", str(man)]) == 3
+
+
+MANIFEST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "evidence", "xrefs",
+                        "chain_manifest_4_4_4.tsv")
+
+
+def _chain_nodes(chain):
+    with open(MANIFEST, encoding="utf-8") as fh:
+        return [node for node in parse_manifest(fh.read()) if node.chain == chain]
+
+
+@pytest.mark.skipif(find_exe_or_none() is None, reason="stellaris.exe not available")
+def test_register_chain_is_green_on_the_pinned_4_4_4_binary():
+    nodes = _chain_nodes("register")
+    img = load_image(find_exe_or_none())
+    color, results, unverified = evaluate_chain(nodes, Resolver(img, pdata_index(img)))
+    assert color == "green", [r for r in results if r.verdict not in ("found", "skipped_structure")]
+    assert unverified == ["token_db_object", "descriptor_array", "class_info_trigger",
+                          "class_info_effect", "donor_docstring_trigger",
+                          "donor_docstring_effect"]
