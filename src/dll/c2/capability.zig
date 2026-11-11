@@ -15,6 +15,13 @@
 
 const std = @import("std");
 
+const gg = @import("galaxy_graph.zig");
+const offsets = @import("../shared/offsets.zig");
+const neo_dispatch = @import("neo_dispatch.zig");
+const exec_hook = @import("../scripted/exec_hook.zig");
+
+const kr = offsets.keyword_reg;
+
 /// 七项检查。
 pub const CHECK_COUNT: usize = 7;
 
@@ -154,6 +161,188 @@ pub fn reset() void {
     current = .{};
 }
 
+// ---------------------------------------------------------------------------
+// Task 2 — 四项 scope-free 检查(token / descriptor / vtable / fingerprint)
+// ---------------------------------------------------------------------------
+
+/// 检查里唯一用到的官方 keyword:自检问的是「这条 id ↔ 名字的对应关系在这一版上还读得回来吗」。
+/// 两个值都是 4.4.4 的静态事实(§17),不是我们从别处抄来的运行时常量。
+pub const PROBE_KEYWORD_ID: u32 = 10104;
+pub const PROBE_KEYWORD_NAME = "add_modifier";
+
+/// 静态 descriptor 数组的槽数(§17:9,863)。**不是** id 上界 —— 槽号 ≠ id
+/// (`add_modifier` 的 id 是 10104,落在槽 1149),所以下面按槽扫、不按 id 索引。
+pub const DESCRIPTOR_SLOTS: usize = 9863;
+
+/// `[db + 0x70]` = token 名字表基址;`[基址 + id*0x30]` 是那个 id 的 name holder(§30.2)。
+const TOKEN_DB_NAME_TABLE: usize = 0x70;
+
+/// 一个 descriptor 槽里够判名字的窗口:`+0x00` 的 id 与 `+0x20` 起的内联串
+/// (`add_modifier` 13 B 带 NUL,16 B 足够;窗口故意开小,好让 9,863 槽各只读一次)。
+const DESCRIPTOR_WINDOW: usize = kr.TOKEN_STR_INLINE + 16;
+
+/// 一次自检的全部外部输入。`mem` 是唯一的读通道(生产侧 = `ReadProcessMemory`,
+/// 测试侧 = 合成镜像);`write_var` 是唯一的写通道(生产侧 = `writeSystemVariable`)。
+pub const Env = struct {
+    mem: gg.Memory,
+    module_base: usize,
+    /// 当前战役的星系条数(`[[0x3260BB0]+0x59C]`,与驱动 `--systems` 同源)。读不到就传 0 ——
+    /// `graph` 检查随之 `fail(unreadable)`,这是对的。
+    systems: u32,
+    /// 当次逐系统派发的 scope;0 = 这一发没有 system scope(3 项 `skip`)。
+    scope: u64 = 0,
+    /// `(scope, name, value) -> 写成功?`。`null` = 没有注入写通道 ⇒ `state` 记 `fail(write_rejected)`。
+    write_var: ?*const fn (scope: u64, name: []const u8, value: u32) bool = null,
+};
+
+pub fn readU32(env: Env, addr: usize) ?u32 {
+    var buf: [4]u8 = undefined;
+    if (!env.mem.read(env.mem.ctx, addr, buf.len, &buf)) return null;
+    return std.mem.readInt(u32, &buf, .little);
+}
+
+pub fn readU64(env: Env, addr: usize) ?u64 {
+    var buf: [8]u8 = undefined;
+    if (!env.mem.read(env.mem.ctx, addr, buf.len, &buf)) return null;
+    return std.mem.readInt(u64, &buf, .little);
+}
+
+/// 逐字节读到 NUL 止。**逐字节**是因为名字是内存派生的短串:一次跨页读会在页边界翻成
+/// 「读不到」,而逐字节最多读到那一页为止,不会把「名字在下一页」误判成不存在。
+/// 缓冲写满仍无 NUL ⇒ `null`(那不是我们要判的名字)。
+pub fn readCStr(env: Env, addr: usize, buf: []u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < buf.len) : (i += 1) {
+        const at = gg.addAddr(addr, i) orelse return null;
+        var one: [1]u8 = undefined;
+        if (!env.mem.read(env.mem.ctx, at, 1, &one)) return null;
+        if (one[0] == 0) return buf[0..i];
+        buf[i] = one[0];
+    }
+    return null;
+}
+
+const NameRead = union(enum) { ok: []const u8, bad, unreadable };
+
+/// name holder(0x38 B)里的名字。判据用**引擎自己的那一条**(`0x1d152fb`,与
+/// `keyword_registry.NameHolder.charsPtr` 同一口径):`cap`(`+0x28`) < 0x10 ⇒ 字符就是
+/// `+0x10` 那 16 字节本身;否则 `[+0x10]` 是 char*。
+fn holderName(env: Env, entry: usize, buf: []u8) NameRead {
+    const cap_at = gg.addAddr(entry, kr.HOLDER_STR_CAP) orelse return .unreadable;
+    const cap = readU64(env, cap_at) orelse return .unreadable;
+    const size_at = gg.addAddr(entry, kr.HOLDER_STR_SIZE) orelse return .unreadable;
+    const size = readU64(env, size_at) orelse return .unreadable;
+    if (size == 0 or size >= buf.len) return .bad;
+    const n: usize = @intCast(size);
+
+    if (cap < @as(u64, kr.SSO_MAX)) {
+        if (n > kr.SSO_MAX) return .bad;
+        const chars = gg.addAddr(entry, kr.HOLDER_NAME) orelse return .unreadable;
+        if (!env.mem.read(env.mem.ctx, chars, n, buf[0..n])) return .unreadable;
+        return .{ .ok = buf[0..n] };
+    }
+
+    const ptr_at = gg.addAddr(entry, kr.HOLDER_NAME) orelse return .unreadable;
+    const chars = readU64(env, ptr_at) orelse return .unreadable;
+    const addr = std.math.cast(usize, chars) orelse return .bad;
+    if (addr == 0) return .bad;
+    const s = readCStr(env, addr, buf) orelse return .unreadable;
+    return .{ .ok = s };
+}
+
+fn checkToken(env: Env, r: *Report) void {
+    const db = gg.addAddr(env.module_base, kr.RVA_TOKEN_DB_OBJECT) orelse
+        return r.set(.token, .fail, .out_of_range);
+    const table_at = gg.addAddr(db, TOKEN_DB_NAME_TABLE) orelse
+        return r.set(.token, .fail, .out_of_range);
+    const table = readU64(env, table_at) orelse return r.set(.token, .fail, .unreadable);
+    const base = std.math.cast(usize, table) orelse return r.set(.token, .fail, .mismatch);
+    if (base == 0) return r.set(.token, .fail, .unreadable);
+
+    const entry = gg.elemAddr(base, PROBE_KEYWORD_ID, kr.HOLDER_SIZE, 0) orelse
+        return r.set(.token, .fail, .out_of_range);
+    var buf: [64]u8 = undefined;
+    switch (holderName(env, entry, &buf)) {
+        .unreadable => return r.set(.token, .fail, .unreadable),
+        .bad => return r.set(.token, .fail, .mismatch),
+        .ok => |name| if (!std.mem.eql(u8, name, PROBE_KEYWORD_NAME)) {
+            return r.set(.token, .fail, .mismatch);
+        },
+    }
+    r.set(.token, .ok, .none);
+}
+
+/// `buf` 里第一个 NUL 之前的部分;没有 NUL ⇒ `null`(这个名字判不了)。
+fn cstrPrefix(buf: []const u8) ?[]const u8 {
+    const end = std.mem.indexOfScalar(u8, buf, 0) orelse return null;
+    return buf[0..end];
+}
+
+/// 按槽扫,不按 id 索引 —— 槽号 ≠ id。找到名字后再断言同槽的 `+0x00` 就是那个 id;
+/// 找不到、或 id 不等,都是 `fail(mismatch)`。
+fn checkDescriptor(env: Env, r: *Report) void {
+    const base = gg.addAddr(env.module_base, kr.RVA_DESCRIPTOR_ARRAY) orelse
+        return r.set(.descriptor, .fail, .out_of_range);
+    var slot: usize = 0;
+    while (slot < DESCRIPTOR_SLOTS) : (slot += 1) {
+        const addr = gg.elemAddr(base, slot, kr.TOKEN_STRIDE, 0) orelse
+            return r.set(.descriptor, .fail, .out_of_range);
+        var buf: [DESCRIPTOR_WINDOW]u8 = undefined;
+        if (!env.mem.read(env.mem.ctx, addr, buf.len, &buf)) {
+            return r.set(.descriptor, .fail, .unreadable);
+        }
+        const name = cstrPrefix(buf[kr.TOKEN_STR_INLINE..]) orelse continue;
+        if (!std.mem.eql(u8, name, PROBE_KEYWORD_NAME)) continue;
+        const id = std.mem.readInt(u32, buf[kr.TOKEN_ID..][0..4], .little);
+        if (id != PROBE_KEYWORD_ID) return r.set(.descriptor, .fail, .mismatch);
+        return r.set(.descriptor, .ok, .none);
+    }
+    r.set(.descriptor, .fail, .mismatch);
+}
+
+fn checkVtable(env: Env, r: *Report) void {
+    const slot_at = gg.addAddr(env.module_base, kr.DONOR_EFFECT_VTABLE + kr.EFFECT_VTBL_EXECUTE) orelse
+        return r.set(.vtable, .fail, .out_of_range);
+    const slot1 = readU64(env, slot_at) orelse return r.set(.vtable, .fail, .unreadable);
+    const expected = gg.addAddr(env.module_base, kr.RVA_EFFECT_DONOR_EXECUTE) orelse
+        return r.set(.vtable, .fail, .out_of_range);
+    if (slot1 != @as(u64, expected)) return r.set(.vtable, .fail, .mismatch);
+    r.set(.vtable, .ok, .none);
+}
+
+fn checkFingerprint(env: Env, r: *Report) void {
+    const addr = gg.addAddr(env.module_base, neo_dispatch.RVA_DISPATCH) orelse
+        return r.set(.fingerprint, .fail, .out_of_range);
+    var code: [neo_dispatch.EXPECTED_CODE.len]u8 = undefined;
+    if (!env.mem.read(env.mem.ctx, addr, code.len, &code)) {
+        return r.set(.fingerprint, .fail, .unreadable);
+    }
+    const bytes_ok = std.mem.eql(u8, &code, &neo_dispatch.EXPECTED_CODE);
+    // 本通道自己的 detour 就跑在这个地址上:它活着时目标头 14 B 是**我们的** JMP,
+    // 指纹按定义不再成立。那时唯一还成立的事实是「钩子还在原处」(`verify() == 0`)——
+    // 这不是放宽,而是把「我们改过的字节」换成一个同样可判的断言。
+    const hooked_ok = neo_dispatch.isInstalled() and neo_dispatch.verify() == 0;
+    if (!bytes_ok and !hooked_ok) return r.set(.fingerprint, .fail, .mismatch);
+
+    // `exec_hook` 的那一半只在它这一进程真的解析过时才断言:`-3` = 从未解析、`-2` = 非 Windows,
+    // 两者都是「这一发里它没参与」—— 记 `fail` 就是把仪器缺席读成漂移。
+    const eh = exec_hook.verifyState();
+    if (eh != 0 and eh != -2 and eh != -3 and !exec_hook.isInstalled()) {
+        return r.set(.fingerprint, .fail, .mismatch);
+    }
+    r.set(.fingerprint, .ok, .none);
+}
+
+/// 四项不需要 scope 的检查。读的顺序固定,好让日志里第一个失败项的原因码稳定
+/// (矩阵本身按 `Check` 枚举序写,与执行顺序无关)。
+pub fn runFree(env: Env) Report {
+    var r = Report{};
+    checkToken(env, &r);
+    checkDescriptor(env, &r);
+    checkVtable(env, &r);
+    checkFingerprint(env, &r);
+    return r;
+}
 
 // ---------------------------------------------------------------------------
 // Tests (written first — Task 1 Step 1)
@@ -196,4 +385,172 @@ test "statsInto writes 8 bytes per check and refuses a short buffer" {
     try std.testing.expectEqual(@as(u32, 4), std.mem.readInt(u32, buf[28..32], .little));
     var small: [16]u8 = undefined;
     try std.testing.expectEqual(@as(i32, -1), statsInto(&small));
+}
+
+// ---------------------------------------------------------------------------
+// Task 2 — 四项 scope-free 检查的合成内存(零游戏、零 Windows API)
+// ---------------------------------------------------------------------------
+
+const FakeRegion = struct { start: usize, bytes: []u8 };
+
+/// 合成镜像:`[start, start+bytes.len)` 内的地址可读,其余一律 `false` ——
+/// 与生产侧 `ReadProcessMemory` 同一个 bool 契约(读不到不是「空」)。
+const FakeMem = struct {
+    regions: [4]FakeRegion = undefined,
+    count: usize = 0,
+
+    fn read(ctx: *anyopaque, addr: usize, len: usize, buf: []u8) bool {
+        const self: *FakeMem = @ptrCast(@alignCast(ctx));
+        for (self.regions[0..self.count]) |rg| {
+            if (addr < rg.start) continue;
+            const off = addr - rg.start;
+            if (off + len <= rg.bytes.len) {
+                @memcpy(buf, rg.bytes[off..][0..len]);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn add(self: *FakeMem, start: usize, bytes: []u8) void {
+        self.regions[self.count] = .{ .start = start, .bytes = bytes };
+        self.count += 1;
+    }
+
+    fn env(self: *FakeMem, module_base: usize, systems: u32) Env {
+        return .{
+            .mem = .{ .ctx = @ptrCast(self), .read = FakeMem.read },
+            .module_base = module_base,
+            .systems = systems,
+        };
+    }
+};
+
+const TEST_MODULE: usize = 0x1_0000_0000;
+const TEST_HOLDER: usize = 0x2_0000_0000;
+
+fn putU32(buf: []u8, off: usize, v: u32) void {
+    std.mem.writeInt(u32, buf[off..][0..4], v, .little);
+}
+
+fn putU64(buf: []u8, off: usize, v: u64) void {
+    std.mem.writeInt(u64, buf[off..][0..8], v, .little);
+}
+
+fn putName(buf: []u8, off: usize, name: []const u8) void {
+    @memcpy(buf[off..][0..name.len], name);
+    buf[off + name.len] = 0;
+}
+
+test "token check reads add_modifier's name back from the id table" {
+    const alloc = testing.allocator;
+    var db = [_]u8{0} ** 0x80;
+    const entry_off = PROBE_KEYWORD_ID * kr.HOLDER_SIZE;
+    const holder = try alloc.alloc(u8, entry_off + kr.HOLDER_SIZE);
+    defer alloc.free(holder);
+    @memset(holder, 0);
+
+    putU64(&db, TOKEN_DB_NAME_TABLE, TEST_HOLDER);
+    // §20 / `NameHolder.charsPtr`:cap < 0x10 ⇒ 字符就是 +0x10 那 16 字节本身。
+    putName(holder, entry_off + kr.HOLDER_NAME, PROBE_KEYWORD_NAME);
+    putU64(holder, entry_off + kr.HOLDER_STR_SIZE, PROBE_KEYWORD_NAME.len);
+    putU64(holder, entry_off + kr.HOLDER_STR_CAP, kr.SSO_MAX - 1);
+
+    var mem = FakeMem{};
+    mem.add(TEST_MODULE + kr.RVA_TOKEN_DB_OBJECT, &db);
+    mem.add(TEST_HOLDER, holder);
+
+    const rep = runFree(mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.ok, rep.statusOf(.token));
+}
+
+test "token check fails when the read-back name is another keyword" {
+    const alloc = testing.allocator;
+    var db = [_]u8{0} ** 0x80;
+    const entry_off = PROBE_KEYWORD_ID * kr.HOLDER_SIZE;
+    const holder = try alloc.alloc(u8, entry_off + kr.HOLDER_SIZE);
+    defer alloc.free(holder);
+    @memset(holder, 0);
+
+    putU64(&db, TOKEN_DB_NAME_TABLE, TEST_HOLDER);
+    putName(holder, entry_off + kr.HOLDER_NAME, "add_modifief");
+    putU64(holder, entry_off + kr.HOLDER_STR_SIZE, PROBE_KEYWORD_NAME.len);
+    putU64(holder, entry_off + kr.HOLDER_STR_CAP, kr.SSO_MAX - 1);
+
+    var mem = FakeMem{};
+    mem.add(TEST_MODULE + kr.RVA_TOKEN_DB_OBJECT, &db);
+    mem.add(TEST_HOLDER, holder);
+
+    const rep = runFree(mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.fail, rep.statusOf(.token));
+    try testing.expectEqual(Reason.mismatch, rep.reasonOf(.token));
+}
+
+test "descriptor check scans slots for the inline name and asserts the id" {
+    const alloc = testing.allocator;
+    const array = try alloc.alloc(u8, DESCRIPTOR_SLOTS * kr.TOKEN_STRIDE);
+    defer alloc.free(array);
+    @memset(array, 0);
+
+    // 槽号 ≠ id:名字放在槽 3,id 写 10104(§17 的 closed-chain 一行读的就是这种错位)。
+    const slot_off = 3 * kr.TOKEN_STRIDE;
+    putU32(array, slot_off + kr.TOKEN_ID, PROBE_KEYWORD_ID);
+    putName(array, slot_off + kr.TOKEN_STR_INLINE, PROBE_KEYWORD_NAME);
+
+    var mem = FakeMem{};
+    mem.add(TEST_MODULE + kr.RVA_DESCRIPTOR_ARRAY, array);
+
+    const rep = runFree(mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.ok, rep.statusOf(.descriptor));
+}
+
+test "descriptor check fails when the slot carries another id" {
+    const alloc = testing.allocator;
+    const array = try alloc.alloc(u8, DESCRIPTOR_SLOTS * kr.TOKEN_STRIDE);
+    defer alloc.free(array);
+    @memset(array, 0);
+
+    const slot_off = 7 * kr.TOKEN_STRIDE;
+    putU32(array, slot_off + kr.TOKEN_ID, PROBE_KEYWORD_ID + 1);
+    putName(array, slot_off + kr.TOKEN_STR_INLINE, PROBE_KEYWORD_NAME);
+
+    var mem = FakeMem{};
+    mem.add(TEST_MODULE + kr.RVA_DESCRIPTOR_ARRAY, array);
+
+    const rep = runFree(mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.fail, rep.statusOf(.descriptor));
+    try testing.expectEqual(Reason.mismatch, rep.reasonOf(.descriptor));
+}
+
+test "vtable check requires slot1 of the donor table to be donor Execute" {
+    var table = [_]u8{0} ** 0x10;
+    putU64(&table, kr.EFFECT_VTBL_EXECUTE, TEST_MODULE + kr.RVA_EFFECT_DONOR_EXECUTE);
+
+    var mem = FakeMem{};
+    mem.add(TEST_MODULE + kr.DONOR_EFFECT_VTABLE, &table);
+    const rep = runFree(mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.ok, rep.statusOf(.vtable));
+
+    putU64(&table, kr.EFFECT_VTBL_EXECUTE, TEST_MODULE + kr.RVA_EFFECT_DONOR_EXECUTE + 1);
+    var bad_mem = FakeMem{};
+    bad_mem.add(TEST_MODULE + kr.DONOR_EFFECT_VTABLE, &table);
+    const bad = runFree(bad_mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.fail, bad.statusOf(.vtable));
+    try testing.expectEqual(Reason.mismatch, bad.reasonOf(.vtable));
+}
+
+test "fingerprint check compares 19 bytes at module+RVA_DISPATCH" {
+    var code = neo_dispatch.EXPECTED_CODE;
+
+    var mem = FakeMem{};
+    mem.add(TEST_MODULE + neo_dispatch.RVA_DISPATCH, &code);
+    const rep = runFree(mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.ok, rep.statusOf(.fingerprint));
+
+    code[7] ^= 0xFF;
+    var bad_mem = FakeMem{};
+    bad_mem.add(TEST_MODULE + neo_dispatch.RVA_DISPATCH, &code);
+    const bad = runFree(bad_mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.fail, bad.statusOf(.fingerprint));
+    try testing.expectEqual(Reason.mismatch, bad.reasonOf(.fingerprint));
 }
