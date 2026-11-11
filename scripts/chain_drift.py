@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from dataclasses import dataclass, replace
+import datetime
 import hashlib
 import os
 import re
@@ -619,3 +620,79 @@ def evaluate_chain(nodes, resolver):
     else:
         color = "green"
     return color, results, unverified
+
+
+DEFAULT_MANIFEST = "evidence/xrefs/chain_manifest_4_4_4.tsv"
+REPORT_COLUMNS = ("chain", "node", "class", "verdict", "expect", "got", "delta",
+                  "candidates", "witness", "note")
+
+
+def locator_mix(nodes):
+    """``strref=n callshape=n vtable=n global=n bytes=n structure=n`` in a fixed order.
+
+    The counts are the report's own evidence that the recipe set is not pure
+    self-证: a manifest made only of ``bytes:`` would be found on every build that
+    still has the same bytes, and prove nothing about the anchors.
+    """
+    counts = dict.fromkeys((*LOCATOR_KINDS, "structure"), 0)
+    for node in nodes:
+        if not node.locator:
+            counts["structure"] += 1
+        else:
+            counts[node.locator.split(":", 1)[0]] += 1
+    return " ".join(f"{kind}={counts[kind]}" for kind in (*LOCATOR_KINDS, "structure"))
+
+
+def exit_code(colors):
+    """0 = no red chain; 2 = at least one red; an empty run is red by construction."""
+    if not colors or "red" in colors:
+        return 2
+    return 0
+
+
+def format_report(meta, nodes, results):
+    """Render the TSV report: meta lines, header, one row per node in manifest order.
+
+    ``note`` only ever carries machine-generated phrases — the report is an
+    artifact other tools diff, so prose belongs in the analysis volumes, not here.
+    """
+    pairs = list(zip(nodes, results))
+    chains = []
+    for node, _result in pairs:
+        if node.chain not in chains:
+            chains.append(node.chain)
+    colors = {}
+    witnesses = {}
+    for node, result in pairs:
+        colors.setdefault(node.chain, [])
+        colors[node.chain].append(result.verdict)
+        if node.witness:
+            witnesses.setdefault(node.chain, node.witness)
+    lines = [
+        f"# manifest={meta.get('manifest', DEFAULT_MANIFEST)}",
+        f"# exe={meta.get('exe', '')}",
+        f"# exe_sha256={meta.get('exe_sha256', '')}",
+        f"# target_version={meta.get('target_version', 'unknown')}",
+        f"# generated={meta.get('generated', datetime.date.today().isoformat())}",
+        "# chains: " + " ".join(
+            f"{chain}=" + ("red" if {"zero", "ambiguous"} & set(colors[chain])
+                           else "yellow" if "moved" in colors[chain] else "green")
+            for chain in chains),
+        "# locators: " + locator_mix(nodes),
+        "# witness: " + " ".join(f"{chain}={witnesses.get(chain, '-')}" for chain in chains),
+        "\t".join(REPORT_COLUMNS),
+    ]
+    for node, result in pairs:
+        got = "" if result.got is None else hex(result.got)
+        delta = candidates = note = ""
+        if result.verdict == "moved":
+            delta = f"{result.got - int(node.expect, 16):+#x}"
+            note = f"delta {delta}"
+        elif result.verdict == "ambiguous":
+            candidates = ";".join(hex(c) for c in result.candidates)
+            note = f"{len(result.candidates)} candidates: {candidates}"
+        elif result.verdict == "skipped_structure":
+            note = "skipped: structure"
+        lines.append("\t".join([node.chain, node.node, node.cls, result.verdict,
+                                node.expect, got, delta, candidates, node.witness, note]))
+    return "\n".join(lines) + "\n"

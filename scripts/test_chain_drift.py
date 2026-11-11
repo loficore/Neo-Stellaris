@@ -12,7 +12,8 @@ import pytest
 
 from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, NodeResult, match_bytes, parse_bytes_pattern, parse_locator,
                          parse_manifest, pdata_index, pe_version, Resolver, substitute_node_refs,
-                         decide, evaluate_chain)
+                         decide, evaluate_chain, exit_code, format_report, locator_mix,
+                         REPORT_COLUMNS)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -302,3 +303,30 @@ def test_evaluate_chain_short_circuits_dependents_to_not_run():
     color, results, _ = evaluate_chain(_nodes()[:2], _StubResolver({"90": [], "91": [0x2000]}))
     assert color == "red"
     assert [x.verdict for x in results] == ["zero", "not_run"]
+
+
+def test_format_report_emits_meta_lines_then_header_then_stable_rows():
+    nodes = [Node("register", "a", "address", "bytes:90", "0x1000", (), "token_readback", "x")]
+    results = [NodeResult("a", "moved", 0x1030, (0x1030,))]
+    text = format_report({"target_version": "4.4.4", "exe_sha256": "ab" * 32},
+                         nodes, results)
+    lines = text.splitlines()
+    assert lines[0] == "# manifest=evidence/xrefs/chain_manifest_4_4_4.tsv"
+    assert any(line.startswith("# locators: ") for line in lines)
+    header = next(i for i, line in enumerate(lines) if line.startswith("chain\t"))
+    assert lines[header].split("\t") == list(REPORT_COLUMNS)
+    assert lines[header + 1].split("\t")[:7] == [
+        "register", "a", "address", "moved", "0x1000", "0x1030", "+0x30"]
+
+
+def test_locator_mix_counts_every_kind_in_a_fixed_order():
+    nodes = [Node("register", "a", "address", "strref:x.cc", "0x1", (), "", "x"),
+             Node("register", "b", "address", "bytes:90", "0x2", (), "", "x"),
+             Node("register", "c", "structure", "", "-", (), "", "x")]
+    assert locator_mix(nodes) == "strref=1 callshape=0 vtable=0 global=0 bytes=1 structure=1"
+
+
+def test_exit_code_maps_red_to_two_and_everything_else_to_zero():
+    assert exit_code(["green", "yellow"]) == 0
+    assert exit_code(["green", "red"]) == 2
+    assert exit_code([]) == 2
