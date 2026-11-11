@@ -11,7 +11,8 @@ import struct
 import pytest
 
 from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, NodeResult, match_bytes, parse_bytes_pattern, parse_locator,
-                         parse_manifest, pdata_index, pe_version, Resolver, substitute_node_refs)
+                         parse_manifest, pdata_index, pe_version, Resolver, substitute_node_refs,
+                         decide, evaluate_chain)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -244,3 +245,60 @@ def test_global_locator_intersects_rip_targets_of_both_functions():
                "r": NodeResult("r", "found", 0x1040, (0x1040,))}
     loc = Locator("global", "-", (("writes_by", "@node:w"), ("reads_by", "@node:r")))
     assert Resolver(img, pdata_index(img)).resolve(loc, results) == [0x4000]
+
+
+def test_decide_found_when_the_single_candidate_matches_expect():
+    assert decide("address", "0x1d13270", [0x1D13270]) == NodeResult("", "found", 0x1D13270, ())
+
+
+def test_decide_moved_keeps_the_delta_visible():
+    r = decide("address", "0x1d13270", [0x1D133A0])
+    assert (r.verdict, r.got) == ("moved", 0x1D133A0)
+
+
+def test_decide_ambiguous_never_picks_expect_out_of_several_candidates():
+    r = decide("address", "0x1d13270", [0x1D13270, 0x1D132A0])
+    assert (r.verdict, r.got) == ("ambiguous", None)
+    assert r.candidates == (0x1D13270, 0x1D132A0)
+
+
+def test_decide_zero_and_structure_without_expect():
+    assert decide("address", "0x1", []).verdict == "zero"
+    assert decide("structure", "-", [0x2000]).verdict == "found"
+
+
+def _nodes():
+    return [Node("register", "a", "address", "bytes:90", "0x1000", (), "", "x"),
+            Node("register", "b", "address", "bytes:90", "0x2000", ("a",), "", "x"),
+            Node("register", "s", "structure", "", "-", (), "", "x")]
+
+
+class _StubResolver:
+    def __init__(self, table):
+        self.table = table
+
+    def resolve(self, loc, results):
+        if loc.kind == "bytes":
+            return self.table[loc.arg]
+        return []
+
+
+def test_evaluate_chain_is_green_when_every_reachable_node_is_found():
+    r = _StubResolver({"90": [0x1000], "91": [0x2000]})
+    a, _b, s = _nodes()
+    nodes = [a, Node("register", "b", "address", "bytes:91", "0x2000", ("a",), "", "x"), s]
+    color, results, unverified = evaluate_chain(nodes, r)
+    assert color == "green"
+    assert unverified == ["s"]
+    assert [x.verdict for x in results] == ["found", "found", "skipped_structure"]
+
+
+def test_evaluate_chain_is_yellow_when_only_moved():
+    color, _, _ = evaluate_chain(_nodes()[:2], _StubResolver({"90": [0x1010], "91": [0x2000]}))
+    assert color == "yellow"
+
+
+def test_evaluate_chain_short_circuits_dependents_to_not_run():
+    color, results, _ = evaluate_chain(_nodes()[:2], _StubResolver({"90": [], "91": [0x2000]}))
+    assert color == "red"
+    assert [x.verdict for x in results] == ["zero", "not_run"]

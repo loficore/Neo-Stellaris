@@ -559,3 +559,63 @@ def rip_operand_targets(img, start, end):
             continue
         out.append(start + off + 7 + struct.unpack_from("<i", code, off + 3)[0])
     return out
+
+
+def decide(cls, expect, candidates):
+    """Turn a candidate list into a verdict.
+
+    ``ambiguous`` never picks ``expect`` out of several candidates: a recipe that
+    stops converging is a defect in the recipe, and hiding it by preferring the
+    familiar address would make the report read "found" while the locator was no
+    longer able to say which match is the anchor.  ``structure`` nodes with no
+    expectation only judge that an entry exists (single candidate), never that it
+    still means the same thing.
+    """
+    candidates = tuple(sorted(candidates))
+    if len(candidates) > 1:
+        return NodeResult("", "ambiguous", None, candidates)
+    if not candidates:
+        return NodeResult("", "zero", None, ())
+    got = candidates[0]
+    if cls == "structure" or expect in ("", "-"):
+        return NodeResult("", "found", got, ())
+    return NodeResult("", "found" if got == int(expect, 16) else "moved", got, ())
+
+
+def evaluate_chain(nodes, resolver):
+    """Resolve one chain in manifest order; return (colour, results, structure gaps).
+
+    Dependencies short-circuit: a node whose prerequisite is not found/moved is
+    ``not_run`` rather than ``zero``, so a broken top of the chain cannot emit a
+    false "this anchor is gone" for everything downstream.  ``structure`` nodes
+    without a locator are registered-but-unjudged and listed in ``unverified`` —
+    the machine-readable form of "this build can be read, not written".
+    """
+    done = {}
+    results = []
+    unverified = []
+    for node in nodes:
+        deps = [done.get(dep) for dep in node.depends_on]
+        if any(res is None or res.verdict not in ("found", "moved") for res in deps):
+            result = NodeResult(node.node, "not_run", None, ())
+        elif not node.locator:
+            result = NodeResult(node.node, "skipped_structure", None, ())
+            unverified.append(node.node)
+        else:
+            try:
+                loc = substitute_node_refs(parse_locator(node.locator), done)
+            except LookupError:
+                result = NodeResult(node.node, "not_run", None, ())
+            else:
+                result = decide(node.cls, node.expect, resolver.resolve(loc, done))
+                result = replace(result, node=node.node)
+        done[node.node] = result
+        results.append(result)
+    verdicts = {result.verdict for result in results}
+    if verdicts & {"zero", "ambiguous"}:
+        color = "red"
+    elif "moved" in verdicts:
+        color = "yellow"
+    else:
+        color = "green"
+    return color, results, unverified
