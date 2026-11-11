@@ -1,6 +1,9 @@
 # docs/c6-acceptance.md — C6 验收标准
 
-> **形状已定（2026-11-06），读数未产生。** 本文件定的是「什么样算通过」，不是「已经通过」。
+> **形状已定（2026-11-06），读数部分产生（2026-11-10/11 窗口）。** 本文件定的是「什么样算通过」，
+> 不是「已经通过」——已落的三道门与仍缺的三道门都只以**判词 + 产物文件名**记在
+> `evidence/logs/c6_r1_boot_4_4_4.log`、`c6_r2_exec_caller_4_4_4.log`、`c6_acceptance_r1_4_4_4.tsv`，
+> 本文件不改判据、不抄数字。
 > 六个门 id `C6-1` … `C6-6` 由 `scripts/test_c6_acceptance_doc.py` 的围栏钉住：每个门一行、
 > 六个列齐全、`auto` 门必须点名一个**真的能产出那个证据词**的脚本、`manual` 门必须给两份对照组。
 > 数字一律不抄到这里：读数只引用既有取证卷的 §，理由见 §0 末段。
@@ -27,7 +30,7 @@ C6 判的是「这套运行期 keyword 能力可以交给 mod 作者用」，不
 | C6-2 | 引擎按星系调用我们的代码 | `scripts/c2_exec_caller_probe.py` 的 artifact | dispatch_named | distinct_ids 与**这一场**容器原始条数逐项相等 | auto |
 | C6-3 | 状态写进真实存档、逐系统可对 | `scripts/c5_variable_probe.py --name neo_mark` 的逐系统行 + 同一进程的 `--stats` 写入计数 | systems= | 系统集合与容器逐项相等、值 = 系统 id（判词 `neo_state_written`） | auto |
 | C6-4 | 官方 DSL 读得回我们写的状态并据此分支 | `scripts/c2_graph_reconcile.py` 的引擎回执 vs 主机侧重算 | tiers_named | 有 `--name-map` 时逐名相等；没有时只能 `tiers_counts`（判词 `score_drives_official_state`） | auto |
-| C6-5 | 官方 scripted_effects 语义不变 | 同一存档同一场景的两份 `game.log`（`base.log` / `with_dll.log`）与两份 `error.log` | official_effects_unchanged | `error.log` 零新增脚本错误、官方 marker 集合逐项相等 | manual |
+| C6-5 | 官方 scripted_effects 语义不变 | 同一存档同一场景的两份 `game.log`（`base.log` / `with_dll.log`）与两份 `error.log` | official_effects_unchanged | `error.log` 零新增脚本错误、官方 marker 集合逐项相等（**空集不算通过**：两份都解析不出 marker 时台帐判 `cannot_say no_markers_parsed`） | manual |
 | C6-6 | 收尾可验证、不留下必须卸载的钩子 | `scripts/c2_boot_inject.py --uninstall` 的回执一行 | UNINSTALL | rc=0 且 verify=0，host 存活，且**从不** FreeLibrary | auto |
 
 ## 2. 每道门：通过 / 失败 / 不能说
@@ -106,3 +109,5 @@ flag 不会被持久化带进下一局 —— 它**就是**会持久化。
 **不能说**：「不留下必须卸载的钩子」指的是 `C2NeoUninstall` 之后 `C2NeoVerify==0`，
 **不是**「DLL 可以 `FreeLibrary`」—— 后者永远不行（约束 5：引擎持有 class_info 与
 vtable 副本的生命周期，超过我们 DLL 的卸载点）。
+
+跑法见 `docs/offline-tooling.md` 的 `c6_acceptance.py` 一节（`--systems` 必填；缺产物降 `cannot_say`，不是 `fail`）。

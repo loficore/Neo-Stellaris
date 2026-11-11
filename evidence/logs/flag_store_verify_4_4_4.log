@@ -1,0 +1,217 @@
+# flag keyspace 修复的实机验证(R6,4.4.4)—— 判词 `flags_end_to_end`
+
+> 计划:`docs/superpowers/plans/2026-11-10-flag-keyspace-live-verification.md` Task 5
+> (窗台账:`2026-11-10-live-window-runbook.md` Task 6)。
+> 授权:协调者 2026-11-10 点名「R6/R7 依赖已合并,可以继续做」。
+> 口径:**一次启动、不重试**;`taskkill /F`;永不 `FreeLibrary`;探针用完即删。
+
+## 结论(先说)
+
+```
+FLAG_VERIFY flags_end_to_end official_hits=7 official_readback=7 \
+  js_reads=641,641,641,594,641,594,641,594,641,43,594,641,43,594,641,43,594,641,26,43,594,641,26,43,594,641,26,43,594,641,26,43,110,594,641,26,43,110,594,641,26,43,110,594,641,26,43,110,594,641,26,43,110,594,641,26,43,110,594,641,26,43,110,551,594,641,26,43,110,551,594,641 \
+  save_official=26,43,110,594,641 save_ours=82 save_flags_blocks=585 \
+  detail=flags_end_to_end:official=neo_probe:ours=neo_probe2
+```
+
+退出码 `0`。四条判据全通:
+
+| # | 判据 | 读数 |
+|---|---|---|
+| 1 | 官方自己写→读(控制组) | `NEO_FLAG_OFFICIAL name=neo_probe` 共 **7** 行(offset 之后) |
+| 2 | 我们的 native 看得见官方写的 | `NEO_FLAG_READ name=neo_probe present=true` 73 次,落在系统 `26,43,110,551,594,641`(每月随机) |
+| 3 | 官方看得见我们写的 | `NEO_FLAG_OFFICIAL name=neo_probe2` 共 **7** 行 |
+| 4 | 两个名字都进存档 | `flags=` 里 `neo_probe` 在 5 个系统、`neo_probe2` 在系统 82 |
+
+## 装配
+
+DLL:`zig build`(Debug)产出 `zig-out/bin/stellaris_quickjs.dll`,
+`sha256 a318686563d1b51186ed9f147b7b7a052888c298d1d92b247c61c7f7e83a3c48`
+(含 2026-11-10 的 `offsets.country.SCOPE_ID_MASK`,同一份字节用于 R7)。
+部署名 `C:/temp/sqjs_lw2.dll`,远端 `sha256` 相等(逐字):
+
+```
+a318686563d1b51186ed9f147b7b7a052888c298d1d92b247c61c7f7e83a3c48  C:/temp/sqjs_lw2.dll
+```
+
+探针 mod:`scripts/scratch/2026-11_flag_verify/mod/neo_flag_probe/`(官方半边 + runtime 半边),
+scp 到 `C:/temp/neo_flag_probe`,官方半边由安装器落到 `Documents/…/Stellaris/mod/neo_flag_probe/`。
+
+上线前静态自检(三条,全过):
+
+```
+python3 scripts/c1_preflight.py neo_probe    # rc=0 VERDICT: name is clear
+python3 scripts/c1_preflight.py neo_probe2   # rc=0 VERDICT: name is clear
+grep -n "effect\s*=" …/common/on_actions/neo_flag_on_actions.txt ; echo $?   # 1(没有 effect =)
+node --check …/neo/main.js                   # rc=0
+```
+
+## 环境前置(逐字)
+
+```
+PROCS count=0
+BACKUP ok C:\temp\dlc_load.before_flag.json sha=caf49e03ddc8f87666d39be6fdea17ba2bcc07f2712dc56b013a39965418aa53
+```
+
+`dlc_load.json` 的 shot 前内容(恢复后逐字同):
+
+```json
+{"disabled_dlcs": [], "enabled_mods": ["mod/neo_ps_probe.mod", "mod/neo_events.mod"]}
+```
+
+安装回执:
+
+```
+NEO_PLAY ok dll=a318686563d1b511 mod=neo_flag_probe pid=0
+```
+
+(安装器的 `NEXT 1/2/3` 三行在 cp936 控制台上经 ssh 回显为乱码 —— 与 C2/C3 同一条已知现象,
+源文本未变。)
+
+`game.log` 在启动时被引擎截断(177 B),所以本发的 `--offset` = **177**
+(记录于启动之后、任何脚本执行之前)。
+
+## 启动与注入(逐字)
+
+`ns_world assert-ready` 先跑了一次,**拒绝**(逐字):
+
+```
+STATE=NO_GAME EVIDENCE=reason=no game window: the premise cannot be proven so the action is refused NEXT=
+EXIT=2
+```
+
+原因与 C2/C3 同:注入必须在脚本解析之前(T1),那一刻进程还没起,T 世界状态机按定义不可能
+给 `IN_GAME_RUNNING`。因此沿用 C2/C3 的**操作者声明前提**通道,回执逐字写明:
+
+```
+[boot] dll=C:/temp/sqjs_lw2.dll sha16=a318686563d1b511
+[boot] launched pid=4164 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+[boot] pid=4164
+[boot] gate skipped by operator override (--allow-window)
+BOOT dll=sqjs_lw2.dll sha=a318686563d1b511 effect_id=19343 set_id=19344 install_rc=0 alive=1
+EXIT=0
+```
+
+Unpause(经 `session_bridge.py` 在 session 1 里跑 `neo_focus_space.py`):
+
+```
+PIDS [4164]
+HWND 4164 133142
+EXIT=0
+```
+
+(`game_supervisor.py` 也在此时起了一次,读到 `hwnd=133142`;`neo_focus_space.py` 的 Space 落下后
+日志 20 s 内开始增长 —— 与 C3 的「启动后约 2 分钟无日志,按一次 Space 才动」同形。)
+
+## 读数(逐字)
+
+### `game.log`(offset 177 之后)
+
+```
+[21:27:28][effect_impl.cpp:21978]: [2280.2.1] Log effect, file: events/neo_flag.txt line: 54. NEO_FLAG_OFFICIAL name=neo_probe
+[21:27:28][effect_impl.cpp:21978]: [2280.2.1] Log effect, file: events/neo_flag.txt line: 71. NEO_FLAG_OFFICIAL name=neo_probe2
+[21:27:40][effect_impl.cpp:21978]: [2280.3.1] Log effect, file: events/neo_flag.txt line: 54. NEO_FLAG_OFFICIAL name=neo_probe
+[21:27:40][effect_impl.cpp:21978]: [2280.3.1] Log effect, file: events/neo_flag.txt line: 71. NEO_FLAG_OFFICIAL name=neo_probe2
+[21:27:52][effect_impl.cpp:21978]: [2280.4.1] Log effect, file: events/neo_flag.txt line: 54. NEO_FLAG_OFFICIAL name=neo_probe
+[21:27:52][effect_impl.cpp:21978]: [2280.4.1] Log effect, file: events/neo_flag.txt line: 71. NEO_FLAG_OFFICIAL name=neo_probe2
+```
+
+⇒ **第 2 步(官方读自己写的)与第 4 步(官方读我们写的)在同一脉冲里都为真**。
+`line: 54` / `line: 71` 与 `events/neo_flag.txt` 的四步顺序一致(第 2 步 / 第 4 步)。
+
+### `C:/temp/neo_js.log`(runtime 半边)
+
+```
+NEO_JS_MODS n=2
+NEO_JS_INIT_OK id=neo_events api=1
+NEO_JS_LOG NEO_FLAG_SESSION_READY
+NEO_JS_INIT_OK id=neo_flag_probe api=1
+```
+
+`NEO_FLAG_READ` 前 10 行(逐字):
+
+```
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe2 present=true id=82
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe2 present=true id=82
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe present=true id=641
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe2 present=true id=82
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe present=true id=641
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe2 present=true id=82
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe present=true id=641
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe2 present=true id=82
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe present=true id=594
+NEO_JS_LOG NEO_FLAG_READ name=neo_probe present=true id=641
+```
+
+`present=false` 出现 **0** 次(788 行/月的量级因此没有出现:每次派发只记真)。
+
+### 存档(`autosave_2280.07.01.sav`,判词当时)
+
+```
+neo_probe:  systems=5 flags_blocks=585 sample=26,43,110,594,641
+neo_probe2: systems=1 flags_blocks=585 sample=82
+```
+
+下一份存档(`autosave_2281.07.01.sav`,R7 那一场跑的,同一战役)仍能读到同样两个名字:
+
+```
+neo_probe:  systems=5 flags_blocks=586 sample=26,43,110,594,641
+neo_probe2: systems=1 flags_blocks=586 sample=82
+```
+
+⇒ 两个 flag 都进存档,**并且跨回合存续**(不是只在当期日志里成立)。
+
+### 错误面(全部为 0)
+
+| 检查 | 读数 |
+|---|---|
+| `neo_js.log` `NEO_JS_ERROR` / `NEO_JS_TIMEOUT` / `NEO_JS_EVAL_FAIL` | 0 / 0 / 0 |
+| `neo_js.log` `NEO_JS_FLAG_REJECT` | 0 |
+| `game.log` `Unexpected token` | 0 |
+| `error.log` `Unexpected token` | 0 |
+
+⇒ 探针在 4.4.4 里解析成功,`neo_action` 的 token 在解析前就已注册(没有晚注册签名)。
+
+## 判读陷阱(这一发踩到的)
+
+1. **两个名字互为前缀**:判词工具按行内 `name=<完整值>` 比 token,`neo_probe` 不会把
+   `neo_probe2` 的行算进来(工具自带 5 条单测)。
+2. **`random_system`**:官方写的 `neo_probe` 每月落在不同系统(26/43/110/551/594/641 累积 5 个),
+   所以「我们读回官方写的」只能判「至少一条 `present=true`」。
+3. **月度累加**:`--offset 177` 把窗口钉在本发启动之后;不带偏移会把上月读数算进来。
+4. **`.sav` 的 `flags=` 是 `名字=时间戳`**:判据只查名字在不在。
+
+## 收尾(以及三条必须说清的边界)
+
+- `taskkill /F /PID 4164`:进程结束前**没有**拿到 `UNINSTALL` 回执 —— 见边界 1。
+- `dlc_load.json` 已从 `C:/temp/dlc_load.before_flag.json` 恢复,逐字回到
+  `["mod/neo_ps_probe.mod", "mod/neo_events.mod"]`,sha256 与备份相同(`caf49e03…18aa53`)。
+- 探针两侧已删:`Documents/…/Stellaris/mod/neo_flag_probe/`、`mod/neo_flag_probe.mod`、
+  `C:/temp/neo_mods/neo_flag_probe/`、`C:/temp/neo_flag_probe/` ⇒ **探针已删除**。
+
+**边界 1:进程在 21:30 前后自行退出,没有 `UNINSTALL`。** 退出前后:`Application` 事件日志里
+没有 `stellaris.exe` 的错误事件,`Documents/…/Stellaris/crashes/` 无新目录。
+AGENTS 约束 8 的「先排除我们自己的 trip」在这条证据下不成立(§48 的修复在跑,记录器无记录可读:
+进程已死)。**这一发没有 `UNINSTALL rc= verify= alive=` 三格**;DLL 随进程消失,没有 `FreeLibrary`
+(铁律仍然满足,但少了一格读数)。R7 那一发补上了这三格(`UNINSTALL rc=0 verify=0 alive=1`)。
+
+**边界 2:同一台 Windows 机上还有第二份我们的 DLL 在跑。** `C:/temp/sqjs_live.dll`
+(mtime 1794317335 = 21:28:55,本发窗口期内)不是本发产生的;R7 的进程里同时看到
+`sqjs_lw2.dll` 与 `sqjs_live.dll` 两个模块。**本发的四条判据都只依赖我们自己打的
+`NEO_FLAG_*` 行,不依赖进程内是否只有一份 DLL**;但「进程为什么退出」在这一格上无法排除
+(两份 DLL 在同一进程里各自装 detour 是一条合理的解释)。这一条要在窗口台上记一笔。
+
+**边界 3:本发的三份原始产物被紧随其后的 R7 覆盖掉了。** R7 的 `--continuelastsave` 让引擎
+重新截断了 `game.log`(本发的 `--offset 177` 现在指向 R7 的内容),而存档轮转把
+`autosave_2280.07.01.sav` 挤掉了(现只剩 2281.07.01 … 2283.07.01 五份)。判词是**产物存在时**跑
+的,逐字记在上面;四条判据的可复算性因此靠这份日志的逐字回执,不靠盘上那三份文件。
+**下一次把两个探针排在同一个存档上时,先 `cp` 一份存档与两份日志再开下一发。**
+
+## 复现(读同一份产物的命令)
+
+```powershell
+python C:/temp/c5_flag_verify.py --game-log "…/logs/game.log" --js-log C:/temp/neo_js.log `
+  --sav "…/save games/_1474567734/autosave_2280.07.01.sav" --offset 177
+python C:/temp/c5_variable_probe.py --sav <同一份 .sav> --flag neo_probe
+python C:/temp/c5_variable_probe.py --sav <同一份 .sav> --flag neo_probe2
+```

@@ -442,6 +442,64 @@ C5-WRITE 的判据 2:窗口里我们的 keyword 写下的系统变量,离线从�
    的残留。要和离线 tier 集合逐项比对时用 `--flag … --all` 拿全量 id,而不是只看 `sample=`。
 7. **id 是存档局部的。** 这里的 system id 只对这份存档(与它的 sha256)有意义,不能当跨战役常量。
 
+### `scripts/c5_flag_verify.py --game-log PATH --js-log PATH --sav PATH [--official N] [--ours N] [--offset BYTES]`
+
+2026-11-08 flag 键空间修复的**判词工具**:吃三份实机产物,吐一行判词。纯 stdlib + 上一节的
+`c5_variable_probe`(复用 `read_gamestate` / `flag_scan`),零游戏、零 Windows。
+
+```bash
+python3 scripts/c5_flag_verify.py --game-log game.log --js-log neo_js.log \
+  --sav autosave.sav --offset 1048576
+FLAG_VERIFY flags_end_to_end official_hits=NN official_readback=NN \
+  js_reads=… save_official=… save_ours=… save_flags_blocks=NN \
+  detail=flags_end_to_end:official=neo_probe:ours=neo_probe2
+```
+
+**本工具还没有实机读数**（2026-11-10 只做出工具与探针，实机那一发在计划 Task 5、未执行）——
+上面的数字是字段名示意，不是任何一次窗口的读数。判词工具本身零游戏，`scripts/test_c5_flag_verify.py`
+用合成日志钉住每个判词。
+
+四条判据(只查「有 / 无」,不查次数):
+
+1. **官方写→读(控制组)**:`game.log` 里有 `NEO_FLAG_OFFICIAL name=<官方名>`;
+2. **我们的 native 读官方的**:`neo_js.log` 里有 `NEO_FLAG_READ name=<官方名> present=true`;
+3. **官方读我们的**:`game.log` 里有 `NEO_FLAG_OFFICIAL name=<我们名>`;
+4. **两个名字都进存档**:`.sav` 的 `flags={}` 按键名查(`flag_scan`)。
+
+判词按上游→下游排,**第一个不成立的那条**给出判词,所以判负能指名是哪一条链断的:
+
+| 判词 | 含义 | 归因 |
+|---|---|---|
+| `official_control_failed` | 官方自己写自己的 flag 都读不回来 | 这一发作废(不是键空间问题):先查事件顺序与 on_action 是否真跑 |
+| `our_read_missing` | 我们看不见官方写的 | `flag_store_4_4_4.md` §2.1 —— 我们的 lookup 与官方写入的键不同 |
+| `official_readback_missing` | 官方看不见我们写的 | §3.1 —— 我们的 ensure 落到了别的编号 |
+| `save_missing` | 日志对、存档没有 | §4.5 第 2 条(序列化/时间戳仍标 `static_inference`)⇒ 文档降级,**不重试** |
+| `flags_end_to_end` | 四条全通 | — |
+
+**退出码**:`0` 当且仅当 `flags_end_to_end`;`1` = 判负(判词仍在 stdout);`2` = 硬错误(读不到文件、
+不是 ZIP、`gamestate` 是二进制)—— 不把「读不到」伪装成「flag 不存在」。
+
+**判读陷阱:**
+
+1. **两个名字互为前缀,只能按 token 完整值比。** 探针用 `neo_probe`(官方写)/ `neo_probe2`(我们写),
+   `neo_probe` 是另一个的前缀 —— `log_text.count("name=neo_probe")` 会把 `name=neo_probe2` 的行也算进来。
+   两个计数都按行拆 token、要求 `name=<name>` 是**完整** token(测试钉住这条)。
+2. **时序在脚本里,工具看不见。** 「官方读我们写的」那一遍必须排在 runtime 写之后(驱动事件体的第 3 步
+   才把 scope 交给 runtime);顺序写反的现象是 `official_readback_missing` 而 `our_read_missing` 正常,
+   与「我们的 ensure 落错编号」**看起来一样**。读这个判词时先核事件体顺序。
+3. **`random_system` 的落点是随机的。** 官方写的那个 flag 落在哪个星系不定,所以第 2 条只有
+   「`present=true` 至少一行」的意义,`js_reads=` 里的 id 不能钉死;能钉 82 的只有我们自己写的那条。
+4. **月度重跑会累加。** flag 持久化、事件每月重跑,所以 `official_hits` / `save_official` 会随窗口长度
+   增长;判据只认「≥1」。要只判当期,用 `--offset`(窗口开始前记下的 `game.log` 字节偏移),否则上个月
+   的读数会算进来。
+5. **`.sav` 的 `flags=` 是 `名字=时间戳`。** 判据只查名字在不在,时间戳语义(当期日期)不在这四条里。
+   `save_missing` 时 detail 会带上 `flags_blocks=N`(`flag_scan` 的第二个返回):`0` = **根本没找到**
+   `flags` 块(解析形状,换版本/换存档布局),非 0 而目标名字不在里面才是真的没写进存档 ——
+   与上一节陷阱 5 同一个分界,别把解析形状读成引擎行为。
+
+**探针在哪**:`scripts/scratch/2026-11_flag_verify/`(一次性,自带 README:两个半边、四条判据、产物名、
+用完要删)。产物按惯例留在 `evidence/logs/`(`flag_store_verify_4_4_4.log`),探针本身不进仓。
+
 ### `scripts/chokepoint_scores.py <edges.tsv> --out <scores.tsv> [--top N]`
 
 只读边表(无表头;第一行全是数字就当数据),算 `degree`、无向无权 Brandes `betweenness`、Tarjan
@@ -2663,6 +2721,59 @@ python3 scripts/pe_disrva.py zig-out/bin/stellaris_quickjs.dll 0xbba0 40       #
    「段内 0 条」,两者都与「成功但没有该指令」分开。
 5. 想验证「0 条 → 1」可以拿 RVA 0,但它走的是 section 门,不是 capstone 解失败;两条路都退出 1,
    理由不同,不要混成一条判据。
+
+## `scripts/c6_acceptance.py` —— C6 六道门的台帐
+
+把 `docs/c6-acceptance.md` 的六道门判成 `pass` / `fail` / `cannot_say`，每门一行、末行一条汇总。
+它**只读文件**：不起进程、不联网、不 import `frida` / `c2_harness`。输入全是别人点名之后留下的
+产物 —— 它本身不产生任何读数，也不新增 shot 授权。
+
+```
+python3 scripts/c6_acceptance.py --boot BOOT.txt --uninstall UNINSTALL.txt \
+    --exec-caller exec_caller.tsv --stats stats.txt --sav autosave.sav \
+    --systems <这一场的容器原始条数> --reconcile reconcile.txt \
+    --base-log base.log --with-log with_dll.log \
+    --base-error base_error.log --with-error with_dll_error.log \
+    --out evidence/logs/c6_acceptance_4_4_4.tsv
+```
+
+| 参数 | 喂什么 | 门 |
+|---|---|---|
+| `--boot` | `c2_boot_inject.py` 的 `BOOT …` 回执一行 | C6-1 |
+| `--exec-caller` | `c2_exec_caller_probe.py` 的 artifact（`#meta` 台帐） | C6-2 |
+| `--stats` | 同一进程 `C2NeoStatsInto` 那一行（含 `writes` / `matched` / `skipped`） | C6-3 |
+| `--sav` | 同一场的 `.sav`（内部走 `c5_variable_probe.read_gamestate`） | C6-3 |
+| `--var-name` | C6-3 的变量名，默认 `neo_mark` | C6-3 |
+| `--systems` | **这一场的容器原始条数**，必填、无默认值 | C6-2 / C6-3 |
+| `--reconcile` | `c2_graph_reconcile.py` 的 stdout 或 `--out` 文件 | C6-4 |
+| `--base-log` / `--with-log` | 未装 / 装了 DLL 两趟的 `game.log` | C6-5 |
+| `--base-error` / `--with-error` | 同两趟的 `error.log` | C6-5 |
+| `--uninstall` | `c2_boot_inject.py --uninstall` 的 `UNINSTALL …` 行 | C6-6 |
+| `--out` | 台帐另写一份（先 `print` 再写，LF 换行） | — |
+
+**三个退出码**：`0` 六门全 `pass`；`1` 有 `fail`；`2` 没有 `fail` 但有 `cannot_say`
+（「还缺读数」与「判负」是两件事，所以它们不共用一个码）。
+
+**判读陷阱：**
+1. **`--systems` 必须现场取。** 它是这一场容器的原始条数（上一场是 788，§95 的分母是 787），工具
+   **不**读存档反推 —— 反推在旧存档上会让「集合相等」假通过。
+2. **官方 marker 只排 `NEO_` 前缀。** 装了 DLL 的那一趟会多出 `NEO_JS_*`；那是我们的行，不是官方
+   脚本的行。`PS_HIT` 是 **mod** 写的，两趟都在，不许排。已查
+   `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`：官方 keyword 里没有 `NEO_` 前缀。
+3. **半场读数是 `cannot_say`，不是 `fail`。** 只给了一个输入（比如有 `BOOT` 没 `UNINSTALL`）时，
+   缺的那几门保持 `cannot_say`；`--base-error ""` 是合法读数（空 `error.log` 正是「零错误」），
+   只有**没给**（`None`）才是缺输入。
+4. **台帐里的两个数就是判据。** C6-2 只比 `distinct_ids` 与 `container_raw_count`（不重算 id 集合、
+   不数 artifact 行数）；C6-3 的 `writes == matched` 与 `skipped == 0` 只从 `C2NeoStatsInto` 那一行来，
+   不拿存档行数反推。
+5. **`error.log` 判的是行数差**，不是两份总行数相等 —— 两份日志长度本来就不同。C6-4 同理：多窗口时
+   一条 `tiers_counts` 或 `tiers_partial` 就够把整门降成 `cannot_say`（计数相等不等于逐名相等）。
+6. **marker 在行尾，不在行首（2026-11-11 R5 实测）。** 真实 `game.log` 的行是
+   `[16:32:26][effect_impl.cpp:21978]: [2314.8.1] Log effect, … R5_HIT` —— 旧实现只认行首
+   `^[A-Z][A-Z0-9_]{2,}`，于是两份真实窗口都解析出**空集**，`missing=- extra=-` 被读成 pass。
+   现在按「行内任意位置的独立大写 token」取 marker，并且**两份都空 ⇒ `cannot_say
+   no_markers_parsed`**；`detail` 末尾的 `markers=<n>` 就是「到底比过几个 marker」。
+   **看到 `C6-5 pass missing=- extra=-` 先看 `markers=`**：没有这一格或它等于 0，就不是读数。
 
 ## IDA headless 现状(环境状态,非规则)
 

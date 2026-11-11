@@ -1,0 +1,7 @@
+C6-1 pass effect_id=19343 set_id=19344 install_rc=0 alive=1
+C6-2 cannot_say missing_input
+C6-3 pass systems=788 expected=788 writes=18124 matched=18124 skipped=0 first_bad=-
+C6-4 cannot_say windows=0 verdicts=-
+C6-5 cannot_say missing_input:base_log,with_log,base_err,with_err
+C6-6 pass rc=0 verify=0 alive=1
+C6 SUMMARY pass=3 fail=0 cannot_say=3

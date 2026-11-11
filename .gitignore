@@ -5,6 +5,9 @@
 zig-out/
 .zig-cache/
 **/__pycache__/
+# `neo pack` stages <project>/dist/<id>/ in place; only the root /dist/ is the
+# preview-package's own output, so the per-example path needs its own rule.
+examples/*/dist/
 
 # === Docs site (npm package under site/) ===
 site/node_modules/

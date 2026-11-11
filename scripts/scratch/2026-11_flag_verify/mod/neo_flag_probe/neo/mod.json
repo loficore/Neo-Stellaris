@@ -1,0 +1,8 @@
+{
+  "id": "neo_flag_probe",
+  "entry": "main.js",
+  "scope": ["system"],
+  "permissions": ["flag.read", "flag.write", "log"],
+  "engine": "4.4.4",
+  "runtime": ">=0.1"
+}

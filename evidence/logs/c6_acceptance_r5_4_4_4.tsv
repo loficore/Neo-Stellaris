@@ -1,0 +1,7 @@
+C6-1 cannot_say missing_input
+C6-2 cannot_say missing_input
+C6-3 cannot_say missing_input
+C6-4 cannot_say windows=0 verdicts=-
+C6-5 pass missing=- extra=- error_delta=0
+C6-6 cannot_say missing_input
+C6 SUMMARY pass=1 fail=0 cannot_say=5

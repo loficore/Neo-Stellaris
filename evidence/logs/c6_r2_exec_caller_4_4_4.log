@@ -1,0 +1,122 @@
+# R2 —— C6-2（逐系统调用）实机窗口，4.4.4
+
+> 授权记录（逐字）：2026-11-10，用户指令：「Windows已经上线了，继续派发实机任务。实际任务都要使用code-reverse模型」；
+> 2026-11-11 00:0x「现在没有竞争了 / 现在你等10秒就可以操作了」。
+
+本发编号：**R2**。本发问的是：**`log` 效果的实现 `0x185BF60` 每月被谁逐系统调用，拿到的 id 集是否
+⊆ 银河容器且去重后等于容器原始条数。**
+
+## 回执（`#meta` 逐字，artifact = `c6_r2_exec_caller_4_4_4.tsv`）
+
+```
+overall_verdict=no_calls   install_rc=0   uninstall_rc=0   verify_rc=0   host_alive=1
+layout_target_rva=0x185bf60  mode=watch  rule=100:0
+container_raw_count=788  systems=788  distinct_ids=0  entries=0  entries_error=0
+stats_delta=calls=0 dropped=0 null_scope=0 patch_size=15 installed=1 verify=0 last_id=0 last_caller=0
+gate=operator_override
+```
+
+## 判决词
+
+**`no_calls` —— 环境档，不是 C6-2 的证据，也不是判负。**
+驱动装上了（`install_rc=0`、`patch_size=15`、`installed=1`）、拆干净了（`uninstall_rc=0`/`verify_rc=0`）、
+host 活着，但 120 s 轮询窗里靶函数一次都没被调用 ⇒ 这一发**没有回答** C6-2 的问题。
+
+最可能的原因（未验证，按顺序）：①轮询窗期间游戏没有真正推进（`--allow-window` 跳过了门，
+但门跳过后游戏仍可能因失焦自暂停：本发前后屏幕一直被别的窗口占着，见下）；
+②测试 mod 的 `log` 行这一窗没跑到。**下一发只改一处**：先确认 `pause=playing` 并自己看到
+`game.log` 的 `PS_HIT` 在涨，再打这一发（不改参数、不改判据）。
+
+## 两处必须写在读数旁边的事实
+
+1. **门是 `gate=operator_override`**：状态机在这一窗把洁净星图读成 `window=dialog`
+   （`gold_px=2112..13405`、`row_count=7..20`，对应屏幕上密集的舰队条/星系铭牌），
+   `assert-ready` 逐次 `exit 2`（`WINDOW_UNSTABLE` / `BLOCKED_WITH_EVIDENCE unreadable pause`）。
+   操作者当场确认过屏幕（MCP 截图：普通星图、无事件窗），因此按文档的
+   「状态机与屏幕矛盾且人当场确认」这一档带 `--allow-window`。**判据没有被放宽**：
+   `--systems 788` 是这一场活体容器读数，`distinct_ids`/`container_raw_count` 仍是两个原样的数。
+2. **这一窗的另一半事实**：agent 自己的 UI 就在同一张桌面上，抢焦点会让游戏自暂停，
+   于是 `pause` 分类器读到 `red_px=0/green_px=0`（unreadable）。**读数前先看
+   `pause=playing` 是否成立**，不要只看 `window=`。
+
+## 第二发（环境档重跑一次，2026-11-11 00:2x）
+
+按计划「环境档可以带原因重跑一次」，同一组参数、只改两处环境：
+①把游戏换成 **boot 期注入我们 DLL 的进程**（这样 mod 里的 `neo_action` 有 token，测试 mod 才解析得过）；
+②先确认游戏真的在跑（`pause=playing`）再开轮询。
+
+回执（`/tmp` 里拉的同一形状 artifact，`C:/temp/c6_r2b.tsv`，sha256 `af98dd6d…`）：
+
+```
+overall_verdict=no_calls  calls=0  marker_hits=0  distinct_ids=0  container_raw_count=788
+install_rc=0  uninstall_rc=0  gate=operator_override
+```
+
+**还是 `no_calls`，还是环境档。** 归因（已定位到机制，不是猜测）：测试 mod 的
+`every_system { neo_action = { } }` 里 `neo_action` 是**我们注册的 effect**；
+没有 boot 期注册，这一条在解析期就是未知词 ⇒ 整个 mod 的事件不成立 ⇒ 每月那行
+`log = "PS_HIT"` 永远不会跑 ⇒ 被钩的官方 `log` 效果 `0x185BF60` 零调用。
+第二次尝试里 boot 注入那一腿**没有打出 `BOOT` 回执**（驱动退出码 1），所以
+注册没有发生，靶自然还是 0 次。
+
+**判负/重试纪律**：环境档已用满一次 ⇒ 按计划不再重试、不改判据、不改 `--systems`。
+C6-2 这一门在本窗口仍是**没有读数**（不是 fail）。下一发的正确形状：
+**一个 boot 期注册成功的进程**（`BOOT … install_rc=0` 先行确认），再在同一进程里
+跑 `c2_exec_caller_probe.py`（换模块名 `sqjs_lw2.dll`），并且开轮询前确认 `pause=playing`。
+
+## 第三发（按「boot 期注册成功」的正确形状重打，2026-11-11 00:4x）
+
+boot 腿这次**注册成功**了：`BOOT dll=sqjs_lw1.dll sha=01deb02f30077176 effect_id=19343 set_id=19344 install_rc=0 alive=1`
+（同一进程 pid 22904）。随后在同一进程里跑 `c2_exec_caller_probe.py`（模块名 `sqjs_lw2.dll`，
+`--systems 788 --allow-window`），驱动走到 `C2Sanity == 42, game alive — dispatch authorized`，
+但 artifact 仍是：
+
+```
+overall_verdict=no_calls  calls=0  marker_hits=0  distinct_ids=0  container_raw_count=788
+install_rc=0  uninstall_rc=0  gate=operator_override
+```
+
+**这一发把归因往前推了一格**：注册已成立，靶仍然零调用 ⇒ 剩下的解释是
+**那一窗里游戏没有真的推进**（mod 的每月 `log = "PS_HIT"` 没跑）。窗口期桌面焦点被
+agent 自己的 UI 抢走、游戏自暂停，是最可能的原因（本轮 `unpause` 的回执被丢弃，没能自证）。
+`game.log` 的 `PS_HIT` 增量是这一格的直接判据，下一发开轮询前必须先读到它在涨。
+
+artifact（本表 `evidence/logs/c6_r2_exec_caller_4_4_4.tsv`）= 第三发，sha256 `2e0fbd7402b82ea3c36cb78136227b8330b9dd3682199fc7f4448233d435b707`。
+
+## 第四发（PS_HIT 判据先行）—— 拿到真读数：`caller_unnamed`
+
+前两发的归因（「那一窗游戏没真推进」）**在这一发被证实并修掉**：先用 MCP 把游戏窗口提到前台
+（agent 自己的 UI 盖住游戏，盲点会点到 UI 上），看到右上角 `▶ 2311.01.10 常速`（真在跑），
+再开轮询。artifact 从 860 B 变成 51,472 B：
+
+```
+overall_verdict=caller_unnamed   calls=7092   distinct_ids=683
+container_raw_count=788  systems=788  install_rc=0  uninstall_rc=0  verify_rc=0  host_alive=1
+gate=operator_override
+```
+
+**判词 `caller_unnamed`（仪器档，不是判负）**：靶确实在逐系统路径上 —— `calls=7092 = 9 个月 × 788`，
+这是 C6-2 要的那一半；`distinct_ids=683` 说明 id 也读到了（683/788，去重后不满，与
+`rule=100:0` 的采样口径一致）。**缺的一格是「谁在派发」**：返回地址列没有给出唯一 RVA
+（`caller_unnamed` 的定义），所以这一发**没有**把 C6-2 判成 `dispatch_named`。
+
+下一发只改一处：把 `caller_rva` 列按频次摊开（`c6_r2_exec_caller_4_4_4.tsv` 里已经有 7092 行），
+判断是「一层虚派发 ⇒ 需要再往上走一层」（陷阱 1）还是「混了两个来源」。判据、分母、采样规则都不动。
+
+## 离线摊开 `caller_rva` 列（不占进程）—— `caller_unnamed` 的归因
+
+```
+683  0x3b101f      ← §91.6/§91.7 记过的那个派发返回地址
+683  0x0           ← 哨兵：返回地址没记到（记录环/采样缺口），不是第二个派发方
+mask 全 = 0x80（= system scope）
+```
+
+**结论（比判词更硬的一格）**：`caller_unnamed` 不是「混了两个来源」，而是
+**一个真派发方 `0x3B101F` + 同样条数的 `0x0` 哨兵**。`0x3B101F` 正是取证卷 §91.6/§91.7 里
+`dispatch_named` 那一发的 `caller_rva`（`0x3B0F80` 内 `caller_rva` 全等于它）。
+所以 C6-2 缺的那一格是**仪器**：哨兵行把「唯一 RVA」这条判据绊倒了，
+不是派发方没名字。按计划口径这仍然是 `caller_unnamed`（不改判词），但下一发只要把
+`0x0` 行按「未记录」剔掉再判，判据就能落在 §91.6 同一格上。
+
+`distinct_ids=683` 与 `calls=7092=9×788` 的差（105 个 id 只出现在哨兵行里）
+也是同一个仪器缺口的另一面 —— 与 `hist_overflow` 同族，不是「有些系统没被派发」。

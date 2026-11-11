@@ -1,0 +1,15 @@
+[16:38:52][effect_impl.cpp:21978]: [2314.8.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:39:03][effect_impl.cpp:21978]: [2314.9.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:39:14][effect_impl.cpp:21978]: [2314.10.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:39:25][effect_impl.cpp:21978]: [2314.11.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:39:37][effect_impl.cpp:21978]: [2314.12.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:39:48][effect_impl.cpp:21978]: [2315.1.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:40:00][effect_impl.cpp:21978]: [2315.2.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:40:01][eventcommands.cpp:88]: Event first_contact.1 added info about event selection. selectedOption 0, human -1, playerEventId 506
+[16:40:02][eventcommands.cpp:88]: Event first_contact_critters.85 added info about event selection. selectedOption 1, human -1, playerEventId 508
+[16:40:02][eventcommands.cpp:75]: Event first_contact_critters.85 already selected. option 1, duplicate command by human -1, playerEventId 508
+[16:40:11][effect_impl.cpp:21978]: [2315.3.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:40:22][effect_impl.cpp:21978]: [2315.4.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:40:34][effect_impl.cpp:21978]: [2315.5.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:40:45][effect_impl.cpp:21978]: [2315.6.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT
+[16:40:56][effect_impl.cpp:21978]: [2315.7.1] Log effect, file: events/neo_r5.txt line: 22. R5_HIT

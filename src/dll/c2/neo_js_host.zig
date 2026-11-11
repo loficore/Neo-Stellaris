@@ -637,18 +637,28 @@ pub fn onSystem(id: u32, scope: u64) void {
     }
 }
 
+/// 引擎写在 `scope+0x10` 的国家 id:高 8 位是类型/标签,低 24 位才是 id。
+/// C3 实机读到的 `0x01000002` / `0x04000015` / `0x06000014` 都是这个形状;
+/// opinion 矩阵的键(`[obj+0x20] & 0xffffff`)也是同一口径。掩码只在 host 这一层 ——
+/// `neo_vtable.runBody` 继续把 raw dword 交给这里(那是「引擎写了什么」的证据)。
+fn countryId(raw: u32) u32 {
+    return raw & offsets.country.SCOPE_ID_MASK;
+}
+
 /// 一次 country 派发(游戏主线程,`mask == 0x04` 的那条路径)。
 ///
 /// 与 `onSystem` 同形:一行 `NEO_JS_CALL_COUNTRY`,然后把当次 scope 放进
 /// `current_scope`(natives 只在这条同步区间里读它),只调用**声明了 country**
 /// 且注册了 handler 的 session。`id` 是引擎写在 `scope+0x10` 的那个值 ——
-/// `opinion` 读器会拿它和 JS 传回来的 `self` 核对(不一致就拒读)。
+/// 这里先过 `countryId` 掩码(高 8 位是标签),JS 拿到的、日志里落的、以及
+/// `opinion` 读器核对 `self` 用的都是同一个掩码后的数。
 pub fn onCountry(id: u32, scope: u64) void {
     ensureLoaded();
     if (state != .ready) return;
 
+    const cid = countryId(id);
     _ = @atomicRmw(u64, &country_call_count, .Add, 1, .monotonic);
-    emit("NEO_JS_CALL_COUNTRY id={d}", .{id});
+    emit("NEO_JS_CALL_COUNTRY id={d}", .{cid});
 
     const saved_scope = current_scope;
     current_scope = scope;
@@ -659,7 +669,7 @@ pub fn onCountry(id: u32, scope: u64) void {
         const s = &sessions[i];
         if (!s.active or !s.scopes.country) continue;
         if (s.country_handler.isUndefined()) continue; // 没注册不是错
-        runCountrySession(i, id);
+        runCountrySession(i, cid);
     }
 }
 
@@ -785,7 +795,7 @@ fn opinionText(buf: []u8, v: opinion_table.LookupError!i32) []const u8 {
 fn c3Opinion(row: u32, col: u32) opinion_table.LookupError!i32 {
     const addr = descriptorAddr() orelse return error.TableNull;
     const table = try opinion_table.load(opinionMemory(), addr);
-    return opinion_table.value(opinionMemory(), table, row & 0xffff_ff, col & 0xffff_ff);
+    return opinion_table.value(opinionMemory(), table, countryId(row), countryId(col));
 }
 
 fn emitCountryProbe(id: u32) void {
@@ -1251,8 +1261,17 @@ fn readOpinion(argc: c_int, argv: [*]c.JSValue, swap: bool) c.JSValue {
     }
 
     // JS 传回来的 `self` 必须就是当次派发的那个国家,否则读的是别人的行。
+    // 两侧都过 `countryId`:scope cell 里高 8 位是标签,而 JS 拿到的是掩码后的 id。
     const scope = current_scope;
-    if (scope == 0 or readU32Safe(scope + neo_vtable.SCOPE_ID_OFF) != self) {
+    if (scope == 0) {
+        opinionReject(self, target, "scope_mismatch");
+        return c.JS_UNDEFINED;
+    }
+    const raw_scope_id = readU32Safe(scope + neo_vtable.SCOPE_ID_OFF) orelse {
+        opinionReject(self, target, "scope_mismatch");
+        return c.JS_UNDEFINED;
+    };
+    if (countryId(raw_scope_id) != self) {
         opinionReject(self, target, "scope_mismatch");
         return c.JS_UNDEFINED;
     }
@@ -1268,8 +1287,8 @@ fn readOpinion(argc: c_int, argv: [*]c.JSValue, swap: bool) c.JSValue {
 
     // C3 实机(2026-11-08):`scope+0x10` 的高 8 位带标签,矩阵的键只用低 24 位
     // (`[obj+0x20] & 0xffffff`,§2.2)。不掩就会把一半国家读成 out_of_range。
-    const row = (if (swap) target else self) & 0xffff_ff;
-    const col = (if (swap) self else target) & 0xffff_ff;
+    const row = countryId(if (swap) target else self);
+    const col = countryId(if (swap) self else target);
     const v = opinion_table.value(opinionMemory(), table, row, col) catch |e| {
         opinionReject(self, target, lookupTag(e));
         return c.JS_UNDEFINED;
@@ -2304,6 +2323,44 @@ fn countryScope(id: u32) [0x20]u8 {
     std.mem.writeInt(u32, scope[neo_vtable.SCOPE_MASK_OFF..][0..4], offsets.country.SCOPE_MASK, .little);
     std.mem.writeInt(u32, scope[neo_vtable.SCOPE_ID_OFF..][0..4], id, .little);
     return scope;
+}
+
+test "onCountry masks the 24-bit country id before the handler sees it" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    try testing.expect(startSession(.{
+        .id = "masked",
+        .source = "__neo_register_country(function(id){ __neo_log('GOT ' + id); });",
+        .permissions = .{ .log = true },
+        .scopes = .{ .country = true },
+    }));
+    const scope = countryScope(0x01000002); // 引擎写的是 raw,低 24 位 = 2
+    onCountry(0x01000002, @intFromPtr(&scope));
+    try testing.expect(cap.contains("GOT 2"));
+    try testing.expect(cap.contains("NEO_JS_CALL_COUNTRY id=2"));
+}
+
+test "nativeCountryOpinion accepts a raw scope cell whose low 24 bits match" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    var matrix = opinion_table.FakeMatrix.init(3);
+    matrix.wire();
+    matrix.set(1, 2, 55); // row = 目标, col = 我们(swap=true 的键序)
+    setOpinionTableForTest(matrix.memory(), matrix.descriptorAddr());
+    try testing.expect(startSession(.{
+        .id = "raw",
+        .source = "__neo_register_country(function(id){ __neo_log('V ' + __neo_country_opinion(id, 1)); });",
+        .permissions = .{ .opinion_read = true, .log = true },
+        .scopes = .{ .country = true },
+    }));
+    const scope = countryScope(0x01000002);
+    onCountry(2, @intFromPtr(&scope));
+    try testing.expect(cap.contains("V 55"));
+    try testing.expect(!cap.contains("scope_mismatch"));
 }
 
 test "nativeCountryOpinion requires opinion.read and rejects a mismatched scope" {

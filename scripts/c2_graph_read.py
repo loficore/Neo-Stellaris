@@ -739,7 +739,7 @@ def read_live_pair(pid, base, exports, stats_buf, hash_buf):
     fingerprint = words[7]
 
     harness.call_remote_with_arg(pid, base, exports["C2NeoLiveHashInto"], hash_buf)
-    hash64, _edges = struct.unpack("<QQ", harness.read_memory(pid, hash_buf, LIVE_HASH_SIZE), 0)
+    hash64, _edges = struct.unpack("<QQ", harness.read_memory(pid, hash_buf, LIVE_HASH_SIZE))
     return fingerprint, hash64
 
 

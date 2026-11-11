@@ -1,0 +1,8 @@
+{
+  "id": "neo_cid_probe",
+  "entry": "main.js",
+  "scope": ["country"],
+  "permissions": ["log", "opinion.read"],
+  "engine": "4.4.4",
+  "runtime": ">=0.1"
+}
