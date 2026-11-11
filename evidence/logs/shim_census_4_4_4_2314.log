@@ -1,0 +1,58 @@
+# R8 —— shim census（execspy，第 4 发 = 成功读数），Stellaris 4.4.4，2026-11-11 15:0x
+# 授权（逐字）：2026-11-10 用户「Windows已经上线了，继续派发实机任务。实际任务都要使用code-reverse模型」；2026-11-11 用户「打」
+# 存档：autosave（--continuelastsave，pid 3680）；这一场 galaxy system 数 = 788（同期 c5_graph_collide/exec_caller 的 #meta）
+# hist_overflow = 0（硬门通过：计数完整，没有截断假象）
+# stats: calls=5109 samples=9 invalid=0 hist_overflow=0 patch_size=16；post-uninstall probe = 0 calls
+#
+# 判据（runbook Task 8 Step 3）：换场景后七把仍彼此相等 ⇒ per-system 循环成立。本发**不成立**：
+#   12 个 distinct shim，只有两把相等（0x1bccf30 与 0x1bcd120 各 2269），其余 426/58/39..1。
+#   2269 / 788 = ×2.88，不是 per-system 的 1×。⇒ 本场景下 §13 的「七把各 2,090 彼此相等」形状没有重现；
+#   能说的只有：这两把仍是**逐系统量级**（≈ 3 倍于系统数），不是一次性调用。
+# 并排（口径警告：能并排讨论，不能并排比对 —— 见 docs/offline-tooling.md execspy 一节）
+#   §13/§74 基线：七把各 2,090（§74 复采 2,494 × 7）
+#   本发：0x1bccf30 ×2269 / 0x1bcd120 ×2269 / 0xd8a820 ×426 / 0x34dad0 ×58 / 0xd59d60 ×39 / … / 0xd5b560 ×1
+# ---- 以下为 execspy 原始输出（非 ASCII 字节已替换为 ?）----
+pid=3680  observe=45s
+LoadLibraryW -> 0x7ffdf3710000
+module: {'loaded': True, 'base': '0x7ffdf3710000'}
+layout: {'entry': 88, 'hist': 16, 'stats': 48, 'ring': 1024, 'hist_len': 1024}
+probe: Frida Interceptor saw 0 calls at base+0x1d08520 in 1.5s
+  quiescent -> installing
+ExecHookInstall -> 0
+while installed -> verify: -1 (expect -1), stats: {'calls': '0', 'samples': '0', 'invalid': '0', 'hist_overflow': '0', 'img_base': '140699933474816', 'patch_size': '16'}
+RESUME THE GAME NOW %?waiting for the counter to actually move (300s max)...
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  calls=0 (still paused?)
+  live: calls 0 -> 38, observing 45s
+stats: {'calls': '5109', 'samples': '9', 'invalid': '0', 'hist_overflow': '0', 'img_base': '140699933474816', 'patch_size': '16'}
+histogram: 12 distinct shims, counted over every call
+  shim  0x1bccf30  vtable  0x26d04c8  x2269
+  shim  0x1bcd120  vtable  0x2522c40  x2269
+  shim   0xd8a820  vtable  0x25435d8  x426
+  shim   0x34dad0  vtable  0x24b3690  x58
+  shim   0xd59d60  vtable  0x253ca88  x39
+  shim   0xd5c420  vtable  0x254b2d8  x18
+  shim   0xd49f40  vtable  0x25338b0  x17
+  shim   0xd4a910  vtable  0x2545fa0  x6
+  shim   0x230990  vtable  0x24b1c88  x3
+  shim   0x1b5460  vtable  0x24b4110  x2
+  shim   0x393770  vtable  0x24e90a8  x1
+  shim   0xd5b560  vtable  0x254b428  x1
+drained 9 records (entry 88 bytes)
+   {"valid": 1, "vtable_rva": "0x2521170", "shim_rva": "0x1bcd120", "token_id": 1, "second_token": 0, "flag_12": 12711, "flag_14": 0, "flag_16": 0, "arg_token": 348, "ctx_counter": 0, "self_ptr": "0x19fceb340", "ctx_ptr": "0x7fed78", "ctx_10": "8384368", "ctx_18": "10712973313", "ctx_30": "140699971727512"}
+   {"valid": 1, "vtable_rva": "0x250c140", "shim_rva": "0x1bcd120", "token_id": 1, "second_token": 0, "flag_12": 13391, "flag_14": 0, "flag_16": 1, "arg_token": 572, "ctx_counter": 0, "self_ptr": "0x2a22267c0", "ctx_ptr": "0x7fe768", "ctx_10": "8382816", "ctx_18": "9762504705", "ctx_30": "140699971727512"}
+   {"valid": 1, "vtable_rva": "0x26d04c8", "shim_rva": "0x1bccf30", "token_id": 1, "second_token": 14091, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1140608936, "ctx_counter": 1, "self_ptr": "0x7fe4f0", "ctx_ptr": "0x7fe768", "ctx_10": "8382816", "ctx_18": "9762504705", "ctx_30": "140699971727512"}
+   {"valid": 1, "vtable_rva": "0x26d04c8", "shim_rva": "0x1bccf30", "token_id": 1, "second_token": 14890, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1140608936, "ctx_counter": 1, "self_ptr": "0x7feb00", "ctx_ptr": "0x7fed78", "ctx_10": "8384368", "ctx_18": "10712973313", "ctx_30": "140699971727512"}
+   {"valid": 1, "vtable_rva": "0x2531de0", "shim_rva": "0x1bcd120", "token_id": 1, "second_token": 0, "flag_12": 15526, "flag_14": 0, "flag_16": 1, "arg_token": 1255, "ctx_counter": 0, "self_ptr": "0x28cbec290", "ctx_ptr": "0x7fe768", "ctx_10": "8382816", "ctx_18": "9762504705", "ctx_30": "140699971727512"}
+   {"valid": 1, "vtable_rva": "0x2521170", "shim_rva": "0x1bcd120", "token_id": 1, "second_token": 0, "flag_12": 16376, "flag_14": 0, "flag_16": 0, "arg_token": 1486, "ctx_counter": 0, "self_ptr": "0x28844a120", "ctx_ptr": "0x7fed78", "ctx_10": "8384368", "ctx_18": "10712973313", "ctx_30": "140699971727512"}
+   {"valid": 1, "vtable_rva": "0x26d04c8", "shim_rva": "0x1bccf30", "token_id": 1, "second_token": 17045, "flag_12": 0, "flag_14": 0, "flag_16": 0, "arg_token": 1140608936, "ctx_counter": 1, "self_ptr": "0x7fe4f0", "ctx_ptr": "0x7fe768", "ctx_10": "8382816", "ctx_18": "9762504705", "ctx_30": "140699971727512"}
+   {"valid": 1, "vtable_rva": "0x25322e8", "shim_rva": "0x1bcd120", "token_id": 1, "second_token": 0, "flag_12": 17814, "flag_14": 0, "flag_16": 1, "arg_token": 1946, "ctx_counter": 0, "self_ptr": "0x2677b3ad0", "ctx_ptr": "0x7fe768", "ctx_10": "8382816", "ctx_18": "9762504705", "ctx_30": "140699971727512"}
+   {"valid": 1, "vtable_rva": "0x2521170", "shim_rva": "0x1bcd120", "token_id": 1, "second_token": 0, "flag_12": 18527, "flag_14": 0, "flag_16": 0, "arg_token": 2173, "ctx_counter": 0, "self_ptr": "0x28844acc0", "ctx_ptr": "0x7fed78", "ctx_10": "8384368", "ctx_18": "10712973313", "ctx_30": "140699971727512"}
+Waiting for base Execute to go silent before "uninstall" (300s max)...
+  idle at calls=669960
+ExecHookUninstall -> 0
+ExecHookVerify -> 0 (engine bytes intact at the target)
+post-uninstall probe: 0 calls at base Execute in 1.5s (engine silent %?resume to confirm)
