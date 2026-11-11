@@ -1,0 +1,134 @@
+# C3 运行时能力自检 —— 4.4.4 实机一发（2026-11-11）
+
+> **授权（逐字）**：任务书 Task 7「Task 7 是**点名 shot**：本任务书即授权，预算 **1 发**
+> （一次 install → sample → uninstall）」。
+> 归属：worker `task_ecc28fa25cba` / 分支 `loficore/capability-selftest`。
+> DLL：`C:/temp/sqjs_cap1.dll`，sha256 `7ee5d117f96f150e05b91bd31aedc8413bb76023db5b6a375dd9afc31cd41816`
+> （主机侧 `zig-out/bin/stellaris_quickjs.dll` 同 sha；`Get-FileHash` 远端复读一致）。
+
+本发问的是：**spec §3.1 那七条结构断言，在这个版本、这个进程上还成立吗。**
+
+## 窗口形状
+
+| 项 | 取值 |
+|---|---|
+| 主机 / 会话 | `Windows_Jiaolong`，游戏在 **session 1**（`session_bridge.py` 落位） |
+| exe | `D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe`，4.4.4 |
+| 启动 | `c2_boot_inject.py --launch … --launch-args=--continuelastsave --allow-window`（boot 期注入，注册必须早于脚本解析） |
+| 战役 | 现场 `autosave_2315.07.01`，银河容器 `[[exe_base+0x3260BB0]+0x59C]` = **788**（`cap_systems.py` 只读） |
+| mod | `mod/neo_ps_probe`（本地唯一启用项）；事件 `neo_ps.1` 的 `every_system = { neo_action = { } … }` |
+| 触发 | 控制台 `event neo_ps.1`（`game_supervisor console`，`console_sent chars=14 opened=true`），游戏**暂停**在窗口里 |
+| 探针 | `c2_capability_probe.py --resident --systems 788`（不二次注入；boot 那份就是仪器） |
+
+## 回执
+
+```
+[boot] launched pid=24068 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+BOOT dll=sqjs_cap1.dll sha=7ee5d117f96f150e effect_id=19343 set_id=19344 install_rc=0 alive=1
+SYSTEMS pid=24068 exe_base=0x7ff627ee0000 container=0x217833c80 count=788 vec=0x2671aff30
+console_sent chars=14 opened=true
+UNINSTALL rc=0 verify=0 alive=1
+```
+
+`effect_id=19343` 是本次进程里 `neo_action` 的 token；`install_rc=0` 表示 `0x3B0F80` 的 detour
+装上了；`verify=0` 表示拆完引擎字节已还原。**没有 FreeLibrary**（进程一直活着）。
+
+## 矩阵读数（`neo_js.log` 的 `NEO_CAP` 行 + 外部只读复读逐项相同）
+
+```
+NEO_CAP scope=ok token=fail(mismatch) descriptor=ok graph=ok state=fail(write_rejected) vtable=ok fingerprint=ok
+```
+
+| 项 | status | reason | 判读 |
+|---|---|---|---|
+| `scope` | ok | — | 当次 scope `+0x08 == 0x80`、`+0x10 < 788`：逐系统派发真的把 system scope 送进来了 |
+| `token` | **fail** | mismatch | **仪器缺陷**（见下 §1），不是结构漂移 |
+| `descriptor` | ok | — | 在 9,863 槽里扫到 `add_modifier`，槽 `+0x00 == 10104` |
+| `graph` | ok | — | `[0x3260B98]` 解出的容器：`systems == 788`、`edges > 0`、`skipped == 0` |
+| `state` | **fail** | write_rejected | **仪器缺陷**（见下 §2），不是结构漂移 |
+| `vtable` | ok | — | `[0x2606FE0+8] == base+0x3AFD30` |
+| `fingerprint` | ok | — | `0x3B0F80` 的 19 B 在 detour 活着时改判 `C2NeoVerify()==0`（=0） |
+
+`state_cleared = true` 是**空真**：`state` 根本没写成（第一次写就被拒），所以没有残留可以收回。
+驱动判词 `capability_failed failed=token:mismatch,state:write_rejected`。
+
+## §1 `token:mismatch` 的归因：步长用错了（已修）
+
+只读摊字节（`scripts/scratch/2026-11_capability/cap_token.py`，无注入、无写）：
+
+```
+db @0x7ff62b6147a0: +0x70 = 0x51003040        ← [db+0x70] = 名字表基址
+holder[10104] @0x510796c0: +0x10 'add_modi' +0x18 'fier\0'  +0x20 size=0x0c  +0x28 cap=0x0f
+holder[10103] @0x51079690: 'set_ship_prefix'                +0x20 size=0x0f  +0x28 cap=0x0f
+holder[10105] @0x510796f0: +0x10 0x1f233c9d0(堆)            +0x20 size=0x12  +0x28 cap=0x1f
+descriptor slot=1149 id=10104 name='add_modifier'
+```
+
+两条结论：
+
+1. **相邻 holder 相差 0x30**（`0x510796c0 - 0x51079690 == 0x30`），而 `offsets.keyword_reg.HOLDER_SIZE`
+   的 0x38 是 holder 这个 std::string 的**对象大小**、不是步长。自检原来拿 `HOLDER_SIZE` 当步长
+   ⇒ 读到的是别人的尾巴 ⇒ `cap` 是垃圾 ⇒ 名字判错。已在 `capability.zig` 里改成
+   本地常量 `TOKEN_HOLDER_STRIDE = 0x30`（注释里写清两者不同），并加 comptime 断言。
+2 **cap 判据成立**：`add_modifier` 的 `cap = 0x0f < 0x10` ⇒ 字符在 `+0x10`（内联），`size = 12`；
+   `holder[10105]` 的 `cap = 0x1f ≥ 0x10` ⇒ 字符在 `[+0x10]`（堆）。`0x1d152fb` 那条规则两种形态都对
+   —— 这一格是**正面读数**，不只是没报错。
+3 `descriptor` 的槽号 ≠ id 也在实机复现：`add_modifier` 的 id 是 10104，落在**槽 1149**。
+
+## §2 `state:write_rejected` 的归因：权限借错了门（已修）
+
+`capabilityWriteVar` 原来走 `writeSystemVariable(currentPermissions(), …)`。`currentPermissions()`
+是**当前 JS session** 的权限；本窗口没有 JS bundle（`state == .failed`），于是它返回全 false 的
+`Permissions{}`，`canSetVariable` 直接拒写。也就是说这一格量到的是「这个进程没装 JS mod」。
+
+修法：自检那一次写给的就是 spec 授权的那一条权限（`.{ .variable_write = true }`），名字/值/
+`scope+0x10 == id` 的判定与官方 body 照旧走同一个漏斗。`neo_js_host.zig` 里新增一条单测钉住
+「借 session 权限会被 `no_permission` 挡下，自检那条权限能过这道门」。
+
+## §3 见证陷阱：`check_variable … value = 0` **不是**见证（本次窗口的读数）
+
+探针 mod 里同时写了两种候选见证，实机计数器：
+
+```
+PS_HIT                          = 784
+NEO_CAP_VAR_OK (isset 分支)      =   0
+NEO_CAP_VAR_OK (zerocheck 分支)  = 784
+```
+
+而同一窗口的 `state` 是 `write_rejected`（变量根本没写进去）。⇒ **`check_variable = { which =
+neo_cap_probe value = 0 }` 对没设过的变量也成立**（784/784 全中）。拿它当脚本侧见证会把
+「写失败」读成「写成功」。mod 已改成只有 `is_variable_set` 那一条。
+
+这条同时解释了为什么本次 `NEO_CAP_VAR_OK` 的**诚实**读数是 0：`is_variable_set` 对 0 值变量
+在这次读里也是 false（变量确实不存在）。
+
+## 这一发不能说
+
+1. 七项里 **5 项 ok 是正面读数**（`scope`/`descriptor`/`graph`/`vtable`/`fingerprint`）；
+   `token`/`state` 两格是**仪器缺陷**，它们的修法在 shot 之后落地，**没有在活体里复测** ——
+   下一发（第二个窗口）才能把这两格变成读数。
+2. **自检通过 ≠ 版本兼容**：它只覆盖写下来的那 7 条断言。
+3 . 本窗口的 `state_cleared=true` 是空真，不能当「残留已收回」的证据。
+
+## 复现命令（第二个窗口）
+
+```
+just deploy
+python C:/temp/session_bridge.py --timeout-s 420 C:/temp/c2_boot_inject.py C:/temp/sqjs_cap2.dll \
+    --launch D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe \
+    --launch-args=--continuelastsave --allow-window
+python C:/temp/cap_systems.py                      # 取 --systems
+# 把游戏窗口切到前台(taskbar),否则 supervisor 的 console 会 console_refused reason=focus
+python C:/temp/session_bridge.py --timeout-s 600 C:/temp/c2_capability_probe.py \
+    C:/temp/sqjs_cap2.dll --systems <N> --save-name <save> --resident --allow-window --poll-s 300
+just game console "event neo_ps.1"                 # 在探针轮询期间发
+python C:/temp/c2_boot_inject.py C:/temp/sqjs_cap2.dll --uninstall
+```
+
+**窗口前置的两条实机教训**（本次踩到）：
+
+* `console_refused reason=focus`：游戏窗口不在前台时 supervisor 拒绝粘贴控制台命令。切前台
+  用任务栏点击（本次经 `win-desktop`），**不要**用 `AppActivate` 之类在没有前台权限的会话里试。
+* 游戏从存档加载后是**暂停**的，且 `--continuelastsave` 不会有月度脉冲 ⇒ `onSystem` 只在
+  显式控制台事件里被调用；探针必须在发事件**之前**开始轮询（`C3CapabilityReset` 会清掉
+  `ran`，事件那一趟就是那一发的采样）。
