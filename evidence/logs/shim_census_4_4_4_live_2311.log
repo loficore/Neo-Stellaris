@@ -119,3 +119,12 @@
 #   C:/temp/census2.txt 写出来（logstate 与 gz 都报文件不存在）⇒ 这一发没有读数，不是判负。
 # 下一发：把编排拆成独立调用（execspy 用后台 shell 持有 SSH 会话；两次切换各自单独发起），
 #   不要在同一条远端命令里混 `&` 与 session_bridge。
+
+# ---- 第三发（2026-11-11 15:0x，用户「打」）：execspy 自己放弃，仍无读数 ----
+# 前置：MCP 直起 exe（pid 16816），截图确认 ▶ 2311.07.05 常速（真在跑）。
+# 失败点（execspy 的原话）：`game stayed active ... hot function` —— 它在等静默窗时
+#   连续读到 `still active: 204/212/195/253/... calls/1.5s`，等满预算后放弃，**没有装上**。
+#   ⇒ 这一发连仪器都没装上，零读数（不是判负）。
+# 归因：我用 session_bridge 的 focus+space 去暂停游戏，而**空格键被吞**（文档陷阱 7）。
+#   同一轮 MCP 的 space（点击后）却是好的 —— R2 第四发正是靠 MCP 的 space 把游戏推起来的。
+# 下一发只改一处：**暂停与恢复都用 win-desktop MCP 的 Shortcut(space)**，不要用 session_bridge 的 focus+space。
