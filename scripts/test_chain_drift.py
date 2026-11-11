@@ -8,7 +8,8 @@ copy is reachable through NS_STELLARIS_EXE / the default chain.
 
 import pytest
 
-from chain_drift import ManifestError, Node, parse_manifest
+from chain_drift import (LocatorError, ManifestError, Node, parse_locator,
+                         parse_manifest)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -51,3 +52,52 @@ def test_parse_manifest_rejects_unknown_class_and_wrong_column_count():
         with pytest.raises(ManifestError) as exc:
             parse_manifest(HEADER + bad)
         assert exc.value.line_no == 2
+
+
+def test_parse_locator_keeps_kind_argument_and_raw_parameters():
+    loc = parse_locator("strref:effect_impl.cpp@calls=0x1d13270@reads=0x38")
+    assert loc.kind == "strref"
+    assert loc.arg == "effect_impl.cpp"
+    assert loc.params == (("calls", "0x1d13270"), ("reads", "0x38"))
+
+
+def test_parse_locator_splits_a_bytes_confirmation_chain():
+    loc = parse_locator("strref:scriptedeffect.cpp&bytes:48 89 5c 24 ??")
+    assert loc.kind == "strref"
+    assert [c.kind for c in loc.confirms] == ["bytes"]
+    assert loc.confirms[0].arg == "48 89 5c 24 ??"
+
+
+def test_parse_locator_collects_node_references_from_the_whole_expression():
+    loc = parse_locator("global:writes_by=@node:effect_db_init,reads_by=@node:bst_insert_effect")
+    assert loc.kind == "global"
+    assert loc.node_refs == ("effect_db_init", "bst_insert_effect")
+
+
+def test_parse_locator_rejects_unknown_kind_and_empty_pattern():
+    for bad in ("rva:0x1d13270", "bytes:", "bytes:   ", "vtable:"):
+        with pytest.raises(LocatorError):
+            parse_locator(bad)
+
+
+def test_parse_locator_rejects_a_tab_inside_a_pattern():
+    with pytest.raises(LocatorError):
+        parse_locator("bytes:48\t89")
+
+
+def test_parse_manifest_allows_backward_references_only():
+    ok = HEADER + ("register\ta\taddress\tbytes:90\t0x1\t\t\tx\n"
+                   "register\tb\taddress\tbytes:90\t0x2\ta\t\tx\n")
+    assert parse_manifest(ok)[1].depends_on == ("a",)
+
+    # depends_on 前向引用
+    with pytest.raises(ManifestError) as exc:
+        parse_manifest(HEADER + ("register\ta\taddress\tbytes:90\t0x1\tb\t\tx\n"
+                                 "register\tb\taddress\tbytes:90\t0x2\t\t\tx\n"))
+    assert exc.value.line_no == 2 and "forward" in exc.value.message
+
+    # locator 里的 @node: 前向引用
+    with pytest.raises(ManifestError) as exc:
+        parse_manifest(HEADER + ("register\ta\taddress\tvtable:slot1==@node:b\t0x1\t\t\tx\n"
+                                 "register\tb\taddress\tbytes:90\t0x2\t\t\tx\n"))
+    assert exc.value.line_no == 2 and "forward" in exc.value.message
