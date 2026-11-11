@@ -610,6 +610,14 @@ fn registerNatives(ctx: ?*c.JSContext) void {
 /// ready 之后对**每个 active session** 调一次 handler。任何失败都不向外抛 ——
 /// 游戏继续,且只禁用出错的那个 session(Task A3/A4)。
 pub fn onSystem(id: u32, scope: u64) void {
+    // C3 能力自检(spec §3.3):进程**第一次**逐系统派发时用当次的真实 scope 跑七项,
+    // 结果落 `neo_js.log` 一行 `NEO_CAP …`。
+    //
+    // 位置在 `ensureLoaded()`/`state` 门**之前**:这一发要的是「引擎给我们的 scope 长什么样」,
+    // 与这个进程有没有 JS bundle 无关 —— 没有 bundle 的窗口里 `state` 会停在 `.failed`,
+    // 把自检放在门后就永远跑不到(Task 7 第一次窗口前改的,见 SDD ledger)。
+    runCapabilityOnce(scope);
+
     ensureLoaded();
     if (state != .ready) return;
 
@@ -624,11 +632,7 @@ pub fn onSystem(id: u32, scope: u64) void {
     current_scope = scope;
     defer current_scope = saved_scope;
 
-    // C3 能力自检(spec §3.3):进程**第一次**逐系统派发时用当次的真实 scope 跑七项,
-    // 结果落 `neo_js.log` 一行 `NEO_CAP …`。放在 JS handler 之前 —— 这一发要的是
-    // 「引擎给我们的 scope 长什么样」,与 mod 有没有注册 handler 无关。
-    runCapabilityOnce();
-
+    // C3 自检已经在函数头上跑过(那里拿的是入参 scope,不依赖 `current_scope`)。
     var i: usize = 0;
     while (i < session_len) : (i += 1) {
         if (!sessions[i].active) continue;
@@ -695,21 +699,21 @@ pub fn countryCalls() u64 {
 
 /// 第一次逐系统派发时跑七项,并把 `NEO_CAP …` 一行落进 `neo_js.log`。
 /// 之后每次派发都只读一个 bool 就返回 —— 这是几十万次/年的热路径。
-fn runCapabilityOnce() void {
+fn runCapabilityOnce(scope: u64) void {
     if (capability.hasRun()) return;
-    capability.maybeRun(capabilityEnv());
+    capability.maybeRun(capabilityEnv(scope));
     var buf: [256]u8 = undefined;
     emit("{s}", .{capability.snapshot().line(&buf)});
 }
 
 /// 自检的全部外部输入。`read` = 进程内 `ReadProcessMemory`(读不到是 `false`,不是「空」);
 /// `write_var` = 已有的 `set_variable` 判定面,不新增写通道。
-fn capabilityEnv() capability.Env {
+fn capabilityEnv(scope: u64) capability.Env {
     return .{
         .mem = .{ .ctx = undefined, .read = capabilityRead },
         .module_base = @intCast(moduleBase()),
         .systems = galaxySystemCount(),
-        .scope = current_scope,
+        .scope = scope,
         .write_var = capabilityWriteVar,
     };
 }
@@ -2610,4 +2614,20 @@ test "the C3 econ line stops after three countries" {
     std.mem.writeInt(u32, system[neo_vtable.SCOPE_MASK_OFF..][0..4], 0x80, .little);
     noteOtherScope(@intFromPtr(&system));
     try testing.expectEqual(@as(usize, 3), countOccurrences(cap.text(), "NEO_C3_ECON "));
+}
+
+test "onSystem runs the capability self-test even when no JS bundle loaded" {
+    // 没有 JS mod 的窗口里 `state` 停在 `.failed`;自检必须在**门之前**跑,
+    // 否则 Task 7 那种窗口永远拿不到矩阵。
+    resetForTest();
+    defer resetForTest();
+    capability.reset();
+    defer capability.reset();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    try testing.expect(!capability.hasRun());
+    onSystem(7, 0);
+    try testing.expect(capability.hasRun());
+    try testing.expect(cap.contains("NEO_CAP "));
 }
