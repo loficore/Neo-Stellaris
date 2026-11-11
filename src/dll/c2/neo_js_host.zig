@@ -81,6 +81,7 @@ const flag_ids = @import("flag_ids.zig");
 const offsets = @import("../shared/offsets.zig");
 const opinion_table = @import("opinion_table.zig");
 const country_probe = @import("country_probe.zig");
+const capability = @import("capability.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -623,6 +624,11 @@ pub fn onSystem(id: u32, scope: u64) void {
     current_scope = scope;
     defer current_scope = saved_scope;
 
+    // C3 能力自检(spec §3.3):进程**第一次**逐系统派发时用当次的真实 scope 跑七项,
+    // 结果落 `neo_js.log` 一行 `NEO_CAP …`。放在 JS handler 之前 —— 这一发要的是
+    // 「引擎给我们的 scope 长什么样」,与 mod 有没有注册 handler 无关。
+    runCapabilityOnce();
+
     var i: usize = 0;
     while (i < session_len) : (i += 1) {
         if (!sessions[i].active) continue;
@@ -678,6 +684,60 @@ var country_call_count: u64 = 0;
 /// `onCountry` 的读数(诊断/测试)。
 pub fn countryCalls() u64 {
     return @atomicLoad(u64, &country_call_count, .monotonic);
+}
+
+// ---------------------------------------------------------------------------
+// C3 能力自检的接线(spec §3.3)
+//
+// 这里是唯一同时拿到 system `id` 与 `scope` 的逐系统入口,所以自检只在这里跑一次。
+// 不挂 hook、不改引擎字节;唯一的写是 `state` 那一项走已有的 `set_variable` 路径。
+// ---------------------------------------------------------------------------
+
+/// 第一次逐系统派发时跑七项,并把 `NEO_CAP …` 一行落进 `neo_js.log`。
+/// 之后每次派发都只读一个 bool 就返回 —— 这是几十万次/年的热路径。
+fn runCapabilityOnce() void {
+    if (capability.hasRun()) return;
+    capability.maybeRun(capabilityEnv());
+    var buf: [256]u8 = undefined;
+    emit("{s}", .{capability.snapshot().line(&buf)});
+}
+
+/// 自检的全部外部输入。`read` = 进程内 `ReadProcessMemory`(读不到是 `false`,不是「空」);
+/// `write_var` = 已有的 `set_variable` 判定面,不新增写通道。
+fn capabilityEnv() capability.Env {
+    return .{
+        .mem = .{ .ctx = undefined, .read = capabilityRead },
+        .module_base = @intCast(moduleBase()),
+        .systems = galaxySystemCount(),
+        .scope = current_scope,
+        .write_var = capabilityWriteVar,
+    };
+}
+
+fn capabilityRead(_: *anyopaque, addr: usize, len: usize, buf: []u8) bool {
+    _ = len; // 以 `buf.len` 为准(与 `graph_probe` 同一个口径)
+    return windows.readProcessMemory(addr, buf);
+}
+
+/// `[[module+0x3260BB0]+0x59C]` = 当前战役的星系条数(与驱动 `--systems` 同源)。
+/// 读不到给 0 ⇒ `graph` 检查记 `fail(unreadable)` —— 不是「假设它没问题」。
+fn galaxySystemCount() u32 {
+    if (comptime !is_windows) return 0;
+    const base = moduleBase();
+    if (base == 0) return 0;
+    const slot = std.math.add(u64, base, offsets.keyword_reg.RVA_GALAXY_MAP_DB) catch return 0;
+    const container = readU64Safe(slot) orelse return 0;
+    if (container == 0) return 0;
+    // `+0x59C` 是那份容器的原始条数(与系统对象的计数同一组偏移,§80.2)。
+    const count_at = std.math.add(u64, container, offsets.graph.EDGE_COUNT_OFF) catch return 0;
+    return readU32Safe(count_at) orelse 0;
+}
+
+/// `(scope, name, value) -> 写成功?`。id 从 scope 自己解,**不从调用方抄** ——
+/// `writeSystemVariable` 会再核对一遍 `scope+0x10 == id`,不一致就 `wrong_scope`。
+fn capabilityWriteVar(scope: u64, name: []const u8, value: u32) bool {
+    const id = neo_vtable.systemScopeId(scope) orelse return false;
+    return writeSystemVariable(currentPermissions(), id, name, @floatFromInt(value), scope) == .ok;
 }
 
 /// Slice 2 的**只读**诊断:引擎把我们注册的 effect 派发进一个**非 system** scope

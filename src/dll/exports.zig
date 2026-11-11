@@ -300,6 +300,7 @@ export fn C2NeoVerifyStatsInto(out: [*]u8) callconv(.c) i32 {
     return 16;
 }
 const c2_neo_dispatch = @import("c2/neo_dispatch.zig");
+const c2_capability = @import("c2/capability.zig");
 const c2_neo_effect = @import("c2/neo_effect.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
@@ -1323,6 +1324,31 @@ export fn C6ExecCallerRuleHitsInto(out: [*]u8) callconv(.c) u32 {
 /// 清计数 + 环 + 去重表 + drain 容量;不卸载 hook(必须在 Install 之前调)。
 export fn C6ExecCallerReset() callconv(.c) void {
     c2_exec_caller.reset();
+}
+
+// ---------------------------------------------------------------------------
+// C3-CAPABILITY(spec §3.2)— 运行时能力自检的只读矩阵。
+//
+// **只报告**:三个导出都不装 hook、不改引擎字节、不改任何行为的判据。
+// 进程第一次逐系统派发(`neo_js_host.onSystem`)时跑那七项,这里只把结果读出来;
+// `C3CapabilityReset` 清矩阵与 `ran`,让第二发能重跑。
+// ---------------------------------------------------------------------------
+
+/// 两个词:`[version = 1, check_count = 7]`;返回 2。
+export fn C3CapabilityLayout(out: [*]u32) callconv(.c) u32 {
+    const words: *[2]u32 = @ptrCast(out);
+    return c2_capability.layoutInto(words);
+}
+
+/// 56 B:每项 `u32 status, u32 reason`,顺序 = §3.1 的七项。
+/// 写满返回 0;缓冲短于 56 B 返回 -1 且一个字节都不写(短缓冲是拒读,不是截断)。
+export fn C3CapabilityStatsInto(out: [*]u8) callconv(.c) i32 {
+    return c2_capability.statsInto(out[0..c2_capability.STATS_SIZE]);
+}
+
+/// 清矩阵与 `ran`。不碰任何 hook(本模块没有 hook),也不重置引擎侧任何东西。
+export fn C3CapabilityReset() callconv(.c) void {
+    c2_capability.reset();
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.

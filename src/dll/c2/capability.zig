@@ -431,6 +431,26 @@ pub fn runScoped(env: Env, free: Report) Report {
 }
 
 // ---------------------------------------------------------------------------
+// Task 4 — 唯一入口(逐系统派发的第一趟)
+// ---------------------------------------------------------------------------
+
+/// 本进程跑过自检没有。`ran` 只在 `maybeRun` 里置位,`reset` 清掉(第二发重跑用)。
+pub fn hasRun() bool {
+    return current.ran;
+}
+
+/// 跑一次并保存矩阵。`ran` 之后直接返回 —— 逐系统派发一年会叫它几万次,
+/// 而七项检查只该在第一次拿到真实 scope 时做。
+///
+/// **只报告**:没有任何路径会因为这个结果改变 `neo_action` / `neo_effect` / 写路径的行为,
+/// 唯一的副作用是 `state` 那一项写了一个 `neo_cap_probe` 并写回 0(spec §2 B 档)。
+pub fn maybeRun(env: Env) void {
+    if (current.ran) return;
+    current = runScoped(env, runFree(env));
+    current.ran = true;
+}
+
+// ---------------------------------------------------------------------------
 // Tests (written first — Task 1 Step 1)
 // ---------------------------------------------------------------------------
 
@@ -856,4 +876,30 @@ test "runScoped marks all three scope checks skip when there is no scope" {
         try testing.expectEqual(Reason.no_scope, rep.reasonOf(c));
     }
     try testing.expectEqual(@as(usize, 0), write_n);
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 — 一次运行 + 导出
+// ---------------------------------------------------------------------------
+
+test "maybeRun runs exactly once until reset" {
+    reset();
+    var mem = FakeMem{};
+    const env = mem.env(TEST_MODULE, 0);
+
+    try testing.expect(!hasRun());
+    maybeRun(env);
+    try testing.expect(hasRun());
+    try testing.expect(snapshot().ran);
+
+    // 再调一次:矩阵必须**原样不动** —— 手工换一张,证明它不是重跑了才「看起来一样」。
+    var manual = snapshot();
+    manual.set(.token, .fail, .mismatch);
+    storeForTest(manual);
+    maybeRun(env);
+    try testing.expectEqual(Status.fail, snapshot().statusOf(.token));
+    try testing.expectEqual(Reason.mismatch, snapshot().reasonOf(.token));
+
+    reset();
+    try testing.expect(!hasRun());
 }
