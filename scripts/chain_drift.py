@@ -17,12 +17,15 @@ usage: python3 chain_drift.py --exe <path> [--manifest <tsv>] [--chain <name>]..
 from __future__ import annotations
 
 from bisect import bisect_right
+import argparse
 from dataclasses import dataclass, replace
 import datetime
 import hashlib
+import json
 import os
 import re
 import struct
+import sys
 
 import rttibatch
 from capstone import CS_ARCH_X86, CS_MODE_64, Cs
@@ -696,3 +699,144 @@ def format_report(meta, nodes, results):
         lines.append("\t".join([node.chain, node.node, node.cls, result.verdict,
                                 node.expect, got, delta, candidates, node.witness, note]))
     return "\n".join(lines) + "\n"
+
+
+def mask_rel32(raw):
+    """Render bytes as a ``bytes:`` pattern, wildcarding rel32 call/jump displacements.
+
+    ``E8``/``E9 rel32`` and ``0F 80..8F rel32`` carry a displacement, so those
+    four bytes move whenever the function is re-laid-out.  Masking them is what
+    turns "20 bytes at this RVA" into a pattern that can survive an address shift;
+    a plain hexdump would only ever match the build it came from.  Pure opcode
+    knowledge, no decoder, so it stays a pure function.
+    """
+    tokens = []
+    at = 0
+    while at < len(raw):
+        byte = raw[at]
+        if byte in (0xE8, 0xE9):
+            tokens.append(f"{byte:02x}")
+            tokens.extend(["??"] * min(4, len(raw) - at - 1))
+            at += 5
+        elif byte == 0x0F and at + 1 < len(raw) and 0x80 <= raw[at + 1] <= 0x8F:
+            tokens.extend(["0f", f"{raw[at + 1]:02x}"])
+            tokens.extend(["??"] * min(4, len(raw) - at - 2))
+            at += 6
+        else:
+            tokens.append(f"{byte:02x}")
+            at += 1
+    return " ".join(tokens)
+
+
+def report_path_for(exe_path, version):
+    """Default artifact path: ``evidence/xrefs/chain_drift_<version>.tsv`` under the repo."""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(repo, "evidence", "xrefs", f"chain_drift_{version}.tsv")
+
+
+def _bytes_at(exe, rva, count):
+    """``--bytes-at``: print a bytes: recipe for the code at ``rva`` and exit 0."""
+    img = load_image(exe)
+    try:
+        raw = img.read(rva, count)
+    except KeyError:
+        print(f"chain_drift: {rva:#x} is not inside the image")
+        return 3
+    print(f"bytes: {mask_rel32(raw)}")
+    print(f"# rva={rva:#x} count={len(raw)}")
+    return 0
+
+
+def _report_meta(args, exe, version):
+    return {"manifest": args.manifest, "exe": exe,
+            "exe_sha256": image_sha256(exe), "target_version": version}
+
+
+def main(argv=None):
+    """CLI.  Exit codes: 0 clean, 2 at least one red chain, 3 environment/manifest error."""
+    parser = argparse.ArgumentParser(
+        prog="chain_drift.py",
+        description="Resolve the manifest's locator recipes against one stellaris.exe copy.")
+    parser.add_argument("--exe", help="stellaris.exe copy (default: NS_STELLARIS_EXE, then the usual chain)")
+    parser.add_argument("--manifest", default=DEFAULT_MANIFEST, help="chain manifest TSV")
+    parser.add_argument("--chain", action="append", metavar="NAME",
+                        help="restrict to this chain (repeatable; default: all)")
+    parser.add_argument("--report", help="report path (default: evidence/xrefs/chain_drift_<version>.tsv)")
+    parser.add_argument("--json", action="store_true", help="print the report as JSON instead of writing it")
+    parser.add_argument("--bytes-at", type=lambda text: int(text, 16), metavar="RVA",
+                        help="print a bytes: recipe for the code at this RVA and exit")
+    parser.add_argument("-n", "--count", type=int, default=16, help="bytes to read with --bytes-at")
+    args = parser.parse_args(argv)
+
+    exe = args.exe or find_exe_or_none()
+    if args.bytes_at is not None:
+        if not exe or not os.path.exists(exe):
+            print("chain_drift: exe not found")
+            return 3
+        return _bytes_at(exe, args.bytes_at, args.count)
+
+    if args.report and os.path.realpath(args.report) == os.path.realpath(args.manifest):
+        print("chain_drift: --report must not overwrite the manifest")
+        return 3
+    try:
+        with open(args.manifest, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        print(f"chain_drift: cannot read manifest {args.manifest}: {exc}")
+        return 3
+    try:
+        nodes = parse_manifest(text)
+    except ManifestError as exc:
+        print(f"chain_drift: {exc}")
+        return 3
+
+    all_chains = []
+    for node in nodes:
+        if node.chain not in all_chains:
+            all_chains.append(node.chain)
+    if args.chain:
+        unknown = [name for name in args.chain if name not in all_chains]
+        if unknown:
+            print(f"chain_drift: unknown chain {unknown[0]!r} (manifest has {', '.join(all_chains) or 'none'})")
+            return 3
+        wanted = [name for name in all_chains if name in args.chain]
+    else:
+        wanted = all_chains
+
+    if not exe or not os.path.exists(exe):
+        print("chain_drift: exe not found")
+        return 3
+    if not nodes:
+        print("chain_drift: empty manifest")
+        return 2
+
+    img = load_image(exe)
+    version = pe_version(img.blob)
+    resolver = Resolver(img, pdata_index(img))
+    meta = _report_meta(args, exe, version)
+    colors = []
+    payload = {}
+    selected = []
+    for chain in wanted:
+        chain_nodes = [node for node in nodes if node.chain == chain]
+        color, results, unverified = evaluate_chain(chain_nodes, resolver)
+        colors.append(color)
+        payload[chain] = {"color": color, "structure_unverified": unverified,
+                          "results": [result.__dict__ | {"node": result.node} for result in results]}
+        selected.extend(zip(chain_nodes, results))
+    report = format_report(meta, [node for node, _r in selected],
+                           [result for _n, result in selected])
+    if args.json:
+        print(json.dumps({"meta": meta, "chains": payload}, indent=2))
+    else:
+        path = args.report or report_path_for(exe, version)
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(report)
+        summary = " ".join(chain + "=" + payload[chain]["color"] for chain in wanted)
+        print(f"chain_drift: wrote {path} ({summary})")
+    return exit_code(colors)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

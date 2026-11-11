@@ -13,7 +13,7 @@ import pytest
 from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, NodeResult, match_bytes, parse_bytes_pattern, parse_locator,
                          parse_manifest, pdata_index, pe_version, Resolver, substitute_node_refs,
                          decide, evaluate_chain, exit_code, format_report, locator_mix,
-                         REPORT_COLUMNS)
+                         REPORT_COLUMNS, main, mask_rel32, report_path_for)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -330,3 +330,32 @@ def test_exit_code_maps_red_to_two_and_everything_else_to_zero():
     assert exit_code(["green", "yellow"]) == 0
     assert exit_code(["green", "red"]) == 2
     assert exit_code([]) == 2
+
+
+def test_mask_rel32_wildcards_call_and_jump_displacements_only():
+    assert mask_rel32(bytes.fromhex("48895c2408e800000000")) == "48 89 5c 24 08 e8 ?? ?? ?? ??"
+    assert mask_rel32(bytes.fromhex("7f32488bcb")) == "7f 32 48 8b cb"
+
+
+def test_report_path_is_versioned():
+    assert report_path_for("/x/stellaris.exe", "4.4.4").endswith("chain_drift_4.4.4.tsv")
+
+
+def test_main_rejects_unknown_chain_name(tmp_path, capsys):
+    man = tmp_path / "m.tsv"
+    man.write_text("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n"
+                   "register\ta\taddress\tbytes:90\t0x1\t\t\tx\n")
+    assert main(["--exe", "/nonexistent.exe", "--manifest", str(man), "--chain", "nope"]) == 3
+
+
+def test_main_rejects_writing_the_report_over_the_manifest(tmp_path):
+    man = tmp_path / "m.tsv"
+    man.write_text("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
+    assert main(["--exe", "/nonexistent.exe", "--manifest", str(man),
+                 "--report", str(man)]) == 3
+
+
+def test_main_reports_environment_error_when_exe_is_missing(tmp_path):
+    man = tmp_path / "m.tsv"
+    man.write_text("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
+    assert main(["--exe", str(tmp_path / "nope.exe"), "--manifest", str(man)]) == 3
