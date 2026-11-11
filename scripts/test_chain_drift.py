@@ -381,3 +381,12 @@ def test_register_chain_is_green_on_the_pinned_4_4_4_binary():
     assert unverified == ["token_db_object", "descriptor_array", "class_info_trigger",
                           "class_info_effect", "donor_docstring_trigger",
                           "donor_docstring_effect"]
+
+
+@pytest.mark.skipif(find_exe_or_none() is None, reason="stellaris.exe not available")
+def test_dispatch_chain_is_green_on_the_pinned_4_4_4_binary():
+    nodes = _chain_nodes("dispatch")
+    img = load_image(find_exe_or_none())
+    color, results, unverified = evaluate_chain(nodes, Resolver(img, pdata_index(img)))
+    assert color == "green", [r for r in results if r.verdict not in ("found", "skipped_structure")]
+    assert unverified == ["donor_vtable"]

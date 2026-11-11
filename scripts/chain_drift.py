@@ -539,16 +539,33 @@ def parse_bytes_pattern(text):
     return bytes(values), bytes(masks)
 
 
+def _match_at(code, off, value, mask):
+    return all((code[off + i] & m) == (v & m) for i, (v, m) in enumerate(zip(value, mask)))
+
+
 def match_bytes(img, pattern, start_rva, end_rva):
-    """Every RVA in ``[start, end)`` where ``pattern`` matches; mask 0 = wildcard."""
+    """Every RVA in ``[start, end)`` where ``pattern`` matches; mask 0 = wildcard.
+
+    The search is anchored on the leading run of fully-specified bytes and handed
+    to ``bytes.find`` (C speed): a 37 MB section scanned position by position in
+    Python is minutes per pattern, and every manifest ``bytes:`` node runs this.
+    """
     value, mask = pattern
     code = _read_span(img, start_rva, end_rva)
-    if not value:
+    if not value or len(code) < len(value):
         return []
+    lead = 0
+    while lead < len(value) and mask[lead] == 0xFF:
+        lead += 1
     hits = []
-    for off in range(len(code) - len(value) + 1):
-        if all((byte & m) == (v & m) for byte, v, m in zip(code[off:off + len(value)], value, mask)):
-            hits.append(start_rva + off)
+    if not lead:
+        positions = range(len(code) - len(value) + 1)
+        return [start_rva + off for off in positions if _match_at(code, off, value, mask)]
+    at = code.find(value[:lead])
+    while at != -1:
+        if at + len(value) <= len(code) and _match_at(code, at, value, mask):
+            hits.append(start_rva + at)
+        at = code.find(value[:lead], at + 1)
     return hits
 
 
