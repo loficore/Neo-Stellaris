@@ -218,7 +218,7 @@ python3 scripts/chain_drift.py --manifest /dev/null --bytes-at 0x1d13270 -n 24
 
 | 前缀 | 形式 | 找到什么 |
 |---|---|---|
-| `strref:` | `strref:<串>[@calls=<rva>][@reads=<disp>]` | 以该串结尾的 C 串被 `lea/mov` 引用的函数（后缀匹配：镜像里存的是 `C:\mnt\gsg\…` 全路径）；`calls=` / `reads=` 是「函数体内必须含有」的收敛条件 |
+| `strref:` | `strref:<串>[@calls=<rva>][@reads=<disp>]` | 以该串结尾的 C 串被 `lea/mov` 引用的函数。**后缀命中会回溯到该 C 串的起点**再找引用点 —— 镜像里存的是 `C:\mnt\gsg\…\scriptedeffect.cpp` 全路径，而代码 `lea` 指向整串第一个字节；拿后缀位置去找会得 0 个站点（这是 v1 第一次交付里真实发生过的缺陷）。`calls=` / `reads=` 是「函数体内必须含有」的收敛条件 |
 | `callshape:` | `callshape:callptr+<disp8>` | 体内含 `FF /2 [reg+disp8]`（`call qword ptr [reg+disp]`）的函数 |
 | `vtable:` | `vtable:slot<k>==<rva\|@node:NAME>` | `.rdata` 里第 k 槽等于该值的 8 对齐表起点 |
 | `global:` | `global:writes_by=@node:X,reads_by=@node:Y` | 两个函数体内 `[rip+disp32]` 操作数目标的**交集** |

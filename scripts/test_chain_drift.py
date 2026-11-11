@@ -14,7 +14,7 @@ import pytest
 from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, NodeResult, match_bytes, parse_bytes_pattern, parse_locator,
                          parse_manifest, pdata_index, pe_version, Resolver, substitute_node_refs,
                          decide, evaluate_chain, exit_code, format_report, locator_mix,
-                         REPORT_COLUMNS, find_exe_or_none, load_image, main,
+                         REPORT_COLUMNS, find_cstring, find_exe_or_none, load_image, main,
                          mask_rel32, report_path_for)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
@@ -160,6 +160,27 @@ def test_pe_version_reads_fixed_file_info_and_falls_back_to_unknown():
 def _lea(site_va, target_va):
     """48 8D 0D <disp32> —— 指向 target 的 lea rcx。"""
     return b"\x48\x8d\x0d" + struct.pack("<i", target_va - (site_va + 7))
+
+
+def test_find_cstring_returns_the_start_of_the_containing_string():
+    # 后缀命中只说明"这串出现在这里"；代码 lea 指向整串第一个字节，所以返回值必须是
+    # 包含该后缀的那个 C 串起点，而不是后缀本身。
+    img = fake_pe([(".rdata", 0x4000, b"a.cpp\x00C:\\src\\b.cpp\x00")])
+    assert find_cstring(img, "a.cpp") == [0x4000]
+    assert find_cstring(img, "b.cpp") == [0x4000 + 6]
+
+
+def test_strref_anchors_at_the_cstring_start_when_the_needle_is_only_a_suffix():
+    # 真实镜像存的是 C:\mnt\gsg\...\source\scriptedeffect.cpp，代码 lea 指向整串起点
+    # 0x25181d0（不是后缀 0x25181fe）。后缀命中回溯失败时这条会得 0 个候选。
+    path = b"C:\\mnt\\gsg\\stellaris\\augustus\\augustus\\source\\scriptedeffect.cpp\x00"
+    code = bytearray(b"\xcc" * 0x40)
+    code[0x10:0x17] = _lea(0x1010, 0x4000)
+    img = fake_pe([(".text", 0x1000, bytes(code)),
+                   (".pdata", 0x3000, struct.pack("<III", 0x1000, 0x1040, 0)),
+                   (".rdata", 0x4000, path)])
+    assert Resolver(img, pdata_index(img)).resolve(
+        Locator("strref", "scriptedeffect.cpp"), {}) == [0x1000]
 
 
 def test_strref_resolves_to_the_enclosing_function():

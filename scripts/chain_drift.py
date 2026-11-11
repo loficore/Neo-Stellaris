@@ -310,19 +310,26 @@ def _read_span(img, start, end):
 
 
 def find_cstring(img, text):
-    """Every RVA in the image where ``text`` ends with a NUL.
+    """Every C-string **start** whose tail is ``text``.
 
     The real image embeds the full build path (``C:\\mnt\\gsg\\...\\scriptedeffect.cpp``),
     so a suffix match is the only stable form: the prefix is build-machine noise.
+    Code references the *first* byte of that string (a ``lea`` lands on it), not the
+    suffix position, so each hit is walked back to the preceding NUL before it is
+    returned. Returning the suffix instead is the defect that made the two
+    ``__FILE__`` anchors look like they had no reference sites at all.
     """
-    needle = text.encode()
-    hits = []
-    for _va, vs, praw in img.secs:
+    needle = text.encode() + b"\x00"
+    hits = set()
+    for va, vs, praw in img.secs:
         blob = img.blob[praw:praw + vs]
-        at = blob.find(needle + b"\x00")
+        at = blob.find(needle)
         while at != -1:
-            hits.append(_va + at)
-            at = blob.find(needle + b"\x00", at + 1)
+            start = at
+            while start > 0 and blob[start - 1] != 0:
+                start -= 1
+            hits.add(va + start)
+            at = blob.find(needle, at + 1)
     return sorted(hits)
 
 

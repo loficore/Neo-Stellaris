@@ -10,8 +10,8 @@
 # re-anchor" on a new build — never "the chain is broken".  Read strref/callshape/
 # vtable/global verdicts and the report's structure_unverified column for that.
 chain	node	class	locator	expect	depends_on	witness	evidence
-register	get_scripted_effect	address	strref:scripted effect %s is overwriting an existing effect, rename it	0x89f960		token_readback	c1_validation §27
-register	get_scripted_trigger	address	strref:scripted trigger %s is overwriting an existing trigger, rename it	0x8a0450		token_readback	c1_validation §27
+register	get_scripted_effect	address	strref:scriptedeffect.cpp	0x89f960		token_readback	c1_validation §27
+register	get_scripted_trigger	address	strref:scriptedtrigger.cpp	0x8a0450		token_readback	c1_validation §27
 register	get_or_add_token	address	bytes:48 89 5c 24 18 48 89 74 24 20 88 54 24 10 55 57 41 54 41 56 41 57 48 8d 6c 24 80 48	0x1d13270		token_readback	pipeline §18 §20
 register	token_db_singleton	address	bytes:48 83 ec 28 ba 14 00 00 00 65 48 8b 04 25 58 00 00 00 48 8b 08 8b 04 0a 39 05 12 1b	0x1d12c60		token_readback	pipeline §18
 register	id_name_rebuild	address	bytes:48 89 5c 24 18 48 89 6c 24 20 56 57 41 56 48 83 ec 20 e8 ??	0x1d12cd0		token_readback	pipeline §30.2
