@@ -1,0 +1,110 @@
+# R5 —— C6-5（官方语义不受影响，对照组）实机窗口，Stellaris 4.4.4
+
+> **授权（逐字）**：2026-11-11，用户：「那你派worker，将R5和R3派发出去」⇒ 本发授权 **R5、R3 各一发**。
+> 归属：worker `term_947eb627` / 分支 `loficore/live-r5-r3` / 模型 `aigw-main/code-reverse`。
+> DLL：`C:/temp/sqjs_r5.dll`，sha256 `71598f3b95754e4ae12376c78d8da4fa1732813d5728d86c1c9d167975e1a373`
+> （`zig build` 的 `zig-out/bin/stellaris_quickjs.dll`，Debug 构建，与主机侧 sha 相同）。
+
+本发问的是：**同一存档、同一 mod、同一窗口长度（12 个游戏月）跑两趟，唯一差别是装没装我们的
+DLL —— 官方 marker 集合是否逐项相等，脚本错误行数差是否为 0。**
+
+## 对照组形状（两趟逐项相同，只有 DLL 一条不同）
+
+| 项 | 趟 A（base） | 趟 B（with） |
+|---|---|---|
+| 存档 | `C:/temp/c6_r5_base.sav` = `autosave_2314.07.01.sav` | 同一份（每趟前从 base 恢复） |
+| 存档 bytes / sha256 | 3,994,385 / `e286e74d840d8af3a3135d8f144435edfb9bae1058ab4b04ec351c1f4182f6e0` | 同左（`RESTORE` 回执复读同一 sha） |
+| mod | `mod/neo_r5_probe.mod`（只有 `on_monthly_pulse → event → random_system → every_system → log = "R5_HIT"`） | 同左 |
+| 启动形状 | `stellaris.exe --continuelastsave`（session 1，`r5_launch.py`） | 同左（`c2_boot_inject.py --launch`） |
+| 注入 | 无 | `BOOT ... install_rc=0`，boot 期注入 |
+| 窗口 | 前 12 个 `R5_HIT`（`2314.8.1` … `2315.7.1`） | 同左 |
+
+探针 mod 只保留官方 `log` 效果：`neo_action = { }`（我们注册的 effect）按任务要求**删掉**，
+所以这两趟不含任何本项目注册的 keyword；唯一变量是 DLL 装没装。
+
+## 趟 A（base，不注入）回执
+
+```
+LAUNCH pid=17656 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+WINDOW trip=A game_bytes=2511 sha256=cdd8335556e71f19c2b6e92c951b7aa43c2196f05167cd3cb2045fe4a1643fd2 pulses=19
+WINDOW start=177 end=1808 bytes=1631 dst=C:/temp/c6_r5_A_game.log sha256=7685175509c47db43416ddf504bdf3a5ae25184950ab47f571169c9f4a8aba15
+ERRORLOG bytes=3302 sha256=cbd28025d28b672c62ebd5a59f20c659740702cac882897c1aa1802e81fe85c7 script_error=0 unexpected_token=0 dst=C:/temp/c6_r5_A_error.log
+```
+
+窗口里的 `R5_HIT` = **12**（`grephead ... R5_HIT` 的 `hits=12`），月份 `2314.8.1` … `2315.7.1`。
+
+## 趟 B（with，boot 期注入）回执
+
+```
+[boot] launched pid=16700 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+BOOT dll=sqjs_r5.dll sha=71598f3b95754e4a effect_id=19343 set_id=19344 install_rc=0 alive=1
+calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 installed=1 verify=0 dispatched=40715 null_scope=0 mask_odd=0 writes=0 skipped=0 score_writes=0 score_skipped=0 set_calls=0 set_runs=0
+UNINSTALL rc=0 verify=0 alive=1
+WINDOW trip=B game_bytes=2358 sha256=865a92de67e9133fa664a6e711033616835082b0dd2f63d2e862abeacff34c2e pulses=16
+WINDOW start=177 end=1808 bytes=1631 dst=C:/temp/c6_r5_B_game.log sha256=bdd9d6017066b87a563068c47af5d2743bd7d2f4c24a6b8bc2e8ee114120bf00
+ERRORLOG bytes=3302 sha256=901c991a42af0b507962730212a17fa21bcb44034132edb4a7d5bfa279b38647 script_error=0 unexpected_token=0 dst=C:/temp/c6_r5_B_error.log
+```
+
+窗口里的 `R5_HIT` 同样 = **12**，月份区间与趟 A 逐项相同。`calls=0` 是**预期**：探针不用
+`neo_action`，所以引擎没有理由调用我们注册的 effect；`installed=1 verify=0` 证明 DLL 确实在。
+
+## 台帐（主机侧，`C:/temp/c6_r5_acceptance.tsv` → `evidence/logs/c6_acceptance_r5_4_4_4.tsv`）
+
+```
+C6-1 cannot_say missing_input
+C6-2 cannot_say missing_input
+C6-3 cannot_say missing_input
+C6-4 cannot_say windows=0 verdicts=-
+C6-5 pass missing=- extra=- error_delta=0
+C6-6 cannot_say missing_input
+C6 SUMMARY pass=1 fail=0 cannot_say=5
+```
+
+其余四门没有产物就是 `cannot_say` —— 本发不为它们造输入。
+
+## 判词
+
+**`C6-5 pass`** —— 判据逐字是「官方 marker 集合逐项相等 且 脚本错误行数差为 0」：
+`error_delta=0`，`missing=-`、`extra=-`（两份窗口的 marker 集合相等），两份 `error.log` 的
+`Script Error` / `Unexpected token` 都是 **0**。mod 对齐也成立：两趟窗口各 **12** 行 `R5_HIT`，
+月份区间逐项相同（`2314.8.1` … `2315.7.1`），若只在一趟出现就要按「mod 没对齐」重跑一次 ——
+没有发生。
+
+## 两条必须写在读数旁边的事实
+
+1. **`missing=-` / `extra=-` 这一格是空集相等，不是「比对了一堆 marker」。**
+   `c6_acceptance.official_markers` 只认**行首** `[A-Z][A-Z0-9_]{2,}` 的 marker，而 `game.log`
+   的每一行都以 `[HH:MM:SS][file]:` 开头 ⇒ 两份窗口的 marker 集合都是空集，所以这一格只能
+   读成「没有多出/少掉行首 marker」，不能读成「官方输出逐行相同」。真正有内容的读数在下面一条。
+2. **窗口内两份 `game.log` 的 15 行逐行对（去掉时间戳）只有 2 行不同，且差异只是引擎的
+   `playerEventId` 计数器：`507` vs `508`。** 用 `r5_errdiff.py` 跑：
+   `ERRDIFF a_lines=15 b_lines=15 shape_equal=True differ_lines=2`，差异行是
+   `Event first_contact_critters.85 ... playerEventId 507` / `... 508`。同一事件、同一选项、
+   同一顺序，只是实例编号整体差 1（加载期多/少一个实例的痕迹），**不是脚本行为改变，也不能从
+   这一发归因到 DLL**（没有第二发来把「加载期抖动」与「DLL 影响」分开）。
+   两份 `error.log` 去时间戳后是**整份相同**：`ERRDIFF a_lines=35 b_lines=35 differ_lines=0`。
+
+## 收尾
+
+- `taskkill /F /IM stellaris.exe` → `PROCS count=0`；`ns_world.py status` → `STATE=NO_GAME`。
+- `--uninstall` 回执 `UNINSTALL rc=0 verify=0 alive=1`；全程未 `FreeLibrary`。
+- 探针 mod **已摘除**：`dlc_load.json` 复原为窗口前的 `["mod/neo_ps_probe.mod"]`，
+  `mod/neo_r5_probe` 与 `mod/neo_r5_probe.mod` 已从主机删除（`MODREMOVE ... dir_exists=False
+  outer_exists=False`）。
+- 环境档/重跑：**0 次**。开窗前读数是 `pause=playing`（`just game status`），且 `R5_HIT`
+  在涨（`2314.8.1`→`2314.9.1` 每 11 s 一行）。
+
+## 产物（主机留在 `C:/temp/`，仓库只收台帐）
+
+| 文件 | 内容 |
+|---|---|
+| `C:/temp/c6_r5_A_game.log` | 趟 A 的 12 月窗口（1,631 B，sha `76851755…`） |
+| `C:/temp/c6_r5_A_error.log` | 趟 A 的 error.log（3,302 B，sha `cbd28025…`） |
+| `C:/temp/c6_r5_B_game.log` | 趟 B 的 12 月窗口（1,631 B，sha `bdd9d601…`） |
+| `C:/temp/c6_r5_B_error.log` | 趟 B 的 error.log（3,302 B，sha `901c991a…`） |
+| `evidence/logs/c6_acceptance_r5_4_4_4.tsv` | 上面那段台帐原文 |
+
+两趟的完整 `game.log` **没有贴进仓库**（体积），只在上面留了 size/sha 与窗口字节偏移
+（两趟都是 `start=177 end=1808`）。容器原始条数按 `--systems 788` 传入：同一战役存档
+（`save_hypergraph` 读出 `systems=788`），本发 DLL 未命中 `neo_action`（`last_id=0`），
+所以取存档口径；C6-2/C6-3 本发都是 `cannot_say`，这个数只出现在 detail 里。

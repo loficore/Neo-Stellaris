@@ -1,0 +1,26 @@
+# R5 probe — C6-5 control group (official effects only).
+#
+# One line per system per monthly pulse: `log = "R5_HIT"`. The monthly count is
+# therefore N per pulse (N = this campaign's live system count), which is both
+# the "is the game advancing" clock and the "did the mod stay aligned between
+# the two trips" receipt. Deliberately **no** `neo_action`: C6-5 asks whether
+# official scripted effects are unchanged, so the probe must not depend on any
+# keyword this project registers.
+#
+# `event = {` is untyped on purpose: an on_action has no scope (the C3 probe
+# lost a run to `country_event` on a no-scope call).
+namespace = neo_r5
+
+event = {
+	id = neo_r5.100
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		random_system = {
+			every_system = {
+				log = "R5_HIT"
+			}
+		}
+	}
+}

@@ -1,0 +1,15 @@
+# R5 probe — C6-5 control group. Official effects only.
+#
+# 4.4.4 on_action bodies only accept `events` / `random_events` (2026-11-01,
+# §89), so the body lives in one hidden event.
+#
+# The shape is the one §89 proved necessary: a no-scope on_action runs
+# `every_system` once, so a system scope is entered first. Nothing here is our
+# own keyword: `log` is the official effect, and the receipt is the fixed
+# string `R5_HIT`. The DLL being installed or not is the only variable between
+# the two R5 trips, which is what makes them a control group.
+on_monthly_pulse = {
+	events = {
+		neo_r5.100
+	}
+}
