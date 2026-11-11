@@ -185,3 +185,33 @@ def test_exit_code_separates_fail_from_cannot_say(tmp_path):
     uninstall = tmp_path / "u.txt"
     uninstall.write_text("UNINSTALL rc=1 verify=0 alive=1")
     assert c6.main([*common, "--uninstall", str(uninstall)]) == 1
+
+
+# --- 2026-11-11：真实 game.log 的行形状（R5 那一发暴露的空集 pass）-----------------
+
+REAL_LINE = ("[16:32:26][effect_impl.cpp:21978]: [2314.8.1] Log effect, "
+             "file: events/neo_r5.txt line: 22. R5_HIT")
+
+
+def test_official_markers_sees_a_marker_at_the_end_of_a_real_log_line():
+    """真实 `game.log` 以 `[HH:MM:SS][file:line]:` 开头，marker 在行尾。
+
+    旧实现只认行首，两份真实窗口都解析出空集 —— 于是「空集相等」被读成 pass。
+    """
+    assert c6.official_markers(REAL_LINE) == {"R5_HIT": 1}
+
+
+def test_c6_5_cannot_say_when_neither_log_yields_a_marker():
+    """两份日志都解析不出 marker ⇒ 仪器没看见东西，不是通过。"""
+    gate = c6.gate_official_unchanged(
+        base_log="[16:32:26][x.cpp:1]: nothing to see\n",
+        with_log="[16:32:27][x.cpp:1]: nothing to see\n",
+        base_err="", with_err="")
+    assert (gate.gate, gate.status) == ("C6-5", c6.CANNOT_SAY)
+    assert gate.detail == "no_markers_parsed"
+
+
+def test_c6_5_detail_reports_how_many_markers_were_compared():
+    """`markers=N` 让读者一眼分清「真的比过」与「空集相等」。"""
+    gate = c6.gate_official_unchanged(base_log=BASE, with_log=WITH, base_err="", with_err="")
+    assert "markers=3" in gate.detail

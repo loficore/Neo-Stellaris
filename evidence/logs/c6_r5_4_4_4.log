@@ -108,3 +108,42 @@ C6 SUMMARY pass=1 fail=0 cannot_say=5
 （两趟都是 `start=177 end=1808`）。容器原始条数按 `--systems 788` 传入：同一战役存档
 （`save_hypergraph` 读出 `systems=788`），本发 DLL 未命中 `neo_action`（`last_id=0`），
 所以取存档口径；C6-2/C6-3 本发都是 `cannot_say`，这个数只出现在 detail 里。
+
+---
+
+## 复判（2026-11-11，修好 `official_markers` 之后）—— 这一发不是空集 pass
+
+上面「两条必须写在读数旁边的事实」第 1 条说清了一件事：`C6-5 pass` 当时是**空集相等**
+（`official_markers` 只认行首，真实行以 `[HH:MM:SS][file:line]:` 开头 ⇒ 两份都解析出 0 个
+marker）。空集相等不能当通过，所以协调者在合并前做了两件事：
+
+1. **修仪器**（`scripts/c6_acceptance.py`）：`MARKER_RE` 从「行首」改成「行内任意位置的独立
+   大写 token」，并把「两份日志都解析不出 marker」判成 `cannot_say no_markers_parsed`
+   （空集不再可能是 pass）；`detail` 里加 `markers=<n>` 让读者一眼分清「真的比过」与「空集相等」。
+   三条新测试钉住：真实行形状能取到行尾 marker、空集判 `cannot_say`、`detail` 带 `markers=N`。
+2. **把两侧窗口日志收进仓库**（1.6 KB / 3.3 KB，共 4 份），原始读数因此可复现：
+   `c6_r5_A_game_window_4_4_4.log`、`c6_r5_B_game_window_4_4_4.log`、
+   `c6_r5_A_error_4_4_4.log`、`c6_r5_B_error_4_4_4.log`。
+
+复判命令（本地，同一批 artifact）：
+
+```
+python3 scripts/c6_acceptance.py \
+  --base-log evidence/logs/c6_r5_A_game_window_4_4_4.log \
+  --with-log evidence/logs/c6_r5_B_game_window_4_4_4.log \
+  --base-error evidence/logs/c6_r5_A_error_4_4_4.log \
+  --with-error evidence/logs/c6_r5_B_error_4_4_4.log --systems 788
+```
+
+读数（`evidence/logs/c6_acceptance_r5_4_4_4_markers.tsv`）：
+
+```
+C6-5 pass missing=- extra=- error_delta=0 markers=1
+```
+
+`markers=1` = `R5_HIT`，两趟各 **12** 次（逐项相等）。**判词不变（`C6-5 pass`），但它现在有内容**：
+不再是「比了两份空集」，而是「比了一个真实 marker 的 12 对 12」。
+
+仍然不能说的话（与上面一致，不改口径）：窗口内 15 行去时间戳后有 2 行差异，只差引擎
+`playerEventId` `507` vs `508`；这一发没有第二发来把「加载期实例编号抖动」与「DLL 影响」分开，
+所以这 2 行**既不能归因给 DLL，也不能反过来证明 DLL 无关**。

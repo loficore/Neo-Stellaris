@@ -2768,6 +2768,12 @@ python3 scripts/c6_acceptance.py --boot BOOT.txt --uninstall UNINSTALL.txt \
    不拿存档行数反推。
 5. **`error.log` 判的是行数差**，不是两份总行数相等 —— 两份日志长度本来就不同。C6-4 同理：多窗口时
    一条 `tiers_counts` 或 `tiers_partial` 就够把整门降成 `cannot_say`（计数相等不等于逐名相等）。
+6. **marker 在行尾，不在行首（2026-11-11 R5 实测）。** 真实 `game.log` 的行是
+   `[16:32:26][effect_impl.cpp:21978]: [2314.8.1] Log effect, … R5_HIT` —— 旧实现只认行首
+   `^[A-Z][A-Z0-9_]{2,}`，于是两份真实窗口都解析出**空集**，`missing=- extra=-` 被读成 pass。
+   现在按「行内任意位置的独立大写 token」取 marker，并且**两份都空 ⇒ `cannot_say
+   no_markers_parsed`**；`detail` 末尾的 `markers=<n>` 就是「到底比过几个 marker」。
+   **看到 `C6-5 pass missing=- extra=-` 先看 `markers=`**：没有这一格或它等于 0，就不是读数。
 
 ## IDA headless 现状(环境状态,非规则)
 

@@ -202,8 +202,13 @@ def gate_official_readback(text: str) -> Gate:
     return Gate("C6-4", CANNOT_SAY, detail)
 
 
-#: `game.log` 的行首 marker：至少三个字符的大写标识符。
-MARKER_RE = re.compile(r"^([A-Z][A-Z0-9_]{2,})(?:\s|$)")
+#: `game.log` 里的官方 marker：行内**任意位置**的独立大写标识符（至少三个字符）。
+#:
+#: 真实行的形状是 `[HH:MM:SS][effect_impl.cpp:21978]: [2314.8.1] Log effect, … R5_HIT`
+#: —— marker 在**行尾**。旧实现只认行首（`^[A-Z][A-Z0-9_]{2,}`），于是两份真实窗口
+#: 都解析出空集，「空集相等」被读成 pass（2026-11-11 R5 实测）。`[file:line]` 前缀里的
+#: `effect_impl.cpp` / `21978` 不构成独立大写 token，不会被误计。
+MARKER_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Z][A-Z0-9_]{2,})(?![A-Za-z0-9_])")
 #: 装了 DLL 的那一趟会多出 `NEO_JS_*` / `NEO_C*` —— 那是我们的行，不是官方脚本的行。
 #: `PS_HIT` 是 **mod** 写的，两趟都在，不许排。查过
 #: `evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv`：官方 keyword 里没有 `NEO_` 前缀。
@@ -213,13 +218,13 @@ ERROR_MARKERS = ("Script Error", "Unexpected token")
 
 
 def official_markers(text: str) -> collections.Counter:
-    """每行行首的官方 marker 计数；我们自己的前缀整行不计。"""
+    """每行的官方 marker 计数（行内任意位置的独立大写 token）；我们自己的前缀不计。"""
     markers: collections.Counter = collections.Counter()
     for line in text.splitlines():
-        match = MARKER_RE.match(line)
-        if not match or match.group(1).startswith(MARKER_EXCLUDE_PREFIXES):
-            continue
-        markers[match.group(1)] += 1
+        for token in MARKER_RE.findall(line):
+            if token.startswith(MARKER_EXCLUDE_PREFIXES):
+                continue
+            markers[token] += 1
     return markers
 
 
@@ -243,11 +248,14 @@ def gate_official_unchanged(*, base_log: str | None, with_log: str | None,
         return Gate("C6-5", CANNOT_SAY, "missing_input:" + ",".join(missing_inputs))
     base = official_markers(base_log)
     with_dll = official_markers(with_log)
+    if not base and not with_dll:
+        # 空集相等不是「官方输出一致」，是仪器没看见东西 —— 判 cannot_say，不许当 pass。
+        return Gate("C6-5", CANNOT_SAY, "no_markers_parsed")
     missing = sorted((base - with_dll).elements())
     extra = sorted((with_dll - base).elements())
     error_delta = script_errors(with_err) - script_errors(base_err)
     detail = (f"missing={','.join(missing) or '-'} extra={','.join(extra) or '-'} "
-              f"error_delta={error_delta}")
+              f"error_delta={error_delta} markers={len(base | with_dll)}")
     failed = bool(missing) or bool(extra) or error_delta != 0
     return Gate("C6-5", FAIL if failed else PASS, detail)
 

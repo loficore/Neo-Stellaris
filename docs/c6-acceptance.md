@@ -30,7 +30,7 @@ C6 判的是「这套运行期 keyword 能力可以交给 mod 作者用」，不
 | C6-2 | 引擎按星系调用我们的代码 | `scripts/c2_exec_caller_probe.py` 的 artifact | dispatch_named | distinct_ids 与**这一场**容器原始条数逐项相等 | auto |
 | C6-3 | 状态写进真实存档、逐系统可对 | `scripts/c5_variable_probe.py --name neo_mark` 的逐系统行 + 同一进程的 `--stats` 写入计数 | systems= | 系统集合与容器逐项相等、值 = 系统 id（判词 `neo_state_written`） | auto |
 | C6-4 | 官方 DSL 读得回我们写的状态并据此分支 | `scripts/c2_graph_reconcile.py` 的引擎回执 vs 主机侧重算 | tiers_named | 有 `--name-map` 时逐名相等；没有时只能 `tiers_counts`（判词 `score_drives_official_state`） | auto |
-| C6-5 | 官方 scripted_effects 语义不变 | 同一存档同一场景的两份 `game.log`（`base.log` / `with_dll.log`）与两份 `error.log` | official_effects_unchanged | `error.log` 零新增脚本错误、官方 marker 集合逐项相等 | manual |
+| C6-5 | 官方 scripted_effects 语义不变 | 同一存档同一场景的两份 `game.log`（`base.log` / `with_dll.log`）与两份 `error.log` | official_effects_unchanged | `error.log` 零新增脚本错误、官方 marker 集合逐项相等（**空集不算通过**：两份都解析不出 marker 时台帐判 `cannot_say no_markers_parsed`） | manual |
 | C6-6 | 收尾可验证、不留下必须卸载的钩子 | `scripts/c2_boot_inject.py --uninstall` 的回执一行 | UNINSTALL | rc=0 且 verify=0，host 存活，且**从不** FreeLibrary | auto |
 
 ## 2. 每道门：通过 / 失败 / 不能说
