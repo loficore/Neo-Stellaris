@@ -14,8 +14,16 @@ from bytes alone (``version_drift_4_4_4.md`` §0).
 
 usage: python3 chain_drift.py --exe <path> [--manifest <tsv>] [--chain <name>]...
 """
+from bisect import bisect_right
 from dataclasses import dataclass, replace
+import hashlib
+import os
 import re
+import struct
+
+import rttibatch
+
+Image = rttibatch.Image
 
 MANIFEST_COLUMNS = ("chain", "node", "class", "locator", "expect", "depends_on",
                     "witness", "evidence")
@@ -188,3 +196,85 @@ def parse_manifest(text):
     if not header_seen:
         raise ManifestError(1, "missing header row")
     return nodes
+
+
+# Same three-candidate chain as rttibatch.find_exe (env first, then the Linux copy,
+# then the Windows install); the difference is that a miss returns None here, so a
+# test can skip instead of the whole run dying with SystemExit.
+_EXE_CANDIDATES = (
+    "/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe",
+    r"D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe",
+)
+
+
+def find_exe_or_none():
+    """Path of a readable stellaris.exe copy, or None — never exits."""
+    for cand in (os.environ.get("NS_STELLARIS_EXE"), *_EXE_CANDIDATES):
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
+def load_image(path):
+    """Read-only PE load; no process, no injection."""
+    with open(path, "rb") as fh:
+        return rttibatch.Image(fh.read())
+
+
+def image_sha256(path):
+    """sha256 of the exe copy, for the report's provenance line."""
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+_VERSION_SIGNATURE = b"\xbd\x04\xef\xfe"  # VS_FIXEDFILEINFO.dwSignature, LE
+
+
+def pe_version(blob):
+    """``a.b.c.d`` from the PE's version resource, or ``unknown``.
+
+    Scans for the VS_FIXEDFILEINFO signature rather than walking the resource
+    tree: the resource directory is not in any section Image parses, and the
+    four version words sit right behind the signature.  A build with no version
+    resource reports ``unknown`` — the tool has no version allow-list (that is
+    neo_install's job).
+    """
+    at = blob.find(_VERSION_SIGNATURE)
+    while at != -1:
+        if at + 16 <= len(blob):
+            ms, ls = struct.unpack_from("<II", blob, at + 8)
+            return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+        return "unknown"
+    return "unknown"
+
+
+@dataclass(frozen=True)
+class PdataIndex:
+    """x64 RUNTIME_FUNCTION bounds, sorted by start, for enclosing-function lookup."""
+    starts: tuple[int, ...]
+    bounds: tuple[tuple[int, int], ...]
+
+    def func_of(self, rva):
+        """(begin, end) of the function containing ``rva``, or None."""
+        idx = bisect_right(self.starts, rva) - 1
+        if idx < 0:
+            return None
+        begin, end = self.bounds[idx]
+        return None if rva >= end else (begin, end)
+
+
+def pdata_index(img):
+    """Index every .pdata RUNTIME_FUNCTION entry (12 bytes: begin, end, unwind)."""
+    entries = []
+    for i in range(len(img.secs)):
+        if rttibatch.section_name(img, i) != ".pdata":
+            continue
+        _va, vs, praw = img.secs[i]
+        blob = img.blob[praw:praw + vs]
+        for off in range(0, len(blob) - 11, 12):
+            begin, end, _unwind = struct.unpack_from("<III", blob, off)
+            if begin == 0 and end == 0:
+                continue
+            entries.append((begin, end))
+    entries.sort()
+    return PdataIndex(tuple(begin for begin, _end in entries), tuple(entries))

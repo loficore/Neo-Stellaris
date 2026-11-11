@@ -6,10 +6,12 @@ self-证 fence at the bottom reads the pinned 4.4.4 binary and is skipped when n
 copy is reachable through NS_STELLARIS_EXE / the default chain.
 """
 
+import struct
+
 import pytest
 
-from chain_drift import (LocatorError, ManifestError, Node, parse_locator,
-                         parse_manifest)
+from chain_drift import (Image, LocatorError, ManifestError, Node, parse_locator,
+                         parse_manifest, pdata_index, pe_version)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -101,3 +103,51 @@ def test_parse_manifest_allows_backward_references_only():
         parse_manifest(HEADER + ("register\ta\taddress\tvtable:slot1==@node:b\t0x1\t\t\tx\n"
                                  "register\tb\taddress\tbytes:90\t0x2\t\t\tx\n"))
     assert exc.value.line_no == 2 and "forward" in exc.value.message
+
+
+HEADER_SIZE = 0x100
+RAW_START = 0x200
+
+
+def fake_pe(sections, base=0x140000000):
+    """Build a PE from [(name, rva, bytes)] with the header fields Image.__init__ reads.
+
+    Same field layout as test_rttibatch.fake_image, generalised to any number of
+    named sections: e_lfanew=0x100, SizeOfOptionalHeader=0x68, VirtualSize ==
+    SizeOfRawData, raw bytes packed from 0x200 in declaration order.
+    """
+    blob = bytearray(RAW_START + sum(len(data) for _n, _va, data in sections))
+    struct.pack_into("<I", blob, 0x3C, HEADER_SIZE)            # e_lfanew
+    blob[HEADER_SIZE:HEADER_SIZE + 4] = b"PE\0\0"
+    struct.pack_into("<H", blob, HEADER_SIZE + 6, len(sections))   # NumberOfSections
+    struct.pack_into("<H", blob, HEADER_SIZE + 20, 0x68)          # SizeOfOptionalHeader
+    struct.pack_into("<H", blob, HEADER_SIZE + 24, 0x20B)         # PE32+
+    struct.pack_into("<Q", blob, HEADER_SIZE + 24 + 0x18, base)   # ImageBase
+    secs = HEADER_SIZE + 24 + 0x68
+    raw = RAW_START
+    for i, (name, va, data) in enumerate(sections):
+        off = secs + i * 40
+        blob[off:off + 8] = name.encode()
+        struct.pack_into("<I", blob, off + 8, len(data))       # VirtualSize
+        struct.pack_into("<I", blob, off + 12, va)             # VirtualAddress
+        struct.pack_into("<I", blob, off + 16, len(data))      # SizeOfRawData
+        struct.pack_into("<I", blob, off + 20, raw)            # PointerToRawData
+        blob[raw:raw + len(data)] = data
+        raw += len(data)
+    return Image(bytes(blob))
+
+
+def test_pdata_index_resolves_the_enclosing_function():
+    pdata = struct.pack("<III", 0x1000, 0x1100, 0x2000) + struct.pack("<III", 0x1100, 0x1200, 0x2010)
+    img = fake_pe([(".text", 0x1000, b"\xcc" * 0x200), (".pdata", 0x3000, pdata)])
+    idx = pdata_index(img)
+    assert idx.func_of(0x10FF) == (0x1000, 0x1100)
+    assert idx.func_of(0x1100) == (0x1100, 0x1200)
+    assert idx.func_of(0x1200) is None
+    assert idx.func_of(0x0FFF) is None
+
+
+def test_pe_version_reads_fixed_file_info_and_falls_back_to_unknown():
+    fixed = struct.pack("<IIII", 0xFEEF04BD, 0x00010000, 0x00040004, 0x00040005)
+    assert pe_version(b"\x00" * 32 + fixed) == "4.4.4.5"
+    assert pe_version(b"\x00" * 64) == "unknown"
