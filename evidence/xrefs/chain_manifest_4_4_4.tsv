@@ -43,3 +43,25 @@ dispatch	effect_pred_plus98	address	bytes:48 89 5c 24 08 57 48 83 ec 20 48 8b fa
 dispatch	trigger_pred_slot	address	bytes:48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9 48 85 d2 74 25 48 8b 01 ff 50 70 48	0x349230		c6_log_lines	c1_validation §75 §76
 dispatch	trigger_eval_slot	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 48 8b f9 49 8b f0 48 83 c1 78 48 8b da e8 ?? ?? ?? ?? 48 8b 07 48 8d 93 78 02 00 00 4c 8b c6 48 8b cf 48 8b 5c 24 30 48 8b 74 24 38 48 83 c4 20 5f 48 ff 60 20 cc cc cc cc cc cc cc cc cc cc cc cc 48 89 5c 24 10 48 89 74 24 18 57 48 81 ec e0 02	0x1a91a80		c6_log_lines	c1_validation §77; 68 B body + following bytes: twin 0x1a91a30 is byte-identical inside the body (differs only in a masked call rel32)
 dispatch	out_of_family_dispatch	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08	0xcc4220		c6_log_lines	c1_validation §72
+state_write	set_variable_create	address	bytes:40 53 48 83 ec 20 b9 18 03 00 00 e8 ?? ?? ?? ?? 48 8b d8 48 89 44 24 38 33 d2 41 b8 18 03 00 00 48 8b c8 e8 ?? ?? ?? ?? 48 8b cb e8 ?? ?? ?? ?? 48 8d 05 b9 3b d4 00 48 89 03 48 8d 05 cf 39 d4	0x18a6970		save_join	c1_validation §94 §95 §96
+state_write	set_variable_parser	address	bytes:48 89 5c 24 18 48 89 54 24 10 55 56 57 48 8d 6c 24 b9 48 81 ec c0 00 00 00 48 8b fa 48 8b d9 33 f6 89 75 c7 48 81 c1 f0	0x188e240		save_join	c1_validation §94 §96
+state_write	set_variable_body	address	bytes:48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20 48 8b f2 48 8b f9 4c 8b c2	0x188e1d0		save_join	c1_validation §94 §96
+state_write	set_variable_vtable	address	vtable:slot9==@node:set_variable_body	0x25ea560	set_variable_body	save_join	c1_validation §94 (slot9 = vptr+0x48 = body, slot5 = vptr+0x28 = parser)
+state_write	class_info_set_variable	structure		-		save_join	c1_validation §94
+state_write	docstring_set_variable	structure		-		save_join	c1_validation §94
+state_write	field_name_string	structure		-		save_join	c1_validation §94
+state_write	field_value_cell	structure		-		save_join	c1_validation §94
+state_write	field_parse_state	structure		-		save_join	c1_validation §94
+graph	system_resolver	address	bytes:48 81 79 08 80 00 00 00 75 09 8b 41 10 89 44 24 08 eb 08 c7 44 24 08 ff ff ff ff 48 8b 05 86 d1	0x3939f0		zero_diff	graph_runtime §1.2 §1.11
+graph	edge_add	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 50 48 8b f2 48 8b f9 48 8d 4a	0x8bbaa0		zero_diff	graph_runtime §1
+graph	edge_remove	address	bytes:40 53 57 41 54 48 83 ec 20 48 63 81 9c 05 00 00 33 db 4c 8b	0x8bbc20		zero_diff	graph_runtime §1
+graph	read_path_a	address	bytes:48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57 48 81 ec a0 01 00 00 48 8b da 48 8b	0x1afe500		zero_diff	graph_runtime §2.2
+graph	read_path_b	address	bytes:48 8b c4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 81 ec e0 01 00 00	0x1ae3700		zero_diff	graph_runtime §2.3
+graph	read_path_c	address	bytes:44 89 4c 24 20 44 89 44 24 18 48 89 4c 24 08 55 56 57 41 54	0x1b86e30		zero_diff	graph_runtime §2.4
+graph	edge_table_global	structure		-		zero_diff	graph_runtime §1.11
+graph	edge_container_offsets	structure		-		zero_diff	graph_runtime §1
+graph	dirty_mask_global	structure		-		zero_diff	graph_runtime §1.4.1
+scope	scope_mask_field	structure		-		mask_id	c1_validation §80.2 §91.7
+scope	scope_id_field	structure		-		mask_id	c1_validation §80.2 §91.7
+scope	country_scope_vtable	structure		-		mask_id	runtime_js_c2_country_scope_4_4_4.log
+scope	dispatch_passes_scope_in_rdx	structure		-		mask_id	c1_validation §91.7

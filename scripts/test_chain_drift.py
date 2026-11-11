@@ -390,3 +390,19 @@ def test_dispatch_chain_is_green_on_the_pinned_4_4_4_binary():
     color, results, unverified = evaluate_chain(nodes, Resolver(img, pdata_index(img)))
     assert color == "green", [r for r in results if r.verdict not in ("found", "skipped_structure")]
     assert unverified == ["donor_vtable"]
+
+
+@pytest.mark.skipif(find_exe_or_none() is None, reason="stellaris.exe not available")
+@pytest.mark.parametrize("chain,expected_unverified", [
+    ("state_write", ["class_info_set_variable", "docstring_set_variable",
+                     "field_name_string", "field_value_cell", "field_parse_state"]),
+    ("graph", ["edge_table_global", "edge_container_offsets", "dirty_mask_global"]),
+    ("scope", ["scope_mask_field", "scope_id_field", "country_scope_vtable",
+               "dispatch_passes_scope_in_rdx"]),
+])
+def test_remaining_chains_are_green_with_their_structure_gaps(chain, expected_unverified):
+    nodes = _chain_nodes(chain)
+    img = load_image(find_exe_or_none())
+    color, results, unverified = evaluate_chain(nodes, Resolver(img, pdata_index(img)))
+    assert color == "green", [r for r in results if r.verdict not in ("found", "skipped_structure")]
+    assert unverified == expected_unverified
