@@ -14,6 +14,8 @@ from bytes alone (``version_drift_4_4_4.md`` §0).
 
 usage: python3 chain_drift.py --exe <path> [--manifest <tsv>] [--chain <name>]...
 """
+from __future__ import annotations
+
 from bisect import bisect_right
 from dataclasses import dataclass, replace
 import hashlib
@@ -66,7 +68,7 @@ class Locator:
     kind: str
     arg: str
     params: tuple[tuple[str, str], ...] = ()
-    confirms: tuple["Locator", ...] = ()
+    confirms: tuple[Locator, ...] = ()
     node_refs: tuple[str, ...] = ()
 
 
@@ -398,13 +400,78 @@ class Resolver:
                 out.append(begin)
         return sorted(out)
 
-    def resolve(self, loc, results):
-        """Candidates for ``loc``; ``results`` carries the chain's earlier nodes."""
+    def _vtable(self, loc):
+        slot_key, _sep, slot_text = loc.arg.partition("slot")
+        if slot_key or not slot_text:
+            raise ValueError(f"vtable: expected slot<k>, got {loc.arg!r}")
+        slot = int(slot_text)
+        wanted = int(dict(loc.params)["eq"], 16)
+        out = []
+        for vt, _run, _slots in rttibatch.all_vtables(self.img, min_run=1):
+            try:
+                value = self.img.u64(vt + 8 * slot) - self.img.image_base
+            except KeyError:
+                continue
+            if value == wanted:
+                out.append(vt)
+        return out
+
+    def _global(self, loc):
+        params = dict(loc.params)
+        try:
+            writes = int(params["writes_by"], 16)
+            reads = int(params["reads_by"], 16)
+        except (KeyError, ValueError) as exc:
+            raise ValueError("global: needs writes_by=<rva> and reads_by=<rva>") from exc
+        targets = set(rip_operand_targets(self.img, *self._function_span(writes)))
+        targets &= set(rip_operand_targets(self.img, *self._function_span(reads)))
+        return sorted(targets)
+
+    def _bytes(self, loc):
+        pattern = parse_bytes_pattern(loc.arg)
+        out = []
+        for va, vs, _praw in self.img.secs:
+            out.extend(match_bytes(self.img, pattern, va, va + vs))
+        return sorted(out)
+
+    def _primary(self, loc):
         if loc.kind == "strref":
             return self._strref(loc)
         if loc.kind == "callshape":
             return self._callshape(loc)
-        raise ValueError(f"locator kind {loc.kind!r} has no resolver yet")
+        if loc.kind == "vtable":
+            return self._vtable(loc)
+        if loc.kind == "global":
+            return self._global(loc)
+        if loc.kind == "bytes":
+            return self._bytes(loc)
+        raise ValueError(f"unknown locator kind {loc.kind!r}")
+
+    def resolve(self, loc, results):
+        """Candidates for ``loc``; ``results`` carries the chain's earlier nodes.
+
+        ``&bytes:`` confirmations run *after* the main locator and only inside the
+        candidate's own function: a confirmation that fails drops the candidate
+        (that is a ``zero``), never a weaker verdict — a confirmation exists to
+        prove this is the same code, and "nearly the same" is not that.
+        """
+        loc = substitute_node_refs(loc, results)
+        candidates = self._primary(loc)
+        for confirm in loc.confirms:
+            confirm = substitute_node_refs(confirm, results)
+            if confirm.kind != "bytes":
+                raise ValueError(f"only bytes confirmations are supported, got {confirm.kind!r}")
+            pattern = parse_bytes_pattern(confirm.arg)
+            candidates = [c for c in candidates if self._confirms(c, pattern)]
+        return candidates
+
+    def _confirms(self, candidate, pattern):
+        """Does ``pattern`` sit at the candidate (or anywhere in its function body)?"""
+        span = self.pdata.func_of(candidate)
+        if span:
+            return bool(match_bytes(self.img, pattern, *span))
+        return bool(match_bytes(self.img, pattern, candidate,
+                                candidate + max(len(pattern[0]), 1)))
 
 
 _DISP_RE = re.compile(r"-?\s*0x([0-9A-Fa-f]+)|\[[^\]]*([+-])\s*0x([0-9A-Fa-f]+)\]")
@@ -420,3 +487,75 @@ def _disp_of(text):
         return int(match.group(1), 16)
     value = int(match.group(3), 16)
     return -value if match.group(2) == "-" else value
+
+
+@dataclass(frozen=True)
+class NodeResult:
+    """One node's verdict.  ``got`` is set for found/moved only; ambiguous keeps all."""
+    node: str
+    verdict: str
+    got: int | None
+    candidates: tuple[int, ...]
+
+
+def substitute_node_refs(loc, results):
+    """Replace every ``@node:<name>`` in a Locator with that node's ``got`` address.
+
+    Only found/moved nodes have an address to substitute: a zero or ambiguous
+    prerequisite raises LookupError, which the chain walker turns into ``not_run``
+    rather than inventing an address.  Substitution is recursive over ``confirms``.
+    """
+    def _one(value):
+        def _repl(match):
+            name = match.group(1)
+            node = results.get(name)
+            if node is None or node.verdict not in ("found", "moved") or node.got is None:
+                state = node.verdict if node else "not in results"
+                raise LookupError(f"@node:{name} is {state}")
+            return hex(node.got)
+        return _NODE_REF_RE.sub(_repl, value)
+
+    return replace(loc,
+                   arg=_one(loc.arg),
+                   params=tuple((key, _one(value)) for key, value in loc.params),
+                   confirms=tuple(substitute_node_refs(c, results) for c in loc.confirms),
+                   node_refs=())
+
+
+def parse_bytes_pattern(text):
+    """``48 89 ?? 24`` -> (value bytes with ?? as 0, mask bytes with ?? as 0)."""
+    values, masks = [], []
+    for token in text.split():
+        if token == "??":
+            values.append(0)
+            masks.append(0)
+        else:
+            values.append(int(token, 16))
+            masks.append(0xFF)
+    return bytes(values), bytes(masks)
+
+
+def match_bytes(img, pattern, start_rva, end_rva):
+    """Every RVA in ``[start, end)`` where ``pattern`` matches; mask 0 = wildcard."""
+    value, mask = pattern
+    code = _read_span(img, start_rva, end_rva)
+    if not value:
+        return []
+    hits = []
+    for off in range(len(code) - len(value) + 1):
+        if all((byte & m) == (v & m) for byte, v, m in zip(code[off:off + len(value)], value, mask)):
+            hits.append(start_rva + off)
+    return hits
+
+
+def rip_operand_targets(img, start, end):
+    """Targets of ``48/4C 8B|8D <modrm mod=00 rm=101> disp32`` in ``[start, end)``."""
+    code = _read_span(img, start, end)
+    out = []
+    for off in range(len(code) - 6):
+        if code[off] not in (0x48, 0x4C) or code[off + 1] not in (0x8D, 0x8B):
+            continue
+        if code[off + 2] & 0xC7 != 0x05:
+            continue
+        out.append(start + off + 7 + struct.unpack_from("<i", code, off + 3)[0])
+    return out

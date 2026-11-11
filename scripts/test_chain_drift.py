@@ -10,8 +10,8 @@ import struct
 
 import pytest
 
-from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, parse_locator,
-                         parse_manifest, pdata_index, pe_version, Resolver)
+from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, NodeResult, match_bytes, parse_bytes_pattern, parse_locator,
+                         parse_manifest, pdata_index, pe_version, Resolver, substitute_node_refs)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -194,3 +194,53 @@ def test_callshape_callptr_disp_returns_every_enclosing_function():
     r = Resolver(img, pdata_index(img))
     assert r.resolve(Locator("callshape", "callptr+0x8"), {}) == [0x1000]
     assert r.resolve(Locator("callshape", "callptr+0x48"), {}) == []
+
+
+def test_vtable_locator_filters_on_the_requested_slot():
+    img = fake_pe([(".text", 0x1000, b"\xcc" * 0x40),
+                   (".rdata", 0x4000, struct.pack("<4Q", 0x140000000 + 0x1000,
+                                                  0x140000000 + 0x1020,
+                                                  0x140000000 + 0x1030,
+                                                  0x140000000 + 0x1040))])
+    r = Resolver(img, pdata_index(img))
+    assert r.resolve(Locator("vtable", "slot1", (("eq", "0x1020"),)), {}) == [0x4000]
+    assert r.resolve(Locator("vtable", "slot2", (("eq", "0x1020"),)), {}) == []
+
+
+def test_node_reference_is_substituted_before_resolution():
+    results = {"base_execute": NodeResult(node="base_execute", verdict="moved",
+                                          got=0x1D08600, candidates=(0x1D08600,))}
+    assert substitute_node_refs(Locator("vtable", "slot1", (("eq", "@node:base_execute"),)),
+                                results).params == (("eq", "0x1d08600"),)
+
+
+def test_node_reference_to_a_zero_node_raises_lookup_error():
+    results = {"base_execute": NodeResult(node="base_execute", verdict="zero",
+                                          got=None, candidates=())}
+    with pytest.raises(LookupError):
+        substitute_node_refs(Locator("vtable", "slot1", (("eq", "@node:base_execute"),)), results)
+
+
+def test_bytes_pattern_treats_question_marks_as_wildcards():
+    value, mask = parse_bytes_pattern("48 89 ?? 24")
+    assert value == b"\x48\x89\x00\x24"
+    assert mask == b"\xff\xff\x00\xff"
+    img = fake_pe([(".text", 0x1000, b"\xcc" * 8 + b"\x48\x89\x5c\x24" + b"\xcc" * 8)])
+    assert match_bytes(img, (value, mask), 0x1000, 0x1014) == [0x1008]
+
+
+def test_global_locator_intersects_rip_targets_of_both_functions():
+    gva = 0x4000
+    def _mov(site, target):
+        return b"\x48\x8b\x05" + struct.pack("<i", target - (site + 7))
+    code = bytearray(b"\xcc" * 0x80)
+    code[0x10:0x17] = _mov(0x1010, gva)
+    code[0x40:0x47] = _mov(0x1040, gva)
+    img = fake_pe([(".text", 0x1000, bytes(code)),
+                   (".pdata", 0x3000, struct.pack("<III", 0x1000, 0x1040, 0)
+                                + struct.pack("<III", 0x1040, 0x1080, 0)),
+                   (".rdata", 0x4000, b"\x00" * 8)])
+    results = {"w": NodeResult("w", "found", 0x1000, (0x1000,)),
+               "r": NodeResult("r", "found", 0x1040, (0x1040,))}
+    loc = Locator("global", "-", (("writes_by", "@node:w"), ("reads_by", "@node:r")))
+    assert Resolver(img, pdata_index(img)).resolve(loc, results) == [0x4000]
