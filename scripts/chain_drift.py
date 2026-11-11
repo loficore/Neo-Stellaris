@@ -22,6 +22,8 @@ import re
 import struct
 
 import rttibatch
+from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+from capstone.x86 import X86_OP_MEM, X86_REG_RIP
 
 Image = rttibatch.Image
 
@@ -278,3 +280,143 @@ def pdata_index(img):
             entries.append((begin, end))
     entries.sort()
     return PdataIndex(tuple(begin for begin, _end in entries), tuple(entries))
+
+
+_MD = Cs(CS_ARCH_X86, CS_MODE_64)
+_MD.detail = True
+_MD.skipdata = True  # a decode gap must not truncate the scan: that reads as "not found"
+
+
+def _read_span(img, start, end):
+    """Bytes of ``[start, end)``, or b'' when the span leaves the image."""
+    try:
+        return img.read(start, end - start)
+    except KeyError:
+        return b""
+
+
+def find_cstring(img, text):
+    """Every RVA in the image where ``text`` ends with a NUL.
+
+    The real image embeds the full build path (``C:\\mnt\\gsg\\...\\scriptedeffect.cpp``),
+    so a suffix match is the only stable form: the prefix is build-machine noise.
+    """
+    needle = text.encode()
+    hits = []
+    for _va, vs, praw in img.secs:
+        blob = img.blob[praw:praw + vs]
+        at = blob.find(needle + b"\x00")
+        while at != -1:
+            hits.append(_va + at)
+            at = blob.find(needle + b"\x00", at + 1)
+    return sorted(hits)
+
+
+def rel32_call_targets(img, start, end):
+    """Targets of every direct ``E8 rel32`` in ``[start, end)``."""
+    code = _read_span(img, start, end)
+    out = []
+    for i in range(len(code) - 4):
+        if code[i] != 0xE8:
+            continue
+        out.append(start + i + 5 + struct.unpack_from("<i", code, i + 1)[0])
+    return out
+
+
+def memory_disp_set(img, start, end):
+    """Every non-RIP ``[reg+disp]`` displacement in ``[start, end)``."""
+    disps = set()
+    for insn in _MD.disasm(_read_span(img, start, end), img.image_base + start):
+        for op in insn.operands:
+            if op.type == X86_OP_MEM and op.mem.base != X86_REG_RIP:
+                disps.add(op.mem.disp)
+    return disps
+
+
+def indirect_call_disps(img, start, end):
+    """Every ``FF /2`` disp8 in ``[start, end)`` — the ``call qword ptr [reg+disp]`` form."""
+    code = _read_span(img, start, end)
+    out = set()
+    for i in range(len(code) - 2):
+        if code[i] != 0xFF:
+            continue
+        modrm = code[i + 1]
+        if modrm & 0xC7 != 0x40 or (modrm >> 3) & 7 != 2:
+            continue
+        out.add(struct.unpack_from("<b", code, i + 2)[0])
+    return out
+
+
+class Resolver:
+    """Resolve a Locator recipe against one image, returning candidate RVAs.
+
+    Every kind returns *all* its matches, sorted: the decision of "one hit is
+    found, two hits are ambiguous" belongs to ``decide``, never here.  A refinement
+    parameter (``calls=``, ``reads=``) is a *must contain* filter on the enclosing
+    function, so a candidate that does not satisfy it is dropped rather than
+    reported as a weaker match.
+    """
+
+    def __init__(self, img, pdata):
+        self.img = img
+        self.pdata = pdata
+
+    def _function_span(self, start):
+        span = self.pdata.func_of(start)
+        return span or (start, start)
+
+    def _strref(self, loc):
+        funcs = set()
+        for rva in find_cstring(self.img, loc.arg):
+            for site in rttibatch.lea_sites_to(self.img, rva):
+                span = self.pdata.func_of(site)
+                if span:
+                    funcs.add(span[0])
+        params = dict(loc.params)
+        wanted_calls = int(params["calls"], 16) if "calls" in params else None
+        wanted_disp = _disp_of(params["reads"]) if "reads" in params else None
+        out = []
+        for start in sorted(funcs):
+            _begin, end = self._function_span(start)
+            if wanted_calls is not None and \
+                    wanted_calls not in rel32_call_targets(self.img, start, end):
+                continue
+            if wanted_disp is not None and \
+                    wanted_disp not in memory_disp_set(self.img, start, end):
+                continue
+            out.append(start)
+        return out
+
+    def _callshape(self, loc):
+        prefix, _sep, disp_text = loc.arg.partition("+")
+        if prefix != "callptr" or not disp_text:
+            raise ValueError(f"callshape: expected callptr+<disp>, got {loc.arg!r}")
+        wanted = int(disp_text, 16)
+        out = []
+        for begin, end in self.pdata.bounds:
+            if wanted in indirect_call_disps(self.img, begin, end):
+                out.append(begin)
+        return sorted(out)
+
+    def resolve(self, loc, results):
+        """Candidates for ``loc``; ``results`` carries the chain's earlier nodes."""
+        if loc.kind == "strref":
+            return self._strref(loc)
+        if loc.kind == "callshape":
+            return self._callshape(loc)
+        raise ValueError(f"locator kind {loc.kind!r} has no resolver yet")
+
+
+_DISP_RE = re.compile(r"-?\s*0x([0-9A-Fa-f]+)|\[[^\]]*([+-])\s*0x([0-9A-Fa-f]+)\]")
+
+
+def _disp_of(text):
+    """Pull a displacement out of ``0x38`` / ``[this+0x38]`` / ``[rcx-0x10]``."""
+    text = text.strip()
+    match = _DISP_RE.search(text)
+    if not match:
+        raise ValueError(f"cannot read a displacement from {text!r}")
+    if match.group(1) is not None:
+        return int(match.group(1), 16)
+    value = int(match.group(3), 16)
+    return -value if match.group(2) == "-" else value

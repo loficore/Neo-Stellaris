@@ -10,8 +10,8 @@ import struct
 
 import pytest
 
-from chain_drift import (Image, LocatorError, ManifestError, Node, parse_locator,
-                         parse_manifest, pdata_index, pe_version)
+from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, parse_locator,
+                         parse_manifest, pdata_index, pe_version, Resolver)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -106,7 +106,7 @@ def test_parse_manifest_allows_backward_references_only():
 
 
 HEADER_SIZE = 0x100
-RAW_START = 0x200
+RAW_START = 0x400   # section table ends at 0x1A4 + 40*n; must stay below the raw data
 
 
 def fake_pe(sections, base=0x140000000):
@@ -127,7 +127,7 @@ def fake_pe(sections, base=0x140000000):
     raw = RAW_START
     for i, (name, va, data) in enumerate(sections):
         off = secs + i * 40
-        blob[off:off + 8] = name.encode()
+        blob[off:off + 8] = name.encode().ljust(8, b"\0")
         struct.pack_into("<I", blob, off + 8, len(data))       # VirtualSize
         struct.pack_into("<I", blob, off + 12, va)             # VirtualAddress
         struct.pack_into("<I", blob, off + 16, len(data))      # SizeOfRawData
@@ -151,3 +151,46 @@ def test_pe_version_reads_fixed_file_info_and_falls_back_to_unknown():
     fixed = struct.pack("<IIII", 0xFEEF04BD, 0x00010000, 0x00040004, 0x00040005)
     assert pe_version(b"\x00" * 32 + fixed) == "4.4.4.5"
     assert pe_version(b"\x00" * 64) == "unknown"
+
+
+def _lea(site_va, target_va):
+    """48 8D 0D <disp32> —— 指向 target 的 lea rcx。"""
+    return b"\x48\x8d\x0d" + struct.pack("<i", target_va - (site_va + 7))
+
+
+def test_strref_resolves_to_the_enclosing_function():
+    target = 0x4000 + 4                       # ".cpp" 串在 .rdata
+    code = b"\xcc" * 0x10 + _lea(0x1010, target) + b"\xcc" * 0x20
+    img = fake_pe([(".text", 0x1000, code),
+                   (".pdata", 0x3000, struct.pack("<III", 0x1000, 0x1100, 0)),
+                   (".rdata", 0x4000, b"abc\x00scriptedeffect.cpp\x00")])
+    assert Resolver(img, pdata_index(img)).resolve(
+        Locator("strref", "scriptedeffect.cpp"), {}) == [0x1000]
+
+
+def test_strref_calls_refinement_rejects_a_function_that_does_not_call_the_rva():
+    target = 0x4004                              # ".rdata" 里 "x.cc" 的起点
+    code = bytearray(b"\xcc" * 0x40)
+    code[0x10:0x17] = _lea(0x1010, target)
+    secs = [(".text", 0x1000, bytes(code)),
+            (".pdata", 0x3000, struct.pack("<III", 0x1000, 0x1040, 0)),
+            (".rdata", 0x4000, b"abc\x00x.cc\x00")]
+    img = fake_pe(secs)
+    assert Resolver(img, pdata_index(img)).resolve(
+        Locator("strref", "x.cc", (("calls", "0x1d13270"),)), {}) == []
+
+    code2 = bytearray(code)
+    code2[0x20:0x25] = b"\xe8" + struct.pack("<i", 0x1d13270 - (0x1020 + 5))
+    img2 = fake_pe([(".text", 0x1000, bytes(code2)), secs[1], secs[2]])
+    assert Resolver(img2, pdata_index(img2)).resolve(
+        Locator("strref", "x.cc", (("calls", "0x1d13270"),)), {}) == [0x1000]
+
+
+def test_callshape_callptr_disp_returns_every_enclosing_function():
+    code = bytearray(b"\xcc" * 0x80)
+    code[0x10:0x13] = b"\xff\x50\x08"         # call qword ptr [rax+8]
+    img = fake_pe([(".text", 0x1000, bytes(code)),
+                   (".pdata", 0x3000, struct.pack("<III", 0x1000, 0x1080, 0))])
+    r = Resolver(img, pdata_index(img))
+    assert r.resolve(Locator("callshape", "callptr+0x8"), {}) == [0x1000]
+    assert r.resolve(Locator("callshape", "callptr+0x48"), {}) == []
