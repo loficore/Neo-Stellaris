@@ -190,6 +190,17 @@ def test_strref_calls_refinement_rejects_a_function_that_does_not_call_the_rva()
         Locator("strref", "x.cc", (("calls", "0x1d13270"),)), {}) == [0x1000]
 
 
+def test_callshape_matches_the_disp_on_any_base_register():
+    # FF /2 disp8 is `call [reg+disp8]` whatever the register: the recipe names a
+    # displacement, not rax, so an rcx-only site must still be returned.
+    code = bytearray(b"\xcc" * 0x80)
+    code[0x10:0x13] = b"\xff\x51\x48"         # call qword ptr [rcx+0x48]
+    img = fake_pe([(".text", 0x1000, bytes(code)),
+                   (".pdata", 0x3000, struct.pack("<III", 0x1000, 0x1080, 0))])
+    assert Resolver(img, pdata_index(img)).resolve(
+        Locator("callshape", "callptr+0x48"), {}) == [0x1000]
+
+
 def test_callshape_callptr_disp_returns_every_enclosing_function():
     code = bytearray(b"\xcc" * 0x80)
     code[0x10:0x13] = b"\xff\x50\x08"         # call qword ptr [rax+8]
@@ -406,3 +417,17 @@ def test_remaining_chains_are_green_with_their_structure_gaps(chain, expected_un
     color, results, unverified = evaluate_chain(nodes, Resolver(img, pdata_index(img)))
     assert color == "green", [r for r in results if r.verdict not in ("found", "skipped_structure")]
     assert unverified == expected_unverified
+
+
+def test_parse_locator_rejects_a_pattern_with_no_fixed_byte():
+    # An all-wildcard pattern matches every offset in the image, so a node carrying
+    # one would report `found` on any build at all — the same defect as `bytes:`.
+    with pytest.raises(LocatorError):
+        parse_locator("bytes:?? ??")
+
+
+def test_parse_manifest_rejects_an_address_node_without_a_hex_expectation():
+    text = HEADER + ("register\ta\taddress\tbytes:90\tnot-an-rva\t\t\tx\n")
+    with pytest.raises(ManifestError) as exc:
+        parse_manifest(text)
+    assert exc.value.line_no == 2

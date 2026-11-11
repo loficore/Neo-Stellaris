@@ -105,6 +105,8 @@ def _parse_segment(segment):
         for token in tokens:
             if token != "??" and not _HEX_TOKEN_RE.fullmatch(token):
                 raise LocatorError(f"bytes: bad pattern token {token!r}")
+        if all(token == "??" for token in tokens):
+            raise LocatorError("bytes: pattern has no fixed byte (it would match everything)")
         return Locator("bytes", pattern)
     if kind == "vtable":
         slot, eq, value = rest.partition("==")
@@ -182,6 +184,12 @@ def parse_manifest(text):
         chain, node, cls, locator, expect, depends, witness, evidence = fields
         if cls not in CLASSES:
             raise ManifestError(line_no, f"unknown class {cls!r} (want address|structure)")
+        if cls == "address":
+            try:
+                int(expect, 16)
+            except ValueError:
+                raise ManifestError(
+                    line_no, f"address node needs a hex expectation, got {expect!r}") from None
         chain_seen = known.setdefault(chain, set())
         if node in chain_seen:
             raise ManifestError(line_no, f"duplicate node {chain}/{node}")
@@ -347,8 +355,8 @@ def indirect_call_disps(img, start, end):
         if code[i] != 0xFF:
             continue
         modrm = code[i + 1]
-        if modrm & 0xC7 != 0x40 or (modrm >> 3) & 7 != 2:
-            continue
+        if modrm & 0xC0 != 0x40 or (modrm >> 3) & 7 != 2:
+            continue  # FF /2 with mod=01 (disp8); rm is any register
         out.add(struct.unpack_from("<b", code, i + 2)[0])
     return out
 
