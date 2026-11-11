@@ -1,0 +1,64 @@
+# manifest=evidence/xrefs/chain_manifest_4_4_4.tsv
+# exe=/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
+# exe_sha256=9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56
+# target_version=1.0.0.0
+# generated=2026-11-11
+# chains: register=green dispatch=green state_write=green graph=green scope=green
+# locators: strref=2 callshape=1 vtable=1 global=2 bytes=30 structure=19
+# witness: register=token_readback dispatch=c6_log_lines state_write=save_join graph=zero_diff scope=mask_id
+chain	node	class	verdict	expect	got	delta	candidates	witness	note
+register	get_scripted_effect	address	found	0x89f960	0x89f960			token_readback	
+register	get_scripted_trigger	address	found	0x8a0450	0x8a0450			token_readback	
+register	get_or_add_token	address	found	0x1d13270	0x1d13270			token_readback	
+register	token_db_singleton	address	found	0x1d12c60	0x1d12c60			token_readback	
+register	id_name_rebuild	address	found	0x1d12cd0	0x1d12cd0			token_readback	
+register	token_db_object	structure	skipped_structure	-				token_readback	skipped: structure
+register	descriptor_writer_static	address	found	0x1d15270	0x1d15270			token_readback	
+register	descriptor_writer_dynamic	address	found	0x1d152d0	0x1d152d0			token_readback	
+register	slot_writer	address	found	0x1d158a0	0x1d158a0			token_readback	
+register	descriptor_array	structure	skipped_structure	-				token_readback	skipped: structure
+register	effect_db_init	address	found	0x3aeba0	0x3aeba0			token_readback	
+register	trigger_db_ensure	address	found	0x347bd0	0x347bd0			token_readback	
+register	bst_insert_effect	address	found	0x3aef60	0x3aef60			token_readback	
+register	bst_insert_trigger	address	found	0x348150	0x348150			token_readback	
+register	consumer_instantiate	address	found	0x3b01a0	0x3b01a0			token_readback	
+register	enum_effects	address	found	0x3af130	0x3af130			token_readback	
+register	enum_triggers	address	found	0x348450	0x348450			token_readback	
+register	effect_db_global	address	found	0x33746e8	0x33746e8			token_readback	
+register	trigger_db_global	address	found	0x32611c8	0x32611c8			token_readback	
+register	operator_new	address	found	0x2185218	0x2185218			token_readback	
+register	class_info_trigger	structure	skipped_structure	-				token_readback	skipped: structure
+register	class_info_effect	structure	skipped_structure	-				token_readback	skipped: structure
+register	donor_docstring_trigger	structure	skipped_structure	-				token_readback	skipped: structure
+register	donor_docstring_effect	structure	skipped_structure	-				token_readback	skipped: structure
+dispatch	base_execute	address	found	0x1d08520	0x1d08520			c6_log_lines	
+dispatch	dispatch_point	address	found	0x3b0f80	0x3b0f80			c6_log_lines	
+dispatch	donor_execute	address	found	0x3afd30	0x3afd30			c6_log_lines	
+dispatch	donor_vtable	structure	skipped_structure	-				c6_log_lines	skipped: structure
+dispatch	effect_body_plus70	address	found	0x3b1330	0x3b1330			c6_log_lines	
+dispatch	effect_pred_plus98	address	found	0x3b1420	0x3b1420			c6_log_lines	
+dispatch	trigger_pred_slot	address	found	0x349230	0x349230			c6_log_lines	
+dispatch	trigger_eval_slot	address	found	0x1a91a80	0x1a91a80			c6_log_lines	
+dispatch	out_of_family_dispatch	address	found	0xcc4220	0xcc4220			c6_log_lines	
+state_write	set_variable_create	address	found	0x18a6970	0x18a6970			save_join	
+state_write	set_variable_parser	address	found	0x188e240	0x188e240			save_join	
+state_write	set_variable_body	address	found	0x188e1d0	0x188e1d0			save_join	
+state_write	set_variable_vtable	address	found	0x25ea560	0x25ea560			save_join	
+state_write	class_info_set_variable	structure	skipped_structure	-				save_join	skipped: structure
+state_write	docstring_set_variable	structure	skipped_structure	-				save_join	skipped: structure
+state_write	field_name_string	structure	skipped_structure	-				save_join	skipped: structure
+state_write	field_value_cell	structure	skipped_structure	-				save_join	skipped: structure
+state_write	field_parse_state	structure	skipped_structure	-				save_join	skipped: structure
+graph	system_resolver	address	found	0x3939f0	0x3939f0			zero_diff	
+graph	edge_add	address	found	0x8bbaa0	0x8bbaa0			zero_diff	
+graph	edge_remove	address	found	0x8bbc20	0x8bbc20			zero_diff	
+graph	read_path_a	address	found	0x1afe500	0x1afe500			zero_diff	
+graph	read_path_b	address	found	0x1ae3700	0x1ae3700			zero_diff	
+graph	read_path_c	address	found	0x1b86e30	0x1b86e30			zero_diff	
+graph	edge_table_global	structure	skipped_structure	-				zero_diff	skipped: structure
+graph	edge_container_offsets	structure	skipped_structure	-				zero_diff	skipped: structure
+graph	dirty_mask_global	structure	skipped_structure	-				zero_diff	skipped: structure
+scope	scope_mask_field	structure	skipped_structure	-				mask_id	skipped: structure
+scope	scope_id_field	structure	skipped_structure	-				mask_id	skipped: structure
+scope	country_scope_vtable	structure	skipped_structure	-				mask_id	skipped: structure
+scope	dispatch_passes_scope_in_rdx	structure	skipped_structure	-				mask_id	skipped: structure
