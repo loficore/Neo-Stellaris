@@ -1,0 +1,73 @@
+# R3 —— C6-4（官方 DSL 读回 / 逐名对账）离线可行性，Stellaris 4.4.4
+
+> **授权（逐字）**：2026-11-11，用户：「那你派worker，将R5和R3派发出去」⇒ 本发授权 **R5、R3 各一发**。
+> 归属：worker `term_947eb627` / 分支 `loficore/live-r5-r3` / 模型 `aigw-main/code-reverse`。
+
+本发按任务要求**先离线判可行性，不直接起进程**。问题只有一句：仓库能不能从现成存档产出
+`id<TAB>name`，并且这个名字与引擎 `[This.GetName]` 打出来的**实际字符串**可比。
+
+## 两处既有文档（判据的出处，不推翻）
+
+- `scripts/c2_graph_reconcile.py` docstring：「名字与 id 的映射是这一发的**已知缺口**:引擎日志给的是
+  `[This.GetName]`(本地化名),主机侧分数按系统 id 索引,仓库里没有 id↔名字的产物。」
+- `docs/offline-tooling.md` §`c2_graph_reconcile.py`（1816–1817 行）：「有 `--name-map`(`id<TAB>name`)
+  时是计划的 `tiers_named` / `tiers_disagree` / `tiers_partial`;没有时退到 `tiers_counts`(分布相等)
+  **而且绝不说 `tiers_named`** —— 仓库里没有 id↔名字 的产物」。
+
+可行性这一步问的就是：这个缺口这一发能不能补上。
+
+## 做法（全部离线，进程 0 个）
+
+1. 用 R5 的固定存档 `C:/temp/c6_r5_base.sav`（= `autosave_2314.07.01.sav`，
+   3,994,385 B，sha256 `e286e74d840d8af3a3135d8f144435edfb9bae1058ab4b04ec351c1f4182f6e0`）
+   跑 `scripts/scratch/2026-11_live_r5_r3/save_names.py` / `r3_feasible.py`（主机侧，复用
+   `scripts/save_hypergraph.py` 的 Clausewitz tokenizer）。
+2. 用**上一窗真实产出的** `game.log`（`C:/temp/c6_r3_prev_game.log`，1,562,489 B，
+   该战役 2314 年的 8 个 `NEO_T*` 脉冲、每个脉冲逐系统一行 `[This.GetName]`）当另一侧。
+   这份 log 在 R5 开窗前抓的：每次启动都重写 `game.log`，晚一步就没了。
+3. 两边按字符串对集合。
+
+## 读数（主机侧原文）
+
+```
+R3FEAS systems=788 named=788 distinct=788 dup_names=0
+R3FEAS loc_keys=12/788 literal_names=776
+R3FEAS log_names_distinct=784 log_lines=6280 missing_from_save=784 not_printed=788 overlap=0
+R3FEAS log_months=8 lines_per_month=785..785 systems_in_save=788
+R3FEAS missing_examples=BX-799 ... | EN-14421 | X-941... | ...
+R3FEAS unprinted_examples=Abdrade | Abovast | Acculum | Achernar | Ackolam
+R3FEAS verdict=not_feasible reason=log_not_subset
+```
+
+## `name_map_verdict=not_feasible`
+
+两个**独立**的阻断，任一都足够：
+
+1. **两边不是同一种名字。** 存档的 `galactic_object` 每个系统都有 `name`，但它是
+   `{ key = "SPEC_Vrinn_system" }` 这种**名字键**（788 个里 776 个是字面键、12 个是 `SPEC_*`
+   本地化键）；引擎 `[This.GetName]` 打出来的是**本地化后的显示名**（本机语言，日志里是中文）。
+   784 个显示名与 788 个存档名**交集 0**（`overlap=0`）。所以「从存档直接解析出 `id<TAB>name`」
+   这条路，产出的名字拿不到日志那一侧去比。
+2. **即使只用日志那一侧，名字也不是键。** 8 个脉冲每个都是 **785 行**，而这一场存档是 **788**
+   个系统 —— 每脉冲少 3 个；784 个不同显示名 vs 每脉冲 785 行 ⇒ 每脉冲至少一个**重名**。
+   逐名对账要求「一个名字唯一对应一个系统」，这一侧不满足；硬做只会在 `tiers_named` 里
+   制造假差异。
+
+（可能的另一条路是切换游戏语言到英文再抓 `[This.GetName]`，或解析本地化库把 key 翻成显示名。
+两条都不在本发授权的一发之内，**没有尝试**，也不据此改判词。）
+
+## 判词与处置
+
+- `name_map_verdict=not_feasible` ⇒ 按任务第 2 条**停在这里**：**C6-4 记 `cannot_say`**，
+  依据就是上面那两处文档（如实到：没有 `--name-map` 就只可能 `tiers_counts`，而 `tiers_counts`
+  按 `docs/c6-acceptance.md` §C6-4 与台帐 `gate_official_readback` 只能是 `cannot_say`）。
+- **没有开窗口**，没有为它烧一发；本发只用了 R5 那一发已经起过的进程之外的**零个**进程。
+- `evidence/logs/c6_acceptance_r5_4_4_4.tsv` 里 `C6-4 cannot_say windows=0 verdicts=-` 与本结论一致。
+
+## 产物（全部是离线脚本，进 scratch）
+
+| 文件 | 作用 |
+|---|---|
+| `scripts/scratch/2026-11_live_r5_r3/save_names.py` | 存档 → `id<TAB>name`（`--probe` 用来确认字段形状） |
+| `scripts/scratch/2026-11_live_r5_r3/r3_feasible.py` | 存档名 vs 日志显示名，打一行判词 |
+| `C:/temp/c6_r3_prev_game.log` | 上一窗的 game.log（主机侧留档，未进仓库） |
