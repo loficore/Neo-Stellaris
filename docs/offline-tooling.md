@@ -197,7 +197,68 @@ rip-relative operand with the RVA it resolves to; this is what pinned the descri
 `src/dll/scripted/keyword_registry_golden.zig` (56 vectors the Zig builder is tested against).
 This is how §18's "byte-for-byte identical" claim became a measurement: **9,863/9,863 agree, 0 divergences**.
 
+### `scripts/chain_drift.py --exe <path> [--chain <name>]... [--report <tsv>] [--json] [--bytes-at <rva> [-n N]]`
+
+**换一份 `stellaris.exe` 拷贝，一条离线命令回答「我们依赖的五条能力链路还在不在、断在哪一环」。** 读的唯一真源是
+`evidence/xrefs/chain_manifest_4_4_4.tsv`（TSV，`#` 开头是注释）：一行一个节点，列是
+`chain / node / class / locator / expect / depends_on / witness / evidence`。工具按行的顺序解析 locator，
+把每个 `address` 节点判成四档之一，再把每条链折成 `green / yellow / red`，写
+`evidence/xrefs/chain_drift_<version>.tsv`（缺省路径；`--json` 打到 stdout 不写文件）。
+
+```bash
+NS_STELLARIS_EXE=/path/to/new/stellaris.exe python3 scripts/chain_drift.py \
+    --chain register --chain dispatch --report /tmp/drift.tsv
+# 取一条 bytes: 配方（不读 manifest，不需要 --chain）
+python3 scripts/chain_drift.py --manifest /dev/null --bytes-at 0x1d13270 -n 24
+```
+
+`--exe` 缺省取 `NS_STELLARIS_EXE`，再走 `rttibatch.find_exe` 的候选链；全落空 ⇒ 退出码 3。
+
+**五类 locator（按抗位移强度排序，`bytes` 只作最终确认）**
+
+| 前缀 | 形式 | 找到什么 |
+|---|---|---|
+| `strref:` | `strref:<串>[@calls=<rva>][@reads=<disp>]` | 以该串结尾的 C 串被 `lea/mov` 引用的函数（后缀匹配：镜像里存的是 `C:\mnt\gsg\…` 全路径）；`calls=` / `reads=` 是「函数体内必须含有」的收敛条件 |
+| `callshape:` | `callshape:callptr+<disp8>` | 体内含 `FF /2 [reg+disp8]`（`call qword ptr [reg+disp]`）的函数 |
+| `vtable:` | `vtable:slot<k>==<rva\|@node:NAME>` | `.rdata` 里第 k 槽等于该值的 8 对齐表起点 |
+| `global:` | `global:writes_by=@node:X,reads_by=@node:Y` | 两个函数体内 `[rip+disp32]` 操作数目标的**交集** |
+| `bytes:` | `bytes:<hex，?? 通配>` | 逐字节匹配（`--bytes-at` 产出，`E8/E9/0F 8x` 的 rel32 已通配） |
+
+`&` 是**追加确认**（`strref:…&bytes:…`；确认失败 ⇒ `zero`，不降级成 `ambiguous`）；`@node:NAME` 引用**同链前序**
+节点的 `got`，解析期就拒绝前向引用（否则结果取决于 dict 插入顺序）。谓词里只允许出现 `@node:`，**不写死 RVA** ——
+写死就是跨大版本自证（`version_drift_4_4_4.md` §3(b)）。
+
+**四档判决 + 两档非判决**：`found`（恰 1 候选且等于 `expect`）、`moved`（恰 1 候选但地址漂了，`delta` 列给差值）、
+`ambiguous`（>1 候选，`candidates` 列全列出来）、`zero`（0 候选）、`not_run`（前置 `zero`/`ambiguous`，DAG 短路）、
+`skipped_structure`（`class=structure` 且无 locator：只登记、不判语义）。链路配色：任一 `zero`/`ambiguous` ⇒ `red`；
+否则有 `moved` ⇒ `yellow`；否则 `green`。
+
+**`structure_unverified` 列（报告的 `# chains:` 下面的节点名集合，也是 JSON 的 `structure_unverified`）**：本链
+依赖、但 v1 无法验证语义的 structure 节点 = 「这一版只能读不能写」的机器判据。它为空才谈得上能用；`green` 本身
+**不**说明能用。
+
+**退出码**：`0` 无 `zero`/`ambiguous`；`2` 至少一条链 `red`（含空 manifest —— 否则「没登记任何锚点」会被读成全绿）；
+`3` 环境或 manifest 错误（exe 读不出、manifest 语法错并给行号、`--chain` 指定了不存在的链名、`--report` 与
+`--manifest` 同路径）。
+
+**判读陷阱**
+
+- **`ambiguous` 绝不自动挑 `expect`，这是设计不是缺陷。** 候选里恰好有 `expect` 也只记在 `note` 里；配方不收敛就是
+  配方缺陷，自动选中的话这一格会永久失去检测能力。
+- **`bytes:` 是自证型 locator：它在同一份二进制上必然 `found`。** 新版本上 `bytes` 节点报 `zero` 只说明「需要人工重锚」，
+  不说明链路断了 —— 断没断看 `strref`/`callshape`/`vtable`/`global` 节点的判决和 `structure_unverified` 列。
+- **`target_version` 读的是 PE 版本资源，不是游戏版本号。** 4.4.4 的 exe 里那份 `VS_FIXEDFILEINFO` 写的是
+  `1.0.0.0`（`Pegasus v4.4.4` 只是普通字符串），所以缺省报告名会变成 `chain_drift_1.0.0.0.tsv`；要按游戏版本落盘就显式
+  传 `--report evidence/xrefs/chain_drift_4.4.4.tsv`。
+- **`green` 不等于「这一版能用」**：四档判决只能发现「地址还在不在」。4.4.4 上真实发生过两次「地址还在、语义变了」
+  （`GetScriptedEffect` 不是 getter、3.x 的 effect dispatch switch 不存在），那种漂移只有语义证人能抓。
+  v1 不跑证人，只把「本链证人 = X」写进 `# witness:` 行。
+- **manifest 只覆盖五条链实际依赖的 ~55 个节点**，不是 `AGENTS.md` RVA 索引的全量。
+- 某些 `bytes:` 配方会**跨过函数结尾**（例如 `trigger_eval_slot`）：它的孪生函数体逐字节相同（只差一个被通配的
+  `call rel32`），配方只能靠函数后的填充/下一函数开头收敛。这类节点在新版本上一律先报 `zero`，是重锚提示。
+
 ## 离线重问实机 artifact(读已入库产物,不读 exe、不起进程、不需要 shot)
+
 
 ### `scripts/scope_reclassify.py [--tsv PATH] [--floor PATH] [--all PATH] [--json PATH]`
 

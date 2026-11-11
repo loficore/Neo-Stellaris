@@ -245,7 +245,7 @@ zig build test
 
 Planned work to improve version compatibility:
 
-- [ ] Dynamic offset detection (scan for patterns instead of hardcoding)
-- [ ] Version-specific offset profiles
-- [ ] Runtime offset validation
-- [ ] Automatic offset discovery via signature scanning
+- [x] Version-specific offset profiles → `evidence/xrefs/chain_manifest_4_4_4.tsv`（一条链一份配方，按版本复制）
+- [x] Automatic offset discovery via signature scanning → `scripts/chain_drift.py` 的 locator 层（检测/报告，不改代码）
+- [x] Runtime offset validation → 已有 `exec_hook` 32 B 指纹 + `isSystemScope`（本设计汇总成 §4 的矩阵，v1.1）
+- [ ] Dynamic offset detection 的全部自动化 → 明确不做（`structure` 类必须重新取证，见 spec §9）
