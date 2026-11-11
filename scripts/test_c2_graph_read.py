@@ -374,7 +374,7 @@ def test_read_live_pair_returns_fingerprint_and_hash(monkeypatch):
     blobs = {}
 
     def fake_call(pid, base, rva, buf):
-        blobs["called"] = blobs.get("called", []) + [rva]
+        blobs["called"] = [*blobs.get("called", []), rva]
         return 0
 
     def fake_read(pid, addr, size):
