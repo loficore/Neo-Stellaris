@@ -1,0 +1,17 @@
+namespace = neo_c65
+
+# C6-5 的探针:只用官方 `log` 效果。**不许**出现 `neo_action` 或任何本项目注册的
+# keyword —— base 趟没有 DLL,引用它会得到 `Unknown effect` 而不是对照组读数。
+event = {
+	id = neo_c65.1
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		random_system = {
+			every_system = {
+				log = "C65_HIT"
+			}
+		}
+	}
+}
