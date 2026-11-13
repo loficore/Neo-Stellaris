@@ -2,9 +2,9 @@
 # exe=/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
 # exe_sha256=9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56
 # target_version=1.0.0.0
-# generated=2026-11-11
+# generated=2026-11-13
 # chains: register=green dispatch=green state_write=green graph=green scope=green
-# locators: strref=2 callshape=1 vtable=1 global=2 bytes=30 structure=19
+# locators: strref=8 callshape=1 vtable=1 global=2 bytes=24 structure=19
 # witness: register=token_readback dispatch=c6_log_lines state_write=save_join graph=zero_diff scope=mask_id
 chain	node	class	verdict	expect	got	delta	candidates	witness	note
 register	get_scripted_effect	address	found	0x89f960	0x89f960			token_readback	

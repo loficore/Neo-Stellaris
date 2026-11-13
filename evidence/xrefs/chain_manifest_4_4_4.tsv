@@ -9,10 +9,11 @@
 # A `bytes:` recipe is self-证: it matches this build's bytes, so it says "needs a
 # re-anchor" on a new build — never "the chain is broken".  Read strref/callshape/
 # vtable/global verdicts and the report's structure_unverified column for that.
+# locator 强度台账见 evidence/xrefs/locator_upgrade_4_4_4.tsv
 chain	node	class	locator	expect	depends_on	witness	evidence
 register	get_scripted_effect	address	strref:scriptedeffect.cpp	0x89f960		token_readback	c1_validation §27
 register	get_scripted_trigger	address	strref:scriptedtrigger.cpp	0x8a0450		token_readback	c1_validation §27
-register	get_or_add_token	address	bytes:48 89 5c 24 18 48 89 74 24 20 88 54 24 10 55 57 41 54 41 56 41 57 48 8d 6c 24 80 48	0x1d13270		token_readback	pipeline §18 §20
+register	get_or_add_token	address	strref:keywords may not start with a digit or '-'.	0x1d13270		token_readback	pipeline §18 §20
 register	token_db_singleton	address	bytes:48 83 ec 28 ba 14 00 00 00 65 48 8b 04 25 58 00 00 00 48 8b 08 8b 04 0a 39 05 12 1b	0x1d12c60		token_readback	pipeline §18
 register	id_name_rebuild	address	bytes:48 89 5c 24 18 48 89 6c 24 20 56 57 41 56 48 83 ec 20 e8 ??	0x1d12cd0		token_readback	pipeline §30.2
 register	token_db_object	structure		-		token_readback	pipeline §18; global unlocated: only token_db_singleton touches [0x37347a0] among chain nodes, and the writer 0x1d13570 is not a chain node
@@ -24,9 +25,9 @@ register	effect_db_init	address	bytes:48 89 5c 24 18 48 89 4c 24 08 55 56 57 48 
 register	trigger_db_ensure	address	bytes:48 89 5c 24 18 55 56 57 48 83 ec 20 b9 98 00 00 00 e8 ?? ??	0x347bd0		token_readback	pipeline §21
 register	bst_insert_effect	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec 50 49 8b e8 ?? ?? ?? ?? 79 18 48	0x3aef60	effect_db_init	token_readback	pipeline §21
 register	bst_insert_trigger	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec 50 49 8b e8 ?? ?? ?? ?? b9 88 00	0x348150	trigger_db_ensure	token_readback	pipeline §21
-register	consumer_instantiate	address	bytes:48 89 5c 24 18 4c 89 4c 24 20 48 89 4c 24 08 55 56 57 41 54 41 55 41 56 41 57 48 8d ac 24 10 fb	0x3b01a0		token_readback	pipeline §23 §23.3
-register	enum_effects	address	bytes:48 89 5c 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 ec 60 4c 8b fa	0x3af130		token_readback	pipeline §23 §23.3
-register	enum_triggers	address	bytes:48 89 54 24 10 48 89 4c 24 08 53 55 56 57 41 54 41 55 41 56 41 57 48 83 ec 78 4c 8b fa 48 8b e9	0x348450		token_readback	pipeline §23 §23.3
+register	consumer_instantiate	address	strref:An effect with id = "%s" already exist. id has to be unique	0x3b01a0		token_readback	pipeline §23 §23.3
+register	enum_effects	address	strref:Supported Scopes:@reads=0xb0@calls=0x1d12cd0	0x3af130		token_readback	pipeline §23 §23.3; @calls 随节点 id_name_rebuild 一起重锚
+register	enum_triggers	address	strref:Supported Scopes:@reads=0x88@calls=0x1d12cd0	0x348450		token_readback	pipeline §23 §23.3; @calls 随节点 id_name_rebuild 一起重锚
 register	effect_db_global	address	global:writes_by=@node:get_scripted_effect,reads_by=@node:consumer_instantiate	0x33746e8		token_readback	pipeline §1 §21
 register	trigger_db_global	address	global:writes_by=@node:get_scripted_trigger,reads_by=@node:enum_triggers	0x32611c8	enum_triggers	token_readback	pipeline §1 §21
 register	operator_new	address	bytes:40 53 48 83 ec 20 48 8b d9 eb 0f 48 8b cb e8 ?? ?? ?? ?? 85	0x2185218		token_readback	pipeline §17 §21
@@ -36,7 +37,7 @@ register	donor_docstring_trigger	structure		-		token_readback	c1_validation §24
 register	donor_docstring_effect	structure		-		token_readback	c1_validation §24 §24.6
 dispatch	base_execute	address	bytes:48 89 5c 24 08 57 48 83 ec 20 8b 42 08 48 8b da 48 8b f9 85 c0 78 32 ba 10 00 00 00 48 8b cb e8 ?? ?? ?? ?? 48 8b cb e8 ?? ?? ?? ?? ba 03 00 00 00 48 8b cb e8 ?? ?? ?? ?? ba 10 00 00 00 48 8b cb e8 ?? ?? ?? ?? 8b 43 08 ff c0 48 8b d3 89 43 08 48 8b cf 48 8b 07 ff 50 10 ff 4b 08 48 8b cb	0x1d08520		c6_log_lines	structures §10 §14
 dispatch	dispatch_point	address	callshape:callptr+0x48&bytes:48 89 5c 24 18 55 56 57 41 56 41 57 48 83 ec 20 48 8b ea 48	0x3b0f80		c6_log_lines	c1_validation §91.6 §91.7
-dispatch	donor_execute	address	bytes:48 89 5c 24 10 48 89 74 24 18 48 89 7c 24 20 55 41 54 41 55 41 56 41 57 48 8d 6c 24 90 48 81 ec 70 01 00 00 4d 8b f8 48 8b f2 4c 8b f1 48 83 79 48 00 75 34 48 8d 54 24	0x3afd30		c6_log_lines	c1_validation §52
+dispatch	donor_execute	address	strref:Expected "@reads=0x88	0x3afd30		c6_log_lines	c1_validation §52; '" in file: "' 12 函数共享 ⇒ 改用同函数内 'Expected "'(2 函数)+@reads=0x88
 dispatch	donor_vtable	structure		-	donor_execute	c6_log_lines	c1_validation §52; two-stage vtable not convergent: 538 tables carry slot1=@node:donor_execute, 5 survive slot2=@node:consumer_instantiate (0x24b1d98/0x24eaac0/0x25f4440/0x2606f00/0x2606fe0), and the remaining discriminators are not chain nodes (spec §4.2 rule 3)
 dispatch	effect_body_plus70	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 70 49 8b f8 48 8b ea 48 8b	0x3b1330		c6_log_lines	c1_validation §24.4.2
 dispatch	effect_pred_plus98	address	bytes:48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9 48 85 d2 74 25 48 8b 01 ff 50 78 48	0x3b1420		c6_log_lines	c1_validation §23.1 §52
@@ -55,7 +56,7 @@ state_write	field_parse_state	structure		-		save_join	c1_validation §94
 graph	system_resolver	address	bytes:48 81 79 08 80 00 00 00 75 09 8b 41 10 89 44 24 08 eb 08 c7 44 24 08 ff ff ff ff 48 8b 05 86 d1	0x3939f0		zero_diff	graph_runtime §1.2 §1.11
 graph	edge_add	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 50 48 8b f2 48 8b f9 48 8d 4a	0x8bbaa0		zero_diff	graph_runtime §1
 graph	edge_remove	address	bytes:40 53 57 41 54 48 83 ec 20 48 63 81 9c 05 00 00 33 db 4c 8b	0x8bbc20		zero_diff	graph_runtime §1
-graph	read_path_a	address	bytes:48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57 48 81 ec a0 01 00 00 48 8b da 48 8b	0x1afe500		zero_diff	graph_runtime §2.2
+graph	read_path_a	address	strref:has_hyperlane_to trigger at %s Evaluated invalid target galactic object or country	0x1afe500		zero_diff	graph_runtime §2.2
 graph	read_path_b	address	bytes:48 8b c4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 81 ec e0 01 00 00	0x1ae3700		zero_diff	graph_runtime §2.3
 graph	read_path_c	address	bytes:44 89 4c 24 20 44 89 44 24 18 48 89 4c 24 08 55 56 57 41 54	0x1b86e30		zero_diff	graph_runtime §2.4
 graph	edge_table_global	structure		-		zero_diff	graph_runtime §1.11

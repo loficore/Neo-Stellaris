@@ -345,9 +345,18 @@ def rel32_call_targets(img, start, end):
 
 
 def memory_disp_set(img, start, end):
-    """Every non-RIP ``[reg+disp]`` displacement in ``[start, end)``."""
+    """Every non-RIP ``[reg+disp]`` displacement in ``[start, end)``.
+
+    ``skipdata`` is on there so a decode gap cannot truncate the scan; the cost is
+    that the gap arrives as a pseudo-instruction (``id == 0``) whose ``operands``
+    raise ``CS_ERR_SKIPDATA``.  Reading them would turn "this function contains a
+    data island" into a crash of the whole run — the opposite of what skipdata was
+    turned on for — so those instructions are skipped, not counted.
+    """
     disps = set()
     for insn in _MD.disasm(_read_span(img, start, end), img.image_base + start):
+        if insn.id == 0:
+            continue
         for op in insn.operands:
             if op.type == X86_OP_MEM and op.mem.base != X86_REG_RIP:
                 disps.add(op.mem.disp)

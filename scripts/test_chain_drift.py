@@ -15,7 +15,7 @@ from chain_drift import (Image, Locator, LocatorError, ManifestError, Node, Node
                          parse_manifest, pdata_index, pe_version, Resolver, substitute_node_refs,
                          decide, evaluate_chain, exit_code, format_report, locator_mix,
                          REPORT_COLUMNS, find_cstring, find_exe_or_none, load_image, main,
-                         mask_rel32, report_path_for)
+                         mask_rel32, report_path_for, memory_disp_set)
 
 HEADER = ("chain\tnode\tclass\tlocator\texpect\tdepends_on\twitness\tevidence\n")
 
@@ -438,6 +438,35 @@ def test_remaining_chains_are_green_with_their_structure_gaps(chain, expected_un
     color, results, unverified = evaluate_chain(nodes, Resolver(img, pdata_index(img)))
     assert color == "green", [r for r in results if r.verdict not in ("found", "skipped_structure")]
     assert unverified == expected_unverified
+
+
+def _shape_anchor_count():
+    """manifest 里 class=address 且 locator 不以 bytes: 开头的节点数。
+
+    数 manifest 而不是数报告:`# locators:` 行是工具算的,而这个测试要钉的是
+    「跨版本还能自动发现地址漂移的锚点还剩几个」—— 它只能来自配方本身。
+    """
+    with open(MANIFEST, encoding="utf-8") as fh:
+        nodes = parse_manifest(fh.read())
+    return sum(1 for node in nodes
+               if node.cls == "address" and not node.locator.startswith("bytes:"))
+
+
+def test_manifest_keeps_enough_non_bytes_address_anchors():
+    # 6 -> 12(三个必成项 + 四个候选里收敛的 enum_effects + 同法收敛的 enum_triggers / donor_execute,
+    # 逐节点来龙去脉见 evidence/xrefs/locator_upgrade_4_4_4.tsv)。这个 floor 不是覆盖率
+    # 指标,是「换版本时能自己报出地址漂了的锚点下限」—— bytes: 节点在新版本上只会说
+    # 「要人工重锚」。掉到 12 以下就是有节点被退回 bytes:,必须同时在台账里说明。
+    assert _shape_anchor_count() >= 12
+
+
+def test_memory_disp_set_survives_a_data_island_instead_of_raising():
+    # skipdata 是故意开的(解码缺口不能截断扫描),代价是缺口以 id==0 的伪指令出现,
+    # 读它的 operands 会抛 CS_ERR_SKIPDATA。以前这一抛会让整条链崩掉 —— 拿不到判决,
+    # 而「这个函数里有数据岛」恰恰是 reads= 谓词该看见的事实。
+    code = b"\x48\x8b\x41\x38" + b"\x06\x06\x06" + b"\x48\x8b\x51\x40"
+    img = fake_pe([(".text", 0x1000, code)])
+    assert memory_disp_set(img, 0x1000, 0x1000 + len(code)) == {0x38, 0x40}
 
 
 def test_parse_locator_rejects_a_pattern_with_no_fixed_byte():
