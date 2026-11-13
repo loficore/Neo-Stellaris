@@ -56,6 +56,9 @@
 //   NEO_JS_NEIGHBORS_TRUNC id=<id> total=<n> written=<n>
 //   NEO_JS_LOG <text>
 //   NEO_JS_ERROR id=<id> mod=<mod> <message> | NEO_JS_TIMEOUT id=<id> mod=<mod>
+//   NEO_JS_DISABLED mod=<mod> reason=budget  该 mod 在本进程被禁用(10 ms 预算);之后
+//       仍会有 `NEO_JS_CALL`(派发在 session 循环之前打),但不再有 WRITE/LOG —— 判「还在干活」
+//       必须看这一行,不能看调用次数
 //   NEO_SCOPE_OTHER mask=0x<mm> … vtable_rva/6×u32  非 system scope 的只读指纹(前 3 次)
 //   NEO_SCOPE_OTHER_SEEN n=<n>                       之后每 500 次一行计数
 //   NEO_C3_ECON id=<id> holder=0x<x> vt_rva=0x<x> s90=0x<x> s98=0x<x>
@@ -955,6 +958,9 @@ fn runHandler(index: usize, id: u32, handler: c.JSValue) void {
         s.active = false;
         _ = @atomicRmw(u64, &timeout_count, .Add, 1, .monotonic);
         emit("NEO_JS_TIMEOUT id={d} mod={s}", .{ id, s.id });
+        // 单独一行 `NEO_JS_DISABLED`:调用计数(`NEO_JS_CALL`)在 session 循环之前打,
+        // 所以「被预算打死之后照常派发」在日志里长得像成功。禁用必须是可读状态。
+        emit("NEO_JS_DISABLED mod={s} reason=budget", .{s.id});
         // The interrupt leaves a pending exception; consume it so the next call
         // does not see a stale one.
         const exc = c.JS_GetException(ctx);
@@ -1667,6 +1673,30 @@ test "permission bits gate the write and the graph read independently" {
     try testing.expectEqual(isChokepoint(table_score), chokepointFor(read_only, 0));
 }
 
+test "betweennessFor is the score source, not a second computation" {
+    // 2026-11-13: 一个 mod 作者看到的 236 与离线表的 234 不是取整差,是**两个来源**
+    // (烘焙表 / 活体重算,见 `evidence/logs/js_graph_source_4_4_4.log`)。本用例只钉
+    // 委托关系:`graph.betweenness` 不是第三种算法 —— 两种来源下它都逐 id 等于
+    // `neo_vtable.scoreFor`,且活体源读不到时**不回退烘焙表**(回退会让「这个数是
+    // 哪来的」再次失去判词)。
+    const read_only = Permissions{ .graph_read = true };
+    const saved = neo_vtable.scoreSource();
+    defer _ = neo_vtable.setScoreSource(saved);
+
+    // 烘焙表源:两个入口逐 id 相等。
+    try testing.expectEqual(@as(i32, 0), neo_vtable.setScoreSource(0));
+    for (0..8) |raw| {
+        const id: u32 = @intCast(raw);
+        try testing.expectEqual(@as(u32, neo_vtable.scoreFor(id).?), betweennessFor(read_only, id));
+    }
+    try testing.expect(neo_vtable.scoreFor(0).? > 0);
+
+    // 活体源(本机没有引擎 ⇒ 读不到):`scoreFor` = null,`betweennessFor` = 0。
+    try testing.expectEqual(@as(i32, 0), neo_vtable.setScoreSource(1));
+    try testing.expectEqual(@as(?u16, null), neo_vtable.scoreFor(0));
+    try testing.expectEqual(@as(u32, 0), betweennessFor(read_only, 0));
+}
+
 test "encodeScriptNumber refuses anything a Debug build would abort on" {
     try testing.expectEqual(@as(?u32, 0), encodeScriptNumber(0));
     try testing.expectEqual(@as(?u32, 286), encodeScriptNumber(286));
@@ -1810,6 +1840,32 @@ test "an endless handler is stopped by the 10 ms budget and the session is disab
     try testing.expect(!cap.contains("NEO_JS_TIMEOUT id=6"));
     try testing.expectEqual(@as(u64, 1), timeouts());
     try testing.expectEqual(@as(u64, 0), errors());
+}
+
+test "a timed-out session logs NEO_JS_DISABLED so the log cannot be read as still-working" {
+    // 2026-11-13 实测(chokepoint 示例,`c5_chokepoint_mod_join_4_4_4.log` §5 第 1 条):
+    // mod 被 10 ms 预算打死之后,同一个进程里还有 34 个月**照常**打出
+    // `NEO_JS_CALL`(788 次/月),但一条 `NEO_JS_WRITE` 都没有。只看调用次数,会把这
+    // 34 个月读成成功 —— 所以「这个 mod 在本进程被禁用」必须是单独一行。
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+    var fake = FakeClock{};
+    setClock(.{ .ctx = @ptrCast(&fake), .now_ns = FakeClock.now });
+
+    _ = startSession(.{
+        .id = "spin",
+        .source = "__neo_register_system(function(id){ for(;;){ __neo_log('spin'); } });",
+        .permissions = .{ .log = true },
+    });
+    onSystem(5, 0);
+
+    try testing.expect(cap.contains("NEO_JS_TIMEOUT id=5"));
+    try testing.expect(cap.contains("NEO_JS_DISABLED mod=spin"));
+    try testing.expect(cap.contains("reason=budget"));
+    // 一行就够:session 被禁用之后不再进入,不该每次派发都重打一行。
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, cap.text(), "NEO_JS_DISABLED"));
 }
 
 test "setVariable without variable.write is rejected, not silently dropped" {

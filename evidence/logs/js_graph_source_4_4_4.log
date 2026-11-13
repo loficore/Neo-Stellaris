@@ -1,0 +1,130 @@
+# `graph.betweenness` 有两个来源:烘焙表(`--score-source 0`)与活体重算(`--score-source 1`)(2026-11-13)
+
+**第一句就是结论**:`betweennessFor` / `graph.betweenness(s)` 的返回值**跟着 `--score-source` 变**。
+同一个 id 在烘焙表下是 236、在本战役的活体重算下是 234 —— 这不是取整差,是两张不同的图。
+一个 mod 作者用同一份 `main.js`、同一个系统 id,在两种安装方式下会读到不同的数。
+
+本卷只**记录**两种来源与它们的差;**不下「该发哪一种」的结论**(那是人的决定)。
+
+## 1. 两条路径(代码位置,不改)
+
+| 层 | 位置 | 做什么 |
+|---|---|---|
+| JS 面 | `src/dll/c2/neo_js_host.zig` 的 `betweennessFor` | `graph.betweenness(s)` → `neo_vtable.scoreFor(id) orelse 0` |
+| 派发 | `src/dll/c2/neo_vtable.zig` 的 `scoreFor(id)` | 看 `score_source`(单个原子 u32)二选一 |
+| 表源 | `chokepoint_table.zig` 的 `scores[787]` | 一张**烘焙表**,`SAVE_SHA256 = 6f271294…`(战役 `C:/temp/stellaris_2226.sav`,787 系统) |
+| 活体源 | `src/dll/scripted/graph_trigger.zig` 的 `liveScore(id)` | 每次求值都问活体图容器,读不到返回 null(不回退烘焙表) |
+
+`score_source` 由安装参数 `--score-source` 设定(`0` = 表,**默认**;`1` = 活体重算)。
+`neo_js_host.zig` 的 `setScoreSource` 只接受 `0..1`,越界返回 `-1`。
+
+## 2. 数据:同一批 id 在两种来源下的值
+
+来源 artifact(全部在仓库里,无需上机):
+
+- 烘焙值:`src/dll/c2/chokepoint_table.zig` 的 `scores[]`(2226 战役,787 项)。
+- 活体重算值:`evidence/logs/c6_r7_score_join_void_4_4_4.tsv` 的 `offline_score` 列 ——
+  那是**本战役**(`_1474567734`,788 系统 / 1,219 边,存档 `autosave_2325.01.01.sav`)
+  用 `scripts/chokepoint_scores.py` 从图重算出来的。它与 DLL 活体源同口径的依据是
+  `evidence/logs/c6_r8_score_join_4_4_4.log` §3.2:同一战役在 `--act write --score-source 1`
+  下 `score_diffs=0`(788 个 id 逐个等于离线重算)。
+- JS 写进存档的值:同一份 void artifact 的 `save_score` 列(那一发 `--act log`,effect 不写,
+  只有 runtime JS 在它判成枢纽的 15 个系统上写过)。
+
+15 个 JS 写过的 id(`second_writer=1`)全表:
+
+| id | baked(2226 表) | live(本战役重算) | save(JS 写的) | live − baked |
+|---:|---:|---:|---:|---:|
+| 82 | 236 | 234 | 236 | −2 |
+| 126 | 253 | 253 | 253 | 0 |
+| 199 | 203 | 203 | 203 | 0 |
+| 239 | 200 | 200 | 200 | 0 |
+| 274 | 234 | 233 | 234 | −1 |
+| 290 | 202 | 202 | 202 | 0 |
+| 364 | 204 | 205 | 204 | **+1** |
+| 391 | 204 | 204 | 204 | 0 |
+| 486 | 249 | 248 | 249 | −1 |
+| 578 | 286 | 285 | 286 | −1 |
+| 587 | 249 | 248 | 249 | −1 |
+| 610 | 255 | 254 | 255 | −1 |
+| 705 | 260 | 259 | 260 | −1 |
+| 717 | 203 | 203 | 203 | 0 |
+| 771 | 254 | 253 | 254 | −1 |
+
+两行读数把这件事钉住:
+
+- **`save == baked` 15/15**。JS 写进存档的每一个值都等于烘焙表,**没有一个**等于本战役自己的重算值。
+- **`save != live` 9/15**,差值 −2 / −1 / **+1**(id 364 是反方向)。
+
+## 3. 为什么这 9 处不等是「来源不同」,不是「取整差」
+
+1. **方向不齐。** 取整/口径差是一族同向的小偏差(而且我们这条链上的取整是 `round-half-to-even`,
+   `chokepoint_dynamic.zig` 逐位复现 Python)。这里 8 处 −1~−2、1 处 **+1** —— 两个来源的差,
+   不是一个算法两种写法。
+2. **量级超出口径能解释的范围。** 本战役无孤立系统,`chokepoint_dynamic.zig` 头部记录的
+   `n` 定义差异(本模块 `n = system_count`,离线 `n = len(adjacency)`)在这一发为 0 ——
+   R8 的 `score_diffs=0` 就是实测。即使有孤立系统,那个差也只有约 0.25%(234 上不到 1 分),
+   解释不了 236 vs 234。
+3. **在更大的样本上,两张表差得更远。** 把 788 个 id 全部对一遍(烘焙表 vs 本战役重算):
+   **79 个 id 不等,最大差 15 分**。9 只是「JS 这一发写过的那 15 个里可见的部分」——
+   JS 没写的 id 不会在存档里留下它的读数,所以存档只能暴露 15 个里的差。
+4. **`second_writer` 集合外的差值是 0。** void artifact 的 `#meta`:
+   `second_writer=15`、`diffs_outside_second_writer=0`、`max_abs_delta=2`。
+   所有不等都落在 JS 写过的 id 上 ⇒ 那些 id 的存档值是 **JS 写的**,不是我们 effect 写的
+   (effect 的值就是 `offline_score`,而它在这些 id 上不等)。
+   **口径提醒**:`second_writer` 这一列是 `scripts/c6_score_join.py` 从**整份** JS 日志的
+   `NEO_HUB <id>` 行取出来的(跨窗口的并集,不是「这一发」);存档里的值是**最后一个写者**
+   留下的。所以上面那句判词的形状是:「这些 id 的最后写者是 JS,JS 写下的值 = 烘焙表」。
+
+诚实边界:R7 那一发的安装参数**没有留在 artifact 里**(仓库里没有对应的 install 日志)。
+「JS 读的是表」是由上面第 2 节的 15/15 与 R8 的 live==离线重算**反推**出来的,
+不是从日志里读出来的。反推不改变结论(值随来源走),但谁要是想复现「JS 在活体源下的读数」,
+那就得再打一发 `--score-source 1` 且让 JS 当最后一个写者 —— 本卷没有这个读数。
+
+## 4. 对 mod 作者的含义
+
+- **同一份 `main.js`,两种安装方式,两个数。** `--score-source 0`(默认)下拿到的是 2226 战役的
+  烘焙表;`--score-source 1` 下拿到的是**当前这张图**的重算值。id 82 = 236 或 234,取决于装法。
+- **这两个数都不是 bug。** 表是**存档局部**的(`chokepoint_table.zig` 的注释与
+  `scripts/chokepoints_emit.py --check` 的漂移围栏都在说这件事):换战役、换图,同一个 id 指向
+  另一个星系,分数自然不同。作者在自己机器上读到 236、在别人的离线表上看到 234,先怀疑来源,
+  再怀疑自己的算法。
+- **分层不受影响,逐 id 分数受影响。** `>= 200` / `>= 100` 的分档在两个来源下这一发都是
+  15 / 55(`c6_r8_score_join_4_4_4.log` §3.2、`c6_r7_score_join_void_4_4_4.tsv` 的 `#meta`)。
+  所以「哪些是枢纽」稳,「它到底多少分」不稳。别把分数当 id 的稳定属性。
+- **示例 mod(`examples/chokepoint`)在活体源下是重算,不是查表。** 每系统每月一次
+  `graph.betweenness(s)` 在 `--score-source 1` 下就是一次活体读(读失败 fail-closed,
+  不回退烘焙表)。它不是「便宜的本地缓存查询」。
+
+## 5. 这一发不能说的
+
+1. **不能说「活体源下 JS 读到什么」。** 本卷的 JS 读数全部来自表源那一发;活体源下 JS 的值
+   没有 artifact(只有 effect 的写值,见 R8)。要判它,得再打一发。
+2. **不能说哪一张表「对」。** 表源对 2226 战役是对的,活体源对当前图是对的;选哪个是产品/
+   安装的决定,不在本卷。
+3. **9 不是「差值的总数」。** 它是「这一发可见的差值数」。全量对账是 79,而且只对两份
+   特定战役成立。
+4. **`SAVE_SHA256` 是判据,不是装饰。** `chokepoint_table.zig` 的表属于 `6f271294…` 那份存档;
+   拿它当别的战役的真值,得到的差就是本卷第 2 节这张表的形状。
+
+## 6. 复现
+
+```bash
+# 15 个 JS 写过的 id:save / baked / live 三列对照(只读仓内 artifact)
+python3 - <<'PY'
+import pathlib, re
+src = pathlib.Path('src/dll/c2/chokepoint_table.zig').read_text()
+m = re.search(r'scores:\s*\[SCORE_COUNT\]u16\s*=\s*\.\{(.*?)\};', src, re.S)
+baked = [int(x) for x in re.findall(r'\b\d+\b', m.group(1))]
+for line in pathlib.Path('evidence/logs/c6_r7_score_join_void_4_4_4.tsv').read_text().splitlines():
+    if line.startswith('#') or line.startswith('id\t'):
+        continue
+    f = line.split('\t')
+    if f[6] == '1':
+        i = int(f[0])
+        print(i, baked[i], f[4], f[3], int(f[4]) - baked[i])
+PY
+```
+
+注:计划原文给的那段脚本比的是「全部 788 个 id 的 `save_score` vs 烘焙表」,会打印 70 行 ——
+那些 id 在那一发没有写者,存档里是更早窗口留下的值。判据必须收到 `second_writer=1` 的 15 行上。
