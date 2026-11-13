@@ -120,3 +120,74 @@ win-desktop MCP          -> ECONNREFUSED
 
 主机恢复后的第一件事必须是：**先把趟 A 的 `C:/temp/c65_A_*.log` 拉回仓库**（主机上的副本
 是唯一一份窗口切片），然后 `c65_boot.py` → 等 12 个 marker → `c65_close.py B 12`。
+
+## 主机下线期间能做完的部分（2026-11-13 22:2x – 22:35）
+
+### 1. 六门台账的命令形状**已经跑通**（dry-run，用 R5 的窗口当占位，不是 r9 的判词）
+
+把 plan Task 5 Step 4 的命令原样跑了一遍，**只把 C6-5 的四个输入换成 R5 已入库的那四份**
+（R8 的五门输入全是真的）：
+
+```
+C6-1 pass effect_id=19343 set_id=19344 install_rc=0 alive=1
+C6-2 pass distinct=788 container=788 systems=788 save=autosave_2327.01.01 verdict=dispatch_named
+C6-3 pass systems=788 expected=788 writes=7092 matched=7092 skipped=0 first_bad=-
+C6-4 pass path=score_join verdicts=score_drives_official_state
+C6-5 pass missing=- extra=- error_delta=0 markers=1
+C6-6 pass rc=0 verify=0 alive=1
+C6 SUMMARY pass=6 fail=0 cannot_say=0
+EXIT=0
+```
+
+**这一段不是 r9 的判词** —— C6-5 那一行的输入是 R5 的窗口。r9 的台账只差把
+`--base-log/--with-log/--base-error/--with-error` 换成趟 A/趟 B 的 r9 产物。
+顺带钉住两条读法：`markers=1` 是**窗口里出现过的那一个 marker**（`R5_HIT`；r9 是
+`C65_HIT`），不是「比对了一堆 marker」；`missing=- extra=-` 是两边的 marker **计数逐项相等**
+（R5 那对是 12:12）。这一跑耗时 46 s（`--sav` 的 gamestate 解析是大头）⇒ 跑台账要给它
+比 120 s 更长的时限。
+
+### 2. `just check-full` 绿
+
+```
+zig fmt --check + ruff check   -> All checks passed!
+zig build                       -> 31/31 steps succeeded; 1100/1100 tests passed
+pytest scripts/windows/tests    -> 66 passed
+pytest scripts                  -> 352 passed
+pytest scripts (全量)           -> 1332 passed in 70.81s
+EXIT=0
+```
+
+### 3. 一条必须写清的字节事实（否则下一发会误判前提）
+
+`just check-full` 会 `zig build`，于是本机**第一次**有了 `zig-out/bin/stellaris_quickjs.dll`，
+它的 sha256 是 `088276865e7103e41b20d29a7196fdd3a82f9111f9c8c1226271969f2cd51eb6`
+（7,910,912 B）—— **与主机那份不同**（主机 `C:/temp/sqjs_c6r1.dll` = `4e767b0a…`，7,909,888 B，
+大小差 1,024 B）。
+
+这一发**装的是主机那份**（`C:/temp/sqjs_c6r1.dll`，sha `4e767b0a…`，今日复读两次：预检一次、
+启动前一次），**不是**本机重建的这份；本机这份只是门禁的副产物，`just deploy` 没有跑，
+主机上的 DLL 一个字节都没被动过。⇒ 「同一份 DLL 字节」这个前提成立的前提是
+**主机侧那个文件**，不是本机 `zig-out/`。
+
+### 4. 主机恢复后的执行序列（照抄即可，每一步都有回执落盘）
+
+```
+# 0. 先把趟 A 的产物拉回仓库（主机上那份窗口切片是唯一一份）
+scp Windows_Jiaolong:C:/temp/c65_A_game.log  evidence/logs/c6_r9_A_game_window_4_4_4.log
+scp Windows_Jiaolong:C:/temp/c65_A_error.log evidence/logs/c6_r9_A_error_4_4_4.log
+
+# 1. 部署本轮新增的脚本（若主机重启过，C:/temp 会被清）
+scp scripts/scratch/2026-11_c65_ab/{c65_boot,c65_close,c65_window,c65_count}.py Windows_Jiaolong:C:/temp/
+
+# 2. 趟 B：原子启动段（存档回位 + sha 校验 + 启动期注入 + BOOT 回执落盘）
+just win "python C:/temp/session_bridge.py --timeout-s 240 C:/temp/c65_boot.py"
+
+# 3. 等 12 个 marker（弹窗会暂停模拟 ⇒ 我这边点掉弹窗 + 空格）
+ssh Windows_Jiaolong 'python C:\temp\c65_count.py'
+
+# 4. 原子收尾段（切窗口 → --uninstall → taskkill）
+ssh Windows_Jiaolong 'python C:\temp\c65_close.py B 12'
+
+# 5. 台账（R8 五门 + r9 的 C6-5），给足时限
+python3 scripts/c6_acceptance.py --boot evidence/logs/c6_r8_boot_4_4_4.log ... --out evidence/logs/c6_acceptance_r8r9_4_4_4.tsv
+```
