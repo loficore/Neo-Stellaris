@@ -26,6 +26,13 @@ pub const RING_LEN: usize = 2048;
 pub const DISTINCT_SLOTS: usize = 4096;
 pub const LAYOUT_VERSION: u32 = 1;
 
+/// Id coverage is a **bitmap**, not a ring readout.  2026-11-11: 7,092 calls with a 2,048-entry
+/// ring left 683 of 788 ids in the artifact, and `distinct_ids` was read as "some systems were
+/// not dispatched" when it only meant "the recorder closed".  Coverage has to survive ring
+/// truncation, so it is 256 B of module static, one bit per id, set on the engine thread.
+pub const ID_BITS: usize = 2048;
+pub const ID_BYTES: usize = ID_BITS / 8;
+
 /// §80.2 的 scope 形状。只在第二实参真的可读时才取;读不到记 `null_scope`。
 pub const SCOPE_MASK_OFF: usize = 0x08;
 pub const SCOPE_ID_OFF: usize = 0x10;
@@ -108,6 +115,50 @@ var ring: [RING_LEN]Entry = undefined;
 /// Monotonic append index. `head > RING_LEN` means the ring overflowed; `stats.dropped`
 /// counts those samples so the artifact can say "this reading is truncated".
 var head: u64 = 0;
+
+// ---------------------------------------------------------------------------
+// Id coverage — ring-independent (§ C6-2, 2026-11-11)
+// ---------------------------------------------------------------------------
+//
+// One bit per id, set from `recordCall` after the scope read succeeded.  Single writer (the
+// engine thread), no lock, no allocation, no table: the only shared state is the byte we OR.
+
+var id_bits: [ID_BYTES]u8 = [_]u8{0} ** ID_BYTES;
+var id_distinct: u32 = 0;
+/// Ids that do not fit the bitmap.  Never expected (containers are < ID_BITS), counted instead
+/// of dropped so a widened id space shows up as a reading rather than as a silent shortfall.
+var ids_over_bitmap: u64 = 0;
+
+/// Set `id`'s bit. Returns true on the first sighting. Ids >= ID_BITS are counted, not stored.
+pub fn noteId(id: u32) bool {
+    if (id >= ID_BITS) {
+        _ = @atomicRmw(u64, &ids_over_bitmap, .Add, 1, .monotonic);
+        return false;
+    }
+    const word: usize = id / 8;
+    const bit: u8 = @as(u8, 1) << @intCast(id % 8);
+    const old = @atomicRmw(u8, &id_bits[word], .Or, bit, .monotonic);
+    if (old & bit != 0) return false;
+    _ = @atomicRmw(u32, &id_distinct, .Add, 1, .monotonic);
+    return true;
+}
+
+/// Distinct ids seen since the last `reset` (the number the C6-2 gate compares with the
+/// container's raw count).
+pub fn distinctIds() u32 {
+    return @atomicLoad(u32, &id_distinct, .monotonic);
+}
+
+/// `[distinct: u32][bits_len: u32][bits…]` — little-endian, 8 + 256 B.  Returns the byte count
+/// written.  `bits_len` travels with the blob so the driver can fence ID_BITS drift without a
+/// seventh layout word (the six-word layout is a byte contract with the existing driver).
+pub fn coverageInto(out: [*]u8) u32 {
+    std.mem.writeInt(u32, out[0..4], distinctIds(), .little);
+    std.mem.writeInt(u32, out[4..8], @intCast(ID_BYTES), .little);
+    var i: usize = 0;
+    while (i < ID_BYTES) : (i += 1) out[8 + i] = @atomicLoad(u8, &id_bits[i], .monotonic);
+    return @intCast(8 + ID_BYTES);
+}
 
 /// PoC rule (§92): "act on systems whose id satisfies `id % mod == rem`". `mod == 0` disables
 /// it. The decision happens **on the engine thread, inside the dispatch**, which is the whole
@@ -226,6 +277,10 @@ pub fn recordCall(caller: usize, self: usize, scope: usize) u32 {
         return 0;
     }
     const id = readU32(scope, SCOPE_ID_OFF);
+    // Coverage is recorded here, not in `recordSample`: the unreadable-scope branch passes
+    // `id = 0`, and 0 is a legal id in this 0-based container.  Only a successful read may
+    // light a bit.
+    _ = noteId(id);
     if (ruleMatches(id)) recordRuleHit(id);
     recordSample(caller_rva, id, readU32(scope, SCOPE_MASK_OFF), @intCast(self), @intCast(scope));
     return id;
@@ -300,6 +355,9 @@ pub fn reset() void {
     @atomicStore(u64, &hit_count, 0, .monotonic);
     @atomicStore(u64, &head, 0, .monotonic);
     @memset(std.mem.asBytes(&ring), 0);
+    @atomicStore(u32, &id_distinct, 0, .monotonic);
+    @atomicStore(u64, &ids_over_bitmap, 0, .monotonic);
+    @memset(&id_bits, 0);
     drain_cap = 0;
 }
 
@@ -496,6 +554,58 @@ test "bounded capture records the first RING_CAP calls and then closes" {
     const first: *Entry = @ptrCast(@alignCast(&buf));
     try std.testing.expectEqual(@as(u32, 0x1D08520), first.caller_rva);
     try std.testing.expectEqual(@as(u32, 100), first.id);
+}
+
+test "id coverage sets one bit per id and counts distinct once" {
+    resetForTest();
+    try std.testing.expect(noteId(0));
+    try std.testing.expect(!noteId(0));
+    try std.testing.expect(noteId(787));
+    try std.testing.expect(!noteId(787));
+    try std.testing.expect(noteId(1));
+    try std.testing.expectEqual(@as(u32, 3), distinctIds());
+}
+
+test "coverageInto writes distinct, bits_len and the 256-byte bitmap" {
+    resetForTest();
+    _ = noteId(0);
+    _ = noteId(5);
+    _ = noteId(788);
+    var buf: [8 + ID_BYTES]u8 = [_]u8{0xAA} ** (8 + ID_BYTES);
+    try std.testing.expectEqual(@as(u32, 8 + ID_BYTES), coverageInto(&buf));
+    try std.testing.expectEqual(@as(u32, 3), std.mem.readInt(u32, buf[0..4], .little));
+    try std.testing.expectEqual(@as(u32, 256), std.mem.readInt(u32, buf[4..8], .little));
+    try std.testing.expectEqual(@as(u8, 0b0010_0001), buf[8]); // ids 0 and 5
+    try std.testing.expectEqual(@as(u8, 0), buf[8 + 1]);
+    try std.testing.expectEqual(@as(u8, 1 << 4), buf[8 + 788 / 8]); // 788 = byte 98, bit 4
+}
+
+test "ids beyond the bitmap are counted, not silently dropped" {
+    resetForTest();
+    try std.testing.expect(!noteId(ID_BITS));
+    try std.testing.expectEqual(@as(u32, 0), distinctIds());
+    try std.testing.expectEqual(@as(u64, 1), @atomicLoad(u64, &ids_over_bitmap, .monotonic));
+}
+
+test "an unreadable scope does not light bit 0" {
+    resetForTest();
+    // A native test binary compiles `isCommitted` to `false`, so this goes down the same
+    // `null_scope` branch that writes `id = 0` into the ring — and 0 is a legal container id.
+    _ = recordCall(0x10000, 0x2000, 0x10000);
+    try std.testing.expectEqual(@as(u64, 1), @atomicLoad(u64, &stats.null_scope, .monotonic));
+    try std.testing.expectEqual(@as(u32, 0), distinctIds());
+    var buf: [8 + ID_BYTES]u8 = undefined;
+    _ = coverageInto(&buf);
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, buf[0..4], .little));
+    try std.testing.expectEqual(@as(u8, 0), buf[8]);
+}
+
+test "reset clears coverage and the distinct count" {
+    resetForTest();
+    _ = noteId(7);
+    reset();
+    try std.testing.expectEqual(@as(u32, 0), distinctIds());
+    try std.testing.expect(noteId(7));
 }
 
 test "the recorder stops touching the ring once it is closed" {

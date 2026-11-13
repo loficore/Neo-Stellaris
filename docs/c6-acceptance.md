@@ -27,7 +27,7 @@ C6 判的是「这套运行期 keyword 能力可以交给 mod 作者用」，不
 | gate | 判据 | 观测 | 证据词 | 阈值 | 方式 |
 |---|---|---|---|---|---|
 | C6-1 | 新 keyword 在脚本解析前就拿到 token id | `scripts/c2_boot_inject.py` 的 `BOOT` 回执一行 | install_rc=0 | effect_id>0 且 set_id>0，且 `gate=world_state` | auto |
-| C6-2 | 引擎按星系调用我们的代码 | `scripts/c2_exec_caller_probe.py` 的 artifact | dispatch_named | distinct_ids 与**这一场**容器原始条数逐项相等 | auto |
+| C6-2 | 引擎按星系调用我们的代码 | `scripts/c2_exec_caller_probe.py` 的 artifact | dispatch_named | **已记录**的 caller RVA 唯一，且 id 覆盖位图去重数 == **这一场**容器原始条数 | auto |
 | C6-3 | 状态写进真实存档、逐系统可对 | `scripts/c5_variable_probe.py --name neo_mark` 的逐系统行 + 同一进程的 `--stats` 写入计数 | systems= | 系统集合与容器逐项相等、值 = 系统 id（判词 `neo_state_written`） | auto |
 | C6-4 | 官方 DSL 读得回我们写的状态并据此分支 | `scripts/c2_graph_reconcile.py` 的引擎回执 vs 主机侧重算 | tiers_named | 有 `--name-map` 时逐名相等；没有时只能 `tiers_counts`（判词 `score_drives_official_state`） | auto |
 | C6-5 | 官方 scripted_effects 语义不变 | 同一存档同一场景的两份 `game.log`（`base.log` / `with_dll.log`）与两份 `error.log` | official_effects_unchanged | `error.log` 零新增脚本错误、官方 marker 集合逐项相等（**空集不算通过**：两份都解析不出 marker 时台帐判 `cannot_say no_markers_parsed`） | manual |
@@ -50,15 +50,20 @@ C6 判的是「这套运行期 keyword 能力可以交给 mod 作者用」，不
 
 ### C6-2 逐系统调用
 
-**通过**：artifact 判词 `dispatch_named` —— 调用者 RVA 唯一且落在镜像里、
-去重后的系统 id 集合与**这一场**容器原始条数逐项相等（`--systems` 无默认值，必须现场取：
-先在同一进程读容器原始条数，再打这一发）。
+**通过**：artifact 判词 `dispatch_named` —— **已记录**的调用者 RVA 唯一（`caller_rva = 0` 是
+「未记录」：`toRva()` 没认出返回地址；它单独报 `unrecorded_callers=` / `unrecorded_samples=`，
+**不参与**唯一性判据，也**不静默丢弃**），且 **id 覆盖位图**去重后的 id 数与**这一场**容器原始条数
+逐项相等。位图来自 `C6ExecCallerIdCoverageInto` 的 `[distinct: u32][bits_len: u32][bits…]`，
+与记录环容量**解耦**（`distinct_ids` 读的就是它）。`--systems` 无默认值，必须现场取：
+先在同一进程读容器原始条数，再打这一发。
 
-**失败**：`ids_not_in_container` / `ids_out_of_range`（id 集合与容器对不上，说明我们拿到的
-不是逐系统 scope）、或 `no_calls`（装上了但引擎没派发到）。
+**失败**：`ids_not_in_container` / `ids_out_of_range` / `ids_coverage_incomplete`（id 集合与容器对不上，
+或位图不满**这一场**的容器原始条数 —— 说明我们拿到的不是逐系统 scope，或覆盖本身有缺口）、或 `no_calls`（装上了但引擎没派发到）。
 
 **不能说**：这一门只证「引擎按星系调到了我们的代码」。它**不**证明每个系统的分数是对的
 （那是 C6-4 与离线重算的活），也**不**证明调用次数等于系统数乘月数 —— 月数不在这一门里。
+另外 `ring_capacity_truncated=1` 是**正常**的（记录环只留前 2,048 次调用）：它只说明 artifact 的
+caller 列是**前缀**，不影响 id 覆盖判据 —— 反过来，位图满了也不证明 caller 列覆盖了每一次调用。
 
 ### C6-3 写状态
 
