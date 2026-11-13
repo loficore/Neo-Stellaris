@@ -1667,6 +1667,30 @@ test "permission bits gate the write and the graph read independently" {
     try testing.expectEqual(isChokepoint(table_score), chokepointFor(read_only, 0));
 }
 
+test "betweennessFor is the score source, not a second computation" {
+    // 2026-11-13: 一个 mod 作者看到的 236 与离线表的 234 不是取整差,是**两个来源**
+    // (烘焙表 / 活体重算,见 `evidence/logs/js_graph_source_4_4_4.log`)。本用例只钉
+    // 委托关系:`graph.betweenness` 不是第三种算法 —— 两种来源下它都逐 id 等于
+    // `neo_vtable.scoreFor`,且活体源读不到时**不回退烘焙表**(回退会让「这个数是
+    // 哪来的」再次失去判词)。
+    const read_only = Permissions{ .graph_read = true };
+    const saved = neo_vtable.scoreSource();
+    defer _ = neo_vtable.setScoreSource(saved);
+
+    // 烘焙表源:两个入口逐 id 相等。
+    try testing.expectEqual(@as(i32, 0), neo_vtable.setScoreSource(0));
+    for (0..8) |raw| {
+        const id: u32 = @intCast(raw);
+        try testing.expectEqual(@as(u32, neo_vtable.scoreFor(id).?), betweennessFor(read_only, id));
+    }
+    try testing.expect(neo_vtable.scoreFor(0).? > 0);
+
+    // 活体源(本机没有引擎 ⇒ 读不到):`scoreFor` = null,`betweennessFor` = 0。
+    try testing.expectEqual(@as(i32, 0), neo_vtable.setScoreSource(1));
+    try testing.expectEqual(@as(?u16, null), neo_vtable.scoreFor(0));
+    try testing.expectEqual(@as(u32, 0), betweennessFor(read_only, 0));
+}
+
 test "encodeScriptNumber refuses anything a Debug build would abort on" {
     try testing.expectEqual(@as(?u32, 0), encodeScriptNumber(0));
     try testing.expectEqual(@as(?u32, 286), encodeScriptNumber(286));
