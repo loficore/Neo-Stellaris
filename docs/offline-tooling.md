@@ -247,6 +247,12 @@ python3 scripts/chain_drift.py --manifest /dev/null --bytes-at 0x1d13270 -n 24
   配方缺陷，自动选中的话这一格会永久失去检测能力。
 - **`bytes:` 是自证型 locator：它在同一份二进制上必然 `found`。** 新版本上 `bytes` 节点报 `zero` 只说明「需要人工重锚」，
   不说明链路断了 —— 断没断看 `strref`/`callshape`/`vtable`/`global` 节点的判决和 `structure_unverified` 列。
+- **配方强度不均质：同样是 `strref:`，收敛条件差一个数量级。** `get_or_add_token` 的串（整串是
+  `" failed, keywords may not start with a digit or '-'.`）只被 **1** 个函数引用，不加任何收敛条件就唯一；
+  `read_path_c` 的数组告警串被 **277** 个函数引用，加 `@reads=` 也收不到 1 个。`@reads=0x<disp>` 的口径是
+  「函数体内含有这个位移」—— 可能是结构体字段（`[r14+0x88]`），也可能是栈槽（`[rsp+0xb0]`），两者换版本的
+  稳定性不同，但都不是 RVA，所以都不自证。哪个 `bytes:` 节点换成了形状配方、哪个没换、为什么没换，逐行记在
+  `evidence/xrefs/locator_upgrade_4_4_4.tsv`（`adopted=no` 只允许四种原因，并附复算命令）。
 - **`target_version` 读的是 PE 版本资源，不是游戏版本号。** 4.4.4 的 exe 里那份 `VS_FIXEDFILEINFO` 写的是
   `1.0.0.0`（`Pegasus v4.4.4` 只是普通字符串），所以缺省报告名会变成 `chain_drift_1.0.0.0.tsv`；要按游戏版本落盘就显式
   传 `--report evidence/xrefs/chain_drift_4.4.4.tsv`。
