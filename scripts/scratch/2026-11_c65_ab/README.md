@@ -10,6 +10,17 @@
 | `c65_probe/` | 探针 mod：`on_monthly_pulse → event → random_system → every_system → log = "C65_HIT"`。每月一次，一次一行 marker。**只**用官方 `log` 效果。 |
 | `lw_launch.py` | 趟 A（base）的裸启动器：`stellaris.exe --continuelastsave`，`cwd` 设在 exe 旁边。 |
 | `c65_window.py` | 把一趟的 `game.log` 裁成 marker 窗口、把 `error.log` 整份拷走，并打印 sha / 字节偏移。 |
+| `c65_boot.py` | 趟 B 的**原子启动段**：固定存档回位 + sha 校验 + `c2_boot_inject.py` 启动期注入 + `BOOT` 回执落盘（`C:/temp/c65_B_boot.txt`）。 |
+| `c65_close.py` | 一趟的**原子收尾段**：切窗口 → `--uninstall` → `taskkill`，回执落 `C:/temp/c65_<trip>_close.txt`。 |
+| `c65_count.py` | 一次读数：`COUNT=<n> LAST=<游戏日期>`。窗口长度按游戏月算，弹窗会暂停模拟，所以要反复读它。 |
+
+## 为什么要 `c65_boot.py` / `c65_close.py` 这两个壳
+
+趟 A 是裸启动，没有注入链，一条 ssh 就够。趟 B 的启动链（`session_bridge` → 启动 → 等 5 s →
+注入 → 注册 → 回执）在我这边一次 **120 s 的 shell 超时**里没跑完，ssh 被掐掉 ⇒ 回执没落盘、
+注入成没成也读不到（2026-11-13 那一发就是这样，随后主机整体下线）。所以把「存档准备 + 启动 +
+注入 + 回执落盘」和「切窗口 + 拆钩子 + 杀进程」各自收进一个脚本：
+**ssh 断了不影响证据，回执文件一定在**。
 
 ## 为什么不能拿 `c2_boot_inject.py` 当趟 A 的启动器
 
