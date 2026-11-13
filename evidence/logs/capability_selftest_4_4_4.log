@@ -317,3 +317,11 @@ python C:/temp/cap_token.py                               # 只读摊 token 表�
 python C:/temp/c2_boot_inject.py C:/temp/sqjs_cap2.dll --uninstall
 just game stop
 ```
+
+## §5 `token` 的修法（2026-11-13，离线；**未实机复测**）
+
+§4.4 归因的 cap 判据在 shot 之后落地：`src/dll/c2/capability.zig` 的 `holderName` 从
+`cap < SSO_MAX`(0x0F) 改成 `cap < 0x10`（新常量 `INLINE_CAP_THRESHOLD`），与引擎
+`0x1d152fb` 的 `cmp [r8+0x18], 0x10; jb` 同一条；单测钉在 **0x0F（内联边界）** 与
+**0x10（堆边界）** 两点 —— 旧的 `SSO_MAX - 1 = 0x0E` 从没测过 0x0F 这个实机值。
+commit `e73e2f1`。**这一格在活体里仍未复测**：第三发才能把它变成读数。
