@@ -192,6 +192,12 @@ comptime {
     if (TOKEN_HOLDER_STRIDE != 0x30) @compileError("holder stride drifted from the live reading");
 }
 
+/// 引擎自己的分支在 `0x1d152fb`:`cmp [r8+0x18], 0x10; jb inline` —— 判据是 **cap < 0x10**,
+/// 不是 `cap < SSO_MAX`。`SSO_MAX`(0x0F)是**最大内联长度**(15),cap 阈值比它大一;
+/// 用 0x0F 当阈值会把 `cap == 0x0F` 的内联串误判成堆串,去解 `[+0x10]` 的字符字节
+/// (2026-11-13 第二发实机:`holder[10104] cap=0x0f` 内联 ⇒ 读到 `unreadable`)。
+const INLINE_CAP_THRESHOLD: u64 = 0x10;
+
 /// 一次自检的全部外部输入。`mem` 是唯一的读通道(生产侧 = `ReadProcessMemory`,
 /// 测试侧 = 合成镜像);`write_var` 是唯一的写通道(生产侧 = `writeSystemVariable`)。
 pub const Env = struct {
@@ -246,8 +252,8 @@ fn holderName(env: Env, entry: usize, buf: []u8) NameRead {
     if (size == 0 or size >= buf.len) return .bad;
     const n: usize = @intCast(size);
 
-    if (cap < @as(u64, kr.SSO_MAX)) {
-        if (n > kr.SSO_MAX) return .bad;
+    if (cap < INLINE_CAP_THRESHOLD) {
+        if (n > INLINE_CAP_THRESHOLD) return .bad;
         const chars = gg.addAddr(entry, kr.HOLDER_NAME) orelse return .unreadable;
         if (!env.mem.read(env.mem.ctx, chars, n, buf[0..n])) return .unreadable;
         return .{ .ok = buf[0..n] };
@@ -592,11 +598,39 @@ test "token check reads add_modifier's name back from the id table" {
     // §20 / `NameHolder.charsPtr`:cap < 0x10 ⇒ 字符就是 +0x10 那 16 字节本身。
     putName(holder, entry_off + kr.HOLDER_NAME, PROBE_KEYWORD_NAME);
     putU64(holder, entry_off + kr.HOLDER_STR_SIZE, PROBE_KEYWORD_NAME.len);
-    putU64(holder, entry_off + kr.HOLDER_STR_CAP, kr.SSO_MAX - 1);
+    putU64(holder, entry_off + kr.HOLDER_STR_CAP, INLINE_CAP_THRESHOLD - 1);
 
     var mem = FakeMem{};
     mem.add(TEST_MODULE + kr.RVA_TOKEN_DB_OBJECT, &db);
     mem.add(TEST_HOLDER, holder);
+
+    const rep = runFree(mem.env(TEST_MODULE, 0));
+    try testing.expectEqual(Status.ok, rep.statusOf(.token));
+}
+
+test "token check follows the pointer when cap is exactly 0x10" {
+    const alloc = testing.allocator;
+    var db = [_]u8{0} ** 0x80;
+    const entry_off = PROBE_KEYWORD_ID * TOKEN_HOLDER_STRIDE;
+    const holder = try alloc.alloc(u8, entry_off + 0x38);
+    defer alloc.free(holder);
+    @memset(holder, 0);
+
+    var chars: [32]u8 = undefined;
+    @memset(&chars, 0);
+    putName(&chars, 0, PROBE_KEYWORD_NAME);
+
+    putU64(&db, TOKEN_DB_NAME_TABLE, TEST_HOLDER);
+    // cap == 0x10 ⇒ 字符在 `[entry+0x10]` 指向的堆上(引擎 0x1d152fb 的 `cmp cap,0x10; jb`)。
+    const heap_chars: usize = 0x3_0000_0000;
+    putU64(holder, entry_off + kr.HOLDER_NAME, heap_chars);
+    putU64(holder, entry_off + kr.HOLDER_STR_SIZE, PROBE_KEYWORD_NAME.len);
+    putU64(holder, entry_off + kr.HOLDER_STR_CAP, INLINE_CAP_THRESHOLD);
+
+    var mem = FakeMem{};
+    mem.add(TEST_MODULE + kr.RVA_TOKEN_DB_OBJECT, &db);
+    mem.add(TEST_HOLDER, holder);
+    mem.add(heap_chars, &chars);
 
     const rep = runFree(mem.env(TEST_MODULE, 0));
     try testing.expectEqual(Status.ok, rep.statusOf(.token));
@@ -613,7 +647,7 @@ test "token check fails when the read-back name is another keyword" {
     putU64(&db, TOKEN_DB_NAME_TABLE, TEST_HOLDER);
     putName(holder, entry_off + kr.HOLDER_NAME, "add_modifief");
     putU64(holder, entry_off + kr.HOLDER_STR_SIZE, PROBE_KEYWORD_NAME.len);
-    putU64(holder, entry_off + kr.HOLDER_STR_CAP, kr.SSO_MAX - 1);
+    putU64(holder, entry_off + kr.HOLDER_STR_CAP, INLINE_CAP_THRESHOLD - 1);
 
     var mem = FakeMem{};
     mem.add(TEST_MODULE + kr.RVA_TOKEN_DB_OBJECT, &db);
