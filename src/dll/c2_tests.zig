@@ -17,6 +17,7 @@ const chokepoint_dynamic = @import("c2/chokepoint_dynamic.zig");
 const graph_fixture = @import("c2/graph_fixture.zig");
 const galaxy_graph = @import("c2/galaxy_graph.zig");
 const graph_probe = @import("c2/graph_probe.zig");
+const capability = @import("c2/capability.zig");
 const offsets = @import("shared/offsets.zig");
 
 comptime {
@@ -30,6 +31,7 @@ comptime {
     _ = graph_fixture;
     _ = galaxy_graph;
     _ = graph_probe;
+    _ = capability;
     _ = offsets;
 }
 
