@@ -1303,6 +1303,12 @@ export fn C6ExecCallerDrainInto(out: [*]u8) callconv(.c) u32 {
     return c2_exec_caller.drainInto(out);
 }
 
+/// `[distinct: u32][bits_len: u32][bits…]` — id 覆盖位图,与记录环解耦(C6-2,2026-11-11)。
+/// 返回写出的字节数(8 + 256)。位图长度随 blob 走,驱动的契约是 `bits_len == 256`。
+export fn C6ExecCallerIdCoverageInto(out: [*]u8) callconv(.c) u32 {
+    return c2_exec_caller.coverageInto(out);
+}
+
 /// PoC(§92):`id % mod == rem` 的星系在**派发线程里**被选出来,计数 + 前 64 个 id 落表。
 /// 打包成一个 u64(`mod << 32 | rem`),因为 `call_remote_with_arg` 只传一个寄存器。
 export fn C6ExecCallerSetRule(bits: u64) callconv(.c) i32 {

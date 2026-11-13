@@ -15,9 +15,13 @@
 
   * `instrument_broken` —— layout 靶位不符 / 装着但 hook 丢了;
   * `no_calls` / `ring_truncated` / `container_unreadable` / `dispatch_denominator_mismatch`
-    / `caller_unnamed` / `caller_mixed` / `scope_constant` —— 环境或仪器档,**不是**证据;
-  * `ids_out_of_range` / `ids_not_in_container` —— 判负;
-  * `dispatch_named` —— 证据:调用者 RVA 唯一且落在镜像里、id 去重后 ⊆ 容器且落在 `[1,N]`。
+    / `caller_unrecorded` / `caller_unnamed` / `caller_mixed` / `scope_constant` —— 环境或仪器档,
+    **不是**证据;
+  * `ids_out_of_range` / `ids_not_in_container` / `ids_coverage_incomplete` —— 判负;
+  * `dispatch_named` —— 证据:**已记录**的调用者 RVA 唯一、id 覆盖位图去重后 == 这一场容器原始条数。
+
+  `caller_rva = 0` 是「未记录」(`toRva()` 认不出返回地址),**不是**第二个派发方:它单独计数
+  (`unrecorded_callers=` / `unrecorded_samples=`),不参与唯一性判据。
 
 **这一发不能说的**(写进 §91 时逐条保留):
   1. 返回地址是**一层**调用者;它上面的循环/派发方若也是虚派发,一层不够。
@@ -50,6 +54,28 @@ LAYOUT_WORDS = 6
 RING_LEN = 2048
 PROLOGUE_LEN = 32               # EXPECTED_CODE length in the Zig module
 
+ID_BITS = 2048                  # exec_caller_probe.ID_BITS
+ID_BYTES = ID_BITS // 8         # 256 B module static
+COVERAGE_SIZE = 8 + ID_BYTES    # [distinct: u32][bits_len: u32][bits…]
+
+# Every export the shot needs.  This list is explicit on purpose: deriving it from the DLL's
+# own export table (the old `startswith("C6ExecCaller")`) let a stale DLL pass the gate by
+# simply not shipping the new readout.
+REQUIRED_EXPORTS = (
+    "C6ExecCallerInstall",
+    "C6ExecCallerUninstall",
+    "C6ExecCallerVerify",
+    "C6ExecCallerLayout",
+    "C6ExecCallerStatsInto",
+    "C6ExecCallerSetDrainCap",
+    "C6ExecCallerDrainInto",
+    "C6ExecCallerIdCoverageInto",
+    "C6ExecCallerReset",
+    "C6ExecCallerSetRule",
+    "C6ExecCallerRuleHitsInto",
+    "C6ExecCallerSetAct",
+)
+
 STATS_KEYS = (
     "calls",
     "dropped",
@@ -72,14 +98,16 @@ VERDICTS = (
     "container_unreadable",
     "dispatch_denominator_mismatch",
     "caller_unnamed",
+    "caller_unrecorded",
     "caller_mixed",
     "scope_constant",
     "ids_out_of_range",
     "ids_not_in_container",
+    "ids_coverage_incomplete",
     "dispatch_named",
 )
-EVIDENCE_VERDICTS = ("ids_out_of_range", "ids_not_in_container", "dispatch_named",
-                    "poc_rule_hits")
+EVIDENCE_VERDICTS = ("ids_out_of_range", "ids_not_in_container", "ids_coverage_incomplete",
+                     "dispatch_named", "poc_rule_hits")
 
 EXIT_REFUSED = 2
 
@@ -158,11 +186,46 @@ def aggregate(rows):
     return list(folded.values())
 
 
-def verdict(stats, rows, container, *, expected, distinct=None):
+def split_callers(rows):
+    """`caller_rva == 0` means **unrecorded** (the return address was outside the image), not
+    "a second dispatcher". Returns `(recorded_rvas, unrecorded_rows, unrecorded_samples)`."""
+    recorded = {row["caller_rva"] for row in rows if row["caller_rva"]}
+    unrecorded_rows = sum(1 for row in rows if row["caller_rva"] == 0)
+    unrecorded_samples = sum(row["occurrences"] for row in rows if row["caller_rva"] == 0)
+    return recorded, unrecorded_rows, unrecorded_samples
+
+
+def decode_id_coverage(blob):
+    """`[distinct: u32][bits_len: u32][bits…]` -> `{distinct, bits_len, bits, ids}`.
+
+    `bits_len` travels with the blob, so a DLL built with a different `ID_BITS` is rejected
+    here instead of being read with the wrong stride. A `distinct` that disagrees with the
+    bitmap is an instrument defect, not a reading.
+    """
+    if len(blob) < 8:
+        raise ValueError(f"coverage blob needs at least 8 bytes, got {len(blob)}")
+    distinct, bits_len = struct.unpack("<II", blob[:8])
+    if bits_len != ID_BYTES:
+        raise ValueError(f"coverage bitmap is {bits_len} B, this driver expects {ID_BYTES} B "
+                         f"(ID_BITS={ID_BITS})")
+    if len(blob) != 8 + bits_len:
+        raise ValueError(f"coverage blob is {len(blob)} B but bits_len says {8 + bits_len} B")
+    bits = blob[8:]
+    ids = [i for i in range(ID_BITS) if bits[i // 8] >> (i % 8) & 1]
+    if len(ids) != distinct:
+        raise ValueError(f"coverage says distinct={distinct} but the bitmap has {len(ids)} bits")
+    return {"distinct": distinct, "bits_len": bits_len, "bits": bits, "ids": ids}
+
+
+def verdict(stats, rows, container, *, expected, distinct=None, coverage=None):
     """The single judgement. Environment classes first; `instrument_broken` wins over all.
 
-    `distinct` is the deduplicated id count; it defaults to the row count when the caller has
-    already folded rows (the artifact path passes it explicitly).
+    `coverage` is the decoded id bitmap; it is the authority for **which systems were
+    dispatched**, because it survives the recording ring closing (2026-11-11: 7,092 calls,
+    2,048-entry ring, 683/788 ids in the artifact). `rows` only carries the caller RVAs and
+    the fallback id set when coverage is unavailable. `caller_rva == 0` is *unrecorded*, not a
+    second caller: the artifact reports its count separately and it does not fail the caller
+    uniqueness test on its own.
     """
     if stats["installed"] == 1 and stats["verify"] != 0:
         return "instrument_broken"
@@ -180,21 +243,34 @@ def verdict(stats, rows, container, *, expected, distinct=None):
     if not rows:
         # §91.3: the ring killed the game, so the shipped probe keeps one caller slot in stats.
         return "caller_sampled" if stats["last_caller"] else "no_rows"
-    callers = {row["caller_rva"] for row in rows}
-    if not callers or 0 in callers:
-        return "caller_unnamed"
-    if len(callers) > 1:
+    recorded, _, _ = split_callers(rows)
+    if not recorded:
+        # Every caller RVA was unrecorded.  With the coverage bitmap the id half is still a
+        # reading, so it gets its own name; without it there is nothing to stand on (the old
+        # artifact shape, where `caller_rva=0` was the only caller column we had).
+        return "caller_unrecorded" if coverage is not None else "caller_unnamed"
+    if len(recorded) > 1:
         return "caller_mixed"
 
-    guard_ids = {row["id"] for row in rows}
+    if coverage is not None:
+        guard_ids = set(coverage["ids"])
+    else:
+        guard_ids = {row["id"] for row in rows}
     # The container is **0-based** (2026-11-02 read: ids 0..786, 787 entries), so the range
     # gate is `0 <= id < expected`; the real constraint is the subset test right below.
     if any(not (0 <= eid < expected) for eid in guard_ids):
         return "ids_out_of_range"
     if not guard_ids <= set(container["ids"]):
         return "ids_not_in_container"
-    if (distinct if distinct is not None else len(rows)) < 2:
-        # One id for every call: the second argument is not the per-system scope shape.
+    if coverage is not None:
+        if coverage["distinct"] < 2:
+            # One id for every call: the second argument is not the per-system scope shape.
+            return "scope_constant"
+        if coverage["distinct"] != container["raw_count"]:
+            # Coverage is the gate now, so a short bitmap is a negative even when the
+            # recorded rows happen to look complete.  Never pass on a truncated id set.
+            return "ids_coverage_incomplete"
+    elif (distinct if distinct is not None else len(rows)) < 2:
         return "scope_constant"
     return "dispatch_named"
 
@@ -211,6 +287,15 @@ def install_decision(rc, layout):
 def gate_label(allow_window):
     """Which premise this shot was fired under — recorded in `#meta`."""
     return "operator_override" if allow_window else "world_state"
+
+
+def require_coverage(reading, coverage):
+    """The id bitmap **is** the C6-2 gate: without it there is no trustworthy id count.
+
+    Falling back to the ring's rows would let a truncated recorder pass as `dispatch_named`
+    (2026-11-11: 683 of 788 ids), so a missing readout is an instrument failure, not a pass.
+    """
+    return "instrument_broken" if coverage is None else reading
 
 
 # --- pre-fire gates ---------------------------------------------------------------
@@ -397,7 +482,7 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
     print(f"[execcaller] dll={dll_path} sha256={dll_sha}")
 
     pid = harness.resolve_pid("stellaris.exe")
-    needed = [name for name in harness.list_exports(dll_path) if name.startswith("C6ExecCaller")]
+    needed = list(REQUIRED_EXPORTS)
     base, exports = gate_module(pid, dll_path, needed, allow_window=allow_window)
     exe_base = harness.resolve_base_address(pid, "stellaris.exe")
 
@@ -405,6 +490,7 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
     drain_cap = RING_LEN * ENTRY_SIZE
     drain_buf = harness.remote_alloc(pid, drain_cap)
     layout_buf = harness.remote_alloc(pid, LAYOUT_WORDS * 4)
+    coverage_buf = harness.remote_alloc(pid, COVERAGE_SIZE)
 
     harness.call_remote_with_arg(pid, base, exports["C6ExecCallerLayout"], layout_buf)
     layout = decode_layout(struct.unpack("<6I", harness.read_memory(pid, layout_buf, LAYOUT_WORDS * 4)))
@@ -473,6 +559,8 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
         rows = _safe(lambda: (
             harness.call_remote_with_arg(pid, base, exports["C6ExecCallerSetDrainCap"], drain_cap),
             drain_entries(pid, base, exports, drain_buf))[1], [])
+        # The final drain re-reads the same **closed** ring, so it supersedes the early one; the
+        # two are never concatenated (that would count every prefix sample twice).
         if not rows and early_rows:
             rows = early_rows
             meta["rows_from"] = "early"
@@ -482,6 +570,17 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
         delta["installed"] = after["installed"]
         delta["verify"] = after["verify"]
         delta["patch_size"] = after["patch_size"]
+
+        coverage_blob = _safe(lambda: (
+            harness.call_remote_with_arg(pid, base,
+                                         exports["C6ExecCallerIdCoverageInto"], coverage_buf),
+            harness.read_memory(pid, coverage_buf, COVERAGE_SIZE))[1], b"")
+        coverage = _safe(lambda: decode_id_coverage(coverage_blob), None)
+        coverage_distinct = coverage["distinct"] if coverage is not None else -1
+
+        recorded, unrecorded_rows, unrecorded_samples = split_callers(rows)
+        distinct_rows = len({row["id"] for row in rows})
+        distinct = coverage_distinct if coverage is not None else distinct_rows
         meta.update({
             "stats_delta": " ".join(f"{k}={delta[k]}" for k in STATS_KEYS),
             "container_raw_count": (container or {}).get("raw_count", -1),
@@ -490,9 +589,18 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
             ).hexdigest(),
             "script_sends": 0,
             "entries": len(rows),
+            "distinct_ids": distinct,
+            "distinct_rows": distinct_rows,
+            "coverage_distinct": coverage_distinct,
+            "coverage_bits_len": coverage["bits_len"] if coverage is not None else -1,
+            "coverage_ids_sha256": hashlib.sha256(
+                coverage["bits"] if coverage is not None else b"").hexdigest(),
+            "coverage_error": 0 if coverage is not None else 1,
+            "unrecorded_callers": unrecorded_rows,
+            "unrecorded_samples": unrecorded_samples,
+            "recorded_callers": len(recorded),
+            "ring_capacity_truncated": 1 if delta["calls"] > RING_LEN else 0,
         })
-        distinct = len({row["id"] for row in rows})
-        meta["distinct_ids"] = distinct
         meta["last_caller"] = f"0x{delta['last_caller']:x}"
         _safe(lambda: harness.call_remote_with_arg(
             pid, base, exports["C6ExecCallerRuleHitsInto"], hits_buf))
@@ -503,7 +611,9 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
         meta["rule"] = rule
         meta["rule_hits"] = len(hit_ids)
         meta["rule_ids"] = ",".join(str(i) for i in hit_ids)
-        base_verdict = verdict(delta, rows, container, expected=systems, distinct=distinct)
+        base_verdict = require_coverage(
+            verdict(delta, rows, container, expected=systems, distinct=distinct,
+                    coverage=coverage), coverage)
         meta["overall_verdict"] = ("poc_rule_hits" if meta.get("rule_hits")
                                    else "poc_no_hits") if base_verdict == "dispatch_named" \
             else base_verdict

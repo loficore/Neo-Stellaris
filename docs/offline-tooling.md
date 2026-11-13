@@ -1897,18 +1897,39 @@ effect,只有 785 行,所以两侧总数天然差 3–4,**覆盖差要判 `tiers
 `+0x08`(mask)与 `+0x10`(id);③ 那批 id 去重后是否 ⊆ 银河容器 `[[0x3260BB0]+0x590]`、是否落在 `[1,N]`。
 模式只有一种(watch):不投递任何脚本,让游戏自己的月度脉冲驱动。
 
-**verdict 值域(十一档)**:证据档 `dispatch_named` / `ids_out_of_range` / `ids_not_in_container`;
-环境或仪器档 `instrument_broken`(永远优先)/ `no_calls` / `dedupe_full` / `container_unreadable` /
-`dispatch_denominator_mismatch` / `caller_unnamed` / `caller_mixed` / `scope_constant`。环境档**不是证据**。
+**id 覆盖与记录环解耦(2026-11-13 修;C6-2 的那一格)。** 记录环是**关闭式**的:`RING_CAP = 2,048`,
+环满之后不再写。R2 那一发 `calls=7092 = 9×788`,环里只剩前 2,048 条 ⇒ 折成 1,366 行、只覆盖 683 个 id,
+`distinct_ids=683 < 788` —— 那是**仪器缺口**,不是「有些系统没被派发」。现在 DLL 另有一张
+**id 位图**(`ID_BITS = 2048` ⇒ 256 B 模块静态,单写者、无锁、无分配):每次 `recordCall` 读到合法 id 就置位,
+去重数单独计数。导出:
+
+| 导出 | 签名 | 返回 |
+|---|---|---|
+| `C6ExecCallerIdCoverageInto` | `fn(out: [*]u8) u32` | `[distinct: u32][bits_len: u32][bits…]`(8 + 256 B),返回写出的字节数 |
+
+`bits_len` 随 blob 走,驱动据此把 `ID_BITS` 漂移挡在门外(`ID_BITS` 与 `LAYOUT_VERSION` **没有**改:
+六词 layout 是既有驱动的字节契约)。`Stats` 的 40 B 布局也**没有**改。
+
+**verdict 值域(十七档)**:证据档 `dispatch_named` / `ids_out_of_range` / `ids_not_in_container` /
+`ids_coverage_incomplete` / `poc_rule_hits`;环境或仪器档 `instrument_broken`(永远优先)/ `no_calls` /
+`ring_truncated` / `container_unreadable` / `dispatch_denominator_mismatch` / `caller_unnamed` /
+`caller_unrecorded` / `caller_mixed` / `scope_constant` / `caller_sampled` / `no_rows`。环境档**不是证据**。
+
+**`caller_rva = 0` 是「未记录」,不是第二个派发方。** 返回地址落在镜像外时 `toRva()` 给 0。
+这些行单独计数(`unrecorded_callers=` 行数、`unrecorded_samples=` 样本数),**不参与**唯一性判据,
+也**不静默丢弃**。于是:全部未记录 ⇒ `caller_unrecorded`(位图仍可能齐);一真一哨 ⇒ 照常判唯一。
+**位图读不回来**(`coverage_error=1`)直接判 `instrument_broken`:没有位图,id 数只是环的前缀,
+不能当通过。
 
 **门序**与兄弟驱动同一条:`sha_gate`(打印并记录注入文件 sha256;文件不在 `exit 2`)→ `gate_module`
-(八个导出 + `C2Sanity==42`)→ `refuse_if_resident`(同名模块已映射就拒绝)→ `gate_install("execcaller")`
+(**十二个导出**,清单写死在驱动里 + `C2Sanity==42`;清单不写死的话,少一个导出的旧 DLL 反而能过门)
+→ `refuse_if_resident`(同名模块已映射就拒绝)→ `gate_install("execcaller")`
 → `inject_dll` → `C6ExecCallerLayout` 对账(靶必须 `0x185BF60`,第 6 词必须是 0:本仪器没有 vtable 过滤器)
-→ `Reset` → `Install` → settle → 读基线 stats → **外部读容器** → 轮询 → drain → `Uninstall` + `Verify`
+→ `Reset` → `Install` → settle → 读基线 stats → **外部读容器** → 轮询 → drain + **读位图** → `Uninstall` + `Verify`
 + settle + `assert_game_alive` → 写 artifact。`Install` 返回 `-2` 不重试;`-7` 打
 `RESTORE_INCOMPLETE_DO_NOT_FREELIBRARY`;**绝不 FreeLibrary**。
 
-**判读陷阱(本仪器专属,三条):**
+**判读陷阱(本仪器专属,五条):**
 
 1. **返回地址只是「一层」调用者。** 它若也是虚派发(`call [rax+0x10]` 那种),一层不够 —— 下一发要
    把这一层当新的锚再往上走一次;不要拿一层读成「最终派发方」。
@@ -1921,10 +1942,15 @@ effect,只有 785 行,所以两侧总数天然差 3–4,**覆盖差要判 `tiers
    银河容器的 id 是 **0 基**(实测 `0..786`,787 条),`[1,N]` 的判据会把合法的 0 判成越界。
 4. **分母写容器原始条数。** `--systems` 无默认值;§89.3 那次容器是 **788**(上一场存档的 787 是错的分母)。
    容器是活数据,只认一次读足的 blob(§81.1 ③)。
+5. **环满是正常的,不是缺口。** `ring_capacity_truncated=1` 只说明 caller 列是**前缀**;id 覆盖判据读
+   位图(与环无关),所以环截断不再把这一门判负。**反过来**:位图满了也不证明每一次调用的 caller 都被记下。
 
 **artifact**:`#meta` 在前(`overall_verdict` / `systems` / `save_name` / `container_raw_count` /
 `container_ids_sha256` / `stats_delta` / `dll` / `dll_sha256` / `module_base` / `exe_base` /
-`install_rc` / `uninstall_rc` / `verify_rc` / `host_alive` / `entries_error`),然后六列行:
+`install_rc` / `uninstall_rc` / `verify_rc` / `host_alive` / `entries_error` /
+`distinct_ids` / `distinct_rows` / `coverage_distinct` / `coverage_bits_len` /
+`coverage_ids_sha256` / `coverage_error` / `unrecorded_callers` / `unrecorded_samples` /
+`recorded_callers` / `ring_capacity_truncated`),然后六列行:
 `caller_rva id mask occurrences self_ptr scope_ptr`。
 
 ### `scripts/c2_capability_probe.py [dll] --systems N --save-name NAME [--resident] [--poll-s 120] [--settle-s 3] [--out C:/temp/c3_capability.tsv] [--allow-window]`

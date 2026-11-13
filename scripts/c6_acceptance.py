@@ -95,8 +95,8 @@ def gate_teardown(line: str) -> Gate:
 
 #: doc §1 只认这一个判词为通过档。
 EVIDENCE_VERDICTS = ("dispatch_named",)
-#: doc §2 明写这两档是**判负**，不是「还没读数」。
-NEGATIVE_VERDICTS = ("ids_out_of_range", "ids_not_in_container")
+#: doc §2 明写这几档是**判负**，不是「还没读数」。
+NEGATIVE_VERDICTS = ("ids_out_of_range", "ids_not_in_container", "ids_coverage_incomplete")
 
 
 def parse_meta(text: str) -> dict[str, str]:

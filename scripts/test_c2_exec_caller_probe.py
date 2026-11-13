@@ -2,9 +2,10 @@
 """test_c2_exec_caller_probe.py — 第八把 guard 的离线围栏(零游戏、零 Windows API)。
 
 三层:
-  * 契约层:Entry 32 B 字段序、Stats 48 B、stats 行八键、layout 六词、八个导出 —— 直接读 Zig 源码;
-  * 判读层:`verdict` 的十一档、容器解码、artifact 六列;
-  * 门序层:安装码表、sha 门、同名模块拒绝。
+  * 契约层:Entry 32 B 字段序、Stats 40 B、stats 行八键、layout 六词、十二个导出、
+    id 覆盖位图 blob(`[distinct][bits_len][bits…]`)—— 直接读 Zig 源码;
+  * 判读层:`verdict` 的十七档、容器解码、artifact 六列、位图去重与 caller 未记录计数;
+  * 门序层:安装码表、sha 门、同名模块拒绝、导出名单是显式清单(缺新导出 = 拒绝注入)。
 """
 from __future__ import annotations
 
@@ -15,7 +16,11 @@ import pytest
 
 import c2_exec_caller_probe as mod
 from c2_exec_caller_probe import (
+    COVERAGE_SIZE,
     EVIDENCE_VERDICTS,
+    ID_BITS,
+    ID_BYTES,
+    REQUIRED_EXPORTS,
     STATS_KEYS,
     TARGET_RVA,
     VERDICTS,
@@ -23,12 +28,14 @@ from c2_exec_caller_probe import (
     build_meta,
     decode_container,
     decode_entry,
+    decode_id_coverage,
     decode_layout,
     gate_label,
     install_decision,
     parse_stats,
     refuse_if_resident,
     sha_gate,
+    split_callers,
     verdict,
 )
 
@@ -42,13 +49,22 @@ def test_entry_size_matches_the_zig_module():
     assert "@sizeOf(Entry) != 32" in src
 
 
-def test_the_ten_exports_exist_in_the_zig_source():
+def test_the_twelve_exports_exist_in_the_zig_source():
     src = EXPORTS_ZIG.read_text()
     for name in ("C6ExecCallerInstall", "C6ExecCallerUninstall", "C6ExecCallerVerify",
                  "C6ExecCallerLayout", "C6ExecCallerStatsInto", "C6ExecCallerSetDrainCap",
-                 "C6ExecCallerDrainInto", "C6ExecCallerReset", "C6ExecCallerSetRule",
-                 "C6ExecCallerRuleHitsInto", "C6ExecCallerSetAct"):
+                 "C6ExecCallerDrainInto", "C6ExecCallerIdCoverageInto", "C6ExecCallerReset",
+                 "C6ExecCallerSetRule", "C6ExecCallerRuleHitsInto", "C6ExecCallerSetAct"):
         assert f"export fn {name}" in src, f"missing export fn {name}"
+
+
+def test_the_export_gate_is_an_explicit_list():
+    """A stale DLL must not clear the gate just by not shipping the new readout."""
+    src = pathlib.Path(mod.__file__).read_text()
+    assert "needed = list(REQUIRED_EXPORTS)" in src
+    assert "needed = [name for name in harness.list_exports" not in src
+    assert "C6ExecCallerIdCoverageInto" in REQUIRED_EXPORTS
+    assert len(REQUIRED_EXPORTS) == 12
 
 
 def test_stats_keys_match_the_dll_line():
@@ -75,6 +91,15 @@ def _rows(ids, caller=0x1D08520):
 
 def _container(ids):
     return {"raw_count": len(ids), "ids": list(ids)}
+
+
+def _coverage(ids):
+    """The blob the DLL's `coverageInto` writes: `[distinct][bits_len][bits…]`."""
+    unique = sorted(set(ids))
+    bits = bytearray(ID_BYTES)
+    for i in unique:
+        bits[i // 8] |= 1 << (i % 8)
+    return struct.pack("<II", len(unique), ID_BYTES) + bytes(bits)
 
 
 GALAXY = list(range(788))   # 788 systems, ids 0..787 (the live container is 0-based)
@@ -192,6 +217,118 @@ def test_verdict_ring_truncation_is_never_evidence():
                       distinct=len(GALAXY))
     assert reading == "ring_truncated"
     assert reading not in EVIDENCE_VERDICTS
+
+
+# --- id coverage is decoupled from the ring (C6-2, 2026-11-11) ---------------------
+
+
+def test_decode_id_coverage_round_trips_the_bitmap():
+    cov = decode_id_coverage(_coverage([0, 5, 787]))
+    assert cov["distinct"] == 3
+    assert cov["bits_len"] == ID_BYTES == 256
+    assert cov["ids"] == [0, 5, 787]
+    assert len(cov["bits"]) == COVERAGE_SIZE - 8
+
+
+def test_id_bitmap_constants_match_the_zig_module():
+    """`ID_BITS`/`ID_BYTES` are a byte contract: the driver rejects a blob that disagrees."""
+    src = ZIG.read_text()
+    assert f"pub const ID_BITS: usize = {ID_BITS};" in src
+    assert "pub const ID_BYTES: usize = ID_BITS / 8;" in src
+    assert COVERAGE_SIZE == 8 + ID_BITS // 8 == 264
+
+
+def test_decode_id_coverage_rejects_bitmap_drift_and_a_lying_count():
+    with pytest.raises(ValueError, match="expects 256"):
+        decode_id_coverage(struct.pack("<II", 1, 512) + bytes(512))
+    with pytest.raises(ValueError, match="distinct=2"):
+        decode_id_coverage(struct.pack("<II", 2, ID_BYTES) + bytes(ID_BYTES))
+    with pytest.raises(ValueError, match="bits_len says"):
+        decode_id_coverage(struct.pack("<II", 1, ID_BYTES) + bytes(10))
+
+
+def test_7092_calls_with_a_1366_row_ring_still_pass_on_full_coverage():
+    """The 2026-11-11 shot: 7,092 = 9×788 calls, the 2,048-entry ring folded to 1,366 rows
+    (683 ids × {one named caller, one unrecorded}), and the id bitmap held all 788 ids."""
+    rows = _rows(range(683), caller=0x3B101F) + _rows(range(683), caller=0)
+    stats = _stats(calls=7092, last_caller=0x3B101F)
+    cov = decode_id_coverage(_coverage(GALAXY))
+    reading = verdict(stats, rows, _container(GALAXY), expected=788, coverage=cov)
+    assert reading == "dispatch_named"
+    assert reading in EVIDENCE_VERDICTS
+
+
+def test_unrecorded_callers_do_not_make_the_caller_unnamed():
+    """`caller_rva=0` is "not recorded", not a second dispatcher."""
+    rows = _rows(GALAXY, caller=0) + _rows([7], caller=0x3B101F)
+    cov = decode_id_coverage(_coverage(GALAXY))
+    assert verdict(_stats(), rows, _container(GALAXY), expected=788,
+                   coverage=cov) == "dispatch_named"
+
+
+def test_every_caller_unrecorded_is_its_own_verdict():
+    rows = _rows(GALAXY, caller=0)
+    cov = decode_id_coverage(_coverage(GALAXY))
+    reading = verdict(_stats(), rows, _container(GALAXY), expected=788, coverage=cov)
+    assert reading == "caller_unrecorded"
+    assert reading != "caller_unnamed"
+    assert reading not in EVIDENCE_VERDICTS
+
+
+def test_two_recorded_callers_still_mix_with_unrecorded_rows_present():
+    rows = _rows(GALAXY[:400]) + _rows(GALAXY[400:], caller=0x1D0BA00) + _rows([1], caller=0)
+    cov = decode_id_coverage(_coverage(GALAXY))
+    assert verdict(_stats(), rows, _container(GALAXY), expected=788,
+                   coverage=cov) == "caller_mixed"
+
+
+def test_a_short_bitmap_is_a_negative_even_when_the_rows_look_complete():
+    """Coverage is the gate: 788 recorded rows cannot outvote a 787-id bitmap."""
+    rows = _rows(GALAXY, caller=0x3B101F)
+    cov = decode_id_coverage(_coverage(GALAXY[:-1]))       # id 787 missing from the bitmap
+    reading = verdict(_stats(), rows, _container(GALAXY), expected=788, coverage=cov)
+    assert reading == "ids_coverage_incomplete"
+    assert reading in EVIDENCE_VERDICTS
+    assert reading != "dispatch_named"
+
+
+def test_a_bitmap_id_outside_the_container_is_ids_not_in_container():
+    container_ids = [1, 2, 5, 6, 7, 8, 9, 10, 11, 12]     # 10 ids, 3 is in range but absent
+    cov = decode_id_coverage(_coverage([1, 2, 3]))
+    reading = verdict(_stats(), _rows([1], caller=0x3B101F),
+                      {"raw_count": 10, "ids": container_ids}, expected=10, coverage=cov)
+    assert reading == "ids_not_in_container"
+
+
+def test_a_one_id_bitmap_is_scope_constant():
+    cov = decode_id_coverage(_coverage([5]))
+    assert verdict(_stats(), _rows([5], caller=0x3B101F), _container(GALAXY), expected=788,
+                   coverage=cov) == "scope_constant"
+
+
+def test_split_callers_counts_unrecorded_rows_and_samples_separately():
+    rows = _rows([1, 2], caller=0x3B101F) + _rows([3], caller=0)
+    rows.append(dict(rows[-1], occurrences=4))             # 1 + 4 = 5 unrecorded samples
+    recorded, unrecorded_rows, unrecorded_samples = split_callers(rows)
+    assert recorded == {0x3B101F}
+    assert unrecorded_rows == 2
+    assert unrecorded_samples == 5
+
+
+def test_coverage_is_read_with_an_argument_and_reported_in_meta():
+    src = pathlib.Path(mod.__file__).read_text()
+    assert 'exports["C6ExecCallerIdCoverageInto"], coverage_buf' in src
+    for key in ("distinct_ids", "distinct_rows", "coverage_distinct", "coverage_bits_len",
+                "coverage_ids_sha256", "coverage_error", "unrecorded_callers",
+                "unrecorded_samples", "recorded_callers", "ring_capacity_truncated"):
+        assert f'"{key}"' in src, f"meta key {key} is not written"
+
+
+def test_a_missing_bitmap_is_an_instrument_failure_not_a_pass():
+    """Without the bitmap the id count is the ring's prefix — that must not read as a pass."""
+    assert mod.require_coverage("dispatch_named", None) == "instrument_broken"
+    assert mod.require_coverage("dispatch_named", {"distinct": 788}) == "dispatch_named"
+
 
 
 def test_aggregate_folds_duplicates_from_the_ring():
