@@ -1,0 +1,52 @@
+# locator 强度台账 —— 本次升级前 chain_manifest_4_4_4.tsv 里 30 个 `bytes:` address 节点,逐行为什么换 / 为什么不换。
+#
+# Columns: node  tried  unique_functions  adopted  reason
+#   node             <chain>/<node>,与 manifest 的 (chain,node) 同口径
+#   tried            实际跑过的配方(多个用 " / " 分隔,括号里是它解出的候选函数数)
+#   unique_functions 该配方实际命中的函数 RVA 与个数;0 = 一个函数都没命中
+#   adopted          yes | no(是否写进了 manifest)
+#   reason           adopted=yes:为什么这一条配方算「唯一收敛」;
+#                    adopted=no **只允许四种**:`no printable string` /
+#                    `string shared by N functions` / `no discriminating reads/calls` /
+#                    `not a function (structure)`
+#
+# 复算(只读 exe 拷贝,不开进程):
+#   python3 scripts/scratch/2026-11_locator_upgrade/locator_strength.py
+#   python3 scripts/scratch/2026-11_locator_upgrade/locator_strength.py --locator '<配方>'
+#
+# 口径:`strref:` 的后缀命中会回溯到 C 串起点,再取 lea/mov 站点所在函数的**起点**去重;
+# 「N 个函数」就是这个去重集合的大小。`.pdata` 里没有的函数连「所在函数」都定义不出来,
+# 所以 strref/reads/calls 三种谓词都无从下手 —— system_resolver 属这一类。
+# `@calls=` 只指向已登记节点的 expect(写死别的 RVA 等于跨版本自证),这类行在 reason 里
+# 写明「随节点 X 一起重锚」。
+node	tried	unique_functions	adopted	reason
+register/get_or_add_token	strref:keywords may not start with a digit or '-'.	1 (0x1d13270)	yes	该 C 串(整串是 '" failed, keywords may not start with a digit or \'-\'.')只被本函数引用,唯一收敛
+register/token_db_singleton	strref:-	0	no	no printable string
+register/id_name_rebuild	strref:-	0	no	no printable string
+register/descriptor_writer_static	strref:-	0	no	no printable string
+register/descriptor_writer_dynamic	strref:-	0	no	no printable string
+register/slot_writer	strref:-	0	no	no printable string
+register/effect_db_init	strref:-	0	no	no printable string
+register/trigger_db_ensure	strref:-	0	no	no printable string
+register/bst_insert_effect	strref:-	0	no	no printable string
+register/bst_insert_trigger	strref:-	0	no	no printable string
+register/consumer_instantiate	strref:An effect with id = "%s" already exist. id has to be unique	1 (0x3b01a0)	yes	该 C 串只被本函数引用,唯一收敛
+register/enum_effects	strref:Supported Scopes: (9) / strref:Supported Scopes:@reads=0xb0 (2) / strref:Supported Scopes:@reads=0xb0@calls=0x1d12cd0 (1)	1 (0x3af130)	yes	串被 9 个函数引用;@reads=0xb0 收到 2,@calls=0x1d12cd0 收到 1 —— @calls 随节点 id_name_rebuild 一起重锚
+register/enum_triggers	strref:Supported Scopes: (9) / strref:Supported Scopes:@reads=0x88 (2) / strref:Supported Scopes:@reads=0x88@calls=0x1d12cd0 (1)	1 (0x348450)	yes	同串(9 函数);@reads=0x88 是本函数的 [rcx+0x88] 字节字段,@calls=0x1d12cd0 随节点 id_name_rebuild 一起重锚
+register/operator_new	strref:-	0	no	no printable string
+dispatch/base_execute	strref:-	0	no	no printable string
+dispatch/donor_execute	strref:" in file: "@reads=0xa0 (4) / strref:" in file: "@reads=0x170 (4) / strref:Expected "@reads=0x88 (1)	1 (0x3afd30)	yes	'" in file: "' 被 12 个函数引用,两次收敛都停在 4 个候选;换同函数内同样只被 2 个函数引用的 'Expected "',加 @reads=0x88([r14+0x88] 字节字段)收到 1
+dispatch/effect_body_plus70	strref:-	0	no	no printable string
+dispatch/effect_pred_plus98	strref:-	0	no	no printable string
+dispatch/trigger_pred_slot	strref:-	0	no	no printable string
+dispatch/trigger_eval_slot	strref:-	0	no	no printable string
+dispatch/out_of_family_dispatch	strref:-	0	no	no printable string
+state_write/set_variable_create	strref:-	0	no	no printable string
+state_write/set_variable_parser	strref:SET_VARIABLE (8) / strref:SET_VARIABLE@reads=0xe0 (2) / strref:SET_VARIABLE@reads=0xf0 (4)	2 (0x188e240,0x188fdd0)	no	no discriminating reads/calls
+state_write/set_variable_body	strref:-	0	no	no printable string
+graph/system_resolver	strref:-	0	no	not a function (structure)
+graph/edge_add	strref:-	0	no	no printable string
+graph/edge_remove	strref:-	0	no	no printable string
+graph/read_path_a	strref:has_hyperlane_to trigger at %s Evaluated invalid target galactic object or country	1 (0x1afe500)	yes	该 C 串只被本函数引用,唯一收敛
+graph/read_path_b	strref:could not get a coordinate from scope. %s (4) / strref:could not get a coordinate from scope. %s@reads=0x80 (2) / strref:could not get a coordinate from scope. %s@reads=0x1e0 (2)	2 (0x1853c60,0x1ae3700)	no	no discriminating reads/calls
+graph/read_path_c	strref:Wrapping array growing, GetSize(): %d GetCapacity(): %d	277	no	string shared by 277 functions
