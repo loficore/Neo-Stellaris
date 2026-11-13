@@ -14,8 +14,9 @@ MARKS = {0: 0, 1: 1, 2: 2, 3: 3}
 
 
 def _join(**overrides):
-    kwargs = dict(scores=SCORES, score_values=VALUES, mark_values=MARKS,
-                  tier2=[3], tier1=[2], flags_blocks=4, second_writer=set())
+    kwargs = {"scores": SCORES, "score_values": VALUES, "mark_values": MARKS,
+              "tier2": [3], "tier1": [2], "flags_blocks": 4,
+              "second_writer": set()}
     kwargs.update(overrides)
     return join.join(**kwargs)
 
@@ -106,7 +107,7 @@ def test_artifact_has_the_meta_header_and_one_row_per_id(tmp_path):
     assert lines[0] == "#meta verdict=score_drives_official_state"
     assert "#meta systems=4" in lines
     assert "#meta js_log=neo_js.log sha256=deadbeef" in lines
-    header = [i for i, line in enumerate(lines) if line.startswith("id\t")][0]
+    header = next(i for i, line in enumerate(lines) if line.startswith("id\t"))
     assert len(lines) - header - 1 == 4
     assert lines[header + 1].split("\t") == ["0", "0", "0", "0", "0", "T0", "0"]
     assert lines[-1].split("\t")[:3] == ["3", "1", "0"]

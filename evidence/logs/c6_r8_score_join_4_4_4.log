@@ -103,6 +103,11 @@ C6 SUMMARY pass=5 fail=0 cannot_say=1
 **五门同进程通过**(`evidence/logs/c6_acceptance_r8_4_4_4.tsv`)。C6-5 要的是「未装 DLL / 装了
 DLL」两趟对照的 `game.log`+`error.log`,不在这一发里,仍是 `cannot_say`。
 
+C6-2 的 artifact 里 `marker_hits=7`(整份 `game.log` 里 `NEO_C64_HIT` 39 行),而同一窗口
+`stats_delta calls=9456`。marker **不是** C6-2 的判据(判据是 `coverage_distinct == systems`,
+这一发 788/788),但这两个数对不上,原因没查 —— 记在这里当未结项,下一发要么换一个会按系统
+打行的 marker,要么先解释这个差。
+
 ## 5. 判读陷阱(这一发踩到的,按踩到的顺序)
 
 1. **flag 会持久化,而且这个战役里早就有了。** 第一次判据用的名字是 `neo_tier1/2`,存档读数
