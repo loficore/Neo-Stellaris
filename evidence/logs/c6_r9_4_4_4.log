@@ -35,3 +35,63 @@
   —— 与 plan / R8 的 `BOOT` 回执所钉的 sha 一致 ⇒ 前提未变。
 - 预检：`just game stop` ⇒ `STATUS=stopped`；`C:\temp\ns_game_cmd.txt` 已删；
   `Get-Process stellaris` 计数 `0`；桌面截图可见 Orca 窗口（桌面已解锁），`LogonUI` 计数 `0`。
+
+## 趟 A（base，不注入）回执（Task 3）
+
+固定存档就位（`--continuelastsave` 取 mtime 最新那份）：
+
+```
+autosave_9999.01.01.sav          <- 本趟/下趟要载入的那份（mtime 刷成 now）
+autosave_2329.07.01.sav
+autosave_2329.01.01.sav
+```
+
+裸启动（经 `session_bridge.py`，落在 session 1）：
+
+```
+LAUNCHED D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe pid=20256
+EXIT=0
+```
+
+**base 趟必须证明进程里没有我们的 DLL** —— 判据是 pid 的模块列表，不是「没跑注入脚本」：
+
+```
+Get-Process -Id 20256 | Select-Object Id,SessionId,MainWindowTitle,Responding
+  20256         1                       True
+(Get-Process -Id 20256).Modules | Where-Object { $_.ModuleName -match "sqjs|quickjs" } | Measure-Object  ->  COUNT_SQJS=0
+(Get-Process -Id 20256).Modules | Where-Object { $_.ModuleName -like "*.dll" }  | Measure-Object          ->  ALLMODS=119
+```
+
+即：进程在 session 1（交互桌面），加载了 119 个 DLL，**其中没有 `sqjs*` / `quickjs*`**。
+趟 B 的对照读数在下一节。
+
+窗口（`c65_window.py A 12`，即前 12 个 `C65_HIT` 行）：
+
+```
+WINDOW trip=A game_bytes=2321 sha256=01d72f1b7844e5d75f9b6345ae3a27b97c20fadb64a9e6393e255a9a6e0fc0f6 pulses=17
+WINDOW start=177 end=1626 bytes=1449 dst=C:/temp/c65_A_game.log sha256=5890185f800f1ced54a691d8229ba8fd88af8254963810e7ca14035720187895
+ERRORLOG bytes=3642 sha256=c74c58d37c793b9670834e041e5e5ea9be964be12a872b558ce72629508d96f5 script_error=0 unexpected_token=0 dst=C:/temp/c65_A_error.log
+```
+
+窗口月份区间（12 行，逐项）：
+
+```
+2329.8.1  2329.9.1  2329.10.1 2329.11.1 2329.12.1 2330.1.1
+2330.2.1  2330.3.1  2330.4.1  2330.5.1  2330.6.1  2330.7.1
+```
+
+`pulses=17` 是窗口**之后**又走了 5 个月才收工（`taskkill` 前读到的最后一个 marker 在
+`2330.7.1` 之后的第 17 个脉冲）。窗口本身只取前 12 行 ⇒ 两趟的窗口是同一个长度。
+
+窗口长度对齐的操作事实：`on_monthly_pulse` 的弹窗会把模拟暂停，所以每约 60–90 s 要
+点掉一次（本趟点了 3 次：`人类觉醒灵能能力` ×2、`措辞强烈的来信` ×1），点完按空格解除暂停
+才继续走月份。`游戏里 12 个月` = 12 个 marker，不是 12 次墙钟分钟。
+
+收工：`taskkill /F /IM stellaris.exe` ⇒ `stellaris.exe` 进程数 `0`。
+
+> **一处与 plan 的偏差（记在这里，不掩盖）**：plan Task 3 Step 5 的命令把**整份**
+> `game.log` 拷成 `c65_A_game.log`。本发用的是 `c65_window.py`，拷的是**marker 窗口**
+> （前 12 个 `C65_HIT` 的字节段）。理由：`c6_acceptance.official_markers` 会扫描每一行的
+> 独立大写 token，整份日志里带着这一场自己的事件流（`playerEventId` 计数器、首次接触事件…），
+> 那部分差异与 DLL 无关，会把 C6-5 判成 `extra=`/`missing=` 而**不是**在比官方语义。
+> 窗口口径与 R5（`evidence/logs/c6_r5_A_game_window_4_4_4.log`）一致。
