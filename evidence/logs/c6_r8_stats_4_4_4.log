@@ -1,0 +1,6 @@
+# C6-8 shot: C2NeoStatsInto read from the same process (pid 16484) after 9 monthly pulses.
+# 7092 = 9 x 788. writes/score_writes equal matched, skipped/score_skipped are 0.
+# neo_hash/neo_edges: the live graph read (score-source 1) succeeded on this process.
+calls=7092 matched=7092 log_calls=7092 last_id=787 rule_hits=64 installed=1 verify=0 dispatched=53944 null_scope=0 mask_odd=0 writes=7092 skipped=0 score_writes=7092 score_skipped=0 set_calls=0 set_runs=0
+hash_rc=16 neo_hash=cec23a9e2b0a890d neo_edges=1219
+live_verify verified=42 verify_failed=0

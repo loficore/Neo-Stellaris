@@ -1,0 +1,85 @@
+# `examples/chokepoint` 打包成 mod 之后:引擎每月按星系调用,JS 的活体读数与离线分层相等(2026-11-13)
+
+**这一发回答的是「示例 mod 能不能原样跑在引擎里」**:`examples/chokepoint` 的产物(`mod.json`
++ `main.js`)装进 `C:/temp/neo_mods/chokepoint/`,外层包一个官方 mod(descriptor +
+`on_monthly_pulse` + 隐藏事件),由引擎自己每月对 788 个系统各下发一次 `neo_action`。
+判据是三条集合相等:**JS 看见的系统集合**、**JS 判成枢纽的集合**、**离线重算的高档集合**。
+
+## 1. 授权与归属
+
+- 授权:用户 2026-11-13「剩下的123，应该都可以执行吧?」(同 `c6_r8_score_join_4_4_4.log` §1)。
+- 机器/会话:`Windows_Jiaolong`,会话 1;DLL sha256
+  `4e767b0a3b4c895610a1699c38a8f8dc027ce0196e02005957be98516d5c797f`。
+- 载入存档:`autosave_2315.07.01.sav` → … → `autosave_2327.01.01.sav`(战役
+  `_1474567734`,788 系统 / 1,219 边,全程未变)。
+
+## 2. 打包形状
+
+```
+mod/neo_chokepoint.mod                  # descriptor:path="mod/neo_chokepoint"
+mod/neo_chokepoint/
+    descriptor.mod
+    common/on_actions/neo_chokepoint_on_actions.txt   # on_monthly_pulse -> neo_chokepoint.1
+    events/neo_chokepoint_events.txt                  # every_system { neo_action = {} }
+    neo/mod.json                                      # {"id":"chokepoint","entry":"main.js",…}
+    neo/main.js                                       # examples/chokepoint 的构建产物
+C:/temp/neo_mods/chokepoint/neo/{mod.json,main.js}    # runtime 从 C:/temp/neo_mods/<id>/ 读
+```
+
+`mod.json` 的 `flags` 里写着 `neo_hub`,但 `main.js` 只调 `setVariable("neo_score", b)`
+(**没有** `setFlag`)——所以这一发的第三条集合从**变量**读,不从 flag 读。
+
+## 3. 读数(窗口 = 该 mod 真正在写的 40 个月)
+
+`neo_js.log`(sha256 `087b566bcaa569efd46d92dd709185f4fde3d16ee639c9333a1b71631326ba6d`,
+7,261,142 B,跨 4 个进程累计)。`evidence/logs/c5_chokepoint_mod_join_4_4_4.tsv` 的
+`#meta` 把窗口钉在 **months 124..163**:
+
+```
+window_months=40 js_systems=788 js_calls_per_id=40..40
+hub_lines=600 hubs_js=15 hubs_offline=15 hub_sets_equal=1
+js_errors=0
+```
+
+- **每个 id 恰好 40 次**:引擎按月、按系统下发,一个系统一个月一次。
+- **JS 看见 788 个系统**:distinct id = 788,`0..787` 无缺。
+- **枢纽集合三条相等**:JS 的 `NEO_HUB` 集合 = 离线 `score >= 200` 集合 =
+  `{82,126,199,239,274,290,364,391,486,578,587,610,705,717,771}`(15 个);
+  `600 = 15 × 40`。
+- **同一进程的 `--stats`**(`c6_r8_stats_4_4_4.log`):`calls=7092 matched=7092 log_calls=7092`
+  (`7092 = 9 × 788`)、`writes=7092 skipped=0`、`neo_edges=1219`。
+
+判词:**`chokepoint_mod_live`**(示例 mod 原样进引擎,活体读数与离线分层逐 id 相等)。
+
+## 4. 台帐 artifact
+
+`evidence/logs/c5_chokepoint_mod_join_4_4_4.tsv`:`#meta` + 每个 id 一行
+(`js_calls` / `js_hub` / `offline_score` / `offline_tier`)。
+
+## 5. 判读陷阱
+
+1. **`NEO_JS_CALL` 计数 ≠ mod 干了活。** 这一发实测:`NEO_JS_TIMEOUT id=772 mod=chokepoint`
+   出现之后,同一个进程里剩下的 34 个月**照常**打出 `NEO_JS_CALL`(788 次/月),但
+   `NEO_JS_WRITE` / `NEO_HUB` 一条都没有 —— runtime 的预算耗尽后,回调还是被调用,mod 的
+   写与日志不再发生。把「调用次数」读成「mod 跑了多少次」会把这 34 个月算成成功。
+   所以 artifact 的窗口钉在 124..163,而不是整份日志。
+2. **`NEO_HUB` 是 JS 自己的读数,不是我们的 effect 的写值。** `graph.betweenness(s)` 走
+   `__neo_graph_betweenness(id)`,读的是**活体容器**,不读 `neo_score` 变量。
+3. **JS 的 betweenness 与离线整数不完全相等。** 在 JS 是最后一个写者的那些月,15 个枢纽里
+   有 9 个的存档值比离线整数大 1~2(236 vs 234、254 vs 253 …)。分层(>=200 / >=100)不受
+   影响,但「逐 id 分数相等」只在我们的 effect 是最后一个写者时成立。差值的来源(JS 侧的
+   取整/口径)没有查,记在这里当未结项。
+4. **`mod.json` 的 `flags` 列表不是行为。** 它只是权限/元数据声明;`main.js` 不写 flag。把
+   `neo_hub` 当「这一发落下的 flag」去存档里找,会得到 0 —— 那是脚本没写,不是 flag 键空间坏了。
+5. **月度重跑 + 多进程累计。** 日志跨进程追加(`NEO_JS_MODS` 出现 4 次),计数会累加;要判
+   当期必须切窗,切的是**进程**边界,不是月份数字(月份编号是本文件按 `id=0` 的出现次数
+   编的,只为定位)。
+
+## 6. 这一发不能说的
+
+1. **不是跨战役承诺**:15/55 只对这份存档这张图成立。
+2. **没有证 `neo_hub` flag 的键空间**:这一发根本没写 flag(见 §5 第 4 条);flag 键空间的
+   四条判据在 `scripts/c5_flag_verify.py` 那一族里。
+3. **预算耗尽的机制没查**:只知道 `NEO_JS_TIMEOUT` 之后该 mod 在本进程内不再产出;不知道
+   预算是按调用数、按毫秒,还是按「每个系统一次 `betweenness` 太贵」。这条对「拿
+   `examples/chokepoint` 当模板」的人是硬限制,需要单独立项。

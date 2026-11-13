@@ -51,6 +51,7 @@
 |---|---|---|
 | `scope_reclassify.py` | 把 §56 那 99 条 scope 候选同时问**两张** vtable 集（1,805 下限集 + 172,296 形状集），分四桶给数；`--json` 出全量 | 读 `evidence/logs/scope_probe_v2_4_4_4.tsv` + `ceffect_vtable_map_4_4_4.txt` + `vtable_candidates_all_4_4_4.txt`；结论落在 §56.9 |
 | `c6_acceptance.py` | 把六道门的既有产物判成 pass/fail/cannot_say | `evidence/logs/c6_acceptance_4_4_4.tsv` |
+| `c6_score_join.py` | C6-4 的第二条证据路径:存档里的官方 flag 集合 + 我们写的分数逐 id 与离线表对账(`score_drives_official_state`) | `evidence/logs/c6_r8_score_join_4_4_4.tsv` |
 
 ## 离线存档分析（读玩家 `.sav`；不需要进程、不需要 exe）
 

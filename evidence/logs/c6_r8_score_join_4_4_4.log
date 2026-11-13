@@ -1,0 +1,142 @@
+# C6-4 第二条证据路径的实机窗口 — 官方 DSL 按我们写的分数落状态(2026-11-13)
+
+**这一发回答的是「谁在驱动官方状态」**:我们注册的 effect 在每个系统上写 `neo_score`,
+同一次下发里官方 DSL 用 `check_variable` 按阈值分支、用 `set_star_flag` 落下 flag。判据全部
+从**存档**里逐 id 读回,不依赖日志里的本地化名 —— 这就是 `docs/c6-acceptance.md` 的 C6-4
+在 `--reconcile` 的 `tiers_named` 之外接受的第二条路径(`c6_score_join.py`)。
+
+## 1. 授权与归属
+
+- 授权(用户逐字,2026-11-13):「剩下的123，应该都可以执行吧? 你看看Windows_Jiaolong，
+  这个机器现在应该没有息屏，你可以使用win_desktop操作」;同一轮里对 `--allow-window`
+  放行(「同意 --allow-window 放行」)。
+- 机器/会话:`Windows_Jiaolong`,会话 1(所有窗口操作经 `C:/temp/session_bridge.py`)。
+- DLL:`C:/temp/sqjs_c6r1.dll`,sha256
+  `4e767b0a3b4c895610a1699c38a8f8dc027ce0196e02005957be98516d5c797f`(Debug 构建)。
+- 安装参数:`--act write --score-source 1`。**这两个开关是判据的一部分**:`--act` 默认是
+  `log`(只记不写),`--score-source` 默认是 `0`(烘焙表)。
+- 载入存档:`autosave_2326.07.01.sav`(战役 `_1474567734`,788 系统 / 1,219 边)。
+
+## 2. 驱动 mod(`mod/neo_chokepoint.mod`)
+
+```
+on_monthly_pulse = { events = { neo_chokepoint.1 } }
+
+event = {
+    id = neo_chokepoint.1
+    immediate = {
+        random_system = {
+            every_system = {
+                neo_action = { }                       # 我们的 effect:写 neo_mark / neo_score
+                if = {
+                    limit = { check_variable = { which = neo_score value >= 200 } }
+                    set_star_flag = neo_c64_t2
+                }
+                else_if = {
+                    limit = { check_variable = { which = neo_score value >= 100 } }
+                    set_star_flag = neo_c64_t1
+                }
+                log = "NEO_C64_HIT"                    # C6-2 探针的控制组 marker
+            }
+        }
+    }
+}
+```
+
+flag 名带 `c64` 前缀**不是命名口味,是判据**:本战役从 2315 起就带着上一轮 C5-SCORE 留下的
+`neo_tier1`/`neo_tier2`(见 §5 第 1 条),拿那两个名字判「这一发写了没有」是判不出来的。
+
+## 3. 读数
+
+### 3.1 同一进程的 `--stats`(pid 16484,9 次月度下发后)
+
+```
+calls=7092 matched=7092 log_calls=7092 last_id=787 rule_hits=64 installed=1 verify=0
+dispatched=53944 null_scope=0 mask_odd=0 writes=7092 skipped=0
+score_writes=7092 score_skipped=0 set_calls=0 set_runs=0
+hash_rc=16 neo_hash=cec23a9e2b0a890d neo_edges=1219
+live_verify verified=42 verify_failed=0
+```
+
+`7092 = 9 × 788`;`writes == matched == score_writes`,`skipped == score_skipped == 0`。
+`neo_edges=1219` 与存档侧重建的边数相同 ⇒ `--score-source 1` 的活体读在这一发是成立的,
+`neo_score` 不是烘焙表的数。
+
+### 3.2 存档(`autosave_2327.01.01.sav`,sha256 `2d66fa38c847fcd9663fac4ab7e0e3e5c5d5fa40b17c45d0ccfeeb2c97f3eab3`)
+
+`python3 scripts/c6_score_join.py --sav <sav> --scores scores_2327.tsv --js-log neo_js.log
+--tier2-flag neo_c64_t2 --tier1-flag neo_c64_t1 --out evidence/logs/c6_r8_score_join_4_4_4.tsv`:
+
+```
+SCORE_JOIN score_drives_official_state systems=788 score_systems=788 mark_systems=788
+missing=0 tier2=15 tier1=55 offline_tier2=15 offline_tier1=55 score_diffs=0
+second_writer=15 diffs_outside_second_writer=0 max_abs_delta=0 flags_blocks=587 bad_mark=0
+verdict=score_drives_official_state
+```
+
+逐条对应 `docs/c6-acceptance.md` 的 C6-4:
+
+| 判据 | 读数 |
+|---|---|
+| 覆盖 | 离线表 788 个 id,存档里 `neo_score` 788 个,缺 0 |
+| 高/中档 flag 集合 | `neo_c64_t2` 15 == 离线 `score>=200` 15;`neo_c64_t1` 55 == 离线 `100..199` 55 |
+| 逐 id 分数 | 788 个系统逐个等于离线表,**0 处不等** |
+| 控制组 | `neo_mark` 788 个系统逐个 == id,`bad_mark=0` |
+
+### 3.3 官方未受损
+
+`error.log` 35 行,`Unexpected token` / `Unknown effect` / `Unknown trigger` 各 **0**;
+装拆 `install_rc=0`、`UNINSTALL rc=0 verify=0 alive=1`;收尾后 `stellaris.exe` 进程数 0。
+
+## 4. 台帐
+
+```
+C6-1 pass effect_id=19343 set_id=19344 install_rc=0 alive=1
+C6-2 pass distinct=788 container=788 systems=788 save=autosave_2327.01.01 verdict=dispatch_named
+C6-3 pass systems=788 expected=788 writes=7092 matched=7092 skipped=0 first_bad=-
+C6-4 pass path=score_join verdicts=score_drives_official_state
+C6-5 cannot_say missing_input:base_log,with_log,base_err,with_err
+C6-6 pass rc=0 verify=0 alive=1
+C6 SUMMARY pass=5 fail=0 cannot_say=1
+```
+
+**五门同进程通过**(`evidence/logs/c6_acceptance_r8_4_4_4.tsv`)。C6-5 要的是「未装 DLL / 装了
+DLL」两趟对照的 `game.log`+`error.log`,不在这一发里,仍是 `cannot_say`。
+
+## 5. 判读陷阱(这一发踩到的,按踩到的顺序)
+
+1. **flag 会持久化,而且这个战役里早就有了。** 第一次判据用的名字是 `neo_tier1/2`,存档读数
+   15/55 —— 看着全对(`evidence/logs/c6_r7_score_join_void_4_4_4.tsv` 就是那一发的 artifact)。
+   但**窗口之前**的存档(`autosave_2315.07.01.sav`)里已经是 15/55:上一轮 C5-SCORE 留下的残留,
+   与当期写无法区分。换成本战役从未出现过的 `neo_c64_t1/t2`(窗口前三份存档里 0 次)之后,
+   「存档里出现」才等价于「这一发写了」。第一次读数因此**作废**(文件名带 `void`),只记在这里
+   当陷阱。
+2. **`--act` 默认是 `log`。** 前两发的 `--stats` 是 `writes=0 score_writes=0`,存档里的
+   `neo_score`/`neo_mark` 全是上一轮留下的值(图没变,所以值恰好等于离线表)。只看存档会把
+   「世界里有正确的数」读成「这一发写了正确的数」。判据 1 的 `writes == matched` 就是为了
+   卡这一条。
+3. **`neo_score` 有两个写者,而且第二个写者会自己停。** 我们的 effect 每系统写一次;
+   `examples/chokepoint` 的 runtime JS 在它判成枢纽的系统上再写一次
+   (`setVariable("neo_score", b)`)。存档只保留最后一个写者:在 `--act log` 那一发,15 个
+   枢纽里有 9 个的存档值比离线整数大 1~2(JS 的读数);在 `--act write` 这一发,effect 每月
+   都写,存档里是 effect 的值,`score_diffs=0`。另外 `NEO_JS_TIMEOUT id=772 mod=chokepoint`
+   之后 JS 在本进程内不再写(见 `c5_chokepoint_mod_join_4_4_4.log` §5 第 1 条),所以
+   artifact 里的 `second_writer=15` 是**整份日志**观察到的 id 集合,不等于「这一发 JS 还在
+   写这 15 个」。`c6_score_join.py` 只用它做「集合外的差值才算判负」的排除项,不用它当证据。
+4. **存档节奏是 6 个月,月度事件会暂停模拟。** 2326.07 → 2327.01 之间每一档月度事件都弹窗
+   暂停;窗口里逐次点掉弹窗才走到下一个自动存档。
+5. **窗口抢焦。** `session_bridge` 的一次性任务会留一个 `cmd.exe`/PowerShell 窗口在最前面;
+   游戏内的暂停菜单**不接受**合成点击(点「保存游戏」无反应),`enter` 会先被事件窗口吃掉。
+   可靠的做法是:先点掉挡在前面的窗口,再点事件的关闭按钮(画面坐标 (1067,947)),再按空格。
+6. **`--stats` 的 `hash_rc=16` 不是失败。** `neo_hash`/`neo_edges` 有值(`cec23a9e2b0a890d`
+   / `1219`)才说明活体图读到了;`hash_rc` 只是那次调用的返回码口径。
+
+## 6. 这一发不能说的
+
+1. **分数表是存档局部的**(§95.6 第 1 条)。`neo_c64_t*` 的 15/55 只对「这份存档这张图」成立;
+   换战役/换图,同一个 flag 名会指向别的星系。
+2. **只证了 `check_variable` 的 `>=` 语义**。没有证 `==`、非整数、负数,也没有证多个阈值
+   同时分支的交互。
+3. **flag 会带进下一局**。`neo_c64_t*` 不会因窗口结束消失;下一次要判「当期」,要么换名字
+   (这一发的做法),要么先清干净。
+4. **C6-5 仍未判**。官方 `scripted_effects` 语义不变需要两趟对照,这一发没有那一对产物。
