@@ -1,0 +1,67 @@
+# Chain drift manifest — 4.4.4 anchors we actually depend on, one row per node.
+#
+# Columns: chain node class locator expect depends_on witness evidence
+#   class    address | structure   (version_drift_4_4_4.md §0 vocabulary)
+#   locator  strref: | callshape: | vtable: | global: | bytes:   (empty = register only)
+#   expect   the 4.4.4 landing (RVA) for address nodes; "-" for structure nodes
+#   rows     are in chain order and dependencies must precede dependents (@node:)
+#
+# A `bytes:` recipe is self-证: it matches this build's bytes, so it says "needs a
+# re-anchor" on a new build — never "the chain is broken".  Read strref/callshape/
+# vtable/global verdicts and the report's structure_unverified column for that.
+chain	node	class	locator	expect	depends_on	witness	evidence
+register	get_scripted_effect	address	strref:scriptedeffect.cpp	0x89f960		token_readback	c1_validation §27
+register	get_scripted_trigger	address	strref:scriptedtrigger.cpp	0x8a0450		token_readback	c1_validation §27
+register	get_or_add_token	address	bytes:48 89 5c 24 18 48 89 74 24 20 88 54 24 10 55 57 41 54 41 56 41 57 48 8d 6c 24 80 48	0x1d13270		token_readback	pipeline §18 §20
+register	token_db_singleton	address	bytes:48 83 ec 28 ba 14 00 00 00 65 48 8b 04 25 58 00 00 00 48 8b 08 8b 04 0a 39 05 12 1b	0x1d12c60		token_readback	pipeline §18
+register	id_name_rebuild	address	bytes:48 89 5c 24 18 48 89 6c 24 20 56 57 41 56 48 83 ec 20 e8 ??	0x1d12cd0		token_readback	pipeline §30.2
+register	token_db_object	structure		-		token_readback	pipeline §18; global unlocated: only token_db_singleton touches [0x37347a0] among chain nodes, and the writer 0x1d13570 is not a chain node
+register	descriptor_writer_static	address	bytes:48 89 4c 24 08 53 48 83 ec 20 48 8b d9 c6 41 04 00 0f 57 c0 0f 11 41 08 48 c7 41 18 00 01 00 00 48 8d 05 e1	0x1d15270		token_readback	pipeline §20
+register	descriptor_writer_dynamic	address	bytes:48 89 4c 24 08 53 48 83 ec 20 48 8b d9 c6 41 04 00 0f 57 c0 0f 11 41 08 48 c7 41 18 00 01 00 00 48 8d 05 81	0x1d152d0		token_readback	pipeline §20
+register	slot_writer	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec 20 41 8b e9 ?? ?? ??	0x1d158a0		token_readback	pipeline §20
+register	descriptor_array	structure		-		token_readback	pipeline §17 §20
+register	effect_db_init	address	bytes:48 89 5c 24 18 48 89 4c 24 08 55 56 57 48 83 ec 20 48 8b f9 48 8d 05 cd	0x3aeba0		token_readback	pipeline §21
+register	trigger_db_ensure	address	bytes:48 89 5c 24 18 55 56 57 48 83 ec 20 b9 98 00 00 00 e8 ?? ??	0x347bd0		token_readback	pipeline §21
+register	bst_insert_effect	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec 50 49 8b e8 ?? ?? ?? ?? 79 18 48	0x3aef60	effect_db_init	token_readback	pipeline §21
+register	bst_insert_trigger	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec 50 49 8b e8 ?? ?? ?? ?? b9 88 00	0x348150	trigger_db_ensure	token_readback	pipeline §21
+register	consumer_instantiate	address	bytes:48 89 5c 24 18 4c 89 4c 24 20 48 89 4c 24 08 55 56 57 41 54 41 55 41 56 41 57 48 8d ac 24 10 fb	0x3b01a0		token_readback	pipeline §23 §23.3
+register	enum_effects	address	bytes:48 89 5c 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 ec 60 4c 8b fa	0x3af130		token_readback	pipeline §23 §23.3
+register	enum_triggers	address	bytes:48 89 54 24 10 48 89 4c 24 08 53 55 56 57 41 54 41 55 41 56 41 57 48 83 ec 78 4c 8b fa 48 8b e9	0x348450		token_readback	pipeline §23 §23.3
+register	effect_db_global	address	global:writes_by=@node:get_scripted_effect,reads_by=@node:consumer_instantiate	0x33746e8		token_readback	pipeline §1 §21
+register	trigger_db_global	address	global:writes_by=@node:get_scripted_trigger,reads_by=@node:enum_triggers	0x32611c8	enum_triggers	token_readback	pipeline §1 §21
+register	operator_new	address	bytes:40 53 48 83 ec 20 48 8b d9 eb 0f 48 8b cb e8 ?? ?? ?? ?? 85	0x2185218		token_readback	pipeline §17 §21
+register	class_info_trigger	structure		-		token_readback	c1_validation §24 §24.6
+register	class_info_effect	structure		-		token_readback	c1_validation §24 §24.6
+register	donor_docstring_trigger	structure		-		token_readback	c1_validation §24 §24.6
+register	donor_docstring_effect	structure		-		token_readback	c1_validation §24 §24.6
+dispatch	base_execute	address	bytes:48 89 5c 24 08 57 48 83 ec 20 8b 42 08 48 8b da 48 8b f9 85 c0 78 32 ba 10 00 00 00 48 8b cb e8 ?? ?? ?? ?? 48 8b cb e8 ?? ?? ?? ?? ba 03 00 00 00 48 8b cb e8 ?? ?? ?? ?? ba 10 00 00 00 48 8b cb e8 ?? ?? ?? ?? 8b 43 08 ff c0 48 8b d3 89 43 08 48 8b cf 48 8b 07 ff 50 10 ff 4b 08 48 8b cb	0x1d08520		c6_log_lines	structures §10 §14
+dispatch	dispatch_point	address	callshape:callptr+0x48&bytes:48 89 5c 24 18 55 56 57 41 56 41 57 48 83 ec 20 48 8b ea 48	0x3b0f80		c6_log_lines	c1_validation §91.6 §91.7
+dispatch	donor_execute	address	bytes:48 89 5c 24 10 48 89 74 24 18 48 89 7c 24 20 55 41 54 41 55 41 56 41 57 48 8d 6c 24 90 48 81 ec 70 01 00 00 4d 8b f8 48 8b f2 4c 8b f1 48 83 79 48 00 75 34 48 8d 54 24	0x3afd30		c6_log_lines	c1_validation §52
+dispatch	donor_vtable	structure		-	donor_execute	c6_log_lines	c1_validation §52; two-stage vtable not convergent: 538 tables carry slot1=@node:donor_execute, 5 survive slot2=@node:consumer_instantiate (0x24b1d98/0x24eaac0/0x25f4440/0x2606f00/0x2606fe0), and the remaining discriminators are not chain nodes (spec §4.2 rule 3)
+dispatch	effect_body_plus70	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 70 49 8b f8 48 8b ea 48 8b	0x3b1330		c6_log_lines	c1_validation §24.4.2
+dispatch	effect_pred_plus98	address	bytes:48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9 48 85 d2 74 25 48 8b 01 ff 50 78 48	0x3b1420		c6_log_lines	c1_validation §23.1 §52
+dispatch	trigger_pred_slot	address	bytes:48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9 48 85 d2 74 25 48 8b 01 ff 50 70 48	0x349230		c6_log_lines	c1_validation §75 §76
+dispatch	trigger_eval_slot	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 48 8b f9 49 8b f0 48 83 c1 78 48 8b da e8 ?? ?? ?? ?? 48 8b 07 48 8d 93 78 02 00 00 4c 8b c6 48 8b cf 48 8b 5c 24 30 48 8b 74 24 38 48 83 c4 20 5f 48 ff 60 20 cc cc cc cc cc cc cc cc cc cc cc cc 48 89 5c 24 10 48 89 74 24 18 57 48 81 ec e0 02	0x1a91a80		c6_log_lines	c1_validation §77; 68 B body + following bytes: twin 0x1a91a30 is byte-identical inside the body (differs only in a masked call rel32)
+dispatch	out_of_family_dispatch	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08	0xcc4220		c6_log_lines	c1_validation §72
+state_write	set_variable_create	address	bytes:40 53 48 83 ec 20 b9 18 03 00 00 e8 ?? ?? ?? ?? 48 8b d8 48 89 44 24 38 33 d2 41 b8 18 03 00 00 48 8b c8 e8 ?? ?? ?? ?? 48 8b cb e8 ?? ?? ?? ?? 48 8d 05 b9 3b d4 00 48 89 03 48 8d 05 cf 39 d4	0x18a6970		save_join	c1_validation §94 §95 §96
+state_write	set_variable_parser	address	bytes:48 89 5c 24 18 48 89 54 24 10 55 56 57 48 8d 6c 24 b9 48 81 ec c0 00 00 00 48 8b fa 48 8b d9 33 f6 89 75 c7 48 81 c1 f0	0x188e240		save_join	c1_validation §94 §96
+state_write	set_variable_body	address	bytes:48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20 48 8b f2 48 8b f9 4c 8b c2	0x188e1d0		save_join	c1_validation §94 §96
+state_write	set_variable_vtable	address	vtable:slot9==@node:set_variable_body	0x25ea560	set_variable_body	save_join	c1_validation §94 (slot9 = vptr+0x48 = body, slot5 = vptr+0x28 = parser)
+state_write	class_info_set_variable	structure		-		save_join	c1_validation §94
+state_write	docstring_set_variable	structure		-		save_join	c1_validation §94
+state_write	field_name_string	structure		-		save_join	c1_validation §94
+state_write	field_value_cell	structure		-		save_join	c1_validation §94
+state_write	field_parse_state	structure		-		save_join	c1_validation §94
+graph	system_resolver	address	bytes:48 81 79 08 80 00 00 00 75 09 8b 41 10 89 44 24 08 eb 08 c7 44 24 08 ff ff ff ff 48 8b 05 86 d1	0x3939f0		zero_diff	graph_runtime §1.2 §1.11
+graph	edge_add	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 50 48 8b f2 48 8b f9 48 8d 4a	0x8bbaa0		zero_diff	graph_runtime §1
+graph	edge_remove	address	bytes:40 53 57 41 54 48 83 ec 20 48 63 81 9c 05 00 00 33 db 4c 8b	0x8bbc20		zero_diff	graph_runtime §1
+graph	read_path_a	address	bytes:48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57 48 81 ec a0 01 00 00 48 8b da 48 8b	0x1afe500		zero_diff	graph_runtime §2.2
+graph	read_path_b	address	bytes:48 8b c4 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 41 56 48 81 ec e0 01 00 00	0x1ae3700		zero_diff	graph_runtime §2.3
+graph	read_path_c	address	bytes:44 89 4c 24 20 44 89 44 24 18 48 89 4c 24 08 55 56 57 41 54	0x1b86e30		zero_diff	graph_runtime §2.4
+graph	edge_table_global	structure		-		zero_diff	graph_runtime §1.11
+graph	edge_container_offsets	structure		-		zero_diff	graph_runtime §1
+graph	dirty_mask_global	structure		-		zero_diff	graph_runtime §1.4.1
+scope	scope_mask_field	structure		-		mask_id	c1_validation §80.2 §91.7
+scope	scope_id_field	structure		-		mask_id	c1_validation §80.2 §91.7
+scope	country_scope_vtable	structure		-		mask_id	runtime_js_c2_country_scope_4_4_4.log
+scope	dispatch_passes_scope_in_rdx	structure		-		mask_id	c1_validation §91.7

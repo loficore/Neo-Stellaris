@@ -43,6 +43,7 @@
 | `tokencorpus.py` | A5：把 token 空间与随游戏发的脚本离线对账，join 应当精确 | `token_corpus_crosscheck_4_4_4.tsv` |
 | `emu_desc.py` | C0.3 oracle：用 unicorn 跑引擎自己的两个描述符写手，逐字节产出 golden 向量 | `descriptor_oracle_4_4_4.tsv` + `src/dll/scripted/keyword_registry_golden.zig` |
 | `c1_preflight.py` | **约束 4 的门**：候选 keyword 名进 `0x1D13270` 之前的离线只读预检，退出码必须 0 | — |
+| `chain_drift.py` | 按 manifest 的 locator 配方扫任意 `stellaris.exe`，出五条能力链路的 found/moved/ambiguous/zero 判决 | `chain_drift_<version>.tsv` |
 
 ## 离线重问实机产物（读已入库 artifact；不读 exe、不起进程、不需要 shot）
 
