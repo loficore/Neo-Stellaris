@@ -30,7 +30,9 @@ from c2_exec_caller_probe import (
     decode_entry,
     decode_id_coverage,
     decode_layout,
+    fold_overall_verdict,
     gate_label,
+    parse_rule_mod,
     install_decision,
     parse_stats,
     refuse_if_resident,
@@ -431,3 +433,18 @@ def test_count_marker_in_log_reads_only_the_delta(tmp_path):
         handle.write("PS_HIT a\nPS_HIT b\n")
     assert mod.count_marker_in_log(str(log), offset, "PS_HIT") == 2
     assert mod.count_marker_in_log(str(log), None, "PS_HIT") is None
+
+
+def test_a_disabled_poc_rule_leaves_dispatch_named_alone():
+    # 2026-11-13 live: `--rule 0:0` (rule disabled) still rewrote the passing
+    # reading to `poc_no_hits`, and the C6-2 gate only accepts `dispatch_named`.
+    assert parse_rule_mod("0:0") == 0
+    assert fold_overall_verdict("dispatch_named", "0:0", 0) == "dispatch_named"
+    assert fold_overall_verdict("dispatch_named", "0:0", 64) == "dispatch_named"
+
+
+def test_an_armed_poc_rule_still_marks_the_poc_modes():
+    assert parse_rule_mod("100:0") == 100
+    assert fold_overall_verdict("dispatch_named", "100:0", 0) == "poc_no_hits"
+    assert fold_overall_verdict("dispatch_named", "100:0", 64) == "poc_rule_hits"
+    assert fold_overall_verdict("no_calls", "100:0", 64) == "no_calls"

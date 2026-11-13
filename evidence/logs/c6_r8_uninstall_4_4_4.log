@@ -1,0 +1,3 @@
+UNINSTALL rc=0 verify=0 alive=1
+# R8 收尾: c2_boot_inject.py --uninstall 对 pid 16484(同一进程)。
+# DLL 永不 FreeLibrary(约束 5);rc/verify 描述的是钩子 + 注册的拆除。

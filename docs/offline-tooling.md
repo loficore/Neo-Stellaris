@@ -2909,6 +2909,7 @@ python3 scripts/c6_acceptance.py --boot BOOT.txt --uninstall UNINSTALL.txt \
 | `--var-name` | C6-3 的变量名，默认 `neo_mark` | C6-3 |
 | `--systems` | **这一场的容器原始条数**，必填、无默认值 | C6-2 / C6-3 |
 | `--reconcile` | `c2_graph_reconcile.py` 的 stdout 或 `--out` 文件 | C6-4 |
+| `--score-join` | `c6_score_join.py` 的回执（C6-4 的第二条证据路径；给了它就走它，不混日志回执的判词） | C6-4 |
 | `--base-log` / `--with-log` | 未装 / 装了 DLL 两趟的 `game.log` | C6-5 |
 | `--base-error` / `--with-error` | 同两趟的 `error.log` | C6-5 |
 | `--uninstall` | `c2_boot_inject.py --uninstall` 的 `UNINSTALL …` 行 | C6-6 |
@@ -2937,6 +2938,44 @@ python3 scripts/c6_acceptance.py --boot BOOT.txt --uninstall UNINSTALL.txt \
    现在按「行内任意位置的独立大写 token」取 marker，并且**两份都空 ⇒ `cannot_say
    no_markers_parsed`**；`detail` 末尾的 `markers=<n>` 就是「到底比过几个 marker」。
    **看到 `C6-5 pass missing=- extra=-` 先看 `markers=`**：没有这一格或它等于 0，就不是读数。
+
+## `scripts/c6_score_join.py` —— C6-4 的第二条证据路径（存档逐 id 对账）
+
+`c2_graph_reconcile.py` 走日志回执，日志给的是本地化名，仓库里没有 id↔名字的产物，所以没有
+`--name-map` 时它只能判到 `tiers_counts`（计数相等，不是逐名相等）。本工具换一份**独立产物**
+做同一件事：官方 `check_variable` 按我们写的分数分支、`set_star_flag` 落下的官方状态，连同我们
+写的 `neo_score`/`neo_mark`，全部逐 id 从**存档**里读回来。
+
+```
+python3 scripts/c6_score_join.py --sav autosave.sav --scores scores.tsv \
+    [--js-log C:/temp/neo_js.log] [--score-var neo_score] [--mark-var neo_mark] \
+    [--tier2-flag neo_tier2] [--tier1-flag neo_tier1] [--out join.tsv]
+```
+
+一行 `SCORE_JOIN <verdict> …` 加一行 `verdict=<verdict>`（`c6_acceptance.py --score-join` 读后者）。
+四条判据：覆盖（离线表每个 id 都有分数）、分层（flag 集合 == 离线 `>=200` / `100..199`）、
+逐 id 分数、控制组（`neo_mark` == id）。判词：
+
+| 判词 | 台帐档 | 含义 |
+|---|---|---|
+| `score_drives_official_state` | pass | 四条全通 |
+| `tier_sets_disagree` | fail | flag 集合与离线分层不等 |
+| `score_value_disagree` | fail | 第二写者集合外的分数不等，或 `neo_mark` != id |
+| `join_incomplete` | cannot_say | 存档缺系统 / 离线表空 / 存档里没有该变量 |
+
+退出码 `0` / `1`（两个 disagree）/ `2`（incomplete 或读不到文件）。`--out` 是唯一写文件的地方。
+
+**判读陷阱：**
+1. **flag 会持久化。** 判「这一发写的」必须用本战役从没出现过的 flag 名（R8 用 `neo_c64_t1/t2`）；
+   拿上一轮留下的 `neo_tier1/2` 判，残留与当期写分不开（`c6_r8_score_join_4_4_4.log` §5 第 1 条）。
+2. **`neo_score` 有两个写者。** runtime JS 也会在枢纽上写同一个变量，存档只保留最后一个写者；
+   `--js-log` 的 `NEO_HUB` 行标出这些 id，它们的差值只记账、不判负。不给 `--js-log` 就是严格模式
+   （任何一处不等都判负）。
+3. **离线表必须由同一份存档的边算出来**（`save_hypergraph.py` + `chokepoint_scores.py`）。分数表是
+   存档局部的，换存档/换图会整体错位，读起来像判负其实是拿错了表。
+4. **`flags_blocks` 是控制组。** `tier2=0 flags_blocks=0` 是解析形状问题（flags 块不在我们找的
+   位置），`tier2=0 flags_blocks=589` 才是「官方真的没写」；两者都判负，原因不同，所以这个数
+   一定要看。
 
 ## IDA headless 现状(环境状态,非规则)
 

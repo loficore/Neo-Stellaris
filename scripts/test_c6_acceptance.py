@@ -221,3 +221,34 @@ def test_c6_5_detail_reports_how_many_markers_were_compared():
     """`markers=N` 让读者一眼分清「真的比过」与「空集相等」。"""
     gate = c6.gate_official_unchanged(base_log=BASE, with_log=WITH, base_err="", with_err="")
     assert "markers=3" in gate.detail
+
+
+JOIN_PASS = ("SCORE_JOIN score_drives_official_state systems=788 tier2=15 tier1=55\n"
+             "verdict=score_drives_official_state\n")
+
+
+def test_c6_4_passes_on_the_score_join_path():
+    # 第二条路径:存档逐 id 对账(2026-11-13 R8 的产物形状)。日志回执那份可以缺。
+    gate = c6.gate_official_readback("", score_join=JOIN_PASS)
+    assert (gate.gate, gate.status) == ("C6-4", c6.PASS)
+    assert "path=score_join" in gate.detail
+
+
+def test_c6_4_fails_on_a_tier_set_disagreement():
+    for word in ("tier_sets_disagree", "score_value_disagree"):
+        text = f"SCORE_JOIN {word} systems=788\nverdict={word}\n"
+        assert c6.gate_official_readback("", score_join=text).status == c6.FAIL
+
+
+def test_c6_4_cannot_say_when_the_join_is_incomplete():
+    text = "SCORE_JOIN join_incomplete missing=3\nverdict=join_incomplete\n"
+    assert c6.gate_official_readback("", score_join=text).status == c6.CANNOT_SAY
+
+
+def test_c6_4_prefers_the_score_join_path_when_both_are_given():
+    # 两条路的输入不同,判词不可互换:给了 join 就按 join 判,不把 tiers_counts 的
+    # cannot_say 混进来,也不拿 join 的通过去覆盖日志回执的判负。
+    counts = NAMED.replace("tiers_named", "tiers_counts")
+    assert c6.gate_official_readback(counts, score_join=JOIN_PASS).status == c6.PASS
+    disagree = NAMED.replace("tiers_named", "tiers_disagree")
+    assert c6.gate_official_readback(disagree, score_join="").status == c6.FAIL

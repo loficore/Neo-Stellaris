@@ -29,7 +29,7 @@ C6 判的是「这套运行期 keyword 能力可以交给 mod 作者用」，不
 | C6-1 | 新 keyword 在脚本解析前就拿到 token id | `scripts/c2_boot_inject.py` 的 `BOOT` 回执一行 | install_rc=0 | effect_id>0 且 set_id>0，且 `gate=world_state` | auto |
 | C6-2 | 引擎按星系调用我们的代码 | `scripts/c2_exec_caller_probe.py` 的 artifact | dispatch_named | **已记录**的 caller RVA 唯一，且 id 覆盖位图去重数 == **这一场**容器原始条数 | auto |
 | C6-3 | 状态写进真实存档、逐系统可对 | `scripts/c5_variable_probe.py --name neo_mark` 的逐系统行 + 同一进程的 `--stats` 写入计数 | systems= | 系统集合与容器逐项相等、值 = 系统 id（判词 `neo_state_written`） | auto |
-| C6-4 | 官方 DSL 读得回我们写的状态并据此分支 | `scripts/c2_graph_reconcile.py` 的引擎回执 vs 主机侧重算 | tiers_named | 有 `--name-map` 时逐名相等；没有时只能 `tiers_counts`（判词 `score_drives_official_state`） | auto |
+| C6-4 | 官方 DSL 读得回我们写的状态并据此分支 | `scripts/c6_score_join.py` 的存档逐 id 对账（第二条路径见 §2：`scripts/c2_graph_reconcile.py` 的日志回执） | score_drives_official_state | flag 集合与离线分层逐项相等；日志回执那条路有 `--name-map` 时逐名相等（`tiers_named`），没有时只能 `tiers_counts` | auto |
 | C6-5 | 官方 scripted_effects 语义不变 | 同一存档同一场景的两份 `game.log`（`base.log` / `with_dll.log`）与两份 `error.log` | official_effects_unchanged | `error.log` 零新增脚本错误、官方 marker 集合逐项相等（**空集不算通过**：两份都解析不出 marker 时台帐判 `cannot_say no_markers_parsed`） | manual |
 | C6-6 | 收尾可验证、不留下必须卸载的钩子 | `scripts/c2_boot_inject.py --uninstall` 的回执一行 | UNINSTALL | rc=0 且 verify=0，host 存活，且**从不** FreeLibrary | auto |
 
@@ -79,16 +79,25 @@ caller 列是**前缀**，不影响 id 覆盖判据 —— 反过来，位图满
 
 ### C6-4 官方 DSL 读回
 
-**通过**：`c2_graph_reconcile` 的 tier 对账判 `tiers_named`（给了 `id<TAB>name` 映射时逐名相等）；
-引擎回执侧用官方 `check_variable` / `has_star_flag` 分档并落 flag，flag 集合与离线 tier 集合
-逐项相等。这一组读数在取证卷里的判词名是 `score_drives_official_state`（§95）。
+**通过**(两条证据路径,任一条成立即算;两条的输入不同,判词不可互换):
 
-**失败**：`tiers_disagree`（引擎分档与独立重算不一致，且缺口在引擎一侧）；
+1. **日志回执** —— `c2_graph_reconcile` 的 tier 对账判 `tiers_named`(给了 `id<TAB>name`
+   映射时逐名相等)。没有映射时只能 `tiers_counts`,那是 `cannot_say`,不是通过。
+2. **存档逐 id 对账** —— `c6_score_join` 判 `score_drives_official_state`:官方
+   `check_variable` 按我们写的分数分档、`set_star_flag` 落 flag,存档里 flag 集合与离线 tier
+   集合逐项相等、`neo_score` 逐 id 等于离线表、`neo_mark` 逐 id 等于 id。这一组读数在取证卷
+   里的判词名也是 `score_drives_official_state`(§95);为什么需要第二条路,见 §95.4 的
+   `neo_tier1/2` 逐 id 读数与 `--name-map` 缺口。
+
+**失败**：`tiers_disagree` / `tier_sets_disagree`(引擎分档与独立重算不一致,且缺口在引擎
+一侧);`score_value_disagree`(集合外的分数或 `neo_mark` 对不上);
 或合法回执里出现离线重算不可能产生的 tier。
 
-**不能说**：这一门只证「官方 DSL 能按我们写的值分支」。它**不**证明分数表对**别的存档**成立
-（表是存档局部的，§95 已记）、不证明 `check_variable` 的比较语义之外的东西、也不证明
-flag 不会被持久化带进下一局 —— 它**就是**会持久化。
+**不能说**：`join_incomplete`(存档缺系统 / 离线表空 / 存档里没有 `neo_score`)。这一门只证
+「官方 DSL 能按我们写的值分支」。它**不**证明分数表对**别的存档**成立(表是存档局部的,§95
+已记)、不证明 `check_variable` 的比较语义之外的东西、也不证明 flag 不会被持久化带进下一局
+—— 它**就是**会持久化,所以「这一发写的」要用一个本战役从没出现过的 flag 名来判
+(`evidence/logs/c6_r8_score_join_4_4_4.log` §5 第 1 条)。
 
 > 结构锚点的可验证性由 `scripts/c2_capability_probe.py` 的七项自检矩阵承担（spec §3），
 > **不新开一门**：那一发判的是「我们写下的结构断言在这一版上还成立吗」，与这六道门

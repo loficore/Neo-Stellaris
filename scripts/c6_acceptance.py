@@ -184,13 +184,32 @@ def gate_state_written(text: str, name: str, systems: int,
 _VERDICT_RE = re.compile(r"verdict=(\w+)")
 
 
-def gate_official_readback(text: str) -> Gate:
-    """C6-4：官方 DSL 读回。输入是 `c2_graph_reconcile` 的整段 stdout / `--out` 文件。
+#: C6-4 的**第二条**证据路径(`c6_score_join.py`)的通过判词。它读的是存档里的官方
+#: 状态(`neo_tier*` flag 集合)与我们写的分数,不是日志回执 —— 两条路各自独立成立即算
+#: 通过,但 detail 里写明是哪一条(2026-11-13,`--reconcile` 的逐名档没有 id↔name 产物)。
+_SCORE_JOIN_PASS = "score_drives_official_state"
+_SCORE_JOIN_FAIL = ("tier_sets_disagree", "score_value_disagree")
+
+
+def gate_official_readback(text: str, *, score_join: str = "") -> Gate:
+    """C6-4：官方 DSL 读回。输入是 `c2_graph_reconcile` 的整段 stdout / `--out` 文件,
+    或(第二条路径)`c6_score_join.py` 的回执。
 
     多窗口时**任何**一条 `tiers_disagree` 就判负（缺口在引擎一侧就是结论）；一条
     `tiers_counts` / `tiers_partial` 就够把整门降成 `cannot_say` —— 计数相等不等于
-    逐名相等，不能读成通过。
+    逐名相等，不能读成通过。`--score-join` 那条路只认它自己的判词,不把日志回执的
+    判词混进来:两条路的输入不同,判词不可互换。
     """
+    if score_join.strip():
+        verdicts = _VERDICT_RE.findall(score_join)
+        detail = "path=score_join verdicts=" + (",".join(sorted(set(verdicts))) or "-")
+        if not verdicts:
+            return Gate("C6-4", CANNOT_SAY, detail)
+        if any(verdict in _SCORE_JOIN_FAIL for verdict in verdicts):
+            return Gate("C6-4", FAIL, detail)
+        if all(verdict == _SCORE_JOIN_PASS for verdict in verdicts):
+            return Gate("C6-4", PASS, detail)
+        return Gate("C6-4", CANNOT_SAY, detail)
     verdicts = _VERDICT_RE.findall(text)
     detail = f"windows={len(verdicts)} verdicts={','.join(sorted(set(verdicts))) or '-'}"
     if not verdicts:
@@ -293,7 +312,8 @@ def evaluate(args: argparse.Namespace) -> list[Gate]:
         gate_registration(parse_boot(boot or "")),
         gate_per_system(parse_meta(exec_caller or ""), args.systems),
         gate_state_written(gamestate, args.var_name, args.systems, stats),
-        gate_official_readback(_read(args.reconcile) or ""),
+        gate_official_readback(_read(args.reconcile) or "",
+                               score_join=_read(args.score_join) or ""),
         gate_official_unchanged(base_log=base_log, with_log=with_log,
                                 base_err=base_error, with_err=with_error),
         gate_teardown(uninstall or ""),
@@ -326,6 +346,8 @@ def _parser() -> argparse.ArgumentParser:
                         help="这一场的容器原始条数；无默认值，必须现场取")
     parser.add_argument("--reconcile", default=None,
                         help="c2_graph_reconcile.py 的 stdout 或 --out 文件（C6-4）")
+    parser.add_argument("--score-join", default=None,
+                        help="c6_score_join.py 的回执（C6-4 的第二条证据路径）")
     parser.add_argument("--base-log", default=None, help="未装 DLL 那趟的 game.log（C6-5）")
     parser.add_argument("--with-log", default=None, help="装了 DLL 那趟的 game.log（C6-5）")
     parser.add_argument("--base-error", default=None, help="未装 DLL 那趟的 error.log（C6-5）")

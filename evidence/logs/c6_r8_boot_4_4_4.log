@@ -1,0 +1,14 @@
+BOOT dll=sqjs_c6r1.dll sha=4e767b0a3b4c8956 effect_id=19343 set_id=19344 install_rc=0 alive=1
+# R8 — C6-1 / C6-2 / C6-3 / C6-4 / C6-6 实机窗口(Stellaris 4.4.4, 2026-11-13)
+# (回执在上面第一行;台帐的 parse_boot 只认行首的 BOOT,所以说明放在它后面)
+#
+# 归属: Windows_Jiaolong, 会话 1(经 C:/temp/session_bridge.py), pid 16484
+# 授权: 用户 2026-11-13「剩下的123，应该都可以执行吧?」+ 当场同意 `--allow-window` 放行
+# DLL:  C:/temp/sqjs_c6r1.dll sha256=4e767b0a3b4c895610a1699c38a8f8dc027ce0196e02005957be98516d5c797f
+# 安装参数: --act write --score-source 1(写入 + 活体重算;默认是 log + 烘焙表)
+# 载入存档: autosave_2326.07.01.sav(战役 _1474567734,788 系统 / 1,219 边)
+# 驱动 mod: mod/neo_chokepoint.mod(见 evidence/logs/c6_r8_score_join_4_4_4.log 的「驱动」一节)
+#
+# [boot] 回执原文:
+#   [boot] launched pid=16484 argv=['D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe', '--continuelastsave']
+#   [boot] gate skipped by operator override (--allow-window)

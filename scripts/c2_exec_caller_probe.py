@@ -289,6 +289,28 @@ def gate_label(allow_window):
     return "operator_override" if allow_window else "world_state"
 
 
+def parse_rule_mod(rule: str) -> int:
+    """`MOD:REM` -> MOD. `0:0` is the documented "rule disabled" spelling."""
+    mod, _, _rem = str(rule).partition(":")
+    try:
+        return int(mod)
+    except ValueError:
+        return 0
+
+
+def fold_overall_verdict(base_verdict, rule, rule_hits):
+    """The PoC rule rewrites a passing reading — **only when a rule is armed**.
+
+    `--rule 0:0` disables the rule (`ruleMatches` returns false for `mod == 0`), so
+    a `dispatch_named` must stay `dispatch_named`: the C6-2 gate only accepts that
+    word, and rewriting it to `poc_no_hits` turned a passing shot into a
+    cannot_say (2026-11-13, live).  A disabled rule is not a PoC run.
+    """
+    if base_verdict != "dispatch_named" or parse_rule_mod(rule) == 0:
+        return base_verdict
+    return "poc_rule_hits" if rule_hits else "poc_no_hits"
+
+
 def require_coverage(reading, coverage):
     """The id bitmap **is** the C6-2 gate: without it there is no trustworthy id count.
 
@@ -614,9 +636,8 @@ def run(dll_path, out_path, *, systems, save_name, poll_s=120.0, settle_s=3.0,
         base_verdict = require_coverage(
             verdict(delta, rows, container, expected=systems, distinct=distinct,
                     coverage=coverage), coverage)
-        meta["overall_verdict"] = ("poc_rule_hits" if meta.get("rule_hits")
-                                   else "poc_no_hits") if base_verdict == "dispatch_named" \
-            else base_verdict
+        meta["overall_verdict"] = fold_overall_verdict(
+            base_verdict, rule, meta.get("rule_hits", 0))
     finally:
         uninstall_rc = _safe(lambda: _signed32(harness.call_remote(
             pid, base, exports["C6ExecCallerUninstall"])))
