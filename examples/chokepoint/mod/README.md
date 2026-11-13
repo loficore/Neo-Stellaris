@@ -1,8 +1,9 @@
 # `examples/chokepoint` 的 mod 外壳
 
-这是把 `examples/chokepoint`(TS → QuickJS bundle)挂进引擎的**外层壳**,与 2026-11-13
-C6-4 那一发同形:一模一样的三个文件、事件 id、每次月脉冲逐系统下发;唯一的区别是
-**flag 名是占位**。
+这是把 `examples/chokepoint`(TS → QuickJS bundle)挂进引擎的**外层壳**,按 2026-11-13
+C6-4 那一发的形状收进仓库:同一个事件 id、`random_system → every_system`、每系统先
+`neo_action = { }` 再用官方 DSL 分支。两处**只影响界面/触发方式**的标准字段是新加的
+(`hide_window = yes`、`is_triggered_only = yes`;那一发是显式点掉弹窗走过去的),flag 名是**占位**。
 
 证据与判读陷阱在 `evidence/logs/c6_r8_score_join_4_4_4.log`(存档逐 id 对账)与
 `evidence/logs/c5_chokepoint_mod_join_4_4_4.log`(示例原样跑在引擎里)。

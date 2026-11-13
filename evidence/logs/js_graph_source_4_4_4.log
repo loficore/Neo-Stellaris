@@ -70,7 +70,11 @@
    JS 没写的 id 不会在存档里留下它的读数,所以存档只能暴露 15 个里的差。
 4. **`second_writer` 集合外的差值是 0。** void artifact 的 `#meta`:
    `second_writer=15`、`diffs_outside_second_writer=0`、`max_abs_delta=2`。
-   所有不等都落在 JS 写过的 id 上 ⇒ 那个写者读的数就是烘焙表。
+   所有不等都落在 JS 写过的 id 上 ⇒ 那些 id 的存档值是 **JS 写的**,不是我们 effect 写的
+   (effect 的值就是 `offline_score`,而它在这些 id 上不等)。
+   **口径提醒**:`second_writer` 这一列是 `scripts/c6_score_join.py` 从**整份** JS 日志的
+   `NEO_HUB <id>` 行取出来的(跨窗口的并集,不是「这一发」);存档里的值是**最后一个写者**
+   留下的。所以上面那句判词的形状是:「这些 id 的最后写者是 JS,JS 写下的值 = 烘焙表」。
 
 诚实边界:R7 那一发的安装参数**没有留在 artifact 里**(仓库里没有对应的 install 日志)。
 「JS 读的是表」是由上面第 2 节的 15/15 与 R8 的 live==离线重算**反推**出来的,
