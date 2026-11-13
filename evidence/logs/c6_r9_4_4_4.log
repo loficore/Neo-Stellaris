@@ -95,3 +95,28 @@ ERRORLOG bytes=3642 sha256=c74c58d37c793b9670834e041e5e5ea9be964be12a872b558ce72
 > 独立大写 token，整份日志里带着这一场自己的事件流（`playerEventId` 计数器、首次接触事件…），
 > 那部分差异与 DLL 无关，会把 C6-5 判成 `extra=`/`missing=` 而**不是**在比官方语义。
 > 窗口口径与 R5（`evidence/logs/c6_r5_A_game_window_4_4_4.log`）一致。
+
+## 趟 B（with，boot 期注入）—— **未完成（主机下线，2026-11-13 22:2x）**
+
+趟 B 的启动命令发出去了，但我的 shell 端 120 s 超时把 ssh 掐断，回执没落盘；紧接着
+`Windows_Jiaolong`(10.66.0.7) 整机不可达：
+
+```
+ping -c 3 10.66.0.7      -> 100% packet loss
+tcp/22                   -> CLOSED
+win-desktop MCP          -> ECONNREFUSED
+```
+
+结论：**这一趟没有读数**（既没有 `BOOT` 回执，也没有 `C65_HIT` 计数）。所以 C6-5 **尚未**
+有第二趟，六门台帐**没有**出。下面这些是不依赖趟 B 就已经做完的部分：
+
+1. 趟 B 的三段步骤已被收进两个**原子脚本**（`scripts/scratch/2026-11_c65_ab/c65_boot.py`、
+   `c65_close.py`）：存档回位 + sha 校验 + 注入 + `BOOT` 回执落盘；切窗口 + `--uninstall` +
+   `taskkill`。这样 ssh 再断，回执文件也在盘上。
+2. 趟 A 的四份产物仍在主机 `C:/temp/c65_A_{game,error}.log` 与
+   `...\Stellaris\logs\{game,error}.log`（**尚未拉回仓库**，主机下线期间拉不了）。
+   它们的 sha / 字节数 / 月份区间已记在上面那两节里。
+3. `just check-full` 与本发的文档改动仍未做 —— 它们依赖台帐的判词，台帐依赖趟 B。
+
+主机恢复后的第一件事必须是：**先把趟 A 的 `C:/temp/c65_A_*.log` 拉回仓库**（主机上的副本
+是唯一一份窗口切片），然后 `c65_boot.py` → 等 12 个 marker → `c65_close.py B 12`。
