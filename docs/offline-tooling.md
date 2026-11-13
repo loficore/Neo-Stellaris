@@ -1927,6 +1927,76 @@ effect,只有 785 行,所以两侧总数天然差 3–4,**覆盖差要判 `tiers
 `install_rc` / `uninstall_rc` / `verify_rc` / `host_alive` / `entries_error`),然后六列行:
 `caller_rva id mask occurrences self_ptr scope_ptr`。
 
+### `scripts/c2_capability_probe.py [dll] --systems N --save-name NAME [--resident] [--poll-s 120] [--settle-s 3] [--out C:/temp/c3_capability.tsv] [--allow-window]`
+
+**运行时能力自检的驱动**:把 spec §3.1 那七条结构断言,从「静态不知道」变成「每个版本一次实机读数」。
+靶不是某个函数,而是**我们自己已经拿到的那个 scope**:进程第一次逐系统派发时,`neo_js_host.onSystem`
+用当次的真实 scope 调 `capability.maybeRun`,七项一次跑完,结果是一张 7×8 B 的矩阵 + 一行
+`NEO_CAP scope=ok token=ok descriptor=ok graph=ok state=ok vtable=presence fingerprint=fail(mismatch)`
+(`neo_js.log`)。
+
+**这一发问什么**(逐项):
+
+| 项 | 断言 | 读/写 |
+|---|---|---|
+| `scope` | `scope+0x08 == 0x80`(system,不是 `0x04` 国家)且 `scope+0x10 < systems` | 读 |
+| `token` | `[[module+0x37347A0]+0x70] + 10104*0x30` 那个 name holder 读回 `add_modifier`(cap<0x10 走内联、否则解 `[+0x10]`) | 读 |
+| `descriptor` | 在 `0x337B400` 的 9,863 个 `0x120` 槽里**扫名字**(槽号 ≠ id),命中槽的 `+0x00 == 10104` | 读 |
+| `graph` | `[[0x3260B98]]` 解出的容器:系统数对上、至少一条边、`skipped == 0` | 读 |
+| `state` | 写 `neo_cap_probe = id` 再写 0(唯一有副作用的一项) | 写 |
+| `vtable` | `[module+0x2606FE0+8] == module+0x3AFD30`(donor slot[1]) | 读 |
+| `fingerprint` | `module+0x3B0F80` 起 19 B == `neo_dispatch.EXPECTED_CODE`;我们自己的 detour 活着时改判 `C2NeoVerify()==0`(`verify()` 见下) | 读 |
+
+**三个导出的字节契约**(`exports.zig` 的 `C3Capability*`):
+
+| 导出 | 签名 | 返回 |
+|---|---|---|
+| `C3CapabilityLayout` | `fn(out: [*]u32) u32` | 写 `[version = 1, check_count = 7]`,返回 2 |
+| `C3CapabilityStatsInto` | `fn(out: [*]u8) i32` | 每项 8 B(`u32 status, u32 reason`),写满 56 B 返回 0,短缓冲返回 -1 且不写 |
+| `C3CapabilityReset` | `fn() void` | 清矩阵与 `ran`,不碰任何 hook(第二发重跑用) |
+
+`status`:`0 = skip`、`1 = ok`、`2 = fail`、`3 = presence_only`。
+`reason`:`1 = unreadable`、`2 = mismatch`、`3 = no_scope`、`4 = out_of_range`、`5 = write_rejected`、
+`6 = not_cleared`。两边的名字/顺序由 `scripts/test_c2_capability_probe.py` 拿 `capability.zig` 的
+字面量互校 —— 漂了就红。
+
+**五档判词**:
+
+| 判词 | 条件 |
+|---|---|
+| `capability_named` | 七项全 `ok`/`presence_only`,且脚本侧见证 `NEO_CAP_VAR_OK ≥ 1` |
+| `capability_partial` | 无 `fail`,但至少一项 `skip`,或缺见证 |
+| `capability_failed` | 至少一项 `fail`(`failed=` 里逐项列原因码) |
+| `instrument_broken` | layout 版本/词数不符,或矩阵读不出 |
+| `environment` | 窗内没有一次逐系统派发(`NEO_JS_CALL` 增量 0,且矩阵没跑过) |
+
+`state` 一行的 `status=ok reason=not_cleared` 是**残留**信号:写进去了但写回 0 失败,artifact 里
+`state_cleared=0`(矩阵是定长的,`state_cleared` 进不了那 56 B,原因码是它在矩阵里的替身)。
+
+**这一步不能说的**(spec §7,三句必须记住的在前):
+
+1. **自检本身依赖地址**:它要读 `0x37347A0`、`0x337B400`、`0x3260B98`、`0x2606FE0`、`0x3B0F80`
+   这些 4.4.4 的落点。所以顺序是**先 drift 报告给出 `found`/`moved`、常量已更新,再跑自检** ——
+   自检只能确认「这一版的这个解释还成立吗」,不能给你一个新的解释。
+2. **`presence_only` 不是绿**:它只证明入口/指针存在,不证明语义。v1 的七项里没有一项只验存在性
+   (逐项都是真断言),所以矩阵里出现 `presence_only` 本身就是一个需要解释的信号。
+3. **`state` 会写存档状态**:这一发会在存档里留一个值为 **0** 的 `neo_cap_probe`(删除变量的官方
+   API 不存在,所以写 0 是残留处置);失败也只报告、不回滚。
+4. 七项全过 ≠ 版本兼容 —— 它只覆盖我们写下来的那 7 条断言;`class_info` 的语义、donor vtable 其余
+   槽、图的可通行语义都不在断言里。
+5. 自检**不改变**任何运行时行为(v1 只报告):`neo_action`/`neo_effect`/写路径的 fail-closed 仍然
+   只有那两条指纹门。
+
+**门序**:`sha_gate` → 导出集(`C3Capability*` + `C2Sanity`)→ 常驻判定(`--resident` 时复用已映射的
+那一份,不再注入;否则 `refuse_if_resident` 拒装)→ `gate_install("capability")` → `inject_dll` →
+`C2Sanity == 42` → `C3CapabilityLayout` 对账 → `C3CapabilityReset` → 记 `neo_js.log` / `game.log`
+的**字节偏移** → 等一次逐系统派发 → 读 56 B → 扫日志增量 → `fold_verdict` → `C2NeoUninstall` +
+`C2NeoVerify` → `assert_game_alive`。**绝不 FreeLibrary**;`--systems` 无默认值(写容器原始条数)。
+
+**artifact**:`#meta` 在前(`overall_verdict` / `failed` / `skipped` / `state_cleared` /
+`missing_witness` / `dispatched` / `witness_hits` / `dll_sha256` / `resident` / `install_rc` /
+`uninstall_rc` / `verify_rc` / `host_alive`),然后七行:`check<TAB>status<TAB>reason`。
+
 ### `scripts/c2_boot_inject.py [dll] --timeout-s 30 [--allow-window]` —— T1:启动期注入
 
 **「加」那条通道的第一个动作。** 进程一出现就注入,然后 `C1Run`(注册 trigger `neo_effect` +

@@ -143,6 +143,13 @@ pub const keyword_reg = struct {
     /// Token descriptor stride — both the 9,863-entry static array at `0x337B400`
     /// and every `new(0x120)` the allocator performs.
     pub const TOKEN_STRIDE: usize = 0x120; // [VERIFIED 4.4.4]
+    /// 静态 descriptor 数组的基址(RVA)。9,863 个 {id, SSO name} 条目、步长 `0x120`,
+    /// 落在 `.data` 的 **BSS 段**(文件里是零,启动期由 driver `0x172E50` 逐个写入)。
+    /// 站点:`0x179ed5 lea rcx,[rip+…] -> 0x33CC0A0`(`add_modifier` 的槽,
+    /// `(0x33CC0A0 - 0x337B400) / 0x120 = 1149`)。
+    /// §17 的「数组按 **id** 索引」是错的:**槽号 ≠ id**(id 10104 在槽 1149);
+    /// §17 的 closed-chain 一行的 `0x120*1149` 才是实测值。
+    pub const RVA_DESCRIPTOR_ARRAY: usize = 0x337B400; // [VERIFIED 4.4.4] §17
     pub const TOKEN_ID: usize = 0x00; // u32, written by 0x1D158A0
     pub const TOKEN_FLAG: usize = 0x04; // u8, always 0; +0x05..+0x07 are NEVER written
     pub const TOKEN_STR_VTABLE: usize = 0x08; // u64 -> RVA 0x247B078 (cstr vtable)
