@@ -1,0 +1,37 @@
+# R9 —— C6-5（官方语义不受影响，对照组）A/B 复采，Stellaris 4.4.4
+
+> **授权（逐字）**：2026-11-13，用户就上一轮问的「实机授权 + `--allow-window` 放行」答：「给」。
+> ⇒ 本发授权 **C6-5 的 A/B 两趟**（+ 每趟最多 1 次重跑）。`--allow-window` 只在趟 B 用，
+> 证据里记 `gate=operator_override`。
+> 缘由：R8 的五门已是 `pass`，只有 C6-5 的读数来自 R5（那一发当时是**空集相等**，靠事后
+> 修 `official_markers` 才复判成 pass）。这一发用同一份 DLL 字节重新打一次新鲜读数，把六门
+> 收成一张表。
+
+## 固定输入（Task 1）
+
+```
+#meta save_name=autosave_2329.07.01.sav
+#meta save_src=C:/Users/13229/Documents/Paradox Interactive/Stellaris/save games/_1474567734/autosave_2329.07.01.sav
+#meta save_frozen=C:/temp/c6_c65_base.sav
+#meta save_bytes=4059281
+#meta save_sha256=9c63364ed1c6e7ee5d52462d84ac1443240c1d40bbb53fcdb7d8983cdbd7f6a5
+#meta systems=788
+#meta undirected_edges=1219
+#meta dll=sqjs_c6r1.dll
+#meta dll_sha256=4e767b0a3b4c895610a1699c38a8f8dc027ce0196e02005957be98516d5c797F
+#meta dll_bytes=7909888
+#meta game_version=4.4.4
+#meta window_months=12
+```
+
+- 存档取法：`dir /b /o-d "...\_1474567734\*.sav"` 第一行（mtime 最新）=
+  `autosave_2329.07.01.sav`，`LastWriteTime` `2026-11-13 18:20:31`。
+- 容器原始条数取法：`scripts/save_hypergraph.py /mnt/cache/tmp/opencode/c65_base.sav --stats`
+  ⇒ `systems=788` / `undirected_edges=1219`（同一场战役，与 M4 / R8 的容器口径一致）。
+- DLL 字节：本工作树是新建的（无 `zig-out/`，且本发**明令不重新 `zig build`**），所以本地
+  `sha256sum zig-out/bin/stellaris_quickjs.dll` 无法执行；改为在主机侧对**这一发真正会装进去
+  的那份字节**做读数：`Get-FileHash C:\temp\sqjs_c6r1.dll` ⇒
+  `4E767B0A3B4C895610A1699C38A8F8DC027CE0196E02005957BE98516D5C797F`，7,909,888 B
+  —— 与 plan / R8 的 `BOOT` 回执所钉的 sha 一致 ⇒ 前提未变。
+- 预检：`just game stop` ⇒ `STATUS=stopped`；`C:\temp\ns_game_cmd.txt` 已删；
+  `Get-Process stellaris` 计数 `0`；桌面截图可见 Orca 窗口（桌面已解锁），`LogonUI` 计数 `0`。
