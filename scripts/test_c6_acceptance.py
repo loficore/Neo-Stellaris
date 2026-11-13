@@ -62,6 +62,12 @@ def test_c6_2_fails_on_a_judged_negative_verdict():
     assert c6.gate_per_system(c6.parse_meta(text), systems=788).status == c6.FAIL
 
 
+def test_c6_2_fails_on_an_incomplete_id_coverage_verdict():
+    """A short coverage bitmap is a negative (2026-11-13), not "no reading yet"."""
+    text = ARTIFACT.replace("dispatch_named", "ids_coverage_incomplete")
+    assert c6.gate_per_system(c6.parse_meta(text), systems=788).status == c6.FAIL
+
+
 def test_c6_2_cannot_say_when_the_artifact_is_missing_or_environmental():
     assert c6.gate_per_system({}, systems=788).status == c6.CANNOT_SAY
     env = ARTIFACT.replace("dispatch_named", "window_not_playing")
