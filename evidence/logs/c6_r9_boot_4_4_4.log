@@ -1,0 +1,23 @@
+BOOT dll=sqjs_c6r1.dll sha=4e767b0a3b4c8956 effect_id=19343 set_id=19344 install_rc=0 alive=1
+# R9 趟 B（C6-5 A/B 复采的 with 趟）的启动回执 —— 2026-11-14，Stellaris 4.4.4
+# （回执在第一行；台帐的 parse_boot 只认行首的 BOOT，说明一律写在它后面）
+#
+# 归属：Windows_Jiaolong，交互会话 1（经 C:/temp/session_bridge.py 落在 session 1）
+# pid：13388（本次载入固定存档、走到 12 个 C65_HIT、被 c65_close.py 收尾的那一个进程）
+# DLL：C:/temp/sqjs_c6r1.dll
+#      sha256 = 4e767b0a3b4c895610a1699c38a8f8dc027ce0196e02005957be98516d5c797f
+#      （7,909,888 B；= R8 那一发的字节，本发两次复读、一次注入前复读）
+# 安装参数：`--allow-window`（人当场声明的前提，授权逐字见 evidence/logs/c6_r9_4_4_4.log）
+#           + `--launch D:/SteamLibrary/.../stellaris.exe --launch-args=--continuelastsave`
+# 载入存档：autosave_9999.01.01.sav = c6_c65_base.sav = 战役 _1474567734 的
+#           autosave_2329.07.01.sav
+#           sha256 = 9c63364ed1c6e7ee5d52462d84ac1443240c1d40bbb53fcdb7d8983cdbd7f6a5
+#           4,059,281 B（启动前由 c65_boot.py 复读；与趟 A 同一份字节）
+# 进程内证据：c65_modules.py -> PID=13388 SQJS=1 DLLS=122 HITS=sqjs_c6r1.dll
+#             （趟 A 那个 pid=20256 同一读数是 SQJS=0 / DLLS=119）
+# c2_boot_inject --stats（启动后、窗口前）：
+#   calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 installed=1 verify=0 dispatched=0 …
+#   `calls=0` 是预期的：探针 mod 只用官方 `log`，不引用 `neo_action`
+#
+# 注：本发第一次启动（pid=13900）载错了存档（2331.01.01 = 趟 A 自己写的 autosave），
+# 判为环境档重跑 #1、不进读数；处理与守卫见 evidence/logs/c6_r9_4_4_4.log。
