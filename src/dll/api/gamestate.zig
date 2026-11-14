@@ -238,24 +238,94 @@ pub fn getSystem(id: u32) ?GameObjectHandle {
     return lookupTable(src, graph.RVA_SYSTEM_INDEX_GLOBAL, graph.SYSTEM_ID_OFF, id);
 }
 
+// ---------------------------------------------------------------------------
+// Game date / tick —— 读引擎自己的日期字段(真实现)
+// ---------------------------------------------------------------------------
+
+/// 日期分解的产物。口径见 `evidence/analysis/runtime_444_game_date_4_4_4.md` §4。
+///
+/// **月与日是 1 基(显示口径)**:引擎内部是 0 基(`doy/30`、`doy%30`,站点 `0x26bc0c`),
+/// 对外的 +1 来自 Paradox 的显示惯例,**静态没有钉死**(同卷 §5.2)。
+pub const GameDate = struct {
+    /// 年 = `floor(days / 360)`(引擎自己的表达式)。
+    year: u32,
+    /// 月,1..12。
+    month: u32,
+    /// 日,1..30。
+    day: u32,
+    /// 绝对天序号 = `year*360 + 年内天`(= 引擎 `0x9AF3B0` 那个访问器的返回值)。
+    day_index: u32,
+};
+
+/// 读引擎的日期字段并分解成 年/月/日/天序号;读不到或不在纪元之后 ⇒ null。
+///
+/// 读法(逐条站点见 `evidence/analysis/runtime_444_game_date_4_4_4.md` §4):
+///   `holder = qword[base + 0x3260BB0]` → `raw = dword[holder + 0xC0]`(单位:小时)
+///   → `days = floor((raw - 0x29C55C0) / 24)` → `year = days / 360`、`doy = days % 360`
+///   → `month = doy / 30 + 1`、`day = doy % 30 + 1`。
+fn readGameDate(src: SystemSource) ?GameDate {
+    const holder_slot = addAddr(src.base, offsets.date.RVA_HOLDER) orelse return null;
+    const holder = readPtr(src, holder_slot) orelse return null;
+    if (holder == 0) return null; // 战役未载入(BSS 里是 0)
+    const raw = readDword(
+        src,
+        addAddr(holder, offsets.date.HOLDER_DATE_OFF) orelse return null,
+    ) orelse return null;
+
+    const hours: i64 = @as(i64, @intCast(raw)) - @as(i64, @intCast(offsets.date.EPOCH_HOURS));
+    const days: i64 = @divFloor(hours, @as(i64, offsets.date.HOURS_PER_DAY));
+    if (days < 0) return null; // 纪元之前:不是有效的游戏日期
+    const per_year: i64 = offsets.date.DAYS_PER_YEAR;
+    const per_month: i64 = offsets.date.DAYS_PER_MONTH;
+    const year: i64 = @divFloor(days, per_year);
+    const doy: i64 = days - year * per_year; // 0..359
+    if (year > std.math.maxInt(u32)) return null;
+    return .{
+        .year = @intCast(year),
+        .month = @intCast(@divFloor(doy, per_month) + 1),
+        .day = @intCast(@mod(doy, per_month) + 1),
+        .day_index = @intCast(days),
+    };
+}
+
+/// `getGameDate` 的返回缓冲区。内容在**下一次调用**时被覆盖 ——
+/// `bridge.zig` 在同一个调用里把它拷进自己的栈缓冲,不会跨调用持有。
+var date_buf: [16]u8 = undefined;
+
 /// Retrieve the current game date as a string.
 ///
-/// # Returns
-/// Pointer to the date string (engine-owned), or empty slice if unavailable.
+/// **真实现**(不是桩):读引擎自己的日期字段 `dword[[0x3260BB0] + 0xC0]` 并按引擎的
+/// 分解原语(`0x9AF2C0`/`0x9AF340`/`0x9AF3B0`)换成 `YYYY.MM.DD`。
+/// 取证:`evidence/analysis/runtime_444_game_date_4_4_4.md`(§2 分解、§3 与真实存档
+/// 对账、§5 边界);卷内口径:`evidence/analysis/runtime_444_sdk_api_4_4_4.md` §3.4。
 ///
-/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §3。
+/// 口径:一年 360 天、每月 30 天、raw 以小时计、纪元常数 `0x29C55C0`
+/// (它的「身份」未解释,同卷 §5.1)。月/日的 +1 是**显示惯例**,静态未钉死(§5.2)。
+///
+/// # Returns
+/// `"YYYY.MM.DD"`;读不到(战役未载入 / 读失败 / 纪元之前)⇒ 空切片。
+/// 返回的切片指向模块内的静态缓冲,**下一次调用会被覆盖**。
 pub fn getGameDate() []const u8 {
-    return "";
+    const src = source() orelse return "";
+    const d = readGameDate(src) orelse return "";
+    return std.fmt.bufPrint(&date_buf, "{d:0>4}.{d:0>2}.{d:0>2}", .{ d.year, d.month, d.day }) catch "";
 }
 
 /// Retrieve the current game tick.
 ///
-/// # Returns
-/// Current tick count, or 0 if unavailable.
+/// **真实现**(不是桩):引擎没有单独的「tick 计数」全局 —— 本函数给的是
+/// **绝对天序号** `year*360 + 年内天`,也就是引擎自己的 `0x9AF3B0` 那个访问器的返回值
+/// (同一次读分解出年/月/日,顺带得到它)。取证:`evidence/analysis/runtime_444_game_date_4_4_4.md` §4。
 ///
-/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §3。
+/// # Returns
+/// 绝对天序号(纪元起算,0 = 纪元当天);读不到 ⇒ **-1**。
+///
+/// **口径变更(2026-11-15)**:旧桩文档写的是「不可用时返回 0」。0 是一个**合法的**天序号
+/// (纪元当天),拿它当「不可用」会把「刚开局」和「读不到」混成一档 —— 所以不可用改成 -1。
 pub fn getGameTick() i64 {
-    return 0;
+    const src = source() orelse return -1;
+    const d = readGameDate(src) orelse return -1;
+    return @intCast(d.day_index);
 }
 
 // ---------------------------------------------------------------------------
@@ -591,12 +661,73 @@ test "getPop: stub returns null" {
     try std.testing.expectEqual(@as(?GameObjectHandle, null), getPop(999));
 }
 
-test "getGameDate: stub returns empty" {
-    try std.testing.expectEqualStrings("", getGameDate());
+test "getGameDate / getGameTick: 日期字段分解成 年/月/日 与绝对天序号" {
+    fake_mem.reset();
+    defer clearSource();
+
+    const module_base: usize = 0x1_4000_0000;
+    const holder: usize = 0x1_8000_0000;
+    installFakeSource(module_base);
+    fake_mem.open(module_base + offsets.date.RVA_HOLDER, 8);
+    fake_mem.open(holder, 0x100);
+    fake_mem.putQword(module_base + offsets.date.RVA_HOLDER, holder);
+
+    // 62,808,000 = 存档 `autosave_2272.07.01.sav` 里 `AI_hub`(银河生成期设的 flag)的
+    // 时间戳 → 解出**开局日期** 2200.01.01(evidence/analysis/runtime_444_game_date_4_4_4.md §3)。
+    fake_mem.putDword(holder + offsets.date.HOLDER_DATE_OFF, 62_808_000);
+    try std.testing.expectEqualStrings("2200.01.01", getGameDate());
+    try std.testing.expectEqual(@as(i64, 792_000), getGameTick());
+
+    // 63,313,440 = 同一份存档里 `neo_tier1` 的时间戳 → 2258.07.01。
+    fake_mem.putDword(holder + offsets.date.HOLDER_DATE_OFF, 63_313_440);
+    try std.testing.expectEqualStrings("2258.07.01", getGameDate());
+    try std.testing.expectEqual(@as(i64, 813_060), getGameTick());
+
+    // 纪元当天:天序号 0 是一个**合法**值(所以不可用才用 -1)。
+    fake_mem.putDword(holder + offsets.date.HOLDER_DATE_OFF, offsets.date.EPOCH_HOURS);
+    try std.testing.expectEqual(@as(i64, 0), getGameTick());
+    try std.testing.expectEqualStrings("0000.01.01", getGameDate());
 }
 
-test "getGameTick: stub returns zero" {
-    try std.testing.expectEqual(@as(i64, 0), getGameTick());
+test "getGameDate / getGameTick: 读不到或纪元之前一律空串 / -1" {
+    defer clearSource();
+
+    const module_base: usize = 0x1_4000_0000;
+    const holder: usize = 0x1_8000_0000;
+    installFakeSource(module_base);
+
+    // (a) 一个区域都没开:全局槽读不到。
+    fake_mem.reset();
+    try std.testing.expectEqualStrings("", getGameDate());
+    try std.testing.expectEqual(@as(i64, -1), getGameTick());
+
+    // (b) 全局槽 = 0:战役未载入(BSS 形态),不许解引用。
+    fake_mem.reset();
+    fake_mem.open(module_base + offsets.date.RVA_HOLDER, 8);
+    try std.testing.expectEqualStrings("", getGameDate());
+    try std.testing.expectEqual(@as(i64, -1), getGameTick());
+
+    // (c) 持有者本身读不到。
+    fake_mem.reset();
+    fake_mem.open(module_base + offsets.date.RVA_HOLDER, 8);
+    fake_mem.putQword(module_base + offsets.date.RVA_HOLDER, holder);
+    try std.testing.expectEqualStrings("", getGameDate());
+    try std.testing.expectEqual(@as(i64, -1), getGameTick());
+
+    // (d) 纪元之前的 raw:不是有效日期,而不是一个回绕出来的大年份。
+    fake_mem.reset();
+    fake_mem.open(module_base + offsets.date.RVA_HOLDER, 8);
+    fake_mem.open(holder, 0x100);
+    fake_mem.putQword(module_base + offsets.date.RVA_HOLDER, holder);
+    fake_mem.putDword(holder + offsets.date.HOLDER_DATE_OFF, 0);
+    try std.testing.expectEqualStrings("", getGameDate());
+    try std.testing.expectEqual(@as(i64, -1), getGameTick());
+}
+
+test "getGameDate / getGameTick: 宿主构建没有读入口时返回 空串 / -1(fail closed)" {
+    defer clearSource();
+    try std.testing.expectEqualStrings("", getGameDate());
+    try std.testing.expectEqual(@as(i64, -1), getGameTick());
 }
 
 test "setVariable: stub returns false" {

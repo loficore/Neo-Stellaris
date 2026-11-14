@@ -19,7 +19,8 @@ registration pipeline and identify extension points for new effects/triggers.
 | 上面那卷的逐节索引(每节标题自带日期、授权级别、结论) | `grep '^## ' 该卷` |
 | 取证 §1–§3(运行时星连图:**§1 写路径** `edge_store_write_named` / **§2 读路径** `edge_store_read_confirmed` / **§3 M1–M3 离线收口**) | `evidence/analysis/runtime_444_graph_runtime.md` |
 | 取证 §1–§9(可通行语义,issue #46:**§1** 12 个 keyword → class_info → factory 台账、**§2** owner 写侧 `set_owner`、**§3** owner 读侧四个 keyword、**§4** 外交五格、**§5** 存档 oracle 只证伪、**§6.1** 候选字段表 + 「下一发」N1–N5、**§7** store 路径落 `+0x1370`、**§8** `is_owned_by` 20 个叶子、**§9** 联邦成员数组 push 链) | `evidence/analysis/runtime_444_transitability_4_4_4.md` |
-| 取证 §1–§5(issue #55 SDK v1 的 `src/dll/api/gamestate.zig` 十个空桩逐条定形:**§1** 桩上两个魔数在 4.4.4 无引用 → 判 stale 已删、**§2** `getSystem` 真查表(站点 `0x393a0b`…`0x393a3c`、16 B 记录、`entry+8==id` 复核)、**§3** 日期/tick 未定形、**§4** 国家表 `0x3260FD8` 定形(`id` 在对象 `+0x20`)、星球/pop 未定形、**§5** 写类 API 的通道评估) | `evidence/analysis/runtime_444_sdk_api_4_4_4.md` |
+| 取证 §1–§5(issue #55 SDK v1 的 `src/dll/api/gamestate.zig` 十个空桩逐条定形:**§1** 桩上两个魔数在 4.4.4 无引用 → 判 stale 已删、**§2** `getSystem` 真查表(站点 `0x393a0b`…`0x393a3c`、16 B 记录、`entry+8==id` 复核)、**§3** 日期/tick 当时判未定形、**后由下一行那卷定形**(`getGameDate`/`getGameTick` 已实现)、**§4** 国家表 `0x3260FD8` 定形(`id` 在对象 `+0x20`)、星球/pop 未定形、**§5** 写类 API 的通道评估) | `evidence/analysis/runtime_444_sdk_api_4_4_4.md` |
+| 取证 §1–§6(4.4.4 **游戏日期字段** `[[0x3260BB0]+0xC0]` 的分解:**§2** 引擎自己的三个访问器 `0x9AF2C0`/`0x9AF340`/`0x9AF3B0`、**§3** 与一份真实存档的 flag 时间戳对账(`62808000` → `2200.01.01`)、**§4** 读法公式(raw 以小时计、`/24`、`/360`、月恒 30 天、纪元 `0x29C55C0`)、**§5** 边界(纪元的身份、`+1` 显示口径、零实机)) | `evidence/analysis/runtime_444_game_date_4_4_4.md` |
 | 离线脚本用法 + **全部判读陷阱**(编号在此,不在别处) | `docs/offline-tooling.md` |
 | world_state 窗口状态机(agent 唯一入口 `ns_world`、租约与惰性 `RESTORE_INCOMPLETE`、反刷预算、黄金集、OCR 换型读数) | `docs/offline-tooling.md` 的「scripts/windows/ns_world.py」一节 |
 | 阶段状态、前置、授权级别 | `docs/roadmap.md` |
