@@ -78,3 +78,27 @@ just win "python C:/temp/session_bridge.py --timeout-s 300 C:/temp/ns_world.py a
 
 **结论**：进程 A（启动期注入）要么拿到人类当场放行（`--allow-window`，原话逐字抄进本文件），
 要么本发的实机部分按 `gate_blocked` 停。二者都不许由我自行选。
+
+## 阻塞（2026-11-15 00:05 起）—— `Windows_Jiaolong` 失联，本发进程数仍为 0
+
+```
+00:11:38  ping 10.66.0.7  100% packet loss
+00:12:41  ping 10.66.0.7  100% packet loss
+00:16:32..00:18:05  ssh -o ConnectTimeout=6 Windows_Jiaolong "echo ALIVE" -> connect to host 10.66.0.7 port 22: Connection timed out
+本机侧：ping 1.1.1.1 = 0% loss（互联网正常）；wg0 = 10.66.0.1/24 在，网关 10.66.0.1 可达
+```
+
+最后一次成功的实机动作是 00:03 左右（`Get-ChildItem C:\temp\neo_mods`，两份坏 mod 的运行时半边已就位）。
+
+**状态（都停在安全点上，没有半装的东西）**：
+
+- 游戏进程：**0**（从未启动；本发用掉的进程数 = **0**）。
+- 远端产物已就位：`C:/temp/sqjs_r10.dll`（sha 逐字相等）、`C:/temp/neo_mods/{r10good,r10timeout,r10throw}/neo/`、
+  `C:/temp/r10_contract/`、`C:/temp/r10_pin_save.ps1`。
+- `dlc_load.json` 现状：`enabled_mods = ["mod/neo_ps_probe.mod", "mod/r10good.mod"]`
+  （**进程 A 之前要改**：`lw_set_mods.py r10good.mod`，否则 `neo_ps_probe` 的 `neo_action`
+  会让每系统每月多派发一次，`R10_NBR` 行数会翻倍）。
+- 固定存档 `r10_base.sav` 已是全目录最新 mtime（`--continuelastsave` 会载它）。
+
+**等协调者/人类两件事**：① 把主机恢复上线；② 进程 A 启动期注入的 `--allow-window` 放行原话
+（见上一节的门读数；没有放行就按 `gate_blocked` 停）。
