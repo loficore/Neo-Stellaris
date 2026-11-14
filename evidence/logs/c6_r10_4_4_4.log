@@ -49,3 +49,32 @@ ssh Windows_Jiaolong 'powershell -NoProfile -Command "(Get-FileHash C:\temp\sqjs
 | `c6_r10_uninstall_4_4_4.log` | `UNINSTALL` 回执（C6-6） |
 | `c6_r10_exec_caller_4_4_4.tsv` | C6-2 artifact（`#meta` + 行） |
 | `c6_acceptance_r10_4_4_4.tsv` | 台帐（只判拿得到输入的三门） |
+
+## 世界状态门（Task 4 Step 3）—— 读数与判定
+
+计划：先 `ns_world assert-ready --action install --guard c6r10`，退出码非 0 ⇒ 停、写 `gate_blocked`，
+**不许**自行加 `--allow-window`。两条读法都打了（此时按 Task 0 Step 3，游戏进程数 = 0）：
+
+```
+# (a) 计划里的原样命令（SSH 落 session 0）
+just win "python C:/temp/ns_world.py assert-ready --action install --guard c6r10"
+=> STATE=NO_GAME EVIDENCE=reason=no game window: the premise cannot be proven so the action is refused  (退出码 2)
+
+# (b) 经 session_bridge 落 session 1（文档要求：状态机要读真窗口）
+just win "python C:/temp/session_bridge.py --timeout-s 300 C:/temp/ns_world.py assert-ready --action install --guard c6r10"
+=> STATE=NO_GAME EVIDENCE=reason=no game window ...  EXIT=2
+```
+
+**判定**：这不是环境故障，是这道门的**结构**：`assert_ready` 要求 `infer_state == IN_GAME_RUNNING`
+（`world_state.py:1196`），而 C6-1 要求注入**早于脚本解析**、解析发生在存档载入时 ——
+启动期那一刻窗口是加载屏，读不出 `pause=playing`。上一次窗口的同类读数在这里：
+
+- R1 attempt#2：`assert-ready` exit 2（屏幕采样把前台浏览器/dock 读成 dialog）；
+- R1 attempt#4 / R8 / R9：全部用 `--allow-window` + **人当场授权**做启动期注入
+  （`evidence/logs/c6_r1_boot_4_4_4.log`、`c6_r8_boot_4_4_4.log`、`c6_r9_boot_4_4_4.log`）。
+
+**锁屏那一档已经用双证据排掉**（Review Focus 1）：`win-desktop Screenshot` 非黑、桌面可见；
+`Get-Process LogonUI` 计数 = 0。缺一即停 —— 两条都在。
+
+**结论**：进程 A（启动期注入）要么拿到人类当场放行（`--allow-window`，原话逐字抄进本文件），
+要么本发的实机部分按 `gate_blocked` 停。二者都不许由我自行选。
