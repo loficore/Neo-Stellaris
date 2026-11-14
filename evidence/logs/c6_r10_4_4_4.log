@@ -102,3 +102,21 @@ just win "python C:/temp/session_bridge.py --timeout-s 300 C:/temp/ns_world.py a
 
 **等协调者/人类两件事**：① 把主机恢复上线；② 进程 A 启动期注入的 `--allow-window` 放行原话
 （见上一节的门读数；没有放行就按 `gate_blocked` 停）。
+
+## 协调者裁定（2026-11-15 00:2x，逐字摘录）
+
+> HOLD. 协调者已独立复核 (1): 从本机 ping 10.66.0.7 = 100% loss、ssh :22 timeout，主机确实不在线，
+> 不是你的隧道问题；…（2）`--allow-window` 的放行原话我正在向人类要，拿到后逐字转给你，你把它抄进
+> `evidence/logs/c6_r10_4_4_4.log` 头注再动手。
+> 现在到放行为止：不要启动任何游戏进程（不要用掉进程 B 的额度），不要改计划，不要自己拼 `dlc_load.json`。
+> 放行 + 主机恢复后我会发一条 START，里面带：授权原话逐字、以及「主机已在线」的复核命令输出。
+> 收到 START 再跑 Task 4/5。
+> 另外一条：你报的 manifest 严格 7 字段 + 权限必须带 `flag.read`，与 `sdk/api.def` 的现有形状一致，已记；
+> 不需要回滚。
+
+本发在收到 START 之前**不启动任何进程**（进程数仍为 0）。离线围栏已跑：
+
+```
+python3 -m pytest scripts/test_scripts_layout.py scripts/test_c6_acceptance_doc.py -q
+=> 42 passed
+```
