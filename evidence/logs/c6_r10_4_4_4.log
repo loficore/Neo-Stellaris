@@ -1,0 +1,51 @@
+# R10 — 出货字节复基线 + v1 合同实机覆盖（4.4.4，2026-11-14）
+
+> **授权原话（逐字）**：2026-11-14，用户指令：
+> 「我需要你选择一个需要实际调试的，还有一个可以离线调试的。然后用Orca派发出去。」
+>
+> **本发预算 = 2 个游戏进程**（进程 A = 主钩 + 三个探针 mod；进程 B = C6-2 逐系统派发）。
+> **第三个进程必须由协调者/人类另行授权**；一进程一 install，`install_rc=-2` / 「already installed」
+> 说明复用了进程 ⇒ 该发读数作废，不许拿来判门。
+
+## 归属与字节
+
+- 主机：`Windows_Jiaolong`（SSH 落 session 0；需要窗口/注入的动作一律经 `C:/temp/session_bridge.py` 进 session 1）
+- 本地 DLL：`zig-out/bin/stellaris_quickjs.dll`
+  `sha256 = 2e1ba6d94bb392b477404652a1be520f7f1be54a3344313e4d1f30e7ffee8068`
+  （7,911,936 B；Debug 构建 —— `zig build` 本次无输出 = 全部命中缓存，字节即当前树）
+- 远端部署名：`C:/temp/sqjs_r10.dll`，`Get-FileHash` 复读 = 同一哈希（逐字相等，见下）
+- 构建/部署命令：
+
+```
+zig build                                    # rc=0，无输出（全缓存）
+sha256sum zig-out/bin/stellaris_quickjs.dll
+scp zig-out/bin/stellaris_quickjs.dll Windows_Jiaolong:C:/temp/sqjs_r10.dll
+ssh Windows_Jiaolong 'powershell -NoProfile -Command "(Get-FileHash C:\temp\sqjs_r10.dll -Algorithm SHA256).Hash.ToLower()"'
+=> 2e1ba6d94bb392b477404652a1be520f7f1be54a3344313e4d1f30e7ffee8068
+```
+
+## 环境门（Task 0，不占 shot）
+
+- `win-desktop Screenshot`：非黑，桌面可见（`Default Desktop`，无 LogonUI）；`LogonUI` 进程数 = 0。
+- `just awake check` → `STATE=serving DESKTOP=unlocked`，rc=0。
+- `Get-Process stellaris` 计数 = 0。
+- `just deploy` rc=0；`C:/temp/world_state.py --help` rc=0。
+
+## 本发要回答的三条（计划目标）
+
+1. **出货字节重新挂到 C6-1 / C6-2 / C6-6 三道 auto 门**（`c6_acceptance.py` 的台帐）。
+2. `System.neighbors` 的**第一次**实机读数（`R10_NBR` 行，判据 `n == deg`）。
+3. `NEO_JS_TIMEOUT` / `NEO_JS_ERROR` 的落盘形状（各恰好 1 行、mod 名对上、异常文本对上），
+   以及 `hasStarFlag` 的**第二次**独立读数（另一个战役/另一个 flag 名，`before=false → after=true`）。
+
+## 读数的组织
+
+| 产物 | 内容 |
+|---|---|
+| `c6_r10_save_4_4_4.log` | 固定存档 + 分母（`galactic_object` 条目数） |
+| `c6_r10_boot_4_4_4.log` | `BOOT` 回执（C6-1） |
+| `c6_r10_neo_js_4_4_4.log` | `C:/temp/neo_js.log` 原件（三条路径 + `R10_*` 行） |
+| `c6_r10_stats_4_4_4.log` | `--stats` 一行（C6-6 前置） |
+| `c6_r10_uninstall_4_4_4.log` | `UNINSTALL` 回执（C6-6） |
+| `c6_r10_exec_caller_4_4_4.tsv` | C6-2 artifact（`#meta` + 行） |
+| `c6_acceptance_r10_4_4_4.tsv` | 台帐（只判拿得到输入的三门） |
