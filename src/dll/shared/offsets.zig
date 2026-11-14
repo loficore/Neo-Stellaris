@@ -374,6 +374,13 @@ pub const graph = struct {
     pub const EDGE_STRIDE: usize = 0x20;
     /// `0xa6ab16 mov r8d, dword ptr [rdx + 8]` — 元素 `+8` = 邻居系统 id。base = 边元素。
     pub const EDGE_ID_OFF: usize = 0x08;
+    /// `0x8bbb94 mov qword ptr [rdi + 0x5a0], rax`(增侧)/ `0x8bbd74`(删侧)—— `rax` 是
+    /// `call 0x8c46c0` 的返回值:该系统边表的**内容哈希**(纯函数,按步长 0x20 遍历
+    /// `+0x590`/`+0x59c`,空表返回 0,对容器零写入)。增、删两侧都重算 ⇒ 它是引擎自己维护的
+    /// 「这张边表长什么样」的戳,挡得住 `+0x59C` 挡不住的「同数换邻居」。
+    /// 取证:`runtime_444_graph_runtime.md` §10.4/§10.5(判词 `stamp_candidate`,静态推断)。
+    /// base = 系统对象。
+    pub const EDGE_HASH_OFF: usize = 0x5A0;
 
     // -----------------------------------------------------------------------
     // Phase 2 (Runtime JS A1): 系统 flag 容器。静态取证,读路径与写路径同一组偏移。
@@ -823,6 +830,12 @@ test "graph: §1/§2 read-path offsets are pinned to the disasm sites" {
     try std.testing.expectEqual(@as(usize, 0x59c), graph.EDGE_COUNT_OFF);
     try std.testing.expectEqual(@as(usize, 0x20), graph.EDGE_STRIDE);
     try std.testing.expectEqual(@as(usize, 0x08), graph.EDGE_ID_OFF);
+    // §10.4/§10.5: `+0x5a0` is a qword (the engine's own edge-table content hash),
+    // it follows the dword count at +0x59c without overlapping it, and it stays
+    // below the system flag container at +0x5f8.
+    try std.testing.expectEqual(@as(usize, 0x5A0), graph.EDGE_HASH_OFF);
+    try std.testing.expect(graph.EDGE_COUNT_OFF + @sizeOf(u32) <= graph.EDGE_HASH_OFF);
+    try std.testing.expect(graph.EDGE_HASH_OFF + @sizeOf(u64) <= graph.FLAG_SET_OFF);
     // Phase 2 A1: the system flag container. Write path `0x180f8e0` resolves the
     // scope through `0x397490` (mask 0x80 → `0x393970(scope) + 0x5f8`) and both
     // `0x1bce180` (add) / `0x1bce270` (remove) walk a u16 array at container+0x10
