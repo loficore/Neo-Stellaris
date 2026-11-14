@@ -342,6 +342,11 @@ $ python3 scripts/disrva.py 0x18015f0 --len=0x300        # 摘录(全量 0x33d B
 
 **字段本身可以定,靠的是另外四条互不依赖的读数(不是 `set_owner` 这条 effect 走的路):**
 
+> (§7 已收口:`[接受者+0x320]` 指向的 id 经哈希表 `0x9c0fd0` 解出的对象 **Z**,
+> 它 `+0x98` → X → `+0x990` → Y → `+0x434` → 参数国家;`0x816dd0` 自己只写 `[系统+0x580]`
+> 与 `[系统+0x1378]`,真正的 store 仍是 `0x8c2b70` 的 `mov dword ptr [rsi+0x1370], ecx`
+> ⇒ 与本节候选**同一格**。`unresolved` 这个判词因此在 §7.4 改为 `same_slot`(仍是静态推断)。)
+
 ```text
 $ python3 scripts/scratch/2026-11_transitability/field_xrefs.py 0x1370 --width dword --writes-only --limit 20
 # module /var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
@@ -594,6 +599,9 @@ $ python3 scripts/disrva.py 0x393970 30
 
 ### §3.4 `is_owned_by` slot[3] = `0x1a9bd10`:按 `[scope+8]` 分派的九路 switch
 
+> (§8 已读完:不是「九路」,是 **20 个 mask 叶子 + 1 条兜底路径**;本节尾部把 `+0x434`
+> 标成「mask 0x20 一路」也是错位 —— 那是 **mask `0x40`**。原读数保留,更正见 §8.1/§8.2。)
+
 ```text
 $ python3 scripts/disrva.py 0x1a9bd10 45
   01a9bd18  mov     rbx, qword ptr [rip + 0x17c3671]  ; -> 0x325f390   ; 空对象回退
@@ -633,6 +641,7 @@ mask `0x20` 一路(同一函数的另一分支)读**另一个**偏移:
 
 ⇒ **owner 不是「一个偏移」,是「按 scope 种类分派的一组偏移」**;本卷只钉住
 `mask 0x80`(系统)那一格 = `+0x1370`,其余分支的偏移**逐条未读完**,见 §3.7。
+(§8 已把 20 个 mask 的字段与落地方式补齐;§3.7 那条限制只被解除一半 —— 字段表齐了,类名仍 `未观测`。)
 
 ### §3.5 `original_owner` / `is_original_owner`:另一条链,另一张表
 
@@ -1021,7 +1030,7 @@ $ python3 scripts/disrva.py 0x18307e0 --len=0x150
 | 关闭边界 | 关系对象 `+0x120` bit 15 | 关系对象 `+0x120` bit 15(`0x185a9ae` 的 xor) | 静态推断(未验证) | 在已知互相闭边界的 2 国上读同一个 bit,读侧与写侧不同位 |
 | 竞争 | 本国 `[+0x2c78]` 的 id 向量 `+0x28`/`+0x34` | `未观测` | 静态推断(未验证) | 已知宿敌对的 id 不在本国向量里 |
 | 敌对 | `[country+0x1d78]` 态度表 `+0x490`/`+0x49c`,值 `+0x10` | `未观测` | 静态推断(未验证) | 已知敌对国查表返回的不是 `[[0x325ec78]+0x98]` |
-| 联邦 | `[country+0x1e88]` → 联邦对象 `+0x98`/`+0xa4` | 联邦类型对象 `+0x100`(`0x183090b`) | 静态推断(未验证) | 同联邦两国中有一方 `+0x1e88` 指向的联邦对象里查不到另一方 |
+| 联邦 | `[country+0x1e88]` → 联邦对象 `+0x98`/`+0xa4` | 联邦类型对象 `+0x100`(`0x183090b`)(§9 已更正:写侧是 `0x7563d9` 写 `[country+0x1e88]` + `0x6b440c` push 进 `[fed+0x90]` 容器;「联邦类型」这个类名见 §9.5) | 静态推断(未验证) | 同联邦两国中有一方 `+0x1e88` 指向的联邦对象里查不到另一方 |
 
 ### §4.9 §4 的三条「不能说」
 
@@ -1138,17 +1147,17 @@ dead_federation_blocks=0
 
 | 候选 | 对象 | 偏移 | 读它的函数 | 档 | 证伪条件 | 升级需要的读数 |
 |---|---|---|---|---|---|---|
-| 系统 → 所属国家 id | 系统对象(`0x3260b98` 表) | `+0x1370` (u32,无主 = `0xFFFFFFFF`) | `0x8bc870` / `0x1a97650` / `0x8c2b70`(写)/ `0x8ae8b0`(ctor) | 静态推断(未验证) | 3 个已知归属不同的星系上读出同值,或落在国家 id 集合外 | 活体读 3 个已知归属不同的星系(N1) |
+| 系统 → 所属国家 id | 系统对象(`0x3260b98` 表) | `+0x1370` (u32,无主 = `0xFFFFFFFF`) | `0x8bc870` / `0x1a97650` / `0x8c2b70`(写)/ `0x8ae8b0`(ctor)(§7 已收口:`set_owner` 的 store 路径 = `0x816dd0` → `0x8c2ca0` → `0x8c2b70`,与本行同一格;档不变,仍缺活体读数) | 静态推断(未验证) | 3 个已知归属不同的星系上读出同值,或落在国家 id 集合外 | 活体读 3 个已知归属不同的星系(N1) |
 | 关系对象:战争 | 关系对象(见「关系表」行) | `+0xf4` (dword,≠0 = 交战) | `0x1a9d980` | 静态推断(未验证) | 交战国对读出 0,或非交战对读出非 0 | 活体读 2 对交战国 + 1 对非交战(N2) |
 | 关系对象:关闭边界 | 关系对象 | `+0x120` bit 15 (`0x8000`) | `0x1af5550`(读)/ `0x185a8f0`(写) | 静态推断(未验证) | 已知互相闭边界的一对读出 0,或已开放的一对读出 1 | 同 N2 一发里读同一对 |
 | 关系表容器 | 国家对象 | `+0x2c78` → `[[..]+0x10] + 0x2d60` | `0x742670`(读)/ `0x73ec40`(写) | 静态推断(未验证) | 指针为 0 或 `+0x2d60` 处不是有序键表 | N2 同发里顺带读指针形状 |
 | 关系键/值数组 | 关系表 | 键 `+0x60` / 条数 `+0x6c` / 值 `+0x18` | `0xb1d470` | 静态推断(未验证) | 二分搜不到已知对国 id | N2 同发 |
 | 竞争:对等名单 | `[国家+0x2c78]` 外交对象 | `+0x28`(id 向量)/ `+0x34`(条数) | `0x76dfc0` | 静态推断(未验证) | 已知宿敌对不在本国的向量里 | N4 |
 | 敌对:态度表 | `[国家+0x1d78]` | 数组 `+0x490` / 条数 `+0x49c` / 元素步长 `0x30`(键 `+8`、值 `+0x10`) | `0xbe3710` | 静态推断(未验证) | 查已知敌对国得到的不是 `[[0x325ec78]+0x98]` | N4 |
-| 联邦:本国 → 联邦 | 国家对象 | `+0x1e88` (u32 联邦 id) | `0x7561f0` | 静态推断(未验证) | 同联邦两国读出不同联邦 id | N5 |
-| 联邦:成员表 | 联邦对象(`0x3261018` 表) | `+0x98`(id 数组)/ `+0xa4`(条数) | `0x7561f0` | 静态推断(未验证) | 成员数组里查不到同联邦的另一国 | N5 |
+| 联邦:本国 → 联邦 | 国家对象 | `+0x1e88` (u32 联邦 id) | `0x7561f0`(§9 已补写侧:全 `.text` 唯一 dword 写点 `0x7563d9`,`0x7562a0(country, fed_id)` 内) | 静态推断(未验证) | 同联邦两国读出不同联邦 id | N5 |
+| 联邦:成员表 | 联邦对象(`0x3261018` 表) | `+0x98`(id 数组)/ `+0xa4`(条数)(§9 已补写侧:push 在 `0x6b440c`,容器基址 `[fed+0x90]`,数据 `+0x98`、容量 `+0xa0`、条数 `+0xa4`) | `0x7561f0` | 静态推断(未验证) | 成员数组里查不到同联邦的另一国 | N5 |
 | 原始主人 id | 表 `0x3260b78`(项 id 在 `+0x18`) | (按 mask 从 scope 取,再查表) | `0x1a97900` / `0x1a98280` | 静态推断(未验证) | 与 owner 那一格读到同一值(那是另一张表,应当不同) | N6 |
-| 其他 scope 种类的 owner | 各种 | `+0x434`(mask 0x20 一路)等 | `0x1a9bd10` | **未观测** | — | N1 同发里顺带扫 `0x1a9bd10` 的其余分支 |
+| 其他 scope 种类的 owner | 各种 | `+0x434`(mask **0x40** 一路)等;20 个 mask 的字段表见 §8.2 | `0x1a9bd10` | **未观测** → **静态推断(未验证)**(§8 已补齐:20 个叶子全部解出国家对象;§3.4 把这一支标成「mask 0x20」是错位,`+0x434` 属 mask `0x40`) | — | N1 同发里顺带扫 `0x1a9bd10` 的其余分支 |
 
 ### §6.2 下一发清单(每条一次 `install → 读 → uninstall`;引擎一进程只许 install 一次)
 
@@ -1221,3 +1230,921 @@ capability flag 的默认关闭与权限声明**要等 §6.1 表里「系统 →
 3. `0x3947f0` 之后:「`join_alliance` 往联邦成员数组 push」那条指令(§4.7 的 stall 点)。
 4. `0x35eee0`(参数按名取值)与 `0x742670`/`0x73ec40` 的**方向**语义:同一对国家在两边的
    表里各有没有一条 —— 这一条决定 §4.9 第 2 条能不能销。
+
+---
+
+## §7 `0x816DD0` 展开:`set_owner` 的 store 路径落到哪一格
+
+(收 §6.5 第 1 条。)§2.4 判 `unresolved` 的原因是「`0x816dd0` 的入参不是 scope」。
+本节把那个入参追到**系统对象**,并给出它与 `[系统对象+0x1370]` 的关系。
+**结论先写:`same_slot`** —— 这条 effect 最终仍由 `0x8c2b70` 写 `[系统对象+0x1370]`,
+`0x816dd0` 只是替它把「待更新」旗标置起来。
+
+### §7.1 入参对象是什么:`0x816dd0` 的前 36 条指令
+
+```text
+$ python3 scripts/disrva.py 0x816dd0 --len=0xa0
+; stellaris.exe  .text RVA 0x816dd0-0x816e70
+  00816dd0  mov     qword ptr [rsp + 0x10], rbx
+  00816dd5  mov     qword ptr [rsp + 0x18], r8
+  00816dda  push    rbp
+  00816ddb  push    rsi
+  00816ddc  push    rdi
+  00816ddd  push    r12
+  00816ddf  push    r13
+  00816de1  push    r14
+  00816de3  push    r15
+  00816de5  lea     rbp, [rsp - 0x580]
+  00816ded  sub     rsp, 0x680
+  00816df4  movzx   ebx, r9b
+  00816df8  mov     rsi, rdx                                    ; 2nd arg = 参数(国家)
+  00816dfb  mov     r14, rcx                                    ; 1st arg = 输入对象
+  00816dfe  call    0x140812ec0  ; -> 0x812ec0                 ; r15 = 输入对象 -> 国家
+  00816e03  mov     r15, rax
+  00816e06  mov     rcx, r14
+  00816e09  call    0x140818010  ; -> 0x818010
+  00816e0e  mov     rdx, qword ptr [rip + 0x2a4a1bb]  ; -> 0x3260fd0
+  00816e15  test    rdx, rdx
+  00816e18  je      0x140816e4e
+  00816e1a  mov     r8d, dword ptr [r14 + 0x98]                 ; ★ 输入对象 +0x98 = 一个 id
+  00816e21  mov     eax, r8d
+  00816e24  and     eax, 0xffffff
+  00816e29  cmp     eax, dword ptr [rdx + 0x20]
+  00816e2c  jae     0x140816e4e
+  00816e2e  mov     ecx, eax
+  00816e30  add     ecx, ecx
+  00816e33  mov     rax, qword ptr [rdx + 0x18]
+  00816e37  mov     rdi, qword ptr [rax + rcx*8 + 8]            ; X
+  00816e3c  mov     qword ptr [rbp + 0x5c0], rdi
+  00816e43  test    rdi, rdi
+  00816e46  je      0x140816e4e
+  00816e48  cmp     dword ptr [rdi + 0x18], r8d                 ; 表项 id 在 +0x18
+  00816e4c  je      0x140816e5c
+  00816e4e  mov     rdi, qword ptr [rip + 0x2a48b8b]  ; -> 0x325f9e0   ; 空回退
+  00816e55  mov     qword ptr [rbp + 0x5c0], rdi
+  00816e5c  mov     rcx, r14
+  00816e5f  call    0x1408176f0  ; -> 0x8176f0
+  00816e64  movzx   r9d, al
+  00816e68  mov     byte ptr [rbp + 0x5d8], al
+```
+
+三个 helper 用**同一个第一跳**:`[输入对象 + 0x98]` → 表 `0x3260fd0`(表项 id 在 `+0x18`,
+空回退 `0x325f9e0`)→ 记作 **X**。之后各走各的:
+
+```text
+$ python3 scripts/disrva.py 0x8168b0 --len=0x60        ; 输入对象 -> 系统对象
+  008168b0  mov     rdx, qword ptr [rip + 0x2a4a719]  ; -> 0x3260fd0
+  008168b7  test    rdx, rdx
+  008168ba  je      0x1408168e9
+  008168bc  mov     r8d, dword ptr [rcx + 0x98]                ; 第一跳 = X 的 id
+  008168c3  mov     eax, r8d
+  008168c6  and     eax, 0xffffff
+  008168cb  cmp     eax, dword ptr [rdx + 0x20]
+  008168ce  jae     0x1408168e9
+  008168d0  mov     ecx, eax
+  008168d2  mov     rax, qword ptr [rdx + 0x18]
+  008168d6  add     rcx, rcx
+  008168d9  mov     rax, qword ptr [rax + rcx*8 + 8]
+  008168de  test    rax, rax
+  008168e1  je      0x1408168e9
+  008168e3  cmp     dword ptr [rax + 0x18], r8d
+  008168e7  je      0x1408168f0
+  008168e9  mov     rax, qword ptr [rip + 0x2a490f0]  ; -> 0x325f9e0
+  008168f0  mov     rdx, qword ptr [rip + 0x2a4a2a1]  ; -> 0x3260b98   ; 系统对象表
+  008168f7  test    rdx, rdx
+  008168fa  je      0x140816929
+  008168fc  mov     r8d, dword ptr [rax + 0xa00]                ; ★ X + 0xa00 = 系统 id
+  00816903  mov     eax, r8d
+  00816906  and     eax, 0xffffff
+  0081690b  cmp     eax, dword ptr [rdx + 0x20]
+  0081690e  jae     0x140816929
+```
+
+```text
+$ python3 scripts/disrva.py 0x812ec0 --len=0x60        ; 输入对象 -> 国家
+  00812ec0  mov     rdx, qword ptr [rip + 0x2a4e109]  ; -> 0x3260fd0
+  00812ec7  test    rdx, rdx
+  00812eca  je      0x140812ef9
+  00812ecc  mov     r8d, dword ptr [rcx + 0x98]                ; 第一跳 = X
+  00812ed3  mov     eax, r8d
+  00812ed6  and     eax, 0xffffff
+  00812edb  cmp     eax, dword ptr [rdx + 0x20]
+  00812ede  jae     0x140812ef9
+  00812ee0  mov     ecx, eax
+  00812ee2  mov     rax, qword ptr [rdx + 0x18]
+  00812ee6  add     ecx, ecx
+  00812ee9  mov     rax, qword ptr [rax + rcx*8 + 8]
+  00812eee  test    rax, rax
+  00812ef1  je      0x140812ef9
+  00812ef3  cmp     dword ptr [rax + 0x18], r8d
+  00812ef7  je      0x140812f00
+  00812ef9  mov     rax, qword ptr [rip + 0x2a4cae0]  ; -> 0x325f9e0
+  00812f00  mov     rdx, qword ptr [rip + 0x2a4bff9]  ; -> 0x325ef00   ; 表 0x325ef00
+  00812f07  test    rdx, rdx
+  00812f0a  je      0x140812f39
+  00812f0c  mov     r8d, dword ptr [rax + 0x990]                ; ★ X + 0x990 = Y 的 id
+  00812f13  mov     eax, r8d
+  00812f16  and     eax, 0xffffff
+  00812f1b  cmp     eax, dword ptr [rdx + 0x20]
+  00812f1e  jae     0x140812f39
+  00812f20  mov     ecx, eax
+  00812f22  mov     rax, qword ptr [rdx + 0x18]
+  00812f26  add     ecx, ecx
+  00812f29  mov     rax, qword ptr [rax + rcx*8 + 8]
+  00812f2e  test    rax, rax
+  00812f31  je      0x140812f39
+  00812f33  cmp     dword ptr [rax + 0x30], r8d                 ; Y 的 id 在 +0x30
+  00812f37  je      0x140812f40
+  00812f39  mov     rax, qword ptr [rip + 0x2a4cae0]  ; -> 0x325fa20
+```
+
+```text
+$ python3 scripts/disrva.py 0x812f40 --len=0x40        ; 第三跳:Y -> 国家
+  00812f40  mov     rdx, qword ptr [rip + 0x2a4e091]  ; -> 0x3260fd8   ; 国家对象表
+  00812f47  test    rdx, rdx
+  00812f4a  je      0x140812f79
+  00812f4c  mov     r8d, dword ptr [rax + 0x434]                ; ★ Y + 0x434 = 国家 id
+  00812f53  mov     eax, r8d
+  00812f56  and     eax, 0xffffff
+  00812f5b  cmp     eax, dword ptr [rdx + 0x20]
+  00812f5e  jae     0x140812f79
+  00812f60  mov     ecx, eax
+  00812f62  mov     rax, qword ptr [rdx + 0x18]
+  00812f66  add     ecx, ecx
+  00812f69  mov     rax, qword ptr [rax + rcx*8 + 8]
+  00812f6e  test    rax, rax
+  00812f71  je      0x140812f79
+  00812f73  cmp     dword ptr [rax + 0x20], r8d
+  00812f77  je      0x140812f80
+  00812f79  mov     rax, qword ptr [rip + 0x2a4c410]  ; -> 0x325f390   ; 空国家
+  00812f80  ret
+```
+
+⇒ **`0x812ec0` = 「输入对象 → X → Y → 国家」**,第三跳的 `[Y+0x434]` 正是 `is_owned_by`
+分派树里读 `+0x434` 的那一支(§8.2 的 **mask `0x40`**,分支体 `0x1a9bdee`)——
+两条完全独立的代码路径落在同一格 ⇒ `+0x434` 这一格的可信度从「单点」升到「两点同形」。
+(注:§3.4 把这一支标成「mask 0x20」,**那是数错了** —— `sub` 链上 `+0x434` 属于
+**mask `0x40`**,mask `0x20`(`0x1a9be28`)读的是 `+0x3a8`。见 §8.2。)
+
+**输入对象的结构(逐条读出,类名 `未观测`):**
+
+| 对象 | 从哪来 | 读出的字段 |
+|---|---|---|
+| 输入对象(记作 Z) | 见 §7.2 | `+0x98` = X 的 id;`+0x880` / `+0x884` = 两个 id(`0x816f3b` / `0x816f4a` 各喂给 `0x8174e0`);`+0xa0`(容器基址,`0x817163`);`+0xbb8`(带 vptr 的子对象,`0x816f67` 调 vtable `+0x40`) |
+| X | 表 `0x3260fd0`,表项 id `+0x18` | `+0x990` = Y 的 id;`+0xa00` = 系统 id;`+0x988`(qword 写,`0x81715c`) |
+| Y | 表 `0x325ef00`,表项 id `+0x30` | `+0x434` = 国家 id;`+0x1248`(byte,`0x8176f0` 比 `0xa`)、`+0x1240` 的 bit 9、`+0x664`(同一函数继续读) |
+
+### §7.2 哪个调用点把 scope 换成 Z
+
+`0x18015f0` 的分派键 `0x40` 分支(§2.3 已抄过前半):
+
+```text
+$ python3 scripts/disrva.py 0x18017d2 --len=0xb0
+  018017d2  cmp     rcx, 0x40
+  018017d6  jne     0x14180189e
+  018017dc  mov     rcx, rbx
+  018017df  call    0x140393f30  ; -> 0x393f30                  ; scope -> Y(表 0x325ef00)
+  018017e7  cmp     byte ptr [rax + 0x1248], 0xa
+  01801820  cmp     dword ptr [rbx + 0x32c], 0
+  01801827  je      0x141801851
+  01801829  mov     rdx, qword ptr [rbx + 0x320]                 ; ★ Y + 0x320 = 指向 id 的指针
+  01801830  mov     rax, qword ptr [rip + 0x1a5f379]  ; -> 0x3260bb0
+  01801837  mov     rcx, qword ptr [rax + 0x948]
+  0180183e  add     rcx, 0xed8                                   ; 哈希表 db
+  01801845  mov     edx, dword ptr [rdx]                         ; id
+  01801847  call    0x1409c0fd0  ; -> 0x9c0fd0                  ; ★ db+id -> Z
+  0180184c  mov     rsi, rax
+  01801865  xor     r8d, r8d
+  01801868  mov     r9b, 6
+  0180186b  mov     rdx, rdi                                     ; 参数(国家)
+  0180186e  mov     rcx, rsi                                     ; Z
+  01801871  call    0x140816dd0  ; -> 0x816dd0                  ; ★ 这里
+```
+
+`0x9c0fd0` 是一个**开放寻址哈希表查表**(不是对象表):
+
+```text
+$ python3 scripts/disrva.py 0x9c0fd0 --len=0x70
+  009c0fd0  movsxd  r9, dword ptr [rcx + 0x4c]                 ; 掩码
+  009c0fd4  mov     r10, qword ptr [rcx + 0x40]                 ; 桶数组
+  009c0fd8  mov     r8, r9
+  009c0fdb  movsxd  rax, edx
+  009c0fde  and     r8, rax
+  009c0fe1  lea     rax, [r8 + r8*2]
+  009c0fe5  mov     r8b, 1
+  009c0fe8  cmp     byte ptr [r10 + rax*8 + 4], r8b             ; 步长 0x18
+  009c0fed  lea     rax, [r10 + rax*8]
+  009c0ff1  jb      0x1409c1005
+  009c0ff3  cmp     edx, dword ptr [rax + 8]                     ; 键在 +8
+  009c0ff6  je      0x1409c1038
+  009c0ff8  add     rax, 0x18
+  009c0ffc  inc     r8b
+  009c0fff  cmp     r8b, byte ptr [rax + 4]
+  009c1003  jbe     0x1409c0ff3                                 ; 链式探测
+```
+
+⇒ **调用点在 `0x1801871`**:`Z = HashMapLookup([[0x3260bb0]+0x948] + 0xed8, dword[[0x393f30(scope)] + 0x320])`。
+同一条 effect 的另一个分支也走 `0x816dd0`(`0x18018d9`,键 `0x20000`),
+但那个分支的入参来自 `0x3949e0`,不是本节这条。
+
+### §7.3 `0x816dd0` 自己怎么写:置旗标 + 刷新,不是直接落盘
+
+```text
+$ python3 scripts/disrva.py 0x816e79 --len=0x50
+  00816e79  mov     eax, 8
+  00816e7e  test    r9b, r9b                                     ; = 0x8176f0(Z) 的结果
+  00816e81  je      0x140816eb9
+  00816e83  cmp     r15, rsi                                     ; r15 = 0x812ec0(Z) = 当前国家
+  00816e86  je      0x140816e9c
+  00816e88  lea     rcx, [r15 + 0x20]
+  00816e8c  test    r15, r15
+  00816e8f  cmove   rcx, rax
+  00816e93  mov     ecx, dword ptr [rcx]
+  00816e95  mov     dword ptr [r13 + 0x580], ecx                 ; ★ 系统 +0x580 = 旧国家 id
+  00816e9c  mov     eax, 1
+  00816ea1  xchg    byte ptr [r13 + 0x1378], al                  ; ★ 系统 +0x1378 = 待更新旗标
+  00816ea8  cmp     byte ptr [rip + 0x2b61ce5], 0  ; -> 0x3378b94
+  00816eaf  je      0x140816eb9
+  00816eb1  mov     rcx, r13
+  00816eb4  call    0x1408c2ca0  ; -> 0x8c2ca0                  ; ★ §2.4(d) 的刷新包装
+  00816eb9  mov     rcx, rsi
+  00816ebc  call    0x140243600  ; -> 0x243600
+```
+
+`0x8c2ca0` 就是 §2.4(d) 抄过的那一段:读旧 `[+0x1370]` → 调 `0x8c2b70` → 读新 `[+0x1370]`
+→ 不等则 `0x8bcaa0(obj, old, new)`。而 `0x8c2b70` 的写点是 `0x8c2c6b mov dword ptr [rsi+0x1370], ecx`。
+
+⇒ **链路闭合:`set_owner` → `0x816dd0` → `0x8168b0` 解出系统对象 → 置 `+0x1378` →
+`0x8c2ca0` → `0x8c2b70` → `mov dword [系统+0x1370], [国家+0x20]`。与 §2 的候选同一格。**
+
+顺带把 §2.4「第二次写」那一行也解释了:同一个 `0x8c2b70` 里
+`xchg byte ptr [rdi + 0x3798], al` / `xchg byte ptr [rbx + 0x3798], bpl`
+(`0x8c2c33` / `0x8c2c47`)就是「新旧两国各置一次 dirty」,不是另一张 owner 表。
+
+### §7.4 §7 的三行判决
+
+```text
+结论: same_slot —— `set_owner` 的 store 路径就是 `[系统对象+0x1370]`,写手与 §2.4 的 0x8c2b70
+      同一个;`0x816dd0` 自己只写 `+0x580`(旧 id 快照)与 `+0x1378`(待更新旗标)。
+      命令: disrva.py 0x816dd0 --len=0xa0 / 0x8168b0 --len=0x60 / 0x816e79 --len=0x50
+           disrva.py 0x812ec0 --len=0x60 / 0x812f40 --len=0x40
+           disrva.py 0x18017d2 --len=0xb0 / 0x9c0fd0 --len=0x70
+      档: 静态推断(未验证)
+不能说的: ① 输入对象 Z / X 的**类名**没读到(`未观测`);能说的只是「Z 的 +0x98 → X 的 +0x990 → Y
+          的 +0x434 → 国家」这条 id 链,和「X 的 +0xa00 → 系统对象」这一跳;
+          ② 「参数国家的 id 从哪条指令进到 `[[系统+0x570]]`」没定位到 —— 新 owner 由
+          `0x8bc8c0(系统)` 读 `[系统+0x570]` 的指向物算出(§2.4 b),而 `0x816dd0` 体内只写
+          `+0x580`、`+0x1378`、`[X+0x988]`,没有一条直接写 `[[系统+0x570]]`;
+          ③ 零 live 读数。
+下一发升级条件: N3(§6.2)不变 —— 一发里读 set_owner 前后的 `[系统+0x1370]`;判据与失败判词照抄 §6.2。
+          追加一个字据: 同一发里顺带读 `[系统+0x580]`(期望 = 写入**前**的 owner id)与
+          `[系统+0x1378]`(期望写完后回到 0)。若 `+0x580` 在写后仍等于新 owner,则本节的
+          「+0x580 = 旧 id 快照」判死。
+```
+
+---
+
+## §8 `is_owned_by` slot[3] = `0x1a9bd10` 的全部叶子
+
+(收 §6.5 第 2 条。)§3.4 写的是「九路 switch」—— **那是我按前 45 条指令数出来的,数错了**。
+把它读完:**20 个 mask 叶子 + 1 条 switch 之前的兜底路径**。本节逐叶列出,
+并把 §6.1 最后一行从 `未观测` 升成 `静态推断(未验证)`。
+
+### §8.1 分派树(逐字)
+
+```text
+$ python3 scripts/disrva.py 0x1a9bd84 --len=0x50
+  01a9bd84  mov     rax, qword ptr [rdi + 8]                 ; ★ scope mask
+  01a9bd88  cmp     rax, 0x40000
+  01a9bd8e  ja      0x141a9c04a                              ; > 0x40000 → 第三层
+  01a9bd94  je      0x141a9c02d                              ; 0x40000
+  01a9bd9a  cmp     rax, 0x100
+  01a9bda0  ja      0x141a9bf99                              ; > 0x100 → 第二层
+  01a9bda6  je      0x141a9bf76                              ; 0x100
+  01a9bdac  sub     rax, 1
+  01a9bdb0  je      0x141a9bf53                              ; 1
+  01a9bdb6  sub     rax, 0xf
+  01a9bdba  je      0x141a9beba                              ; 0x10
+  01a9bdc0  sub     rax, 0x10
+  01a9bdc4  je      0x141a9be28                              ; 0x20
+  01a9bdc6  sub     rax, 0x20
+  01a9bdca  je      0x141a9bdee                              ; 0x40
+  01a9bdcc  cmp     rax, 0x40
+  01a9bdd0  jne     0x141a9c23a                              ; 无匹配 → 空对象
+  01a9bdd6  mov     rcx, rdi
+  01a9bdd9  call    0x140393970  ; -> 0x393970                ; 0x80
+  01a9bdde  mov     rcx, rax
+  01a9bde1  call    0x1408bc870  ; -> 0x8bc870                ; → [obj+0x1370]
+  01a9bde6  mov     rbx, rax
+```
+
+```text
+$ python3 scripts/disrva.py 0x1a9bf99 --len=0x3c        ; 第二层(0x100 < mask ≤ 0x40000)
+  01a9bf99  cmp     rax, 0x200
+  01a9bf9f  je      0x141a9c015
+  01a9bfa1  cmp     rax, 0x1000
+  01a9bfa7  je      0x141a9bff5
+  01a9bfa9  cmp     rax, 0x4000
+  01a9bfaf  je      0x141a9bfd5
+  01a9bfb1  cmp     rax, 0x20000
+  01a9bfb7  jne     0x141a9c23a
+  01a9bfbd  mov     rcx, rdi
+  01a9bfc0  call    0x140394960  ; -> 0x394960
+  01a9bfc5  mov     rcx, rax
+  01a9bfc8  call    0x140816990  ; -> 0x816990                ; ★ 与 §7 同一条链
+  01a9bfcd  mov     rbx, rax
+  01a9bfd0  jmp     0x141a9c23a  ; -> 0x1a9c23a
+```
+
+```text
+$ python3 scripts/disrva.py 0x1a9c04a --len=0x38        ; 第三层(0x40000 < mask ≤ 0x2000000)
+  01a9c04a  cmp     rax, 0x2000000
+  01a9c050  ja      0x141a9c17f
+  01a9c056  je      0x141a9c12c
+  01a9c05c  cmp     rax, 0x100000
+  01a9c062  je      0x141a9c109
+  01a9c068  cmp     rax, 0x400000
+  01a9c06e  je      0x141a9c0c4
+  01a9c070  cmp     rax, 0x800000
+  01a9c076  je      0x141a9c09c
+  01a9c078  cmp     rax, 0x1000000
+  01a9c07e  jne     0x141a9c23a
+  01a9c084  mov     rcx, rdi
+  01a9c087  call    0x140394ca0  ; -> 0x394ca0
+  01a9c08c  mov     rcx, rax
+  01a9c08f  call    0x140648b80  ; -> 0x648b80
+```
+
+```text
+$ python3 scripts/disrva.py 0x1a9c17f --len=0x30        ; 第四层(mask > 0x2000000)
+  01a9c17f  cmp     rax, 0x10000000
+  01a9c185  je      0x141a9c1f7
+  01a9c187  cmp     rax, 0x20000000
+  01a9c18d  je      0x141a9c1db
+  01a9c18f  cmp     rax, 0x40000000
+  01a9c195  je      0x141a9c1c2
+  01a9c197  mov     ecx, 0x80000000
+  01a9c19c  cmp     rax, rcx
+  01a9c19f  jne     0x141a9c23a
+  01a9c1a5  mov     rcx, rdi
+  01a9c1a8  call    0x140395200  ; -> 0x395200
+  01a9c1ad  lea     rdx, [rsp + 0x24]
+  01a9c1b2  lea     rcx, [rax + 0x70]
+  01a9c1b6  mov     rax, qword ptr [rax + 0x70]
+  01a9c1ba  call    qword ptr [rax + 0x58]                    ; vtable +0x58 取 id
+```
+
+### §8.2 20 个叶子逐条
+
+表里三列的定义:
+
+- **scope → 对象**:每支第一步把 scope 换成哪个对象(第一个 `call`)。
+- **读出的 id 来源**:从那个对象(或再下一跳)读哪个字段才是国家 id。
+- **落地方式**:最后一步怎么把 id 变成**国家对象**。
+
+| mask | scope → 对象 | 读出的 id 来源 | 落地方式 |
+|---|---|---|---|
+| `1` | `0x394870` | `[obj+0x1b8]` | 表 `0x3260fd8`(国家表) |
+| `0x10` | `0x394190` | `[obj+0x18]` → 表 `0x3260ff0`(项 id `+0x10`)→ `[entry+0x3a8]` → 表 `0x3261068`(项 id `+0x10`)→ `[entry+0xf78]` → `0xd3b4d0` → vtable `+0x58` | 表 `0x3260fd8` |
+| `0x20` | `0x2b6470` | `[obj+0x3a8]` → 表 `0x3261068` → `[entry+0xf78]` → `0xd3b4d0` → vtable `+0x58` | 表 `0x3260fd8` |
+| `0x40` | `0x393ec0` | `[obj+0x434]` | 表 `0x3260fd8` |
+| `0x80` | `0x393970` → `0x8bc870` | (系统对象的 `+0x1370`) | **`0x8bc870` 直接返回国家对象**(§3.2) |
+| `0x100` | `0x393a70` | `[obj+0xd8]` | 表 `0x3260fd8` |
+| `0x200` | `0x3942b0` → `0x8577d0` | `[obj+0x16c]` | `0x8577d0` 内部查表 `0x3260fd8` |
+| `0x1000` | `0x3952e0` → `0x35fb20` → `0x8bc870` | `[obj+0x78]` → 表 `0x3260b98`(系统表)→ 系统对象 | **`0x8bc870` 直接返回国家对象** |
+| `0x4000` | `0x3945b0` | `[obj+0x20]` | 表 `0x3260fd8` |
+| `0x20000` | `0x394960` → `0x816990` | `0x816990` → `0x812ec0`:Z `+0x98` → X → Y `+0x434` | `0x812ec0` 内部查表 `0x3260fd8`(**与 §7 同一条链**) |
+| `0x40000` | `0x394a60` | `[obj+0x30]` + `[obj+0x34]` → `0xec3b00` → vtable `+0x58` | 表 `0x3260fd8` |
+| `0x100000` | `0x394b40` | `[obj+0x168]` | 表 `0x3260fd8` |
+| `0x400000` | `0x394bc0` | `[obj+0xa0]` + `[obj+0xa4]` → `0x89a2e0` → vtable `+0x8` → `0x34e340` → `[rax+0x1370]` | 表 `0x3260fd8` ⚠ 这里的 `+0x1370` 在 `0x34e340` 返回的**另一个对象**上,不保证是系统对象 |
+| `0x800000` | `0x394d80` → `0x3538f0` | `[rax+0x20]` | 表 `0x3260fd8` |
+| `0x1000000` | `0x394ca0` → `0x648b80` | `[obj+0x18]` | `0x648b80` 内部查表 `0x3260fd8` |
+| `0x2000000` | `0x394e60` | `[obj+0xac]` → 表 `0x3261030`(项 id `+0x8`)→ `[entry+0x18]` → `0x648b80` | `0x648b80` 内部查表 `0x3260fd8` |
+| `0x10000000` | `0x394fc0` | `[obj+0x18]` | 表 `0x3260fd8` |
+| `0x20000000` | `0x3950a0` | `[obj+0x204]` | 表 `0x3260fd8` |
+| `0x40000000` | `0x395180` | `[obj+0x38]` | 表 `0x3260fd8` |
+| `0x80000000` | `0x395200` | `[obj+0x70]` 的 vtable `+0x58` | 表 `0x3260fd8` |
+
+**三个落地 helper 的原文**(它们的字段就是上表的 id 来源):
+
+```text
+$ python3 scripts/disrva.py 0x8577d0 --len=0x40
+  008577d0  mov     rdx, qword ptr [rip + 0x2a09801]  ; -> 0x3260fd8
+  008577d7  test    rdx, rdx
+  008577da  je      0x140857809
+  008577dc  mov     r8d, dword ptr [rcx + 0x16c]
+  008577e3  mov     eax, r8d
+  008577e6  and     eax, 0xffffff
+  008577eb  cmp     eax, dword ptr [rdx + 0x20]
+  008577ee  jae     0x140857809
+  008577f0  mov     ecx, eax
+  008577f2  mov     rax, qword ptr [rdx + 0x18]
+  008577f6  add     ecx, ecx
+  008577f9  mov     rax, qword ptr [rax + rcx*8 + 8]
+  008577fe  test    rax, rax
+  00857801  je      0x140857809
+  00857803  cmp     dword ptr [rax + 0x20], r8d
+  00857807  je      0x14057810
+  00857809  mov     rax, qword ptr [rip + 0x2a07b80]  ; -> 0x325f390
+```
+
+```text
+$ python3 scripts/disrva.py 0x648b80 --len=0x40
+  00648b80  mov     rdx, qword ptr [rip + 0x2c18451]  ; -> 0x3260fd8
+  00648b87  test    rdx, rdx
+  00648b8a  je      0x140648bb6
+  00648b8c  mov     r8d, dword ptr [rcx + 0x18]
+  00648b90  mov     eax, r8d
+  00648b93  and     eax, 0xffffff
+  00648b98  cmp     eax, dword ptr [rdx + 0x20]
+  00648b9b  jae     0x140648bb6
+  00648b9d  mov     ecx, eax
+  00648b9f  mov     rax, qword ptr [rdx + 0x18]
+  00648ba3  add     ecx, ecx
+  00648ba6  mov     rax, qword ptr [rax + rcx*8 + 8]
+  00648bab  test    rax, rax
+  00648bae  je      0x140648bb6
+  00648bb0  cmp     dword ptr [rax + 0x20], r8d
+  00648bb4  je      0x140648bbd
+  00648bb6  mov     rax, qword ptr [rip + 0x2c167d3]  ; -> 0x325f390
+  00648bbd  ret
+```
+
+```text
+$ python3 scripts/disrva.py 0x35fb20 --len=0x40
+  0035fb20  mov     rdx, qword ptr [rip + 0x2f01071]  ; -> 0x3260b98   ; 系统表
+  0035fb27  test    rdx, rdx
+  0035fb2a  je      0x14035fb56
+  0035fb2c  mov     r8d, dword ptr [rcx + 0x78]
+  0035fb30  mov     eax, r8d
+  0035fb33  and     eax, 0xffffff
+  0035fb38  cmp     eax, dword ptr [rdx + 0x20]
+  0035fb3b  jae     0x14035fb56
+  0035fb3d  mov     ecx, eax
+  0035fb3f  mov     rax, qword ptr [rdx + 0x18]
+  0035fb43  add     ecx, ecx
+  0035fb46  mov     rax, qword ptr [rax + rcx*8 + 8]
+  0035fb4b  test    rax, rax
+  0035fb4e  je      0x14035fb56
+  0035fb50  cmp     dword ptr [rax + 8], r8d
+  0035fb54  je      0x14035fb5d
+  0035fb56  mov     rax, qword ptr [rip + 0x2efdd23]  ; -> 0x325d880
+  0035fb5d  ret
+```
+
+**switch 之前的兜底路径**(`0x1a9bd18`,任何 mask 都先试一次):
+
+```text
+$ python3 scripts/disrva.py 0x1a9bd18 --len=0x30
+  01a9bd18  mov     rbx, qword ptr [rip + 0x17c3671]  ; -> 0x325f390   ; 空国家
+  01a9bd1f  mov     rsi, rcx
+  01a9bd22  mov     rcx, rdx
+  01a9bd25  mov     rdi, rdx                                     ; scope
+  01a9bd28  call    0x140a54d70  ; -> 0xa54d70
+  01a9bd2d  mov     rcx, rax
+  01a9bd30  test    rax, rax
+  01a9bd33  je      0x141a9bd84                                  ; 失败才进 switch
+  01a9bd35  mov     rax, qword ptr [rax]
+  01a9bd38  lea     rdx, [rsp + 0x50]
+  01a9bd3d  call    qword ptr [rax + 0x58]                       ; vtable +0x58 取 id
+  01a9bd40  mov     rdx, qword ptr [rip + 0x17c5291]  ; -> 0x3260fd8
+```
+
+⇒ 共 **21 条**取对象的路径。
+
+### §8.3 20 个叶子合流的尾部:全部比「国家对象 == 参数」
+
+```text
+$ python3 scripts/disrva.py 0x1a9c23a --len=0x50
+  01a9c23a  lea     r8, [rsi + 0x40]
+  01a9c23e  mov     rdx, rdi                                     ; scope
+  01a9c241  lea     rcx, [rsi + 0x80]
+  01a9c248  lea     r9, [rip + 0xa0ed61]  ; -> 0x24aafb0       ; "is_owned_by"
+  01a9c24f  call    0x14035eee0  ; -> 0x35eee0                  ; 取参数
+  01a9c254  mov     rdx, qword ptr [rbx + 0x18]
+  01a9c258  lea     rcx, [rbx + 0x18]
+  01a9c25c  mov     rdi, rax
+  01a9c25f  call    qword ptr [rdx + 8]                          ; rbx(解出的国家)有效性
+  01a9c262  test    al, al
+  01a9c264  je      0x141a9c283
+  01a9c266  mov     rdx, qword ptr [rdi + 0x18]
+  01a9c26a  lea     rcx, [rdi + 0x18]
+  01a9c26e  call    qword ptr [rdx + 8]                          ; 参数有效性
+  01a9c271  test    al, al
+  01a9c273  je      0x141a9c283
+  01a9c275  cmp     rbx, rdi
+  01a9c278  sete    al                                           ; ★ 对象身份比较
+```
+
+⇒ **20 个叶子产出的都是同一个类型(国家对象),尾部只做「对象 == 参数」**。
+没有一支返回「布尔」「计数」或别的类型 —— 这与 §3.6 记的「owner 不是一格,是一组分派」
+一致,只是分派的宽度从 9 变成 20。
+
+### §8.4 §6.1 最后一行的升级
+
+| 原行 | 原档 | 现在 | 依据 |
+|---|---|---|---|
+| 「其他 scope 种类的 owner」 | `未观测` | **`静态推断(未验证)`** | §8.2 的 20 行表:每个 mask 各自读一个字段,21 条路径**全部**最终产出一个国家对象(18 条经国家表 `0x3260fd8`,2 条经 `0x8bc870` 直接返回) |
+
+能升级到什么、不能升级到什么,写清楚:
+
+- **可以写**:「`is_owned_by` 对任何一种 scope 都解出一个**国家对象**;那个对象对应的 id 在
+  哪个字段上,由 `[scope+8]` 的 mask 决定,表在 §8.2」。
+- **不可以写**:「那 20 个字段都是 `owner`」。它们是「这个 scope 的**归属国**」不同视图:
+  有的直接在对象上(`+0x1370` 系统、`+0x434`)、有的要过三张表(mask `0x10`/`0x20`)、
+  有的取的是 id 对(`0x40000` 的 `+0x30/+0x34`)、有一支的 `+0x1370` 还不保证是系统对象
+  (`0x400000`)。**把它们当成同一语义的别名会读错。**
+
+### §8.5 §8 不能说的
+
+1. **类名全未观测。** 20 个第一跳函数(`0x394870` / `0x394190` / `0x2b6470` / … )的返回类型
+   本卷一个都没命名;能给的只有「表 → 表项 id 位移 → 字段位移」。
+2. **四个中继体没读**:`0x34e340`(mask `0x400000`)、`0x3538f0`(mask `0x800000`)、
+   `0xec3b00`(mask `0x40000`)、`0xd3b4d0`(mask `0x10`/`0x20`)。
+   它们决定那四支到底落在谁的 `+0x1370` / vtable `+0x58` 上。
+3. **20 个 mask 值里有几个真的会在 4.4.4 里出现,一个都不知道**;零 live 读数。
+
+---
+
+## §9 `join_alliance` 与联邦成员数组:push 在哪一条指令
+
+(收 §6.5 第 3 条。)
+
+### §9.1 成员容器:基址 `+0x90`,数据 `+0x98`,条数 `+0xa4`
+
+`[fed+0x98]`(数据)与 `[fed+0xa4]`(条数)是 §4.6 读侧用过的两格。把**写侧**的同族代码读出来,
+三格的从属关系就定了 —— `+0x98`/`+0xa4` 是**容器内部**,容器基址在 `+0x90`:
+
+```text
+$ python3 scripts/disrva.py 0x6b4240 --len=0x1e0        ; 摘录
+  006b4240  mov     qword ptr [rsp + 0x10], rbx
+  ...
+  006b4260  mov     rbp, rdx                                 ; 2nd arg = 本国
+  006b4263  mov     r12, rcx                                 ; 1st arg = 联邦对象
+  ...
+  006b428c  movsxd  rax, dword ptr [r12 + 0xa4]              ; ★ 成员条数
+  006b4294  test    eax, eax
+  006b4296  jle     0x1406b42ce
+  006b4298  mov     r8d, dword ptr [rbp + 0x20]               ; 本国 id
+  006b429c  mov     r9, rax
+  006b429f  mov     ecx, r13d
+  006b42a2  mov     rax, qword ptr [r12 + 0x98]               ; ★ 成员数组(数据指针)
+  006b42b0  cmp     dword ptr [rax], r8d                      ; 已经在成员表里?
+  006b42b3  je      0x1406b42c5
+  006b42b5  inc     edx
+  006b42b7  inc     ecx
+  006b42ba  add     rax, 4
+  006b42be  cmp     rcx, r9
+  006b42c1  jl      0x1406b42b0
+  006b42c3  jmp     0x1406b42ce  ; -> 0x6b42ce
+  006b42c5  cmp     edx, -1
+  006b42c8  jne     0x1406b4af2                              ; 已是成员 → 直接返回
+  ...
+  006b43eb  mov     edx, dword ptr [r12 + 8]                  ; 联邦 id(表项 id 在 +8)
+  006b43f0  mov     rcx, rbp                                  ; 本国
+  006b43f3  call    0x1407562a0  ; -> 0x7562a0               ; ★ SetFederation(本国, 联邦 id)
+  006b43f8  mov     eax, dword ptr [rbp + 0x20]               ; 本国 id
+  006b43fb  mov     dword ptr [rsp + 0x60], eax
+  006b43ff  lea     rdx, [rsp + 0x60]
+  006b4404  lea     rcx, [r12 + 0x90]                         ; ★ 容器基址 = fed + 0x90
+  006b440c  call    0x1402a4990  ; -> 0x2a4990               ; ★★ push(本国 id)
+  006b4411  mov     rdx, qword ptr [rip + 0x2bacbc0]  ; -> 0x3260fd8
+```
+
+(`0x6b4af2` 是本函数的尾声:`mov rbx,[rsp+0x68] … ret`,即「已是成员」时的提前返回。)
+
+`0x2a4990` 本身是**向量 append**,把容器的内部布局钉死:
+
+```text
+$ python3 scripts/disrva.py 0x2a4990 --len=0x80
+  002a4990  push    rbx
+  002a4992  push    r14
+  002a4994  push    r15
+  002a4996  sub     rsp, 0x20
+  002a499a  movsxd  rbx, dword ptr [rcx + 0x14]               ; ★ 条数
+  002a499e  mov     r15, rdx
+  002a49a1  mov     eax, dword ptr [rcx + 0x10]               ; ★ 容量
+  002a49a4  mov     r14, rcx
+  002a49a7  cmp     ebx, eax
+  002a49a9  jne     0x1402a4a7a
+  ...
+  002a49f1  call    0x14218525c  ; -> 0x218525c               ; 扩容
+  002a49f6  mov     ecx, dword ptr [r15]                      ; ★ 取要压入的 dword
+  002a49f9  lea     r8, [rbx*4]
+  002a4a04  mov     rdi, rbx
+  002a4a07  mov     dword ptr [rax + rbx*4], ecx              ; ★★ 写值
+  002a4a0a  mov     rcx, rax
+```
+
+```text
+$ python3 scripts/disrva.py 0x2a4a0a --len=0x60
+  002a4a0a  mov     rcx, rax
+  002a4a0d  mov     rdx, qword ptr [r14 + 8]                  ; ★ 数据指针在 +8
+  002a4a11  call    0x142187ac0  ; -> 0x2187ac0
+  002a4a16  mov     r9, qword ptr [r14 + 8]
+  ...
+  002a4a3a  mov     ebx, dword ptr [r14 + 0x14]               ; ★ 条数在 +0x14
+  002a4a3e  mov     rcx, r14
+  002a4a41  mov     rax, qword ptr [r14]
+  002a4a44  inc     ebx
+  002a4a46  mov     dword ptr [r14 + 0x14], 0
+  002a4a4e  call    qword ptr [rax + 0x18]
+  002a4a51  lea     rax, [rsi + rdi*4]
+  002a4a55  mov     qword ptr [r14 + 8], rsi                   ; ★ 回填数据指针
+  ...
+  002a4a63  mov     dword ptr [r14 + 0x10], ebp               ; ★ 回填容量(+0x10)
+```
+
+**答案(三条,逐条对应问题):**
+
+1. **哪条指令**:`0x6b440c call 0x1402a4990`,实参 `rcx = 联邦对象 + 0x90`(容器基址)、
+   `rdx = &本国 id`;真正的写值在 `0x2a4a07 mov dword ptr [rax + rbx*4], ecx`。
+2. **写的是 `[联邦对象+0x98]` 数组还是别的**:**写的是容器 `[联邦+0x90]`**;
+   `[联邦+0x98]` 是这个容器的**数据指针**,`[联邦+0xa4]` 是它的**条数** ——
+   即「`+0x98`/`+0xa4` 是对的,但它们是容器内部,不是容器本身」。容器基址 = `+0x90`,
+   数据 = 基址 `+0x8`,容量 = 基址 `+0x10`,条数 = 基址 `+0x14`。
+3. **长度字段是 `+0xa4` 还是别的**:**`+0xa4`**(容器基址 `+0x14`),与 §4.6 读侧用的同一格。
+
+### §9.2 反向指针:全 `.text` 里唯一的 dword 写点
+
+```text
+$ python3 scripts/scratch/2026-11_transitability/field_xrefs.py 0x1e88 --width dword --writes-only --limit 10
+# module /var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
+# .text bytes=37291792 pdata funcs=130615
+
+## [reg+0x1e88]  width=dword hits=1 writes=1
+  0x7563db  W  mov dword ptr [rbp + 0x1e88], ebx   (in func 0x7562a0)
+```
+
+> 地址口径提醒:`field_xrefs.py` 打的是 **disp32 字节的地址**,不是指令首地址 ——
+> 同一条指令在 `disrva.py` 里是 `0x7563d9`(见下)。本卷 §2.4 那张 `[+0x1370]` 表
+> (`0x8c2c6d` 那行)用的是同一个口径,两处相差 2 字节,指的是**同一条指令**。
+
+`0x7562a0(country, fed_id)` 就是 §4.6 里 `[country+0x1e88]` 的写侧:
+
+```text
+$ python3 scripts/disrva.py 0x7562a0 --len=0x40
+  007562a0  mov     qword ptr [rsp + 8], rbx
+  007562a5  mov     qword ptr [rsp + 0x10], rbp
+  007562aa  mov     qword ptr [rsp + 0x18], rsi
+  007562af  push    rdi
+  007562b0  push    r14
+  007562b2  push    r15
+  007562b4  sub     rsp, 0x30
+  007562b8  mov     ebx, edx                                  ; 新联邦 id
+  007562ba  mov     rbp, rcx                                 ; 本国
+  007562bd  cmp     edx, dword ptr [rcx + 0x1e88]            ; 没变就返回
+  007562c3  je      0x14075641d
+  007562c9  mov     rdx, qword ptr [rip + 0x2b0ad48]  ; -> 0x3261018   ; 联邦对象表
+  007562d0  test    rdx, rdx
+  007562d3  je      0x1407562f9
+  007562d5  mov     eax, ebx
+  007562d7  and     eax, 0xffffff
+  007562dc  cmp     eax, dword ptr [rdx + 0x20]
+  007562df  jae     0x1407562f9
+  007562e1  mov     ecx, eax
+  007562e3  add     ecx, ecx
+  007562e6  mov     rax, qword ptr [rdx + 0x18]
+  007562ea  mov     rsi, qword ptr [rax + rcx*8 + 8]         ; 联邦对象
+  007562ef  test    rsi, rsi
+  007562f2  je      0x1407562f9
+  007562f4  cmp     dword ptr [rsi + 8], ebx
+  007562f7  je      0x140756300
+  007562f9  mov     rsi, qword ptr [rip + 0x2b099f0]  ; -> 0x325fcf0   ; 空联邦
+```
+
+```text
+$ python3 scripts/disrva.py 0x756300 --len=0x40
+  00756300  mov     rax, qword ptr [rsi]
+  00756303  mov     rcx, rsi
+  00756306  call    qword ptr [rax + 8]                       ; 联邦有效?
+  00756309  test    al, al
+  0075630b  je      0x14075631d
+  0075630d  lea     rdx, [rsi + 0x28]
+  00756311  lea     rcx, [rbp + 0x1e30]
+  00756318  call    0x14030f5f0  ; -> 0x30f5f0              ; 联邦的名字/标签 → 本国 +0x1e30
+  0075631d  cmp     qword ptr [rip + 0x2b0a88b], 0  ; -> 0x3260bb0
+  00756325  je      0x1407563cd
+```
+
+```text
+$ python3 scripts/disrva.py 0x7563c6 --len=0x30
+  007563c6  mov     byte ptr [rip + 0x22165d3], r15b  ; -> 0x296c9a0
+  007563cd  lea     rcx, [rbp + 0x1bc8]
+  007563d4  call    0x140213300  ; -> 0x213300
+  007563d9  mov     dword ptr [rbp + 0x1e88], ebx            ; ★★ 本国 +0x1e88 = 联邦 id
+  007563df  mov     rax, qword ptr [rsi]
+  007563e2  mov     rcx, rsi
+  007563e5  call    qword ptr [rax + 8]
+```
+
+### §9.3 `join_alliance` 自己做了什么 —— push **不在它体内**,但它**够得到**
+
+`join_alliance` 的执行体是 `0x18307e0`(§1.3 的 slot[9])。它对联邦对象的最后一处写是:
+
+```text
+$ python3 scripts/disrva.py 0x1830be4 --len=0x70
+  01830be4  mov     rdx, qword ptr [rip + 0x1a3042d]  ; -> 0x3261018   ; 联邦对象表
+  01830beb  test    rdx, rdx
+  01830bee  je      0x141830c1d
+  01830bf0  mov     r8d, dword ptr [rdi + 0x1e88]                    ; ★ 参数国的 +0x1e88
+  01830bf7  mov     eax, r8d
+  01830bfa  and     eax, 0xffffff
+  01830bff  cmp     eax, dword ptr [rdx + 0x20]
+  01830c02  jae     0x141830c1d
+  01830c04  mov     ecx, eax
+  01830c06  add     ecx, ecx
+  01830c09  mov     rax, qword ptr [rdx + 0x18]
+  01830c0d  mov     rbx, qword ptr [rax + rcx*8 + 8]                 ; 联邦对象
+  01830c12  test    rbx, rbx
+  01830c15  je      0x141830c1d
+  01830c17  cmp     dword ptr [rbx + 8], r8d
+  01830c1b  je      0x141830c24
+  01830c1d  mov     rbx, qword ptr [rip + 0x1a2f0cc]  ; -> 0x325fcf0
+  01830c24  cmp     qword ptr [rsp + 0x58], 0
+  01830c2a  jne     0x141830c32
+  01830c2c  cmp     dword ptr [rbp - 0x7c], 0
+  01830c30  je      0x141830c4d
+  01830c32  mov     rax, qword ptr [rbx]
+  01830c35  mov     rcx, rbx
+  01830c38  call    qword ptr [rax + 8]                             ; 联邦有效?
+  01830c3b  test    al, al
+  01830c3d  je      0x141830c4d
+  01830c3f  lea     rdx, [rsp + 0x30]                              ; 消息文本
+  01830c44  mov     rcx, rbx                                      ; 联邦对象
+  01830c47  call    0x1406b4b10  ; -> 0x6b4b10                     ; ★ effect 的最后一处联邦写
+```
+
+`0x6b4b10` 写的是 **`[联邦+0x28]`** 与 **`[联邦+0x1f8]`(一张哈希表)**,不是成员数组:
+
+```text
+$ python3 scripts/disrva.py 0x6b4b10 --len=0x30
+  006b4b10  mov     rax, rsp
+  006b4b13  mov     qword ptr [rax + 0x10], rbx
+  006b4b17  mov     qword ptr [rax + 0x18], rbp
+  006b4b1b  mov     qword ptr [rax + 0x20], rsi
+  006b4b1f  push    rdi
+  006b4b20  sub     rsp, 0xc0
+  006b4b27  movaps  xmmword ptr [rax - 0x18], xmm6
+  006b4b2b  movaps  xmmword ptr [rax - 0x28], xmm7
+  006b4b2f  movaps  xmmword ptr [rax - 0x38], xmm8
+  006b4b34  mov     rsi, rcx                                  ; 联邦对象
+  006b4b37  add     rcx, 0x28
+  006b4b3b  call    0x14030f5f0  ; -> 0x30f5f0              ; 把消息拷进 [联邦+0x28]
+```
+
+```text
+$ python3 scripts/disrva.py 0x6b4c60 --len=0x30
+  006b4c6c  mov     eax, dword ptr [rdi]
+  006b4c6e  mov     rcx, rdi
+  006b4c71  call    qword ptr [rax + 8]
+  006b4c74  mov     rbx, rax
+  006b4c77  mov     rcx, qword ptr [rsi + 0x1f8]              ; ★ 哈希表在 [联邦+0x1f8]
+  006b4c7e  mov     rdx, qword ptr [rcx]
+  006b4c81  call    qword ptr [rdx]                           ; 插入
+  006b4c83  mov     qword ptr [rsi + 0x1f8], rbx              ; ★★ 写 [联邦+0x1f8]
+```
+
+```text
+$ python3 scripts/find_refs.py 0x7562a0 0x6b4b10
+stellaris.exe  targets: 0x7562a0, 0x6b4b10
+scanning .text (0x2390800 bytes) ...
+
+== 0x7562a0: 2 references ==
+  .text 0x6b43f3: call 0x1407562a0
+  .text 0x6b4ecc: call 0x1407562a0
+
+== 0x6b4b10: 6 references ==
+  .text 0x6b3f52: call 0x1406b4b10
+  .text 0x704954: jmp 0x1406b4b10
+  .text 0xa0b45a: call 0x1406b4b10
+  .text 0xa1100c: call 0x1406b4b10
+  .text 0x1824556: call 0x1406b4b10
+  .text 0x1830c47: call 0x1406b4b10
+```
+
+`0x6b4b10` 的 6 个调用点里含 `0x1830c47`(= `join_alliance`);`0x7562a0` 的 2 个调用点
+**都不在 `join_alliance` 体内**。而成员数组的 push(`0x6b440c`)在
+`0x6b4240..0x6b4b0f` 这个大函数里(`.pdata` 边界),`join_alliance` 不直接调它。
+
+`0x6b4240`(真正做加入的那一支)的引用也只有三个,其中一个在它自己体内:
+
+```text
+$ python3 scripts/find_refs.py 0x6b4240
+stellaris.exe  targets: 0x6b4240
+scanning .text (0x2390800 bytes) ...
+
+== 0x6b4240: 3 references ==
+  .text 0x6b45e4: call 0x1406b4240
+  .text 0xa0b36f: call 0x1406b4240
+  .text 0xa0ba6b: call 0x1406b4240
+```
+
+三个地址里 `0x6b45e4` 落在 `0x6b4240..0x6b4b0f` 之内(函数内调用),
+`0xa0b36f` / `0xa0ba6b` 落在 `0xa0aec0..0xa0babc`(另一个函数,`.pdata` 边界)。
+`0xa0b36f` 那一次传的第三参 `r8d = 0`(`xor r8d, r8d`),`0xa0ba6b` 那一次传 `r8b = 1`。
+
+而 `0xa0aec0` 的**唯一**调用方就在 `join_alliance` 体内 —— **链闭合了**:
+
+```text
+$ python3 scripts/find_refs.py 0xa0aec0
+stellaris.exe  targets: 0xa0aec0
+scanning .text (0x2390800 bytes) ...
+
+== 0xa0aec0: 1 references ==
+  .text 0x1830bd2: call 0x140a0aec0
+```
+
+```text
+$ python3 scripts/disrva.py 0x1830b40 --len=0xa0
+  01830b40  mov     al, 0x41
+  01830b42  mov     eax, dword ptr [rsi + 0x20]
+  01830b45  mov     dword ptr [rbp - 0x4c], eax
+  01830b48  mov     rax, qword ptr [rip + 0x1a2e841]  ; -> 0x325f390
+  01830b4f  cmp     rdi, rax
+  01830b52  jne     0x141830ba5
+  01830b54  cmp     r14, rax
+  01830b57  jne     0x141830ba5
+  01830b59  mov     rax, qword ptr [rip + 0x1a2df08]  ; -> 0x325ea68
+  01830b60  cmp     dword ptr [rax + 0x5c], 0
+  01830b64  jne     0x141830b9c
+  01830b66  lea     rax, [rip + 0xccb893]  ; -> 0x24fc400
+  01830b6d  mov     qword ptr [rsp + 0x20], rax
+  01830b72  mov     dword ptr [rsp + 0x28], 0x13c
+  01830b7a  mov     dword ptr [rsp + 0x2c], 0x1000
+  01830b82  lea     rdx, [rip + 0xccb8ef]  ; -> 0x24fc478
+  01830b89  lea     rcx, [rsp + 0x20]
+  01830b8e  call    0x141c91c30  ; -> 0x1c91c30
+  01830b93  mov     rax, qword ptr [rip + 0x1a2f126]  ; -> 0x325fcc0
+  01830b9a  jmp     0x141830bb0  ; -> 0x1830bb0
+  01830b9c  mov     rax, qword ptr [rax + 0x50]
+  01830ba0  mov     rax, qword ptr [rax]
+  01830ba3  jmp     0x141830bb0  ; -> 0x1830bb0
+  01830ba5  mov     rdx, r14
+  01830ba8  mov     rcx, rdi
+  01830bab  call    0x1405814d0  ; -> 0x5814d0
+  01830bb0  mov     qword ptr [rbp + 0x40], rax
+  01830bb4  xor     r8d, r8d
+  01830bb7  xor     edx, edx
+  01830bb9  lea     rcx, [rbp - 0x70]                          ; ★ 本国句柄
+  01830bbd  call    0x140a0c970  ; -> 0xa0c970                  ; 「能不能加入?」判定
+  01830bc2  test    al, al
+  01830bc4  jne     0x141830bce
+  01830bc6  cmp     byte ptr [rsi + 0x290], al
+  01830bcc  je      0x141830bd7
+  01830bce  lea     rcx, [rbp - 0x70]
+  01830bd2  call    0x140a0aec0  ; -> 0xa0aec0                  ; ★ 加入
+  01830bd7  mov     rax, qword ptr [rbx]
+  01830bda  mov     rcx, rbx
+  01830bdd  call    qword ptr [rax + 8]
+```
+
+`rbp-0x70` 那个句柄是**国家对象**:`0xa0aec0` 开头读 `[rcx+0x20]` 再经国家表
+`0x3260fd8` 换成国家对象(§2.5 记的 id 位 `+0x20`)。
+
+⇒ **完整链:
+`join_alliance`(0x18307e0)→ `0x1830bd2 call 0xa0aec0` → `0xa0b36f`/`0xa0ba6b call 0x6b4240`
+→ `0x6b43f3 call 0x7562a0`(写 `[country+0x1e88]`)+ `0x6b440c`(push 进 `[fed+0x90]`)。**
+
+`join_alliance` 自己读的两处联邦字段是:`0x1830985` 读 scope 国家的 `[+0x1e88]`
+(它现在属于哪个联邦),`0x1830bf0` 读**参数**国家的 `[+0x1e88]` —— 后者正是被交给
+`0x6b4b10` 的那个联邦对象。
+
+### §9.4 §9 的判决
+
+```text
+结论: 联邦成员数组的 push 是 `0x6b440c call 0x1402a4990(rcx = [联邦+0x90], rdx = &本国 id)`;
+      容器基址 = 联邦对象 + 0x90,数据 = +0x98,容量 = +0xa0,条数 = +0xa4(与 §4.6 读侧同一格);
+      本国 → 联邦的反向指针写点是 `0x7563d9 mov dword ptr [rbp+0x1e88], ebx`(全 .text 唯一 dword 写点)。
+      这两条都在 `0x6b4240` 这一个函数里;`join_alliance` **不直接 push**,但它**够得到**:
+      `0x1830bd2` 调 `0xa0aec0`(该函数唯一调用方),`0xa0aec0` 调 `0x6b4240` ⇒ 链闭合。
+      `join_alliance` 对联邦的**直接**写只有一处:`0x6b4b10` → `[联邦+0x28]` + `[联邦+0x1f8]`(哈希表)。
+      命令: disrva.py 0x6b4240 --len=0x1e0 / 0x2a4990 --len=0x80 / 0x2a4a0a --len=0x60
+           disrva.py 0x7562a0 --len=0x40 / 0x756300 --len=0x40 / 0x7563c6 --len=0x30
+           disrva.py 0x1830b40 --len=0xa0 / 0x1830be4 --len=0x70
+           disrva.py 0x6b4b10 --len=0x30 / 0x6b4c60 --len=0x30 / 0xa0c970 --len=0x40
+           find_refs.py 0x7562a0 0x6b4b10 / find_refs.py 0x6b4240 / find_refs.py 0xa0aec0
+           field_xrefs.py 0x1e88 --width dword --writes-only
+      档: 静态推断(未验证)
+不能说的: ① `0xa0aec0` 体内有**两条** `0x6b4240` 调用点(`0xa0b36f` 第三参 `r8d=0`、
+          `0xa0ba6b` 第三参 `r8b=1`),两条都通向同一个 push;哪一条在实机上执行、
+          第三参(疑似「是否公告」)的语义,以及 `0xa0c970` 那条「能不能加入」判定的真值条件,
+          都未观测;
+          ② `[联邦+0x90]` 容器语义(成员 id 向量)只由读侧与这一次 push 交叉确定,没有独立命名;
+          ③ §4.7 那句「联邦类型对象 +0x100」**要改口**:`0x3947f0` 的返回值与本节的联邦对象
+          (`0x3261018` 表项,id 在 `+0x8`)**很可能**是同一个类,但本卷没有独立证明 ⇒
+          「联邦类型(federation_type)」这个叫法仍是 `未观测`,见 §9.5;
+          ④ 零 live 读数。
+下一发升级条件: N5(§6.2)不变;追加一条字据: 同一发里读两个同联邦国家的 `[country+0x1e88]`
+          (期望相等)与联邦对象的 `[fed+0x98]` 数组(期望含这两个国家的 id,且 `[fed+0xa4]` = 数组长度)。
+```
+
+### §9.5 §4.8 / §4.7 的两处要改口(不改写旧节,在这里记账)
+
+1. **§4.8 联邦行的「写侧来源」** 写的是「联邦类型对象 `+0x100`(`0x183090b`)」。
+   本节读到的写侧是:`[country+0x1e88]`(反向指针)+ `[fed+0x90]` 容器(成员 id 向量)。
+   `0x183090b` 的 `mov r8d, dword ptr [rbx + 0x100]` 里 `rbx = 0x3947f0(...)` 的返回值 ——
+   本节证明 `[fed+0x100]` 这个偏移出现在**联邦对象**上,但 `0x3947f0` 的返回值**是不是**
+   联邦对象,本卷**没有**独立证明 ⇒「联邦类型」这个类名仍是 `未观测`。
+2. **§4.6 读侧的「成员数组 `+0x98` / 条数 `+0xa4`」** 现在多了一条写侧印证
+   (§9.1 的 `0x6b440c` / `0x2a4a07`),从「只有读点」变成「读点 + 写点同格」。
