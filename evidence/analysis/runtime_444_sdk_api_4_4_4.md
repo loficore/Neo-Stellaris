@@ -342,3 +342,62 @@ $ zig test src/dll/api_tests.zig     # All 36 tests passed (本模块根);
 本节。**缺**:两张表各自的全局 RVA、表对象头部布局、对象内 id 字段。
 **下一步**(与国家同一手法):从 `colony_age` / `planet_*` / `pop_*` 一族 trigger 的
 `class_info → create → evaluate` 找到「按 id 取对象」的读点,再反推全局与 id 偏移。
+
+---
+
+## §5 写类 API 的通道评估(变量 / modifier / 事件)—— 只出结论,不写代码
+
+本节不写代码(计划 Task 4,且本计划全局只读)。它回答每个写类函数**能不能**复用已有通道、
+走哪条、还缺什么。全部 RVA 都是静态读数(零 shot);「实机」只有 §94 那两发。
+
+### §5.1 `setVariable` —— 通道够(§94 实机已证),但 **API 缺一个 scope 入参**
+
+- 载体:官方 `set_variable`(token 10115,`class_info 0x2608D18` → factory `0x18A6970` →
+  `new(0x318)` + ctor `0x18A71A0`→`0x34ECD0`,装 vtable `0x25EA560`)。
+- 执行体:vtable **`+0x48 = 0x188E1D0(self, scope)`**。§94 两发实机证明:名字写进 `obj+0xD0`
+  的 std::string(size `+0xE0`、cap `+0xE8`,cap < 0x10 才走内联)、值写进 `+0x300/+0x310`
+  (让 `+0x210` 保持 0,`0x3515A0` 就短路成 `*out = [+0x310]`,**不需要伪造 token 流/解析状态**),
+  再调 `0x188E1D0`,引擎就把它当系统变量写进去(§94.5 判词 `neo_state_written`)。
+- 值编码:1e-5 定点 ⇒ 写入值 `V` 要存 `V × 100000`;只在 `0..786` 的整数上实机验过
+  (§94.6 ①:负数 / 分数 / 越界值**没有**读数,不能外推)。
+- **阻断缺口(1 件)**:`setVariable(name, value)` 的签名**没有 scope**。引擎的写是
+  `0x7EEBF0(变量容器, name, value)`,而变量容器来自 `0xA56CC0(scope, …)` —— 没有 scope 就没有
+  容器。⇒ 要落地必须把签名扩成 `setVariable(scope, name, value)`,并定义 scope 从哪来
+  (这超出本计划:只读、不改导出面)。**结论:通道够,API 形状不够,留给下一份计划。**
+
+### §5.2 `addModifier` / `removeModifier` —— 通道存在,参数布局与 scope 分派未钉死
+
+- `add_modifier`:token 10104,`class_info 0x260ABD8` = `{deleter 0x34C090, factory 0x18A3340}`
+  → `new(0x528)` + ctor `0x18E6010` → vtable `0x2641B38`(`+8` 再装 `0x25EDEF0`)。
+  **`+0x48` body = `0x18E6310`**:先 `0x18E6334 call 0x3515A0(src=obj+0xD0, …)` 解析一个脚本值
+  (与 set_variable 的值解析是**同一个 helper**),再拿 `[scope+8]`(scope 类型)与 `0x4000` / `0x80`
+  比较后**按类型分派**(`0x393be0` / `0x393e40` → `0x747300` 等 apply)。即 body 自己会分派 scope。
+- `remove_modifier`:token 10250,`class_info 0x260AAD8` → factory `0x18A33C0`
+  (`new` + ctor `0x3AFB40`,并把 `[obj+0xC0] = [0x325D858]`);同一套「construct + call body」形状。
+- **能不能「构造参数 + 调执行体」复用?结构上成立**(与 set_variable 同法:官方 class_info 的
+  factory 造对象、填参数、调 `+0x48` body)。缺三件:
+  1. **modifier 名/值两格的对象内偏移与编码** —— `0x18E6310` 里名字/值是经 `0x3515A0` 解析的
+     脚本值,其单元格本轮没有逐个读完(不能猜);
+  2. **scope 类型分派表** —— `0x18E6310` 支持哪些 scope 类型(决定 `addModifier(scope, …)` 能对
+     哪些对象生效);
+  3. **`remove_modifier` 的 `+0x48` body** —— 本轮只读了它的 class_info/factory,没单独读 body。
+- 而且这是**写引擎状态**,与本计划「只读」约束冲突 ⇒ 本轮只出结论。
+
+### §5.3 `triggerEvent` —— 未定形
+
+- `COnActionDatabase::PerformEvent` 只在 `AGENTS.md` 的外部研究(取自 Linux 符号)与
+  `evidence/analysis/extension_points_analysis.md` 里被**点名**,**没有 RVA**;仓内没有任何指向它的
+  站点读数。判据「能不能定到那个函数」:**不能**。
+- ⇒ `triggerEvent` 保持 `false`,注释指向本节。**缺**:PerformEvent 的 RVA;事件 id(string → token)
+  的解析入口;scope 入参形状。**下一步**:从 `common/on_actions` 加载器 / `COnActionDatabase` 的 BST
+  找起(与 §21 的 `ScriptedEffectDB` 同法),或从 `fire_event` / `country_event` 一族 effect 的 body
+  反推。
+
+### §5.4 汇总
+
+| API | 已有通道 | 能不能复用 | 缺什么(下一份计划) |
+|---|---|---|---|
+| `setVariable` | `set_variable` vtable `+0x48 = 0x188E1D0`(§94 实机已证) | 能,差 API 形状 | **scope 入参**;值编码只验过 `0..786` 整数 |
+| `addModifier` | `add_modifier` `+0x48 = 0x18E6310` | 结构上能 | modifier 名/值格偏移 + 编码;scope 类型分派表 |
+| `removeModifier` | `remove_modifier` class_info `0x260AAD8` / factory `0x18A33C0` | 结构上能 | 其 `+0x48` body;与 add 同两件 |
+| `triggerEvent` | —(无锚点) | 不能 | `PerformEvent` RVA;事件 id 解析;scope |
