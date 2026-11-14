@@ -203,9 +203,11 @@ pub fn build(b: *std.Build) void {
         .root_module = detour_mod,
     });
 
-    // API module tests.
+    // API module tests. Rooted at src/dll (not src/dll/api) because
+    // api/gamestate.zig reads the engine through ../hooking/windows.zig — same
+    // module-path constraint as c2_tests.zig / scripted_tests.zig.
     const api_gamestate_mod = b.createModule(.{
-        .root_source_file = b.path("src/dll/api/gamestate.zig"),
+        .root_source_file = b.path("src/dll/api_tests.zig"),
         .target = native,
         .optimize = optimize,
     });
