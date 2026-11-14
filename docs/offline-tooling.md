@@ -1798,6 +1798,8 @@ fail-closed(保留旧分数)且**不回落烘焙表**。判读三条:①`evaluat
 ②`recomputed` 只在指纹变化时 +1(它才是「重算发生了」的证据,`score_writes` 不是);
 ③注册必须**早于脚本解析**,否则 `Invalid scripted effect: neo_action` —— 用 `--launch <exe>`
 配 `--allow-window`(主菜单本来就不是 `IN_GAME_RUNNING`,这一档是结构性例外,§7.1)。
+JS 宿主侧怎么读这个开关(`graph.betweenness` 跟着它变、`NEO_JS_*` 行怎么读)见
+`## QuickJS 宿主(neo_js_host)的日志行`。
 
 ### `scripts/c2_graph_read.py [dll] --expect-systems N --expect-edges N --save-name NAME [--edges-file PATH] [--attach] [--mutate FROM,TO] [--mutate-collide FROM,TO] [--rewire auto|A,B,C,D] [--wait-pulse-s S] [--settle-graph-s S] [--kill-after] [--out C:/temp/c5_graph_read.tsv]`
 
@@ -2100,6 +2102,45 @@ Spec §1 的判据只在这里:**`game.log` 自 `--offset` 起含有 `--marker` 
 2. **多一行也是异常。** `extra` 不是「跑得更好」:重复注册、同一星系跑两次、或别的来源也在写这行。
 3. **`offset` 读不到就是 `unmeasured`,不是 `short` 也不是 `ok`。** 驱动层把「没量到」和「量到 0」
    分开(`None` ≠ `0`);把两者混成一个词会把环境故障读成证据。
+
+## QuickJS 宿主(`neo_js_host`)的日志行
+
+**第一句就是结论:`graph.betweenness(s)` 的值跟着 `--score-source` 变。** 同一个 id 在烘焙表
+(`--score-source 0`,默认)下是 236,在活体重算(`--score-source 1`)下是 234 —— 同一份 `main.js`、
+两种安装方式、两个数。逐 id 的数据与判读在 `js_graph_source_4_4_4.log`。
+
+宿主把日志追加到 `C:/temp/neo_js.log`(每行一条,跨进程累计)。按行读:
+
+| 行 | 含义 |
+|---|---|
+| `NEO_JS_CALL id=<id>` | **派发**。每次逐系统下发一行,且在 session 循环**之前**打 —— 它数的是「被调用了多少次」,**不是**「mod 干了多少活」 |
+| `NEO_JS_CALL_COUNTRY id=<id>` | 国家派发(`mask=0x04`) |
+| `NEO_JS_WRITE id=<id> name=<name> [kind=flag]` | mod 的**写**(变量 / flag),落的是官方 body |
+| `NEO_JS_WRITE_REJECT … reason=<tag>` | 写被拒(无权限 / 名字非法 / scope 不匹配) |
+| `NEO_JS_TIMEOUT id=<id> mod=<mod>` | 这次 handler 撞上 **10 ms 中断预算**,被掐掉 |
+| `NEO_JS_DISABLED mod=<mod> reason=budget` | **该 mod 在本进程被禁用**。与上一行同一分支、同一日志流,每个被禁用的 session 一行 |
+| `NEO_JS_ERROR id=<id> mod=<mod> <msg>` | JS 抛异常;该 session 同样**从此不再被调用** |
+| `NEO_JS_LOG <text>` | mod 自己的 `log()` |
+
+**判「这个 mod 还在干活」不能看调用次数。** 2026-11-13 实测(`c5_chokepoint_mod_join_4_4_4.log`
+§5 第 1 条):mod 被预算打死之后,同一个进程里剩下的 34 个月照常打 `NEO_JS_CALL`(788 次/月),
+但一条 `NEO_JS_WRITE` 都没有。`NEO_JS_DISABLED` 就是为了让这件事**在日志里不可能被读反** ——
+它跟 `NEO_JS_TIMEOUT` 一起出现,而不是替代它。
+
+**预算语义。** `CALL_BUDGET_NS = 10 ms`(`src/dll/c2/neo_js_host.zig`)是**每次 handler 调用**的
+中断预算,不是每月总量;超了丢掉**这一次**调用并禁用该 session,其它 session 与游戏继续。
+**这个值本轮没有改**(冻结值;改它是另一个决定)。
+
+**分数来源(与 `c2_boot_inject.py --score-source` 同一个开关)。** JS 的 `graph.betweenness(s)` 走
+`neo_vtable.scoreFor(id)`:表源 = `chokepoint_table.zig` 的烘焙表(`SAVE_SHA256 = 6f271294…`,
+787 系统那一场);活体源 = 每次求值重算当前图,读不到 fail-closed,**不回退烘焙表**。
+所以示例 mod 的「每系统每月一次 `betweenness`」在活体源下是**重算**,不是便宜的本地查表 ——
+预算要按重算算。
+
+**顺序依赖。** `neo_action` 的 effect 先写 `neo_score`,同一 `immediate` 里随后的
+`check_variable` 读到的就是它;反过来不成立 —— JS 的 `graph.betweenness` 读的是**图**,
+不读 `neo_score` 变量。示例外壳(`examples/chokepoint/mod/`,flag 名每发都要换)与它的判读规则
+在目录自己的 README 里。
 
 ## 实机调试:桌面通道(`win-desktop` MCP)
 

@@ -1,0 +1,32 @@
+namespace = neo_chokepoint
+
+# 每系统先跑我们的 effect(写 neo_score),同一 scope 紧跟官方 DSL:
+# `check_variable` 按分数分支,官方 star flag 落状态。
+#
+# 顺序是承重的:effect 先写 `neo_score`,随后的 `check_variable` 读的才是**刚写的
+# 那个值**。反过来不成立 —— JS 侧的 `graph.betweenness(s)` 读的是**图**(活体源下
+# 是重算),不读 `neo_score` 这个变量。
+#
+# flag 名是**占位**:判「这一发写的」必须换成本战役从没出现过的名字
+# (2026-11-13 第一次用 neo_tier1/2 判,读到的 15/55 是上一轮残留)。
+event = {
+	id = neo_chokepoint.1
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		random_system = {
+			every_system = {
+				neo_action = { }
+				if = {
+					limit = { check_variable = { which = neo_score value >= 200 } }
+					set_star_flag = neo_hub_t2
+				}
+				else_if = {
+					limit = { check_variable = { which = neo_score value >= 100 } }
+					set_star_flag = neo_hub_t1
+				}
+			}
+		}
+	}
+}
