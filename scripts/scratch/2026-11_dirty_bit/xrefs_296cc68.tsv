@@ -1,0 +1,26 @@
+# global 0x296cc68  columns: insn_rva<TAB>fn_start<TAB>fn_end<TAB>form<TAB>mnemonic<TAB>op_str
+0024dbad	0024d4d0	0024fc16	overwrite_imm	mov	dword ptr [rip + 0x271f0b1], 2
+00250dd0	00250c50	00250ddf	overwrite_reg	mov	dword ptr [rip + 0x271be92], edi
+00259d7d	00259ca4	0025a6ae	set_bit	or	dword ptr [rip + 0x2712ee4], 1
+00259e55	00259ca4	0025a6ae	set_bit	or	dword ptr [rip + 0x2712e0c], 1
+0025cdaf	0025c960	0025dd67	set_bit	or	dword ptr [rip + 0x270feb2], 1
+002ae950	002ae950	002ae951	read_mask	mov	eax, dword ptr [rip + 0x26be312]
+008bbb85	008bbaa0	008bbbab	set_bit	or	dword ptr [rip + 0x20b10dc], 1
+008bbbf6	008bbbb0	008bbc17	set_bit	or	dword ptr [rip + 0x20b106b], 1
+008bbd65	008bbd2d	008bbd8a	set_bit	or	dword ptr [rip + 0x20b0efc], 1
+008bbe45	008bbe2f	008bbe63	set_bit	or	dword ptr [rip + 0x20b0e1c], 1
+008d52fd	008d4880	008d56c0	set_bit	or	dword ptr [rip + 0x2097964], 1
+008d5364	008d4880	008d56c0	set_bit	or	dword ptr [rip + 0x20978fd], 1
+008d5542	008d4880	008d56c0	set_bit	or	dword ptr [rip + 0x209771f], 1
+008d55aa	008d4880	008d56c0	set_bit	or	dword ptr [rip + 0x20976b7], 1
+008d566a	008d4880	008d56c0	overwrite_imm	mov	dword ptr [rip + 0x20975f4], 2
+00952e54	00952e50	00952e9d	read_bit	mov	eax, dword ptr [rip + 0x2019e0e]
+00952eda	00952eda	00952ee9	overwrite_imm	mov	dword ptr [rip + 0x2019d84], 2
+009e67c0	009e64c0	009e6878	set_bit	or	dword ptr [rip + 0x1f864a1], 1
+009e6825	009e64c0	009e6878	set_bit	or	dword ptr [rip + 0x1f8643c], 1
+009e81e6	009e7fc0	009e83fe	overwrite_imm	mov	dword ptr [rip + 0x1f84a78], 2
+00a95441	00a94bb0	00a95a62	set_bit	or	dword ptr [rip + 0x1ed7820], 1
+00a954a9	00a94bb0	00a95a62	set_bit	or	dword ptr [rip + 0x1ed77b8], 1
+00a958c5	00a94bb0	00a95a62	set_bit	or	dword ptr [rip + 0x1ed739c], 1
+00a9592c	00a94bb0	00a95a62	set_bit	or	dword ptr [rip + 0x1ed7335], 1
+refs=24 set_bit=17 overwrite_imm=4 overwrite_reg=1 read_mask=1 read_bit=1 other=0
