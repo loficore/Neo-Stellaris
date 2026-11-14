@@ -299,3 +299,238 @@ $ python3 scripts/find_refs.py 0x8c2b70 0x8ae8b0
 下一发升级条件: 在活体里对 3 个已知归属不同的星系读 [obj+0x1370] 的 u32,三值互不相同且都落在
           国家 id 集合内(低 24 位口径),同时 [obj+0x1374..0x1379] 呈现「锁 + 两旗标」形状。
 ```
+## §3 owner 读侧:`has_owner` / `original_owner` / `is_original_owner` / `is_owned_by`
+
+四个类的 factory、vptr、槽表见 §1.3。本节只读 **slot[3](subject resolver)**,因为 9 个触发类的
+slot[5] 全 = `0x1a91a80`(`pinned(§77)`:`尾部 jmp [self_vtable+0x20]`),slot[4] 只有三个不同值,
+**唯一逐类不同的就是 slot[3]** —— 谁读哪个字段,答案只在那一格。
+
+### §3.1 `has_owner` slot[3] = `0x1a97650`:mask 0x80 分支读 `[obj+0x1370]`
+
+```text
+$ python3 scripts/disrva.py 0x1a97650 --len=0xc0
+; stellaris.exe  .text RVA 0x1a97650-0x1a97710
+  01a97650  mov     qword ptr [rsp + 0x10], rbx
+  01a97655  push    rdi
+  01a9765a  xor     bl, bl
+  01a9765c  mov     rdi, rcx                                   ; self
+  01a9765f  cmp     qword ptr [rdx + 8], 0x80                  ; scope mask == 0x80 (system)
+  01a97667  jne     0x141a97698
+  01a97669  mov     r9, qword ptr [rip + 0x17c9968]  ; -> 0x3260fd8   ; 国家对象表
+  01a97675  mov     rcx, rdx
+  01a97678  call    0x140393970  ; -> 0x393970                 ; scope -> 系统对象
+  01a9767d  mov     edx, dword ptr [rax + 0x1370]              ; ★ owner id
+  01a97683  mov     eax, edx
+  01a97685  and     eax, 0xffffff                              ; 24 位索引
+  01a9768a  cmp     eax, dword ptr [r9 + 0x20]                 ; bound
+  01a9768e  jae     0x141a976ea
+  01a97690  mov     ecx, eax
+  01a97692  mov     rax, qword ptr [r9 + 0x18]                 ; root
+  01a976d8  add     rcx, rcx
+  01a976db  mov     rcx, qword ptr [rax + rcx*8 + 8]           ; entry = root + idx*16 + 8
+  01a976e0  test    rcx, rcx
+  01a976e3  je      0x141a976ea
+  01a976e5  cmp     dword ptr [rcx + 0x20], edx                ; 对象 id == 查的 id
+  01a976e8  je      0x141a976f1
+  01a976ea  mov     rcx, qword ptr [rip + 0x17c7c9f]  ; -> 0x325f390   ; 空对象回退
+  01a976f1  mov     rax, qword ptr [rcx + 0x18]
+  01a976f5  add     rcx, 0x18
+  01a976f9  call    qword ptr [rax + 8]                        ; 对象合法性槽
+  01a976fc  movzx   ebx, al
+  01a976ff  cmp     bl, byte ptr [rdi + 0x220]                 ; 与 self+0x220 的缓存 byte 比
+  01a97705  mov     rbx, qword ptr [rsp + 0x38]
+  01a9770a  sete    al
+```
+
+非 system 分支(`0x141a97698`)走另一条路:
+
+```text
+  01a97698  mov     rcx, rdx
+  01a9769b  call    0x140a54d70  ; -> 0xa54d70                 ; scope -> 某个带 vtable 的对象
+  01a976a0  test    rax, rax
+  01a976a3  je      0x141a976ff
+  01a976a5  mov     rcx, qword ptr [rax]
+  01a976ad  mov     r8, qword ptr [rcx + 0x58]                 ; vtable +0x58 = 取 id
+  01a976b4  call    r8
+  01a976c3  mov     edx, dword ptr [rax]
+  01a976c5  mov     eax, edx
+  01a976c7  and     eax, 0xffffff
+  ...同一张 0x3260fd8 表
+```
+
+### §3.2 同一个格子的第二次独立读数:`0x8bc870(系统) → 国家对象`
+
+`0x8bc870` 不带任何 mask 判断,直接 `[rcx+0x1370]` —— 这是 §3.1 那条分支的**裸版本**,
+两条读路径互相独立:
+
+```text
+$ python3 scripts/disrva.py 0x8bc870 40
+  008bc870  mov     rdx, qword ptr [rip + 0x29a4761]  ; -> 0x3260fd8
+  008bc877  test    rdx, rdx
+  008bc87a  je      0x1408bc8a9
+  008bc87c  mov     r8d, dword ptr [rcx + 0x1370]              ; ★ owner id
+  008bc883  mov     eax, r8d
+  008bc886  and     eax, 0xffffff
+  008bc88b  cmp     eax, dword ptr [rdx + 0x20]
+  008bc88e  jae     0x1408bc8a9
+  008bc890  mov     ecx, eax
+  008bc892  mov     rax, qword ptr [rdx + 0x18]
+  008bc896  add     rcx, rcx
+  008bc899  mov     rax, qword ptr [rax + rcx*8 + 8]
+  008bc89e  test    rax, rax
+  008bc8a1  je      0x1408bc8a9
+  008bc8a3  cmp     dword ptr [rax + 0x20], r8d
+  008bc8a7  je      0x1408bc8b0
+  008bc8a9  mov     rax, qword ptr [rip + 0x29a2ae0]  ; -> 0x325f390
+  008bc8b0  ret
+```
+
+### §3.3 `scope → 系统对象` 的解析器与已验过的系统表同格
+
+```text
+$ python3 scripts/disrva.py 0x393970 30
+  00393970  mov     rdx, qword ptr [rcx + 0x1c]                 ; 缓存对象指针
+  00393974  test    rdx, rdx
+  00393977  je      0x14039398d
+  00393979  cmp     qword ptr [rcx + 8], 0x80
+  00393981  mov     rax, qword ptr [rip + 0x2ec9ef8]  ; -> 0x325d880
+  00393988  cmove   rax, rdx
+  0039398c  ret
+  0039398d  cmp     qword ptr [rcx + 8], 0x80
+  00393995  jne     0x1403939a0
+  00393997  mov     eax, dword ptr [rcx + 0x10]                 ; scope+0x10 = id
+  003939a8  mov     rdx, qword ptr [rip + 0x2ecd1e9]  ; -> 0x3260b98   ; 系统对象表
+  003939bc  mov     eax, r8d
+  003939bf  and     eax, 0xffffff
+  003939c4  cmp     eax, dword ptr [rdx + 0x20]
+  003939d2  mov     rax, qword ptr [rax + rcx*8 + 8]
+  003939dc  cmp     dword ptr [rax + 8], r8d                    ; 系统对象 id 在 +8
+  003939e2  mov     rax, qword ptr [rip + 0x2ec9e97]  ; -> 0x325d880
+```
+
+`0x3260b98` + `+0x18/+0x20` + `entry = base+idx*16+8` + `[entry+8] == id` 与
+`runtime_444_graph_runtime.md §1.2/§1.3` 的解析器**逐字同形**,而那个解析器返回的对象带
+`+0x588` 边容器(`pinned(图卷 §1.3)`)⇒ 本卷说的「系统对象」就是图卷那个「系统对象」,不是另一个类。
+
+### §3.4 `is_owned_by` slot[3] = `0x1a9bd10`:按 `[scope+8]` 分派的九路 switch
+
+```text
+$ python3 scripts/disrva.py 0x1a9bd10 45
+  01a9bd18  mov     rbx, qword ptr [rip + 0x17c3671]  ; -> 0x325f390   ; 空对象回退
+  01a9bd22  mov     rcx, rdx
+  01a9bd25  mov     rdi, rdx                                    ; scope
+  01a9bd28  call    0x140a54d70  ; -> 0xa54d70
+  01a9bd30  test    rax, rax
+  01a9bd33  je      0x141a9bd84
+  01a9bd35  mov     rax, qword ptr [rax]
+  01a9bd3d  call    qword ptr [rax + 0x58]
+  01a9bd40  mov     rdx, qword ptr [rip + 0x17c5291]  ; -> 0x3260fd8
+  ...（命中路径与 §3.1 同形）
+  01a9bd84  mov     rax, qword ptr [rdi + 8]                    ; scope mask
+  01a9bd88  cmp     rax, 0x40000
+  01a9bd9a  cmp     rax, 0x100
+  01a9bdac  sub     rax, 1                                      ; mask 1
+  01a9bdb6  sub     rax, 0xf                                    ; mask 0x10
+  01a9bdc0  sub     rax, 0x10                                   ; mask 0x20
+  01a9bdc6  sub     rax, 0x20                                   ; mask 0x40
+  01a9bdd0  jne     0x141a9c23a
+  01a9bdd6  mov     rcx, rdi
+  01a9bdd9  call    0x140393970  ; -> 0x393970
+  01a9bdde  mov     rcx, rax
+  01a9bde1  call    0x1408bc870  ; -> 0x8bc870                  ; ★ 与 §3.1/§3.2 同一格
+  01a9bde6  mov     rbx, rax
+```
+
+mask `0x20` 一路(同一函数的另一分支)读**另一个**偏移:
+
+```text
+  01a9bdee  mov     r8, qword ptr [rip + 0x17c51e3]  ; -> 0x3260fd8
+  01a9bdfe  mov     rcx, rdi
+  01a9be01  call    0x140393ec0  ; -> 0x393ec0
+  01a9be06  mov     edx, dword ptr [rax + 0x434]                ; ★ 另一格:+0x434
+  01a9be0e  and     eax, 0xffffff
+```
+
+⇒ **owner 不是「一个偏移」,是「按 scope 种类分派的一组偏移」**;本卷只钉住
+`mask 0x80`(系统)那一格 = `+0x1370`,其余分支的偏移**逐条未读完**,见 §3.7。
+
+### §3.5 `original_owner` / `is_original_owner`:另一条链,另一张表
+
+```text
+$ python3 scripts/disrva.py 0x1a97900 48
+  01a97907  mov     rax, qword ptr [rdx + 8]                    ; scope mask
+  01a9790e  movabs  rcx, 0x10000000000
+  01a9791b  cmp     rax, rcx
+  01a97920  test    al, 0xa
+  01a97928  cmp     rax, 2
+  01a9792e  mov     eax, dword ptr [rdx + 0x10]                 ; mask 2 → 直接用 scope id
+  01a9793c  cmp     rax, 8
+  01a97945  call    0x140393fb0  ; -> 0x393fb0                 ; mask 8
+  01a9794f  lea     rcx, [rax + 0x40]
+  01a97953  mov     rax, qword ptr [rax + 0x40]
+  01a97957  call    qword ptr [rax + 0x120]                     ; vtable +0x120 取 id
+  01a9795f  mov     eax, 0xffffffff
+  01a97972  call    0x14039c850  ; -> 0x39c850                 ; mask 0x10000000000
+  01a97977  mov     rcx, qword ptr [rax + 0xf78]               ; ★ 该分支的另一格
+  01a97992  mov     r8, qword ptr [rip + 0x17c91df]  ; -> 0x3260b78   ; ← 不是 0x3260fd8
+  01a9799e  mov     qword ptr [rsp + 0x20], rdi
+  01a979aa  and     ecx, 0xffffff
+  01a979b4  jae     0x141a979ce
+```
+
+`is_original_owner` 的 slot[3] = `0x1a98280` 是**同一段逻辑的孪生**(mask 2 / mask 8 / mask
+`0x10000000000` 三分支、同一张 `0x3260b78` 表),差别在尾部:
+
+```text
+$ python3 scripts/disrva.py 0x1a98280 45
+  01a982bb  mov     rcx, qword ptr [rbx + 8]
+  01a982bf  movabs  rax, 0x10000000000
+  01a982c9  test    cl, 0xa
+  01a982d7  cmp     rcx, 2
+  01a982dd  mov     eax, dword ptr [rbx + 0x10]
+  01a982e2  cmp     rcx, 8
+  01a982eb  call    0x140393fb0  ; -> 0x393fb0
+  01a982f5  lea     rcx, [rax + 0x40]
+  01a982fd  call    qword ptr [rax + 0x120]
+  01a9830d  call    0x14039c850  ; -> 0x39c850
+  01a98312  mov     rcx, qword ptr [rax + 0xf78]
+  01a98339  mov     r8, qword ptr [rip + 0x17c8838]  ; -> 0x3260b78
+  01a98347  and     ecx, 0xffffff
+  01a98366  cmp     dword ptr [rcx + 0x18], eax                  ; 表项 id 在 +0x18(不是 +0x20)
+  01a9836b  mov     rcx, qword ptr [rip + 0x17c6dfe]  ; -> 0x325f170
+  01a98372  call    0x140e70d10  ; -> 0xe70d10
+  01a98377  cmp     rax, rdi                                    ; 与参数对象比
+  01a9837a  sete    al
+```
+
+**这三条读的是「原始主人」,与 §3.1 的 `+0x1370` 不是同一格**:表不同(`0x3260b78` vs `0x3260fd8`)、
+表项 id 位置不同(`+0x18` vs `+0x20`)、失败回退不同(`0x325f170` vs `0x325f390`)。但它们**都**先按
+mask 从 scope 取一个 id 再去表里换对象,所以「原始主人」在引擎里看起来也是**id → 对象**,不是指针。
+
+### §3.6 判决:读侧与写侧是 `same_slot`(**仅限系统分支**)
+
+```text
+判定: same_slot(限 mask 0x80 分支)
+  —— 读:[系统对象 + 0x1370] (u32, `and 0xffffff` 后查 0x3260fd8,`[entry+0x20]==id`)
+     写:[系统对象 + 0x1370] (u32, 写 `[country+0x20]`,无主 = 0xFFFFFFFF)
+  —— 两侧的「系统对象」都来自同一张 `0x3260b98` 表(§3.3),不是两个类。
+不成立的部分:
+  —— 其余 scope 种类各读各的偏移(mask 0x20 → `+0x434`,§3.4),那些格子与 §2 的写点无关;
+     本卷**不**把 `+0x434`/`+0xf78`/`+0x120` 记成 owner 的别名。
+  —— `original_owner` 家族走 `0x3260b78`,与 owner 那一格是两张表;两者是否同值,本卷无读数。
+```
+
+`is_owned_by` 的其余六个分支(`mask 1 / 0x10 / 0x100 / 0x40000` 等)本卷**逐条未读完** ——
+`未观测`,不给偏移。
+
+### §3.7 读侧不能说的
+
+1. **布尔语义没判。** 本卷只读「谁读哪个格子」,没有读 `slot[4]`(`0x1a91ad0` / `0x1a92a90` /
+   `0x1a97c40`)的完整比较逻辑,所以「`has_owner` 与 `original_owner` 语义差在哪」是 `未观测`。
+   已知的只有:两者 slot[4] **同为 `0x1a92a90`**,差别在 slot[3]。
+2. **scope mask 的值来自 `pinned(country_scope_4_4_4 §6)`**(system `0x80`、country `0x04`,
+   两侧读点都读过)。本卷没有新的 mask 实机读数。
+3. **`0xa54d70(scope)` 是什么对象,`未观测`。** 它在非 system 分支里兜底,返回一个带 vtable、
+   `+0x58` 槽能取 id 的东西;本卷没展开它。
+4. **`+0x1370` 在「系统对象」上的宽度是 dword 这一条,只有三处静态见证**(§2.5);它旁边
+   `+0x1374`/`+0x1378`/`+0x1379` 的锁/旗标形状是**旁证**,不是证明。
