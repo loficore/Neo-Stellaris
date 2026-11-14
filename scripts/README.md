@@ -20,6 +20,7 @@
 |---|---|---|
 | `find_refs.py` | 线性 capstone 解码每个可执行段，找指向给定 RVA 的 image-relative 引用 | `rva_reference_scan_4_4_4.txt` |
 | `riprefs.py` | 同一个问题的快版：谁读/写某个数据全局，不解码 37 MB | `db_global_refs_4_4_4.txt` |
+| `global_xrefs.py` | 给一个数据全局 RVA，列出**全部** rip 相对引用并逐个给形态（set_bit / overwrite_imm / overwrite_reg / read_mask / read_bit / other）；`fn_start`/`fn_end` 是 `.pdata` **按链合并**后的逻辑函数范围；默认不截断（`--limit N` 才截断，末行写 `truncated=`）。**19 s** @ 4.4.4；`find_refs.py` 仍是独立的慢通道 | —（stdout；读数落取证卷 §10） |
 | `fastcalls.py` | 字节级定位对某 RVA 的所有直接 call/jmp，按 `.pdata` 函数分桶并贴来源文件名 | `callers_0x<rva>_buckets.tsv` |
 | `disrva.py` | 反汇编一个 RVA 区间，标注每个 rip 操作数解析到的 RVA 与每个 call 目标 | — |
 | `cap.py` | 同样的反汇编，走 `.text` 手解 + capstone（`disrva.py` 的前身，仍在用） | — |
