@@ -340,6 +340,10 @@ pub fn getGameTick() i64 {
 ///
 /// # Returns
 /// true if the variable was set successfully, false otherwise.
+///
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §5.1(通道够:官方
+/// `set_variable` 的 `+0x48 = 0x188E1D0` 已有实机读数;缺的是 **scope 入参** —— 本签名
+/// 拿不到变量容器,扩签名会改导出面,不在本计划。值编码只验过 `0..786` 整数)。
 pub fn setVariable(name: []const u8, value: i64) bool {
     _ = name;
     _ = value;
@@ -354,6 +358,10 @@ pub fn setVariable(name: []const u8, value: i64) bool {
 ///
 /// # Returns
 /// true if the modifier was applied, false otherwise.
+///
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §5.2(结构上能复用
+/// `add_modifier` 的 `+0x48 = 0x18E6310`,但 modifier 名/值两格的**对象内偏移与编码**、
+/// 以及 scope 类型分派表都没读完;且这是写引擎状态,与本计划「只读」冲突)。
 pub fn addModifier(scope: GameObjectHandle, modifier: Modifier) bool {
     _ = scope;
     _ = modifier;
@@ -368,6 +376,9 @@ pub fn addModifier(scope: GameObjectHandle, modifier: Modifier) bool {
 ///
 /// # Returns
 /// true if the event was triggered, false otherwise.
+///
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §5.3(缺的是**锚点本身**:
+/// `COnActionDatabase::PerformEvent` 只有外部研究里的名字,仓内没有任何指向它的 RVA)。
 pub fn triggerEvent(event_id: []const u8, scope: GameObjectHandle) bool {
     _ = event_id;
     _ = scope;
@@ -382,6 +393,10 @@ pub fn triggerEvent(event_id: []const u8, scope: GameObjectHandle) bool {
 ///
 /// # Returns
 /// true if the modifier was removed, false otherwise.
+///
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §5.2(只读到
+/// `remove_modifier` 的 class_info `0x260AAD8` / factory `0x18A33C0`,它的 `+0x48` body
+/// 没单独读;与 `addModifier` 差同样两件)。
 pub fn removeModifier(scope: GameObjectHandle, modifier_name: []const u8) bool {
     _ = scope;
     _ = modifier_name;
