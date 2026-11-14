@@ -473,6 +473,102 @@ pub const country = struct {
     pub const SCOPE_ID_MASK: u32 = 0x00FF_FFFF;
 };
 
+/// 国家对象表 `0x3260FD8`。[VERIFIED 4.4.4 STATIC] `evidence/analysis/country_scope_4_4_4.md`
+/// §7;两个独立读者逐条对上:`0x192c290`(国家 id 收集器)与 `0x1e7b850`(另一个按 id
+/// 取国家的函数)。形状与系统索引(`graph` 段 / 解析器 `0x3939f0`)**相同**,只有两处不同:
+/// 全局 RVA,以及**对象自身**的 id 字段偏移(国家 `+0x20`,系统 `+0x08`)。
+/// 公共的四个表结构偏移复用 `graph.*`,由本文件底部的测试断言逐一相等,防两者漂移。
+pub const country_table = struct {
+    /// `0x192c2d0 mov rbx,[rip+…]` / `0x1e7b8a0 mov rax,[rip+…]` — 全局槽,存表对象的绝对地址。
+    pub const RVA_GLOBAL: usize = 0x3260FD8; // [VERIFIED 4.4.4 STATIC]
+    /// `0x192c2e5 cmp eax,[rbx+0x20]` — 槽数上界。
+    pub const BOUND_OFF: usize = 0x20;
+    /// `0x192c2ea mov rbx,[rbx+0x18]` — 记录数组基址。
+    pub const TABLE_OFF: usize = 0x18;
+    /// `0x192c2ee add rax,rax` + `0x192c2f1 [rbx+rax*8+8]` ⇒ 16 B 记录、对象指针在 `+8`。
+    pub const RECORD_SIZE: usize = 16;
+    pub const SLOT_PTR_OFF: usize = 0x08;
+    /// `0x192c2fb cmp dword [rbx+0x20],ecx` / `0x1e7b8cd cmp [rcx+0x20],edx` — 国家对象自己的
+    /// id 字段(**不是**系统对象的 `+0x08`)。
+    pub const OBJECT_ID_OFF: usize = 0x20;
+};
+
+test "country_table shares the system index record shape, with a different id field" {
+    // 两个独立读者(§7)读到的是同一条形状;这里把「同形」钉死,免得日后一边改了另一边没改。
+    try std.testing.expectEqual(@as(usize, 0x3260FD8), country_table.RVA_GLOBAL);
+    try std.testing.expectEqual(graph.INDEX_BOUND_OFF, country_table.BOUND_OFF);
+    try std.testing.expectEqual(graph.INDEX_TABLE_OFF, country_table.TABLE_OFF);
+    try std.testing.expectEqual(graph.TABLE_RECORD_SIZE, country_table.RECORD_SIZE);
+    try std.testing.expectEqual(graph.TABLE_SLOT_PTR_OFF, country_table.SLOT_PTR_OFF);
+    // 唯一必须不同的那一格:国家对象 id 在 +0x20,系统对象 id 在 +0x08。
+    try std.testing.expectEqual(@as(usize, 0x20), country_table.OBJECT_ID_OFF);
+    try std.testing.expect(country_table.OBJECT_ID_OFF != graph.SYSTEM_ID_OFF);
+    // 两个全局不同;且都落在 .data(> .text 结束 0x2391710)。
+    try std.testing.expect(country_table.RVA_GLOBAL != graph.RVA_SYSTEM_INDEX_GLOBAL);
+    try std.testing.expect(country_table.RVA_GLOBAL > 0x2392000);
+}
+
+test "date: §2/§3 的分解常数与三个访问器钉在逐字地址上" {
+    // 卷:evidence/analysis/runtime_444_game_date_4_4_4.md
+    try std.testing.expectEqual(@as(usize, 0x3260BB0), date.RVA_HOLDER);
+    try std.testing.expectEqual(@as(usize, 0xC0), date.HOLDER_DATE_OFF);
+    try std.testing.expectEqual(@as(u32, 0x29C55C0), date.EPOCH_HOURS);
+    try std.testing.expectEqual(@as(u32, 24), date.HOURS_PER_DAY);
+    try std.testing.expectEqual(@as(u32, 360), date.DAYS_PER_YEAR);
+    try std.testing.expectEqual(@as(u32, 30), date.DAYS_PER_MONTH);
+    try std.testing.expectEqual(@as(usize, 0x9AF340), date.RVA_ACCESSOR_YEAR);
+    try std.testing.expectEqual(@as(usize, 0x9AF2C0), date.RVA_ACCESSOR_DAY_OF_YEAR);
+    try std.testing.expectEqual(@as(usize, 0x9AF3B0), date.RVA_ACCESSOR_DAY_INDEX);
+    // 12 × 30 = 360:月长与年长必须自洽(否则日期整体错位)。
+    try std.testing.expectEqual(date.DAYS_PER_YEAR, date.DAYS_PER_MONTH * 12);
+    // 与系统索引全局只差 0x18,但**不是同一格**(§1 的勘误):改一个不能连带另一个。
+    try std.testing.expectEqual(graph.RVA_SYSTEM_INDEX_GLOBAL + 0x18, date.RVA_HOLDER);
+    try std.testing.expect(date.RVA_HOLDER != graph.RVA_SYSTEM_INDEX_GLOBAL);
+    try std.testing.expect(date.RVA_HOLDER != country_table.RVA_GLOBAL);
+    // 全局在 .data(> .text 结束),访问器在 .text 内。
+    const text_end: usize = 0x2392000;
+    try std.testing.expect(date.RVA_HOLDER > text_end);
+    try std.testing.expect(date.RVA_ACCESSOR_YEAR < text_end);
+    try std.testing.expect(date.RVA_ACCESSOR_DAY_OF_YEAR < text_end);
+    try std.testing.expect(date.RVA_ACCESSOR_DAY_INDEX < text_end);
+}
+
+/// 游戏日期字段(`[[0x3260BB0]+0xC0]`)与它的分解常数。
+/// [VERIFIED 4.4.4 STATIC] `evidence/analysis/runtime_444_game_date_4_4_4.md`
+/// §1(字段在哪)、§2(三个访问器 `0x9AF2C0`/`0x9AF340`/`0x9AF3B0`)、§2.1(月 = 年内天/30)、
+/// §3(**与一份真实存档的 flag 时间戳对账**:两个 8 位数解出 2207.11.18 / 2266.05.18,
+/// 同一场 2272.07.01 的战役之内)。
+pub const date = struct {
+    /// `0x180f93d mov r8, qword ptr [rip + 0x1a5126c]` — 全局槽,存**日期持有者**对象的
+    /// 绝对地址。与 `graph.RVA_SYSTEM_INDEX_GLOBAL` 只差 `0x18`,但**不是同一格**:
+    /// 那条全局里的指针才带 `+0x18`/`+0x20` 两个字段(§1)。
+    pub const RVA_HOLDER: usize = 0x3260BB0;
+    /// `0x180f94a add r8, 0xc0` — 日期字段在持有者内的偏移(`0x1bce213 mov eax,[rdi]`
+    /// 把它当 dword 读;写 flag 时整格照抄进存档)。
+    pub const HOLDER_DATE_OFF: usize = 0xC0;
+    /// `0x9af2c7 sub edx, 0x29c55c0` — 纪元常数(raw 以**小时**计)。
+    /// 它相对哪个日历原点 **未解释**(§5.1),只当减法常数目。
+    pub const EPOCH_HOURS: u32 = 0x29C55C0;
+    /// `0x9af2d2 sar r9d, 2`(magic `0x2AAAAAAB` 先把 `/6` 折进去)—— 一天多少小时。
+    pub const HOURS_PER_DAY: u32 = 24;
+    /// `0x9af2eb sar r8d, 8`(magic `0xB60B60B7`)—— 一年多少天。
+    pub const DAYS_PER_YEAR: u32 = 360;
+    /// `0x26bc21 shr edx, 4`(magic `0x88888889`)—— 一月多少天(每个月恒 30 天,§2.1)。
+    pub const DAYS_PER_MONTH: u32 = 30;
+    /// 三个访问器,只作证据索引(本仓库不调用它们,读法见 §4):
+    /// 年、年内第几天、以及 `year*360 + day_of_year`。
+    pub const RVA_ACCESSOR_YEAR: usize = 0x9AF340;
+    pub const RVA_ACCESSOR_DAY_OF_YEAR: usize = 0x9AF2C0;
+    pub const RVA_ACCESSOR_DAY_INDEX: usize = 0x9AF3B0;
+};
+
+comptime {
+    // 12 个月 × 30 天 = 360 天:这三个数任意一个单独改都会让日期整体错位,编译期拦住。
+    if (date.DAYS_PER_MONTH * 12 != date.DAYS_PER_YEAR)
+        @compileError("date offsets: 12 months x DAYS_PER_MONTH must equal DAYS_PER_YEAR (360)");
+    if (date.HOURS_PER_DAY == 0) @compileError("date offsets: HOURS_PER_DAY must be non-zero");
+}
+
 /// CEffect object offsets.
 /// [FALSIFIED 3.x] 4.4.4 has NO central dispatch switch — effects are polymorphic
 /// CEffect::Execute via vtable call (evidence/analysis/runtime_444_structures.md).
