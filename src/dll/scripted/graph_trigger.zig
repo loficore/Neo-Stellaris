@@ -85,6 +85,18 @@ pub fn fingerprint(counts: []const u32) u64 {
     return acc;
 }
 
+/// 与 `accumulate` 同形,但输入是**内容哈希**而不是边数。按槽号加权 ⇒ 位置敏感。
+pub fn accumulateHash(acc: u64, slot: usize, hash: u64) u64 {
+    return acc +% mixWeight(slot) *% hash;
+}
+
+/// 逐系统哈希的指纹。空切片 = 0(与「没读到」同值,调用方靠 `unreadable` 区分)。
+pub fn fingerprintHashes(hashes: []const u64) u64 {
+    var acc: u64 = 0;
+    for (hashes, 0..) |h, slot| acc = accumulateHash(acc, slot, h);
+    return acc;
+}
+
 /// `now == 0` 表示这一趟没读到指纹 ⇒ 不重算(保留上一份分数,fail-closed)。
 pub fn shouldRecompute(last: u64, now: u64) bool {
     return now != 0 and now != last;
