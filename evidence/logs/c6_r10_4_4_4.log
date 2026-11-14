@@ -165,3 +165,23 @@ python3 -m pytest scripts/test_scripts_layout.py scripts/test_c6_acceptance_doc.
    `^\s*\d+=\s*\{` 在真存档上恒 0 命中（本机 `r10_base.sav` 实测 0，见
    `c6_r10_save_4_4_4.log`）；要用 `(?m)^\t(\d+)=\n\t\{`，且必须取**顶级** `^galactic_object=$`
    那一块（`nebula` 里也有 6 个/组的 `galactic_object=<id>` 引用）。
+
+## 离线 prep（2026-11-15，协调者 GO-for-offline 四条）
+
+- **(a) 头注**：授权原话（用户 2026-11-15 采纳的句子）+ 放行前的 `assert-ready` 两条读数（都是
+  `STATE=NO_GAME`，退出码 2）已写进本文件头注，逐字。
+- **(b) runbook**：`scripts/scratch/2026-11_r10_contract/run_window.md` —— 顺序 / 命令 / expected /
+  fail 判词 / 必须停的步骤，命令里用 `<SYSTEMS>` / `<SAVE_NAME>` / `<DLL_SHA>` / `<SAVE_SHA>` 占位；
+  占位符的**已测得**填值单列一张表（出处指向本目录的 `c6_r10_save_4_4_4.log`），没有一条是凭印象写的。
+- **(c) 与计划的偏差**：三条（manifest 严格 7 字段 / 权限必须带 `flag.read` / 分母正则）见上一节；
+  runbook §7 另记了两条计划命令缺的参数（C6-2 的 `--rule 0:0`）与一条 JS 写路径的判读提示（`--act`）。
+- **(d) SDK 侧检查**：`neo check` **未跑** —— 它要 authoring project（`tsconfig.json` + `src/main.ts`，
+  `sdk/src/build.ts:17`）并跑 tsc+esbuild，而这三份是手写 `neo/main.js`；且 `sdk/node_modules` 未安装
+  （`npm ls` 四个 `UNMET DEPENDENCY`）。替代复核（自建、零依赖、不进 `src/`）：
+  `node scripts/scratch/2026-11_r10_contract/bundle_smoke.mjs .` → **`SMOKE ok`**，32 项，含
+  manifest 严格 7 字段、`neo check` 第 2 层同五条 forbidden 模式（`require(`/`process.`/`window.`/
+  `document.`/`import(`）、以及 `R10_NBR id=7 deg=3 n=3 first=1` / `R10_FLAG id=7 before=false after=true`
+  的**逐字相等**、`r10throw` 抛 `R10_INTENSIONAL`… 更正：抛 `R10_INTENTIONAL`。
+  这套 smoke **不是** `neo check`：它不跑 tsc/esbuild、不跑真 QuickJS。
+
+**进程数仍为 0**；主机仍离线（本节的每一条都不依赖主机）。
