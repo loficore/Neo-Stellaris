@@ -7,13 +7,16 @@
 // 全部是纯函数(没有 `@ptrFromInt`,没有 `ReadProcessMemory`):谓词体只做参数解包与调用,
 // 于是"重算/缓存/fail-closed"这三件事能在 Linux 上被测死。
 //
-// **缓存键是容器指纹,不是时间**(计划 Review Focus #1):指纹 = `Σ(count[slot] × mix(slot))`,
-// 每个活槽一次 4 B 读(788 次,亚毫秒)。**按槽号加权**而不是直接求和,是为了让"度在系统之间
-// 迁移"也能被看见 —— 纯求和时 A 少一条、B 多一条会抵消(issue #46 的表)。
+// **缓存键是容器指纹,不是时间**(计划 Review Focus #1):指纹 = `Σ(h[slot] × mix(slot))`,
+// 其中 `h[slot]` 是引擎自己维护的**该系统边表内容哈希**(`[sys+0x5A0]`,见
+// `shared/offsets.zig` 的 `graph.EDGE_HASH_OFF`);每个活槽一次 8 B 读(788 次,亚毫秒)。
+// **按槽号加权**而不是直接求和,是为了让"度在系统之间迁移"也能被看见 —— 纯求和时 A 少一条、
+// B 多一条会抵消(issue #46 的表)。
 //
-// 它仍然**不是哈希**:同一系统内部换邻居(度不变、邻居变了)照样漏。真保证只有"读出边集再
-// 对内容做哈希",代价是整趟读。这一层只为挡住绝大多数"没变",盲点写进 §7 的"不能说",
-// **不许**用 TTL 掩盖 —— 时间缓存会把"没重算"伪装成"重算了"。
+// 内容哈希挡得住计数挡不住的两种变化:同一系统内部换邻居(度不变、邻居变了)与度迁移。
+// 仍然有的盲点:引擎还没算过哈希的槽(哈希为 0)退化用计数,那一格仍看不见"同数换邻居";
+// 以及整趟读的 `hashEdges` 核对仍然每 `VERIFY_EVERY` 次跑一遍作为独立对账,**不许**
+// 用 TTL 掩盖 —— 时间缓存会把"没重算"伪装成"重算了"。
 //
 // **fail-closed**:读失败(`read_ok == false`)返回 false 且 `score = 0`,但**不清空**分数
 // 数组 —— 清空会让下一次求值把"这一次读失败"读成"全图零分"。调用方只在 `shouldRecompute`
@@ -85,6 +88,18 @@ pub fn fingerprint(counts: []const u32) u64 {
     return acc;
 }
 
+/// 与 `accumulate` 同形,但输入是**内容哈希**而不是边数。按槽号加权 ⇒ 位置敏感。
+pub fn accumulateHash(acc: u64, slot: usize, hash: u64) u64 {
+    return acc +% mixWeight(slot) *% hash;
+}
+
+/// 逐系统哈希的指纹。空切片 = 0(与「没读到」同值,调用方靠 `unreadable` 区分)。
+pub fn fingerprintHashes(hashes: []const u64) u64 {
+    var acc: u64 = 0;
+    for (hashes, 0..) |h, slot| acc = accumulateHash(acc, slot, h);
+    return acc;
+}
+
 /// `now == 0` 表示这一趟没读到指纹 ⇒ 不重算(保留上一份分数,fail-closed)。
 pub fn shouldRecompute(last: u64, now: u64) bool {
     return now != 0 and now != last;
@@ -93,7 +108,7 @@ pub fn shouldRecompute(last: u64, now: u64) bool {
 /// 每隔多少次求值做一次**内容哈希**核对。
 ///
 /// 代价:一次 verify = 一整趟读(约 10⁴ 次 `ReadProcessMemory`),而一次 reuse 只读
-/// 788 个 4 B 计数。787 个星系一次 tick 大约 3 次 verify(787 / 256 ≈ 3.1),所以
+/// 788 个 8 B 哈希。787 个星系一次 tick 大约 3 次 verify(787 / 256 ≈ 3.1),所以
 /// 这个数不能更小;再大则「指纹没变、图变了」的漏报窗口按比例变长。
 pub const VERIFY_EVERY: u32 = 256;
 
@@ -187,7 +202,7 @@ pub fn recordLiveFate(stats: *Stats, action: CacheAction, hash_matched: bool) vo
 //
 // 调用方是 C5-SCORE 的写手(`neo_vtable.writeScore`):它原本读
 // `chokepoint_table.zig` 里那张**烘焙表**,现在多一个 live 源 —— 每次求值先从活体
-// 容器的计数和得到指纹,指纹变了才整趟重读 + 重算(§93 的 effect 路径已证明我们的
+// 容器的逐系统内容哈希得到指纹,指纹变了才整趟重读 + 重算(§93 的 effect 路径已证明我们的
 // 代码真的按星系被调用,这里只换"分数从哪来")。
 // ---------------------------------------------------------------------------
 
@@ -318,8 +333,12 @@ pub fn liveScore(id: u32) ?u16 {
         return null;
     }
 
-    // 指纹:`Σ(count[slot] × mixWeight(slot))`。**任何一个槽读不到**就把指纹打成 0
-    // (= 「这一趟没读到」),于是 `shouldRecompute` 为假、上一份分数保留 —— fail-closed。
+    // 指纹:`Σ(hash[slot] × mixWeight(slot))`,`hash[slot]` = 引擎维护的该系统边表内容哈希
+    // (`[sys+0x5A0]`)。**任何一个槽读不到**就把指纹打成 0(= 「这一趟没读到」),于是
+    // `shouldRecompute` 为假、上一份分数保留 —— fail-closed。
+    //
+    // Review Focus 5:每槽仍然只读一次(8 B 哈希替代原来的 4 B 计数),调用次数不增;
+    // 计数那一次 4 B 读只在哈希为 0 的槽上发生。
     var sum: u64 = 0;
     var unreadable = false;
     var slot: usize = 0;
@@ -332,14 +351,28 @@ pub fn liveScore(id: u32) ?u16 {
             break;
         };
         if (entry == 0) continue;
-        const edges_here = readDword(mem, gg.addAddr(entry, graph.EDGE_COUNT_OFF) orelse {
+        const hash_here = readQword(mem, gg.addAddr(entry, graph.EDGE_HASH_OFF) orelse {
             unreadable = true;
             break;
         }) orelse {
             unreadable = true;
             break;
         };
-        sum = accumulate(sum, slot, edges_here);
+        if (hash_here != 0) {
+            sum = accumulateHash(sum, slot, hash_here);
+        } else {
+            // Review Focus 3:引擎还没给这个系统算过哈希(或它本来就没有边)时退化用计数,
+            // 不能把「哈希是 0」当成「没变」。空边表 + 计数 0 的槽在这里贡献 0,与哈希口径一致。
+            // 这是本模块唯一允许混用两种口径的地方 —— 它只发生在「引擎没给戳」的槽上。
+            const edges_here = readDword(mem, gg.addAddr(entry, graph.EDGE_COUNT_OFF) orelse {
+                unreadable = true;
+                break;
+            }) orelse {
+                unreadable = true;
+                break;
+            };
+            sum = accumulate(sum, slot, edges_here);
+        }
     }
     const now: u64 = if (unreadable) 0 else sum;
 
@@ -453,4 +486,10 @@ fn readPtr(mem: Memory, addr: usize) ?usize {
     var buf: [@sizeOf(usize)]u8 = undefined;
     if (!mem.read(mem.ctx, addr, buf.len, &buf)) return null;
     return std.mem.readInt(usize, &buf, .little);
+}
+
+fn readQword(mem: Memory, addr: usize) ?u64 {
+    var buf: [8]u8 = undefined;
+    if (!mem.read(mem.ctx, addr, buf.len, &buf)) return null;
+    return std.mem.readInt(u64, &buf, .little);
 }
