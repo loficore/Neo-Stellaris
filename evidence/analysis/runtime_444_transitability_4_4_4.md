@@ -859,3 +859,96 @@ $ python3 scripts/disrva.py 0x18307e0 --len=0x150
 `war=3` / `truce=9` / `federation=0`,而 `country` 块里没有任何 `war=`/`truce=` 标量
 (脚本与原始输出见 §5)。这与「战争/停战/联邦是独立顶层对象」的静态结论同向 ——
 但存档只能作旁证,不能证明偏移。
+## §5 存档 oracle(只证伪)
+
+### §5.1 计划预期与实测的差异(**Ruling**)
+
+计划 §5 Step 1 预期脚本打出 `systems=N owners=<distinct>` / `owner_range=min..max` / `owner_missing=<count>`。
+**实测:4.4.4 存档的 `galactic_object` 块里根本没有 `owner=` 标量。** 787 个系统,
+带 `owner=` 的 **0** 个。
+
+原因(`claims` 的 `owner=` 是冒名货):
+
+```text
+$ python3 -   # 数第一个 400 kB 的 galactic_object 块里的 owner=
+owner= count in first 400k: 76
+colony= ? 56
+'...planet=176\n\t\t\tclaims=\n\t\t\t{\n\t\t\t\t\n\t\t\t\t{\n\t\t\t\t\towner=16777247\n\t\t\t\t\tdate=\t\t\t\t"2256.07.10"\n\t\t\t\t\tclaims=1\n\t\t\t\t}\n \n\t\t\t}\n...'
+```
+
+`owner=16777247` = `0x00FFFFFF`,是**索赔记录里的「无人」哨兵**,不是系统的主人。
+用 `grep owner=` 会把这 76 条算进去,得到「8 个 owner / 345 个系统」这种假读数 ——
+所以脚本必须**解析树**而不是 grep。
+
+⇒ **Ruling:** 存档 oracle **不能**对「系统 owner 字段」这一格开火(存档里没有这一格的对应物);
+它能开火的是**国家 id 的值域**。§5.2 给出那个值域,§5.3 给出用它判死候选偏移的规则。
+代价:如果将来发现 4.4.4 存档其实**有**别的写法记系统归属(比如某个 `flags` 子键),
+本节的值域仍然有效,但「系统 owner 字段」那一格就多了一个旁证 —— 不影响本卷的字段结论。
+
+### §5.2 脚本与原始输出
+
+脚本:`scripts/scratch/2026-11_transitability/owner_domain.py`(一次性探针,按 `scripts/` 约定进 `scratch/`)。
+
+```text
+$ python3 scripts/scratch/2026-11_transitability/owner_domain.py /mnt/cache/tmp/opencode/autosave_2257.07.01.sav
+save=/mnt/cache/tmp/opencode/autosave_2257.07.01.sav
+systems=787 owners=0 owned=0 owner_missing=787
+countries=41 ids=0..100663316
+first10 systems (id -> owner):
+  0 -> None
+  1 -> None
+  2 -> None
+  3 -> None
+  4 -> None
+  5 -> None
+  6 -> None
+  7 -> None
+  8 -> None
+  9 -> None
+
+# fallback domain: the top-level blocks that DO carry an `owner=`
+# scalar, plus the raw/masked test against the country id set
+spy_networks: children_with_owner=486 distinct=37 range=0..100663316 raw_subset=True masked_subset=True
+army: children_with_owner=1166 distinct=22 range=0..100663316 raw_subset=True masked_subset=True
+missile: children_with_owner=1 distinct=1 range=5122..5122 raw_subset=False masked_subset=False
+megastructures: children_with_owner=5 distinct=4 range=16777220..16777228 raw_subset=True masked_subset=True
+sectors: children_with_owner=31 distinct=18 range=0..100663316 raw_subset=True masked_subset=True
+country_ids_fit_in_24_bits=False
+
+war_blocks=3
+truce_blocks=9
+federation_blocks=0
+dead_war_blocks=0
+dead_federation_blocks=0
+```
+
+读出来的四条:
+
+1. **系统数 787** —— 与图卷 `runtime_444_graph_runtime.md` 的 `systems=788` 差 1(存档快照与
+   活体不是同一局),两者同量级 ⇒ 这份存档确实是 4.4.4 的真实存档。
+2. **国家 id 集合:41 个,`0 .. 100663316`**。`100663316 = 0x06000014` —— id **带高位标志位**,
+   低 24 位(`& 0xffffff`)才是表索引。这与引擎里每一处 `and eax, 0xffffff` 同口径
+   (`country_scope_4_4_4 §2.7` 的 A 级读数也是这个口径)。
+3. **凡是有 `owner=` 的块,owner 值都 ⊆ 国家 id 集合**(`raw_subset=True`);唯一的例外是
+   `missile`(owner=5122),它是舰队 id 不是国家 id —— 不当异常,单独记。
+4. `war_blocks=3` / `truce_blocks=9` / `federation_blocks=0`:战争与停战是**顶层独立块**,
+   `country` 块里没有对应标量 ⇒ §4「关系是独立对象」有存档侧旁证。
+
+### §5.3 §5 的第一行(降级写法,逐字)
+
+```text
+§5 存档 oracle(只证伪):systems=787 countries=41 owner⊆country=yes(除 missile 的 5122,
+  它是舰队 id);
+  候选偏移 [obj+0xNN] 的读数若落在国家 id 集合外(原值或 &0xffffff 掩码后)⇒ 判死;
+  落在集合内 ⇒ 不构成证据。
+  —— 存档里**没有** galactic_object.owner,所以这条规则**不能**用来证伪
+    「[系统对象+0x1370] 是 owner」;它只能证伪「某格是某个国家 id」。
+```
+
+### §5.4 §5 不能说的
+
+1. **「owner 落在国家 id 集合内」不证明任何偏移。** 值域相符是最弱的证据;
+   §2/§3 的偏移结论完全由静态执行体支撑,存档不参与。
+2. **存档里的 `id` 与运行时读到的 `id` 不是同一口径。** 存档写的是带高位标志的原值,
+   引擎读的是掩码后的索引;两者在本卷里已经用 `raw_subset` / `masked_subset` 两列分开记。
+3. **这份存档没有联邦、没有 `federation` 块**,所以 §4.6 的联邦结论**没有**存档侧旁证。
