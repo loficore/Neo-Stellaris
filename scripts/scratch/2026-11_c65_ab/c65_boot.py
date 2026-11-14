@@ -23,6 +23,8 @@ import shutil
 import subprocess
 import sys
 
+import c65_hold_saves  # 同目录部署（C:/temp）：检查目录里有没有比固定存档更新的 autosave
+
 DOCS = os.path.join(os.environ.get("USERPROFILE", r"C:\Users\13229"), "Documents",
                      "Paradox Interactive", "Stellaris")
 SAVE_DIR = os.path.join(DOCS, "save games", "_1474567734")
@@ -55,6 +57,17 @@ def main() -> int:
         with open(RECEIPT, "w", encoding="utf-8", newline="\n") as handle:
             handle.write("BOOT FAIL save_sha\n")
             handle.write(f"# save sha256={digest} expected={EXPECTED_SAVE_SHA}\n")
+        return 2
+
+    # `--continuelastsave` 不按 mtime 选（2026-11-14 实测：mtime 刷到 now 仍载入了趟 A 自己
+    # 写的 2331.01.01）。所以「同一份存档字节」的前提只能靠「目录里没有更新的存档」来保。
+    newer = c65_hold_saves.newer_saves()
+    if newer:
+        print("FAIL newer_saves " + ",".join(newer))
+        with open(RECEIPT, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("BOOT FAIL newer_saves\n")
+            handle.write("# " + ",".join(newer) + "\n")
+            handle.write("# 先跑 c65_hold_saves.py 把这些存档移出目录再启动\n")
         return 2
 
     cmd = [sys.executable, DRIVER, DLL, "--allow-window", "--launch", EXE,

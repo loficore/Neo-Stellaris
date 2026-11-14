@@ -116,6 +116,11 @@ caller 列是**前缀**，不影响 id 覆盖判据 —— 反过来，位图满
 （detour 在热路径上，开销是另一类读数），也**不**证明所有官方 keyword 都被覆盖 ——
 只覆盖这一场脚本实际跑到的那一部分。
 
+**2026-11-14 r9 复采**：同战役同存档两趟各 12 个月（`2329.8.1` … `2330.7.1`），
+`error_delta=0`、`markers=1`（`C65_HIT` 两趟各 12 次）、两份 `error.log` 去时间戳后逐字节相同；
+base 趟「进程里没有我们的 DLL」以模块读数为证（`SQJS=0` vs `SQJS=1`）。产物
+`evidence/logs/c6_r9_*_4_4_4.log` 与 `c6_acceptance_r8r9_4_4_4.tsv`（六门合并 `pass=6`）。
+
 ### C6-6 收尾
 
 **通过**：`--uninstall` 回执里 rc=0 且 verify=0（`C2NeoUninstall` 拆完 detour 后

@@ -1,0 +1,7 @@
+C6-1 pass effect_id=19343 set_id=19344 install_rc=0 alive=1
+C6-2 cannot_say missing_input
+C6-3 cannot_say missing_input
+C6-4 cannot_say windows=0 verdicts=-
+C6-5 pass missing=- extra=- error_delta=0 markers=1
+C6-6 cannot_say missing_input
+C6 SUMMARY pass=2 fail=0 cannot_say=4

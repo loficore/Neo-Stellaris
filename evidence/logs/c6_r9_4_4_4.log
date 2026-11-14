@@ -1,13 +1,15 @@
 # R9 —— C6-5（官方语义不受影响，对照组）A/B 复采，Stellaris 4.4.4
 
-> **授权（逐字）**：2026-11-13，用户就上一轮问的「实机授权 + `--allow-window` 放行」答：「给」。
+> **授权（逐字）**：2026-11-13，用户就上一轮问的「实机授权 + `--allow-window` 放行」答：「给」；
+> 2026-11-14 主机恢复后用户：「现在机器回来了」「连接好了，开始调试吧」。
 > ⇒ 本发授权 **C6-5 的 A/B 两趟**（+ 每趟最多 1 次重跑）。`--allow-window` 只在趟 B 用，
-> 证据里记 `gate=operator_override`。
-> 缘由：R8 的五门已是 `pass`，只有 C6-5 的读数来自 R5（那一发当时是**空集相等**，靠事后
-> 修 `official_markers` 才复判成 pass）。这一发用同一份 DLL 字节重新打一次新鲜读数，把六门
-> 收成一张表。
+> 启动回执里记 `gate skipped by operator override`，本卷记 `gate=operator_override`。
+> 归属：worker `term_ef3253c1` / 分支 `loficore/c6-5-ab-pair` / 模型 `aigw-main/code-reverse`。
+>
+> 缘由：R8 的五门已是 `pass`，只有 C6-5 的读数来自 R5（那一发当时是**空集相等**，靠事后修
+> `official_markers` 才复判成 pass）。这一发用同一份 DLL 字节重新打一次新鲜读数，把六门收成一张表。
 
-## 固定输入（Task 1）
+## 固定输入
 
 ```
 #meta save_name=autosave_2329.07.01.sav
@@ -18,7 +20,7 @@
 #meta systems=788
 #meta undirected_edges=1219
 #meta dll=sqjs_c6r1.dll
-#meta dll_sha256=4e767b0a3b4c895610a1699c38a8f8dc027ce0196e02005957be98516d5c797F
+#meta dll_sha256=4e767b0a3b4c895610a1699c38a8f8dc027ce0196e02005957be98516d5c797f
 #meta dll_bytes=7909888
 #meta game_version=4.4.4
 #meta window_months=12
@@ -26,107 +28,115 @@
 
 - 存档取法：`dir /b /o-d "...\_1474567734\*.sav"` 第一行（mtime 最新）=
   `autosave_2329.07.01.sav`，`LastWriteTime` `2026-11-13 18:20:31`。
-- 容器原始条数取法：`scripts/save_hypergraph.py /mnt/cache/tmp/opencode/c65_base.sav --stats`
+- 容器原始条数：`scripts/save_hypergraph.py /mnt/cache/tmp/opencode/c65_base.sav --stats`
   ⇒ `systems=788` / `undirected_edges=1219`（同一场战役，与 M4 / R8 的容器口径一致）。
-- DLL 字节：本工作树是新建的（无 `zig-out/`，且本发**明令不重新 `zig build`**），所以本地
-  `sha256sum zig-out/bin/stellaris_quickjs.dll` 无法执行；改为在主机侧对**这一发真正会装进去
-  的那份字节**做读数：`Get-FileHash C:\temp\sqjs_c6r1.dll` ⇒
-  `4E767B0A3B4C895610A1699C38A8F8DC027CE0196E02005957BE98516D5C797F`，7,909,888 B
-  —— 与 plan / R8 的 `BOOT` 回执所钉的 sha 一致 ⇒ 前提未变。
+- DLL 字节：本工作树是新建的（无 `zig-out/`，且本发**明令不重新 `zig build`** 去出货），所以
+  这一发的字节身份**只**认主机侧那份要装进去的文件：`Get-FileHash C:\temp\sqjs_c6r1.dll` ⇒
+  `4E767B0A3B4C895610A1699C38A8F8DC027CE0196E02005957BE98516D5C797F`，7,909,888 B —— 与 R8 的
+  `BOOT` 回执所钉的 sha 一致（本发读了三次：预检、启动前、注入回执）。
+  `just check-full` 会 `zig build`，本机那份重建产物是 `088276865e71…`（7,910,912 B，差 1,024 B，
+  嵌了构建路径）—— **那不是本发用的字节**，`just deploy` 没跑，主机 DLL 一个字节没动。
 - 预检：`just game stop` ⇒ `STATUS=stopped`；`C:\temp\ns_game_cmd.txt` 已删；
-  `Get-Process stellaris` 计数 `0`；桌面截图可见 Orca 窗口（桌面已解锁），`LogonUI` 计数 `0`。
+  `Get-Process stellaris` 计数 `0`；桌面截图可见桌面、`LogonUI` 计数 `0`。
 
-## 趟 A（base，不注入）回执（Task 3）
+## 对照组形状（两趟逐项相同，只有 DLL 一条不同）
 
-固定存档就位（`--continuelastsave` 取 mtime 最新那份）：
+| 项 | 趟 A（base） | 趟 B（with） |
+|---|---|---|
+| 存档 | `autosave_9999.01.01.sav` ← `c6_c65_base.sav`（sha `9c63364e…`，4,059,281 B） | 同一份（`c65_boot.py` 启动前**复读同一 sha** 才放行） |
+| mod | `mod/neo_c65_probe.mod`（`on_monthly_pulse → event → random_system → every_system → log = "C65_HIT"`） | 同左（`dlc_load.json` 两趟都只有这一条） |
+| 启动形状 | `stellaris.exe --continuelastsave`（session 1，`lw_launch.py`，`cwd` = exe 旁） | 同左（`c2_boot_inject.py --launch`，`cwd` 同） |
+| 注入 | 无 —— 判据是模块列表 `SQJS=0`（不是「没跑注入脚本」） | boot 期注入，`install_rc=0`，模块列表 `SQJS=1` |
+| 窗口 | 前 12 个 `C65_HIT`（`2329.8.1` … `2330.7.1`） | 同左，月份逐项相同 |
+| 窗口字节偏移 | `start=177 end=1626`（1,449 B） | `start=177 end=1626`（1,449 B，同长度） |
 
-```
-autosave_9999.01.01.sav          <- 本趟/下趟要载入的那份（mtime 刷成 now）
-autosave_2329.07.01.sav
-autosave_2329.01.01.sav
-```
+探针只用官方 `log` 效果，**不含** `neo_action` 或任何本项目注册的 keyword —— 否则 base 趟会因为
+keyword 不存在而报 `Unknown effect`，把 `error_delta` 污染成非 0。
 
-裸启动（经 `session_bridge.py`，落在 session 1）：
+## 趟 A（base，不注入）回执
 
 ```
 LAUNCHED D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe pid=20256
 EXIT=0
-```
-
-**base 趟必须证明进程里没有我们的 DLL** —— 判据是 pid 的模块列表，不是「没跑注入脚本」：
-
-```
-Get-Process -Id 20256 | Select-Object Id,SessionId,MainWindowTitle,Responding
-  20256         1                       True
-(Get-Process -Id 20256).Modules | Where-Object { $_.ModuleName -match "sqjs|quickjs" } | Measure-Object  ->  COUNT_SQJS=0
-(Get-Process -Id 20256).Modules | Where-Object { $_.ModuleName -like "*.dll" }  | Measure-Object          ->  ALLMODS=119
-```
-
-即：进程在 session 1（交互桌面），加载了 119 个 DLL，**其中没有 `sqjs*` / `quickjs*`**。
-趟 B 的对照读数在下一节。
-
-窗口（`c65_window.py A 12`，即前 12 个 `C65_HIT` 行）：
-
-```
+Get-Process -Id 20256 -> SessionId=1, Responding=True
+(Get-Process -Id 20256).Modules | ? ModuleName -match "sqjs|quickjs"  -> COUNT_SQJS=0
+(Get-Process -Id 20256).Modules | ? ModuleName -like "*.dll"           -> ALLMODS=119
 WINDOW trip=A game_bytes=2321 sha256=01d72f1b7844e5d75f9b6345ae3a27b97c20fadb64a9e6393e255a9a6e0fc0f6 pulses=17
 WINDOW start=177 end=1626 bytes=1449 dst=C:/temp/c65_A_game.log sha256=5890185f800f1ced54a691d8229ba8fd88af8254963810e7ca14035720187895
 ERRORLOG bytes=3642 sha256=c74c58d37c793b9670834e041e5e5ea9be964be12a872b558ce72629508d96f5 script_error=0 unexpected_token=0 dst=C:/temp/c65_A_error.log
 ```
 
-窗口月份区间（12 行，逐项）：
+窗口月份（12 行）：`2329.8.1 2329.9.1 2329.10.1 2329.11.1 2329.12.1 2330.1.1 2330.2.1
+2330.3.1 2330.4.1 2330.5.1 2330.6.1 2330.7.1`。`pulses=17` 是**窗口之后**又多走了 5 个月才收工；
+窗口本身只取前 12 行。
+
+## 趟 B（with，boot 期注入）回执
 
 ```
-2329.8.1  2329.9.1  2329.10.1 2329.11.1 2329.12.1 2330.1.1
-2330.2.1  2330.3.1  2330.4.1  2330.5.1  2330.6.1  2330.7.1
+SAVE path=...\save games\_1474567734\autosave_9999.01.01.sav bytes=4059281 sha256=9c63364ed1c6e7ee5d52462d84ac1443240c1d40bbb53fcdb7d8983cdbd7f6a5
+[boot] dll=C:\temp\sqjs_c6r1.dll sha16=4e767b0a3b4c8956
+[boot] launched pid=13388 argv=['D:\SteamLibrary\steamapps\common\Stellaris\stellaris.exe', '--continuelastsave']
+[boot] gate skipped by operator override (--allow-window)
+BOOT dll=sqjs_c6r1.dll sha=4e767b0a3b4c8956 effect_id=19343 set_id=19344 install_rc=0 alive=1
+DRIVER rc=0
+c65_modules.py -> PID=13388 SQJS=1 DLLS=122 HITS=sqjs_c6r1.dll
+c2_boot_inject --stats -> calls=0 matched=0 log_calls=0 last_id=0 rule_hits=0 installed=1 verify=0 dispatched=0 null_scope=0 mask_odd=0 …
+WINDOW trip=B game_bytes=2648 sha256=2a2ff4ccbd497254663c0706265ebf507639840594718108d015ae6d6d78919d pulses=20
+WINDOW start=177 end=1626 bytes=1449 dst=C:/temp/c65_B_game.log sha256=a04f10f0addbba69507d640ddced6f135897a8c8e285b50077f5ef5111b80619
+ERRORLOG bytes=3642 sha256=15b1e16d4e0b428871479a88b5b240dd1086711d931fbef649ef8db7b63415e4 script_error=0 unexpected_token=0 dst=C:/temp/c65_B_error.log
+UNINSTALL rc=0 verify=0 alive=1
+KILL 成功: 已终止进程 "stellaris.exe"，其 PID 为 13388。
 ```
 
-`pulses=17` 是窗口**之后**又走了 5 个月才收工（`taskkill` 前读到的最后一个 marker 在
-`2330.7.1` 之后的第 17 个脉冲）。窗口本身只取前 12 行 ⇒ 两趟的窗口是同一个长度。
+`calls=0` / `dispatched=0` 是**预期**：探针不用 `neo_action`，引擎没有理由调用我们注册的 effect；
+`installed=1 verify=0` 证明 detour 在、且可拆净。`installed=1` 与 `SQJS=1` 合起来才是「这一趟确实装了」，
+单看任何一个都不够。
 
-窗口长度对齐的操作事实：`on_monthly_pulse` 的弹窗会把模拟暂停，所以每约 60–90 s 要
-点掉一次（本趟点了 3 次：`人类觉醒灵能能力` ×2、`措辞强烈的来信` ×1），点完按空格解除暂停
-才继续走月份。`游戏里 12 个月` = 12 个 marker，不是 12 次墙钟分钟。
+### 环境档：趟 B 的第一次启动载错了存档（重跑 #1，不进读数）
 
-收工：`taskkill /F /IM stellaris.exe` ⇒ `stellaris.exe` 进程数 `0`。
+第一次启动（pid=13900）的 `BOOT` 也是 `install_rc=0 alive=1`，但载入的游戏内日期是 **2331.01.01**
+—— 那是**趟 A 自己写出来的** `autosave_2331.01.01.sav`，不是固定存档（2329.07.01）。原因：
+`--continuelastsave` **不按 mtime 选**，把固定档 mtime 刷到 now 也不管用。
 
-> **一处与 plan 的偏差（记在这里，不掩盖）**：plan Task 3 Step 5 的命令把**整份**
-> `game.log` 拷成 `c65_A_game.log`。本发用的是 `c65_window.py`，拷的是**marker 窗口**
-> （前 12 个 `C65_HIT` 的字节段）。理由：`c6_acceptance.official_markers` 会扫描每一行的
-> 独立大写 token，整份日志里带着这一场自己的事件流（`playerEventId` 计数器、首次接触事件…），
-> 那部分差异与 DLL 无关，会把 C6-5 判成 `extra=`/`missing=` 而**不是**在比官方语义。
-> 窗口口径与 R5（`evidence/logs/c6_r5_A_game_window_4_4_4.log`）一致。
+处理：① `taskkill` 掉那一趟；② `c65_hold_saves.py` 把 `2330.01.01` / `2330.07.01` / `2331.01.01`
+三份趟 A 产物**移动**到 `C:\temp\c65_saves_hold\`（不删，留着核对）；③ `c65_boot.py` 加**启动前守卫**：
+拷贝固定档之后复查「目录里还有没有日期更新的 `.sav`」，有就 `BOOT FAIL newer_saves` 拒绝启动。
+重跑后载入日期 = `2329.07.01`（与趟 A 同）。**这一趟不计入两趟读数，也不改动判据。**
 
-## 趟 B（with，boot 期注入）—— **未完成（主机下线，2026-11-13 22:2x）**
+## 两趟逐项对齐
 
-趟 B 的启动命令发出去了，但我的 shell 端 120 s 超时把 ssh 掐断，回执没落盘；紧接着
-`Windows_Jiaolong`(10.66.0.7) 整机不可达：
+| 读数 | 趟 A | 趟 B | 判 |
+|---|---|---|---|
+| `C65_HIT` 计数（窗口内） | 12 | 12 | 相等 |
+| 月份区间 | `2329.8.1` … `2330.7.1` | `2329.8.1` … `2330.7.1` | 逐项相同 |
+| 窗口字节数 / 偏移 | 1,449 B，`177..1626` | 1,449 B，`177..1626` | 相同 |
+| `official_markers` | `{'C65_HIT': 12}` | `{'C65_HIT': 12}` | 集合逐项相等 |
+| `error.log` 行数 | 37 | 37 | 差 0 |
+| `Script Error` / `Unexpected token` | 0 / 0 | 0 / 0 | 差 0 |
+| 窗口内出现过的官方事件行 | 1 行（`federations.10401`，`selectedOption 0, human 1, playerEventId 549`） | 同一行、同一 id | 见下 |
+
+**两份窗口的内容当多重集比较完全相同**（`diff <(…|sort)` 空），逐行比较只差**一行位置**：
+`federations.10401 … playerEventId 549` 在 A 里排第 8 行、在 B 里排第 12 行 —— 同一事件、同一选项、
+同一实例编号，只是与月度脉冲的交错位置不同（墙钟层面的插队），**不是脚本行为改变**。
+两份 `error.log` 去掉时间戳后**逐字节相同**（`diff` 空）。
+
+## 台帐
+
+本发自己的那本（只喂 C6-5 的四个输入 + `BOOT`）：
 
 ```
-ping -c 3 10.66.0.7      -> 100% packet loss
-tcp/22                   -> CLOSED
-win-desktop MCP          -> ECONNREFUSED
+C6-1 pass effect_id=19343 set_id=19344 install_rc=0 alive=1
+C6-2 cannot_say missing_input
+C6-3 cannot_say missing_input
+C6-4 cannot_say windows=0 verdicts=-
+C6-5 pass missing=- extra=- error_delta=0 markers=1
+C6-6 cannot_say missing_input
+C6 SUMMARY pass=2 fail=0 cannot_say=4
 ```
 
-结论：**这一趟没有读数**（既没有 `BOOT` 回执，也没有 `C65_HIT` 计数）。所以 C6-5 **尚未**
-有第二趟，六门台帐**没有**出。下面这些是不依赖趟 B 就已经做完的部分：
+其余四门没有产物就是 `cannot_say` —— 本发不为它们造输入（它们的读数在 R8）。
 
-1. 趟 B 的三段步骤已被收进两个**原子脚本**（`scripts/scratch/2026-11_c65_ab/c65_boot.py`、
-   `c65_close.py`）：存档回位 + sha 校验 + 注入 + `BOOT` 回执落盘；切窗口 + `--uninstall` +
-   `taskkill`。这样 ssh 再断，回执文件也在盘上。
-2. 趟 A 的四份产物仍在主机 `C:/temp/c65_A_{game,error}.log` 与
-   `...\Stellaris\logs\{game,error}.log`（**尚未拉回仓库**，主机下线期间拉不了）。
-   它们的 sha / 字节数 / 月份区间已记在上面那两节里。
-3. `just check-full` 与本发的文档改动仍未做 —— 它们依赖台帐的判词，台帐依赖趟 B。
-
-主机恢复后的第一件事必须是：**先把趟 A 的 `C:/temp/c65_A_*.log` 拉回仓库**（主机上的副本
-是唯一一份窗口切片），然后 `c65_boot.py` → 等 12 个 marker → `c65_close.py B 12`。
-
-## 主机下线期间能做完的部分（2026-11-13 22:2x – 22:35）
-
-### 1. 六门台账的命令形状**已经跑通**（dry-run，用 R5 的窗口当占位，不是 r9 的判词）
-
-把 plan Task 5 Step 4 的命令原样跑了一遍，**只把 C6-5 的四个输入换成 R5 已入库的那四份**
-（R8 的五门输入全是真的）：
+R8 五门 + 本发 C6-5 合并（`evidence/logs/c6_acceptance_r8r9_4_4_4.tsv`）：
 
 ```
 C6-1 pass effect_id=19343 set_id=19344 install_rc=0 alive=1
@@ -136,58 +146,64 @@ C6-4 pass path=score_join verdicts=score_drives_official_state
 C6-5 pass missing=- extra=- error_delta=0 markers=1
 C6-6 pass rc=0 verify=0 alive=1
 C6 SUMMARY pass=6 fail=0 cannot_say=0
-EXIT=0
 ```
 
-**这一段不是 r9 的判词** —— C6-5 那一行的输入是 R5 的窗口。r9 的台账只差把
-`--base-log/--with-log/--base-error/--with-error` 换成趟 A/趟 B 的 r9 产物。
-顺带钉住两条读法：`markers=1` 是**窗口里出现过的那一个 marker**（`R5_HIT`；r9 是
-`C65_HIT`），不是「比对了一堆 marker」；`missing=- extra=-` 是两边的 marker **计数逐项相等**
-（R5 那对是 12:12）。这一跑耗时 46 s（`--sav` 的 gamestate 解析是大头）⇒ 跑台账要给它
-比 120 s 更长的时限。
+**这一张台帐的 C6-5 来自 r9、其余来自 r8 —— 两发不是同一个进程。**
 
-### 2. `just check-full` 绿
+## 判词
 
-```
-zig fmt --check + ruff check   -> All checks passed!
-zig build                       -> 31/31 steps succeeded; 1100/1100 tests passed
-pytest scripts/windows/tests    -> 66 passed
-pytest scripts                  -> 352 passed
-pytest scripts (全量)           -> 1332 passed in 70.81s
-EXIT=0
-```
+**`C6-5 pass`** —— 判据逐字是「官方 marker 集合逐项相等 且 脚本错误行数差为 0」：两趟窗口的
+marker 集合都是 `{C65_HIT: 12}`（`missing=- extra=-`），两份 `error.log` 都是 37 行、
+`Script Error`/`Unexpected token` 都是 **0** ⇒ `error_delta=0`。窗口长度也成立：两趟都是
+12 个月、月份逐项相同、窗口字节数相同（1,449 B、偏移 `177..1626`）—— 若只在一趟出现就按
+「mod/config 没对齐」重跑；没有发生。
 
-### 3. 一条必须写清的字节事实（否则下一发会误判前提）
+## 两条必须写在读数旁边的事实
 
-`just check-full` 会 `zig build`，于是本机**第一次**有了 `zig-out/bin/stellaris_quickjs.dll`，
-它的 sha256 是 `088276865e7103e41b20d29a7196fdd3a82f9111f9c8c1226271969f2cd51eb6`
-（7,910,912 B）—— **与主机那份不同**（主机 `C:/temp/sqjs_c6r1.dll` = `4e767b0a…`，7,909,888 B，
-大小差 1,024 B）。
+1. **`markers=1` 是「窗口里出现过的那一个 marker」，不是「比对了一堆 marker」。**
+   `official_markers` 抽到的是 `C65_HIT`（我们探针写的那个词，两趟各 12 次）；这一门真正有内容的
+   读数是**计数相等**（12:12）与**月份逐项相同**，以及两份 `error.log` 去时间戳后逐字节相同。
+   `missing=-`/`extra=-` 的含义是「两边 marker 集合没有多出/少掉的项」，不是「官方输出逐行相同」。
+2. **base 趟的「没有我们的 DLL」是模块读数，不是流程自述。**
+   趟 A：`pid=20256`，`SQJS=0` / `DLLS=119`；趟 B：`pid=13388`，`SQJS=1`（`sqjs_c6r1.dll`）/ `DLLS=122`。
+   两条读数来自同一个脚本（`c65_modules.py`）/同一台机器/同一套 `psutil` 口径。只凭「没跑注入脚本」
+   不算证明，因为残留的注入可以来自任何地方。
 
-这一发**装的是主机那份**（`C:/temp/sqjs_c6r1.dll`，sha `4e767b0a…`，今日复读两次：预检一次、
-启动前一次），**不是**本机重建的这份；本机这份只是门禁的副产物，`just deploy` 没有跑，
-主机上的 DLL 一个字节都没被动过。⇒ 「同一份 DLL 字节」这个前提成立的前提是
-**主机侧那个文件**，不是本机 `zig-out/`。
+## 跑法（可复现）
 
-### 4. 主机恢复后的执行序列（照抄即可，每一步都有回执落盘）
+- 探针 mod：`scripts/scratch/2026-11_c65_ab/c65_probe/`（三个文件，见同目录 `README.md`）。
+- 趟 A：`scp` 探针 → `lw_set_mods.py neo_c65_probe.mod` → `session_bridge.py … lw_launch.py`
+  → 点弹窗/空格走到 ≥12 个 `C65_HIT` → `c65_window.py A 12` → `taskkill`。
+- 趟 B：`c65_hold_saves.py`（清掉更新存档）→ `session_bridge.py … c65_boot.py`（存档回位 + sha 校验 +
+  启动期注入 + 回执落盘）→ 同上去走到 ≥12 → `c65_close.py B 12`（切窗口 → `--uninstall` → `taskkill`）。
+- 弹窗会**暂停模拟**：两趟各点了 3–4 次（`人类觉醒灵能能力` / `措辞强烈的来信`），点完按空格解除暂停；
+  「12 个月」= 12 个 marker，不是 12 次墙钟分钟。
+- 台账：`scripts/c6_acceptance.py`（`--systems 788`；`--sav` 的 gamestate 解析约 45 s，给足时限）。
 
-```
-# 0. 先把趟 A 的产物拉回仓库（主机上那份窗口切片是唯一一份）
-scp Windows_Jiaolong:C:/temp/c65_A_game.log  evidence/logs/c6_r9_A_game_window_4_4_4.log
-scp Windows_Jiaolong:C:/temp/c65_A_error.log evidence/logs/c6_r9_A_error_4_4_4.log
+## 收尾
 
-# 1. 部署本轮新增的脚本（若主机重启过，C:/temp 会被清）
-scp scripts/scratch/2026-11_c65_ab/{c65_boot,c65_close,c65_window,c65_count}.py Windows_Jiaolong:C:/temp/
+- `c65_close.py B 12` 里已经跑过 `--uninstall`：`UNINSTALL rc=0 verify=0 alive=1`（拆完 detour 之后
+  `C2NeoVerify==0`）；全程**没有一次 `FreeLibrary`**（`AGENTS.md` 约束 5）。
+- `taskkill /F /IM stellaris.exe` ⇒ `stellaris.exe` 进程数 **0**。
+- 探针 mod 摘除：`dlc_load.json` 复原为 `MODS=mod/neo_ps_probe.mod`；`mod/neo_c65_probe` 与
+  `mod/neo_c65_probe.mod` 均已删除（`Test-Path` 两条都 `False`）；`autosave_9999.01.01.sav` 已删
+  （`Test-Path False`）。
+- `C:\temp\c65_saves_hold\` 留着趟 A 的三份 autosave（`2330.01.01` / `2330.07.01` / `2331.01.01`）——
+  移动不是删除，它们是这一发的读数产物，留着以后核对。
+- 环境档/重跑：**1 次**（趟 B 第一次启动载错存档，见上）；判据重跑 **0 次**。
 
-# 2. 趟 B：原子启动段（存档回位 + sha 校验 + 启动期注入 + BOOT 回执落盘）
-just win "python C:/temp/session_bridge.py --timeout-s 240 C:/temp/c65_boot.py"
+## 产物
 
-# 3. 等 12 个 marker（弹窗会暂停模拟 ⇒ 我这边点掉弹窗 + 空格）
-ssh Windows_Jiaolong 'python C:\temp\c65_count.py'
+| 文件 | 内容 |
+|---|---|
+| `evidence/logs/c6_r9_A_game_window_4_4_4.log` | 趟 A 的 12 月窗口（1,449 B，sha `5890185f…`） |
+| `evidence/logs/c6_r9_A_error_4_4_4.log` | 趟 A 的 error.log（3,642 B，sha `c74c58d3…`，37 行） |
+| `evidence/logs/c6_r9_B_game_window_4_4_4.log` | 趟 B 的 12 月窗口（1,449 B，sha `a04f10f0…`） |
+| `evidence/logs/c6_r9_B_error_4_4_4.log` | 趟 B 的 error.log（3,642 B，sha `15b1e16d…`，37 行） |
+| `evidence/logs/c6_r9_boot_4_4_4.log` | 趟 B 的 `BOOT` 回执（第一行）+ pid/存档 sha/模块读数 |
+| `evidence/logs/c6_acceptance_r9_4_4_4.tsv` | 本发自己的那本台帐（`pass=2 cannot_say=4`） |
+| `evidence/logs/c6_acceptance_r8r9_4_4_4.tsv` | R8 五门 + r9 的 C6-5（`pass=6 fail=0 cannot_say=0`） |
+| `scripts/scratch/2026-11_c65_ab/` | 探针 mod、裸启动器、窗口切片、原子启动/收尾段、存档守卫 |
 
-# 4. 原子收尾段（切窗口 → --uninstall → taskkill）
-ssh Windows_Jiaolong 'python C:\temp\c65_close.py B 12'
-
-# 5. 台账（R8 五门 + r9 的 C6-5），给足时限
-python3 scripts/c6_acceptance.py --boot evidence/logs/c6_r8_boot_4_4_4.log ... --out evidence/logs/c6_acceptance_r8r9_4_4_4.tsv
-```
+两趟的完整 `game.log` **没有贴进仓库**（体积），仓库里只收窗口切片（上面那四份），主机上留整份：
+`C:/temp/c65_A_game.log`、`C:/temp/c65_B_game.log` 与游戏目录里的 `logs\game.log`。
