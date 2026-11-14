@@ -181,7 +181,7 @@ python3 -m pytest scripts/test_scripts_layout.py scripts/test_c6_acceptance_doc.
   `node scripts/scratch/2026-11_r10_contract/bundle_smoke.mjs .` → **`SMOKE ok`**，32 项，含
   manifest 严格 7 字段、`neo check` 第 2 层同五条 forbidden 模式（`require(`/`process.`/`window.`/
   `document.`/`import(`）、以及 `R10_NBR id=7 deg=3 n=3 first=1` / `R10_FLAG id=7 before=false after=true`
-  的**逐字相等**、`r10throw` 抛 `R10_INTENSIONAL`… 更正：抛 `R10_INTENTIONAL`。
+  的**逐字相等**、`r10throw` 抛 `R10_INTENTIONAL`。
   这套 smoke **不是** `neo check`：它不跑 tsc/esbuild、不跑真 QuickJS。
 
 **进程数仍为 0**；主机仍离线（本节的每一条都不依赖主机）。
