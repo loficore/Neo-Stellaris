@@ -534,3 +534,328 @@ mask 从 scope 取一个 id 再去表里换对象,所以「原始主人」在引
    `+0x58` 槽能取 id 的东西;本卷没展开它。
 4. **`+0x1370` 在「系统对象」上的宽度是 dword 这一条,只有三处静态见证**(§2.5);它旁边
    `+0x1374`/`+0x1378`/`+0x1379` 的锁/旗标形状是**旁证**,不是证明。
+## §4 外交家族:战争 / 关闭边界 / 竞争 / 联邦
+
+五个读侧、两个写侧。**结论先写:这五个状态没有一个落在「country 上的一个 int」上**——
+四个落在**关系/态度容器**里,一个落在**联邦对象**上。计划 Review Focus 第 5 条成立。
+
+### §4.1 五个谓词的 slot[3]:先分「对象来源」
+
+| keyword | slot[3] | 第一个对象是谁 | 二级来源 |
+|---|---|---|---|
+| `is_at_war_with` | `0x1a9d980` | `0x393dd0(scope)` → 本国对象 | 关系对象 `+0xf4` |
+| `has_closed_borders` | `0x1af5550` | `0x393dd0(scope)` → 本国对象 | 关系对象 `+0x120` bit 15 |
+| `is_rival` | `0x1b38b40` | `0x393dd0(scope)` → 本国对象 | `[country+0x2c78]` 的对等名单 `+0x28/+0x34` |
+| `is_hostile_to` | `0x1b3a1c0` | `0x393dd0(scope)` → 本国对象 | `[country+0x1d78]` 的态度表 `+0x490/+0x49c` |
+| `is_in_federation_with` | `0x1b38060` → 尾跳 `0x7561f0` | 本国对象 | `[country+0x1e88]` → 联邦对象 `+0x98/+0xa4` |
+
+`0x393dd0` 是 **mask 4(country)解析器**,与 `pinned(country_scope_4_4_4 §6)` 的国家 mask 一致:
+
+```text
+$ python3 scripts/disrva.py 0x393dd0 30
+  00393dd0  mov     rdx, qword ptr [rcx + 0x1c]                 ; 缓存对象
+  00393dd9  cmp     qword ptr [rcx + 8], 4                      ; mask == 4 (country)
+  00393dde  mov     rax, qword ptr [rip + 0x2ecb5ab]  ; -> 0x325f390
+  00393de5  cmove   rax, rdx
+  00393dea  cmp     qword ptr [rcx + 8], 4
+  00393df1  mov     eax, dword ptr [rcx + 0x10]                 ; scope+0x10 = id
+  00393e02  mov     rax, qword ptr [rip + 0x2ecd1cf]  ; -> 0x3260fd8   ; 国家对象表
+  00393e15  and     ecx, 0xffffff
+  00393e1d  cmp     ecx, dword ptr [rax + 0x20]
+  00393e29  mov     rax, qword ptr [rax + rcx*8 + 8]
+  00393e33  cmp     dword ptr [rax + 0x20], edx
+  00393e38  mov     rax, qword ptr [rip + 0x2ecb551]  ; -> 0x325f390
+```
+
+### §4.2 战争:`is_at_war_with` 读关系对象 `+0xf4`
+
+```text
+$ python3 scripts/disrva.py 0x1a9d980 40
+  01a9d98d  mov     r10, rdx
+  01a9d990  mov     rcx, rdx
+  01a9d993  call    0x140393dd0  ; -> 0x393dd0                  ; scope -> 本国
+  01a9d998  lea     rcx, [r9 + 0x80]                            ; 参数存储
+  01a9d99f  mov     rdx, r10
+  01a9d9a2  lea     r8, [r9 + 0x40]
+  01a9d9a6  mov     rdi, rax
+  01a9d9a9  lea     r9, [rip + 0xa0de90]  ; -> 0x24ab840        ; "is_at_war_with"
+  01a9d9b0  call    0x14035eee0  ; -> 0x35eee0                   ; 取参数(对国)
+  01a9d9b5  mov     rdx, qword ptr [rdi + 0x18]
+  01a9d9b9  lea     rcx, [rdi + 0x18]
+  01a9d9c0  call    qword ptr [rdx + 8]                         ; 本国有效?
+  01a9d9c7  mov     rdx, qword ptr [rbx + 0x18]
+  01a9d9cf  call    qword ptr [rdx + 8]                         ; 参数有效?
+  01a9d9d6  mov     rdx, rbx
+  01a9d9d9  mov     rcx, rdi
+  01a9d9dc  call    0x140742670  ; -> 0x742670                 ; ★ 取关系对象
+  01a9d9e1  cmp     dword ptr [rax + 0xf4], 0                   ; ★ 战争旗标
+  01a9d9e8  setne   al
+```
+
+关系对象从哪来:
+
+```text
+$ python3 scripts/disrva.py 0x742670 45
+  0074267a  mov     rbx, rcx                                    ; 本国
+  00742680  mov     rcx, qword ptr [rcx + 0x2c78]               ; 本国 +0x2c78 = 外交对象
+  00742687  mov     rax, qword ptr [rcx]
+  0074268a  call    qword ptr [rax + 0x80]                      ; 外交对象有效?
+  00742694  mov     rcx, qword ptr [rbx + 0x2c78]
+  0074269d  mov     rcx, qword ptr [rip + 0x2b1cffc]  ; -> 0x325f6a0   ; 空回退
+  007426a4  mov     rcx, qword ptr [rcx + 0x10]
+  007426a8  mov     rdx, rdi                                    ; 对国
+  007426ab  add     rcx, 0x2d60                                 ; 关系表基址
+  007426bc  jmp     0x140b1d470  ; -> 0xb1d470                 ; ★ 查表
+```
+
+```text
+$ python3 scripts/disrva.py 0xb1d470 50
+  00b1d475  cmp     rdx, qword ptr [rcx + 8]                    ; 对国 == 自己?
+  00b1d47b  mov     r11, qword ptr [rcx + 0x60]                 ; ★ 键数组(升序 dword)
+  00b1d47f  movsxd  r9, dword ptr [rcx + 0x6c]                 ; ★ 键条数
+  00b1d486  mov     ebx, dword ptr [rdx + 0x20]                 ; 键 = [对国+0x20] 国家 id
+  00b1d491  lea     rdi, [r11 + r9*4]
+  00b1d4a0  mov     rdx, r9
+  00b1d4a3  shr     rdx, 1                                      ; 二分
+  00b1d4a9  cmp     dword ptr [r8 + rdx*4], ebx
+  00b1d4dc  mov     rax, qword ptr [r10 + 0x18]                 ; ★ 值数组
+  00b1d4e0  mov     rax, qword ptr [rax + rcx*8]
+  00b1d4e6  mov     rax, qword ptr [rip + 0x274277b]  ; -> 0x325fc68   ; 空回退
+```
+
+⇒ **关系 = `[[本国+0x2c78]+0x10] + 0x2d60` 上的一个「按对国 id 升序」的键值表**
+(键数组 `+0x60`、条数 `+0x6c`、值数组 `+0x18`、空值回退 `0x325fc68`)。**存储是单向的**:
+本国那张表里按对国 id 索引。
+
+### §4.3 关闭边界:`has_closed_borders` 读关系对象 `+0x120` 的 bit 15
+
+```text
+$ python3 scripts/disrva.py 0x1af5550 30
+  01af555a  mov     r9, rcx
+  01af555d  mov     r10, rdx
+  01af5560  mov     rcx, rdx
+  01af5563  call    0x140393dd0  ; -> 0x393dd0                  ; scope -> 本国
+  01af5568  lea     rcx, [r9 + 0x220]
+  01af556f  mov     rdx, r10
+  01af5572  lea     r8, [r9 + 0x40]
+  01af5576  mov     rdi, rax
+  01af5579  lea     r9, [rip + 0x9b7d88]  ; -> 0x24ad308        ; "has_closed_borders"
+  01af5580  call    0x14035eee0  ; -> 0x35eee0                   ; 取参数
+  01af5585  mov     rdx, qword ptr [rdi + 0x18]
+  01af5590  call    qword ptr [rdx + 8]
+  01af5597  mov     rdx, qword ptr [rbx + 0x18]
+  01af559f  call    qword ptr [rdx + 8]
+  01af55a6  mov     rdx, rbx
+  01af55a9  mov     rcx, rdi
+  01af55ac  call    0x140742670  ; -> 0x742670                 ; ★ 同一张关系表
+  01af55b1  mov     ecx, dword ptr [rax + 0x120]                ; ★ 关系对象 +0x120
+  01af55b7  shr     ecx, 0xf                                    ; bit 15
+  01af55ba  test    cl, 1
+  01af55bf  xor     r8d, r8d
+  01af55c2  mov     rdx, rbx
+  01af55c5  mov     rcx, rdi
+  01af55c8  call    0x14075be90  ; -> 0x75be90                 ; 附加判据(未展开)
+```
+
+### §4.4 竞争:`is_rival` 读本国「对等名单」
+
+```text
+$ python3 scripts/disrva.py 0x1b38b40 30
+  01b38b4a  lea     r8, [rcx + 0x40]
+  01b38b4e  mov     rbx, rdx
+  01b38b51  sub     rcx, -0x80                                  ; self+0x80 = 参数存储
+  01b38b55  lea     r9, [rip + 0xb8ec84]  ; -> 0x26c77e0        ; "attitude trigger"
+  01b38b5c  call    0x14035eee0  ; -> 0x35eee0
+  01b38b61  mov     r8, qword ptr [rax + 0x18]
+  01b38b6c  call    qword ptr [r8 + 8]
+  01b38b74  mov     rcx, rbx
+  01b38b77  call    0x140393dd0  ; -> 0x393dd0
+  01b38b7c  cmp     qword ptr [rax + 0x1d78], 0                  ; 态度容器非空?
+  01b38b84  je      0x141b38ba2
+  01b38b86  mov     rdx, rdi
+  01b38b89  mov     rcx, rax
+  01b38b8c  call    0x14076dfc0  ; -> 0x76dfc0
+  01b38b91  test    al, al
+```
+
+```text
+$ python3 scripts/disrva.py 0x76dfc0 45
+  0076dfd0  mov     rcx, qword ptr [rcx + 0x2c78]                ; 本国 +0x2c78
+  0076dfda  call    qword ptr [rax + 0x80]
+  0076dff4  movsxd  rcx, dword ptr [rax + 0x34]                 ; ★ 对等名单条数
+  0076dffe  mov     r8d, dword ptr [rdi + 0x20]                 ; 对国 id
+  0076e005  mov     rax, qword ptr [rax + 0x28]                  ; ★ 对等名单数组
+  0076e010  cmp     dword ptr [rax], r8d                         ; 线性搜
+  0076e023  mov     edx, 0xffffffff
+  0076e02d  cmp     edx, -1
+  0076e030  setne   al
+```
+
+⇒ **竞争不是关系对象上的一个位,是本国 `+0x2c78` 外交对象里的一个 id 向量**(`+0x28` 数据、
+`+0x34` 条数)。这一点与战争/边界**不同源**。
+
+### §4.5 敌对:`is_hostile_to` 读本国的态度表
+
+```text
+$ python3 scripts/disrva.py 0x1b3a1c0 30
+  01b3a1ca  lea     r8, [rcx + 0x40]
+  01b3a1ce  mov     rbx, rdx
+  01b3a1d1  sub     rcx, -0x80
+  01b3a1d5  lea     r9, [rip + 0xb8d604]  ; -> 0x26c77e0
+  01b3a1dc  call    0x14035eee0  ; -> 0x35eee0
+  01b3a1f7  call    0x140393dd0  ; -> 0x393dd0
+  01b3a1fc  mov     rcx, qword ptr [rax + 0x1d78]                ; ★ 态度容器
+  01b3a203  test    rcx, rcx
+  01b3a206  je      0x141b3a22d
+  01b3a208  mov     edx, dword ptr [rdi + 0x20]                  ; 对国 id
+  01b3a20b  call    0x140be3710  ; -> 0xbe3710                   ; 查态度
+  01b3a210  mov     rcx, qword ptr [rip + 0x1724a61]  ; -> 0x325ec78
+  01b3a217  cmp     rax, qword ptr [rcx + 0x98]                  ; 与「敌对态度」比
+  01b3a21e  jne     0x141b3a22d
+```
+
+```text
+$ python3 scripts/disrva.py 0xbe3710 40
+  00be3710  mov     r9d, dword ptr [rcx + 0x49c]                 ; ★ 条数
+  00be371e  mov     r10, qword ptr [rcx + 0x490]                 ; ★ 数组
+  00be3733  lea     rcx, [r8 + r8*2]
+  00be3737  add     rcx, rcx                                     ; idx*6
+  00be373a  cmp     dword ptr [r10 + rcx*8 + 8], edx              ; 键在 +8(步长 0x30)
+  00be3748  mov     rax, qword ptr [rip + 0x267b529]  ; -> 0x325ec78
+  00be374f  mov     rax, qword ptr [rax + 0x168]                  ; 空回退
+  00be3763  mov     rax, qword ptr [r10 + rax*8 + 0x10]           ; 值在 +0x10
+```
+
+⇒ **敌对 = 「态度对象 == 全局敌对态度」**,键值表在 `[本国+0x1d78]`(条数 `+0x49c`、数组
+`+0x490`、元素步长 `0x30`、键 `+8`、值 `+0x10`)。`0x325ec78` 是态度库全局。
+
+### §4.6 联邦:`is_in_federation_with` 读 `[country+0x1e88]` → 联邦对象
+
+```text
+$ python3 scripts/disrva.py 0x7561f0 45
+  007561fa  mov     r8, qword ptr [rip + 0x2b0ae17]  ; -> 0x3261018   ; 联邦对象表
+  00756209  mov     edx, dword ptr [rcx + 0x1e88]                 ; ★ 本国 +0x1e88 = 联邦 id
+  00756211  and     eax, 0xffffff
+  00756216  cmp     eax, dword ptr [r8 + 0x20]
+  00756225  mov     rbx, qword ptr [rax + rcx*8 + 8]
+  0075622f  cmp     dword ptr [rbx + 8], edx                      ; 表项 id 在 +8
+  00756234  mov     rbx, qword ptr [rip + 0x2b09ab5]  ; -> 0x325fcf0   ; 空联邦
+  0075623b  mov     rax, qword ptr [rbx]
+  00756241  call    qword ptr [rax + 8]
+  00756248  movsxd  rax, dword ptr [rbx + 0xa4]                 ; ★ 成员条数
+  0075625c  mov     rax, qword ptr [rbx + 0x98]                  ; ★ 成员 id 数组
+  00756255  mov     r8d, dword ptr [rdi + 0x20]                  ; 对国 id
+  00756265  cmp     dword ptr [rax], r8d                          ; 线性搜
+  00756285  cmp     edx, -1
+  0075628a  mov     al, 1
+```
+
+⇒ **联邦成员 = 联邦对象上的一个 dword id 数组**(`+0x98` 数据、`+0xa4` 条数);
+本国到联邦的**反向指针**在 `[country+0x1e88]`。
+
+### §4.7 写侧两条:`set_closed_borders` / `join_alliance`
+
+**`set_closed_borders` 写关系对象,不写 country 字段:**
+
+```text
+$ python3 scripts/disrva.py 0x185a8f0 --len=0x100
+  0185a8ff  mov     rdi, rcx                                    ; self
+  0185a902  mov     rsi, rdx                                    ; scope
+  0185a905  mov     rcx, rdx
+  0185a908  call    0x140393e40  ; -> 0x393e40                  ; scope -> 本国(mask 4)
+  0185a90d  lea     rcx, [rdi + 0x2e8]                          ; 参数存储
+  0185a914  mov     rdx, rsi
+  0185a917  lea     r8, [rdi + 0x28]
+  0185a91b  mov     rbx, rax
+  0185a91e  lea     r9, [rip + 0xc268c3]  ; -> 0x24811e8        ; "set_closed_borders"
+  0185a925  call    0x14035eee0  ; -> 0x35eee0                   ; 取参数(对国)
+  0185a92a  mov     rdx, rax
+  0185a92d  mov     rcx, rbx
+  0185a930  call    0x14073ec40  ; -> 0x73ec40                 ; ★ find-or-create 关系
+  0185a935  mov     rcx, rax
+  0185a938  mov     rbx, rax
+  0185a93b  mov     rdx, qword ptr [rax]
+  0185a93e  call    qword ptr [rdx + 0x38]                      ; 关系有效?
+  0185a941  test    al, al
+  0185a943  jne     0x14185a990
+  ...
+  0185a990  movzx   eax, byte ptr [rdi + 0x488]                 ; 效果自己的 open/closed 旗标
+  0185a997  lea     rcx, [rdi + 0xc0]
+  0185a99e  neg     eax                                         ; 1 → 0xFFFFFFFF
+  0185a9a3  xor     eax, dword ptr [rbx + 0x120]               ; 与关系对象 +0x120 异或
+  0185a9a9  and     eax, 0x8000                                 ; 只留 bit 15
+  0185a9ae  xor     dword ptr [rbx + 0x120], eax                ; ★ 写点:关系对象 +0x120 bit15
+  0185a9b4  call    0x1403526b0  ; -> 0x3526b0
+  0185a9bd  imul    ecx, eax, 0x21c0
+  0185a9c3  mov     rax, qword ptr [rip + 0x1a061e6]  ; -> 0x3260bb0
+  0185a9ca  add     ecx, dword ptr [rax + 0xc0]
+  0185a9d0  mov     dword ptr [rbx + 0x148], ecx                ; 关系对象 +0x148(缓存年代值)
+```
+
+`0x73ec40` 是 `0x742670` 的**写孪生**:同一条 `[country+0x2c78]` → `[[..]+0x10]+0x2d60` →
+`0xb1d4f0`(find-or-create),只是找不到时会建。
+
+```text
+$ python3 scripts/disrva.py 0x73ec40 --len=0xd0
+  0073ec50  mov     rcx, qword ptr [rcx + 0x2c78]
+  0073ec5a  call    qword ptr [rax + 0x80]
+  0073ec64  mov     rbx, qword ptr [rbx + 0x2c78]
+  0073ec74  mov     rax, qword ptr [rbx]
+  0073ec7a  call    qword ptr [rax + 0x80]
+  0073ec96  mov     rcx, qword ptr [rbx + 0x10]
+  0073ec9d  add     rcx, 0x2d60
+  0073eca9  add     rsp, 0x20
+  0073ecae  jmp     0x140b1d4f0  ; -> 0xb1d4f0                 ; find-or-create
+```
+
+`xor dword [rel+0x120], mask` 这个写法本身说明它是**翻转**而不是赋值:方向(开/关)
+由 `self+0x488` 的旗标取反后决定,所以 `neg eax` 为 0 时写 0 位(不动),为 `0xFFFFFFFF` 时翻位。
+这也是本卷不敢断言「哪个方向叫关闭」的原因之一(见 §4.9)。
+
+**`join_alliance` 落在联邦对象上:**
+
+```text
+$ python3 scripts/disrva.py 0x18307e0 --len=0x150
+  0183080d  mov     rcx, rdx
+  01830810  call    0x140393e40  ; -> 0x393e40                  ; scope -> 本国
+  01830815  mov     r14, rax
+  0183087b  call    0x140356be0  ; -> 0x356be0                  ; self+0xc0 参数 → 值对象
+  01830880  mov     rcx, rax
+  01830883  call    0x1403947f0  ; -> 0x3947f0                  ; 值 → 联邦类型
+  01830888  mov     rbx, rax
+  ...
+  018308f6  mov     rdx, qword ptr [rip + 0x1a306db]  ; -> 0x3260fd8
+  0183090b  mov     r8d, dword ptr [rbx + 0x100]                 ; ★ 联邦类型 +0x100 = 一个 id
+  01830915  and     eax, 0xffffff
+```
+
+⇒ 写侧的落点既不是 country 字段也不是关系表,而是**联邦对象 / 联邦类型对象**;与 §4.6 的读侧
+(`[country+0x1e88]` + 联邦成员数组)是**同一个对象家族的两头**,但本卷**没有**读到
+`join_alliance` 往 `[fed+0x98]` 里 push 的那条指令(stall 在 `0x3947f0` 之后),记为 `未观测`。
+
+### §4.8 §4 的表
+
+| 状态 | 读侧来源 | 写侧来源 | 档 | 证伪条件 |
+|---|---|---|---|---|
+| 战争 | 关系对象 `+0xf4`(dword ≠ 0) | `未观测` | 静态推断(未验证) | 在 3 对已知交战国上读 `[rel+0xf4]`,不是非零 / 与非交战国同值 |
+| 关闭边界 | 关系对象 `+0x120` bit 15 | 关系对象 `+0x120` bit 15(`0x185a9ae` 的 xor) | 静态推断(未验证) | 在已知互相闭边界的 2 国上读同一个 bit,读侧与写侧不同位 |
+| 竞争 | 本国 `[+0x2c78]` 的 id 向量 `+0x28`/`+0x34` | `未观测` | 静态推断(未验证) | 已知宿敌对的 id 不在本国向量里 |
+| 敌对 | `[country+0x1d78]` 态度表 `+0x490`/`+0x49c`,值 `+0x10` | `未观测` | 静态推断(未验证) | 已知敌对国查表返回的不是 `[[0x325ec78]+0x98]` |
+| 联邦 | `[country+0x1e88]` → 联邦对象 `+0x98`/`+0xa4` | 联邦类型对象 `+0x100`(`0x183090b`) | 静态推断(未验证) | 同联邦两国中有一方 `+0x1e88` 指向的联邦对象里查不到另一方 |
+
+### §4.9 §4 的三条「不能说」
+
+1. **不能证明「可通行性」的语义。** 本卷钉住的是「哪个位存着闭边界」,不是「哪一侧不能过」。
+   `xor` 写 + `self+0x488` 取反的写法说明「开/关」是效果参数决定的,而**方向**(从本国看对国,
+   还是反过来)没有读数。要做到「A 的船进不去 B 的星系」,还需要一条**取对象方向**的读数。
+2. **关系表是单向存储,方向未定。** `0xb1d470` 在**本国**的容器里按**对国 id** 二分查找 ⇒
+   `relation(a→b)` 存在 a 的表里。引擎是否保证 b 的表也有一条对称项,本卷**未读到同步写**;
+   因此「闭边界是对称的」这句话不能出口。
+3. **没有 live 读数。** 五个谓词一次都没在活体里求值过;`0x325ec78`(态度库)、`0x325f6a0`
+   (外交对象空回退)、`0x325fc68`(关系空回退)、`0x325fcf0`(空联邦)四个全局在文件里是 BSS,
+   **静态不可定值**(与图卷 §1.11 对 `0x3260B98`/`0x325D880` 的口径相同)。
+
+补充一条:**存档侧独立印证「关系是独立对象」**。同一份 `autosave_2257.07.01.sav` 的顶层块是
+`war=3` / `truce=9` / `federation=0`,而 `country` 块里没有任何 `war=`/`truce=` 标量
+(脚本与原始输出见 §5)。这与「战争/停战/联邦是独立顶层对象」的静态结论同向 ——
+但存档只能作旁证,不能证明偏移。
