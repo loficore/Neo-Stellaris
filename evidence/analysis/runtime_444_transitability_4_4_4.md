@@ -1,3 +1,178 @@
+# runtime_444_transitability_4_4_4 — #46 第二半:可通行语义的静态取证
+
+零 shot、零 Windows。输入只有 exe 拷贝与仓内 TSV/存档。置信档:`pinned(§N)` / `静态推断(未验证)` / `未观测`。
+
+```text
+exe  = /var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
+sha256(实测) = 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56
+date = 2026-11-14
+```
+
+本卷只回答一个问题的**静态可达性**:「星系 → 所属国家」与「国家 → 外交状态」这两条
+语义,在 4.4.4 的执行体里分别落到**哪个对象、哪个偏移、哪个函数**。它**不**回答
+「运行期那个格子里真的是这个值」—— 那要一发 `install → 读 → uninstall`,清单在 §6。
+
+**引文口径(全卷适用)**:所有 `disrva.py` / `vtable.py` / `find_refs.py` / 探针的输出块都是
+**逐字摘录** —— 省略的行直接不列或写成 `...（略）`,保留下来的每一行与原始输出逐字符相同,
+**不改写任何操作数**。凡是结论依赖被省略的行,正文会在那一行旁边说明。
+
+---
+
+## §1 线索台账:12 个 keyword → class_info → factory → vptr
+
+### §1.1 取 12 个 lead 的 class_info(Task 1 Step 2)
+
+```text
+$ awk -F'\t' 'NR>1 && $6 ~ /^(has_owner|original_owner|is_original_owner|is_owned_by|set_owner|is_at_war_with|has_closed_borders|is_rival|is_in_federation_with|is_hostile_to|set_closed_borders|join_alliance)$/ {print $6"\t"$5"\t"$4"\t"$7}' \
+    evidence/xrefs/keyword_behaviour_registration_4_4_4.tsv | sort
+has_closed_borders	18394	0x32611c8	0x269d908
+has_owner	17965	0x32611c8	0x269f528
+is_at_war_with	18075	0x32611c8	0x269f658
+is_hostile_to	18282	0x32611c8	0x269eef8
+is_in_federation_with	18244	0x32611c8	0x269efd8
+is_original_owner	18333	0x32611c8	0x269f548
+is_owned_by	17972	0x32611c8	0x269f578
+is_rival	18293	0x32611c8	0x269ef78
+join_alliance	16512	0x33746e8	0x260ff60
+original_owner	13581	0x32611c8	0x269f538
+set_closed_borders	10347	0x33746e8	0x260ee70
+set_owner	10008	0x33746e8	0x2611430
+```
+
+12 行全出,`class_info` 列与计划预量表**逐项相等** ⇒ TSV 未漂。TSV 列序(`# array_rva index
+thunk_rva db_global_rva token_id keywords field0_rva ...`)由首行确认。
+
+### §1.2 class_info 是 16 字节 `{deleter, factory}`(Task 1 Step 3)
+
+```text
+$ python3 -   # 读 12 个 class_info 的两个 qword,减 image base
+image_base 0x140000000
+has_owner                 0x269f528 deleter=0x34c090 factory=0x1b1ea10
+original_owner            0x269f538 deleter=0x34c090 factory=0x1b1ea80
+is_original_owner         0x269f548 deleter=0x34c090 factory=0x1b1eaf0
+is_owned_by               0x269f578 deleter=0x34c090 factory=0x1b1ef70
+set_owner                 0x2611430 deleter=0x34c090 factory=0x1893b30
+is_at_war_with            0x269f658 deleter=0x34c090 factory=0x1b1f230
+has_closed_borders        0x269d908 deleter=0x34c090 factory=0x1b29460
+is_rival                  0x269ef78 deleter=0x34c090 factory=0x1b222c0
+is_in_federation_with     0x269efd8 deleter=0x34c090 factory=0x1b22590
+is_hostile_to             0x269eef8 deleter=0x34c090 factory=0x1b21f40
+set_closed_borders        0x260ee70 deleter=0x34c090 factory=0x189b900
+join_alliance             0x260ff60 deleter=0x34c090 factory=0x1897690
+```
+
+`deleter` 12/12 都是 `0x34c090`(共享 deleting destructor,与 §17/§22.2 同一格),
+factory 与 §1.1 的 `field0_rva` **逐项相等** ⇒ 台账成立。
+
+### §1.3 factory → 最终 vptr → 三个语义槽
+
+每个 factory 都走同一条形状:`new(size)` → `memset` → 基类 ctor → **写两次 vptr**
+(第一次是中间基类、第二次才是本类最终 vptr)。「两次」这件事在 `set_owner` 与
+`is_owned_by` 上各读过一次,余下 10 个同形。
+
+```text
+$ python3 scripts/disrva.py 0x1893b30 60          # 计划里的 set_owner factory
+  01893b36  mov     ecx, 0x260
+  01893b3b  call    0x142185218  ; -> 0x2185218       ; operator new(0x260)
+  01893b53  call    0x142188170  ; -> 0x2188170       ; memset
+  01893b5b  call    0x1403afb40  ; -> 0x3afb40        ; CEffect 基类 ctor
+  01893b61  lea     rax, [rip + 0xd82390]  ; -> 0x2615ef8
+  01893b68  mov     qword ptr [rbx], rax             ; vptr #1(中间基类)
+  01893b8d  lea     rax, [rip + 0xd74264]  ; -> 0x2607df8
+  01893b94  mov     qword ptr [rbx], rax             ; vptr #2 = 本类最终 vptr
+```
+
+`is_owned_by` 的「先 `0x26A2CC0` 后 `0x268ADD0`」在计划里已实测,本次复现一致
+(`01b1efa1 lea rax,[rip+0xb83d18] ; -> 0x26a2cc0` / `01b1efbf lea rax,[rip+0xb6be0a] ; -> 0x268add0`)。
+
+**槽号语义(本卷全程使用,必须与 §77 一起读):**
+
+| 槽 | 偏移 | 触发类(trigger) | 效果类(effect) |
+|---|---|---|---|
+| slot[1] | `+0x08` | 无 | **parse**:把脚本文本解析进 `self` 的成员 |
+| slot[3] | `+0x18` | **subject resolver**:从 scope 取「被比较的那个值」 | — |
+| slot[4] | `+0x20` | **evaluator**:把 subject 与参数(`+0x80`)比较 | — |
+| slot[5] | `+0x28` | `0x1A91A80` 共用包装,尾跳 slot[4](`pinned(§77)`) | — |
+| slot[9] | `+0x48` | describe / 报错串 | **ExecuteActual**(本卷 §2/§4 的全部写点都在这里) |
+
+「slot[3] = subject、slot[4] = evaluator」是本卷从 9 个触发类**同形**归纳出来的:
+9 个类的 slot[5] 全 = `0x1a91a80`,slot[4] 只有三个不同值,而 slot[3] 个个不同且
+每个都在读一个不同的字段。这是 `静态推断(未验证)`。
+
+| keyword | factory | 最终 vptr | slot[3] subject | slot[4] evaluator | slot[9] |
+|---|---|---|---|---|---|
+| `has_owner` | `0x1b1ea10` | `0x2699538` | `0x1a97650` | `0x1a92a90` | `0x1a97720` (HAS_OWNER) |
+| `original_owner` | `0x1b1ea80` | `0x2699628` | `0x1a97900` | `0x1a92a90` | `0x1a97a70` (HAS_ORIGINAL_OWNER) |
+| `is_original_owner` | `0x1b1eaf0` | `0x2699718` | `0x1a98280` | `0x1a97c40` | `0x1a983a0` (IS_ORIGINAL_OWNER) |
+| `is_owned_by` | `0x1b1ef70` | `0x268add0` | `0x1a9bd10` | `0x1a91ad0` | `0x1a9c290` (IS_OWNED_BY) |
+| `is_at_war_with` | `0x1b1f230` | `0x268b280` | `0x1a9d980` | `0x1a91ad0` | `0x1a9da10` |
+| `has_closed_borders` | `0x1b29460` | `0x26a0930` | `0x1af5550` | `0x1a97c40` | `0x1af55f0` |
+| `is_rival` | `0x1b222c0` | `0x2687f40` | `0x1b38b40` | `0x1a91ad0` | `0x1b388f0` |
+| `is_in_federation_with` | `0x1b22590` | `0x2688b78` | `0x1b38060` | `0x1a91ad0` | `0x1b37e10` |
+| `is_hostile_to` | `0x1b21f40` | `0x26877c0` | `0x1b3a1c0` | `0x1a91ad0` | `0x1b39f70` |
+| `set_owner` | `0x1893b30` | `0x2607df8` | — | — | `0x18015f0` |
+| `set_closed_borders` | `0x189b900` | `0x25fbee0` | — | — | `0x185a8f0` |
+| `join_alliance` | `0x1897690` | `0x26146b0` | — | — | `0x18307e0` |
+
+命令(每个 vptr 一次 `vtable.py`,每个槽一次 `disrva.py`;下面给两条原文,其余同形):
+
+```text
+$ python3 scripts/vtable.py 0x268add0 --slots 12
+  [0x0] +0x00 -> 1a9b380  bounds 1a9b380..1a9b3c0
+  [0x1] +0x08 -> 1ba340  NOT CODE
+  [0x2] +0x10 -> 348b60  bounds 348b60..348d4e
+  [0x3] +0x18 -> 1a9bd10  bounds 1a9bd10..1a9c28d
+          str 24aafb0 "is_owned_by"
+  [0x4] +0x20 -> 1a91ad0  bounds 1a91ad0..1a9206e
+  [0x5] +0x28 -> 1a91a80  bounds 1a91a80..1a91ac4
+  [0x6] +0x30 -> 349220  NOT CODE
+  [0x7] +0x38 -> 349640  NOT CODE
+  [0x8] +0x40 -> 349700  bounds 349700..3497c9
+  [0x9] +0x48 -> 1a9c290  bounds 1a9c290..1a9c5c0
+          str 26a3760 "IS_NOT_OWNED_BY"
+          str 24fdf2c "EMPIRE"
+          str 26a3750 "IS_OWNED_BY"
+          str 24fdf2c "EMPIRE"
+  [0xa] +0x50 -> 1b4d60  NOT CODE
+  [0xb] +0x58 -> 349550  bounds 349550..349582
+(12 slots shown; extent is NOT proven by this listing — see docstring)
+
+$ python3 scripts/vtable.py 0x25fbee0 --slots 24          # set_closed_borders(此处略去 slot 6/7/0xa–0x11/0x14–0x17 的 12 行,只抄有语义的 8 行)
+  [0x0] +0x00 -> 182f140  bounds 182f140..182f18f
+  [0x1] +0x08 -> 17f6130  NOT CODE
+  [0x2] +0x10 -> 185a250  bounds 185a250..185a31d
+  [0x3] +0x18 -> 17f60b0  bounds 17f60b0..17f60cb
+  [0x4] +0x20 -> 3b1770  bounds 3b1770..3b1ef0
+  [0x5] +0x28 -> 185a9f0  bounds 185a9f0..185aa8f
+          str 24811e8 "set_closed_borders"
+          str 2629b28 "SET_CLOSED_BORDERS_EFFECT_OPEN"
+          str 2629ef8 "SET_CLOSED_BORDERS_EFFECT_CLOSED"
+          str 24f6fd8 "TARGET"
+  [0x8] +0x40 -> 3b0f80  bounds 3b0f80..3b1155
+  [0x9] +0x48 -> 185a8f0  bounds 185a8f0..185a9e6
+          str 24811e8 "set_closed_borders"
+          str 26162c0 "C:\mnt\gsg\stellaris\augustus\augustus\source\effect_impl\effect"
+          str 2629eb8 "set_closed_borders effect at %s failed to access relation!"
+  [0x12] +0x90 -> 185a320  bounds 185a320..185a8e6
+          str 2629e78 "set_closed_borders effect at %s has an undefined target!"
+  [0x13] +0x98 -> 3b1420  bounds 3b1420..3b1467
+```
+
+### §1.4 台账里不能说的
+
+1. **`class_info` 的 factory 是「建对象」不是「执行」**。factory 只 `new` + 写 vptr +
+   跑成员 ctor;真正的读写全在 vtable 槽里。把 factory RVA 当锚点做 detour 没有价值
+   (与 §28.5 同一条理由)。
+2. **槽号在 trigger 与 effect 两族不同义**。effect 的 slot[9] 是执行体,trigger 的
+   slot[9] 是描述串产出;trigger 的执行体是 slot[3]/slot[4] 这一对。跨族复用槽号会读错。
+3. **`+0x78` 不是语义字段**。12 个 factory 里 9 个触发类都写
+   `mov dword ptr [rbx + 0x78], 0x165`,四个 owner 家族**完全同值**;它在
+   `0x1a92a90` 里的用法是 `cmp dword ptr [rbx + 0x78], 0x427`(与常量比之后做取反)。
+   ⇒ 它是**变体/运算符判别位**,不是 owner,也不是比较运算符 id。计划 Review Focus 的
+   第 2 条成立,本卷据此不把 `+0x78` 记入任何一格。
+
+---
+
 ## §2 owner 写侧:`set_owner` 走到哪、字段落在哪
 
 ### §2.1 factory → 最终 vptr
@@ -924,8 +1099,8 @@ dead_federation_blocks=0
 
 读出来的四条:
 
-1. **系统数 787** —— 与图卷 `runtime_444_graph_runtime.md` 的 `systems=788` 差 1(存档快照与
-   活体不是同一局),两者同量级 ⇒ 这份存档确实是 4.4.4 的真实存档。
+1. **系统数 787** —— 与 `AGENTS.md` 记的 `systems=788` 差 1(语料里 787/788 本就并存:
+   图卷 §91.6 的派发窗是 787 行,M4 是 788),量级一致 ⇒ 这份存档确实是 4.4.4 的真实存档。
 2. **国家 id 集合:41 个,`0 .. 100663316`**。`100663316 = 0x06000014` —— id **带高位标志位**,
    低 24 位(`& 0xffffff`)才是表索引。这与引擎里每一处 `and eax, 0xffffff` 同口径
    (`country_scope_4_4_4 §2.7` 的 A 级读数也是这个口径)。
