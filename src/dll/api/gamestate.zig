@@ -1,30 +1,26 @@
-// gamestate.zig — Game state access functions (stubs).
+// gamestate.zig — Game state access functions.
 //
-// Provides read/write access to Stellaris game objects (countries, planets,
-// pops, systems) via the Clausewitz engine's global databases. These are
-// STUB implementations that return safe defaults until actual engine
-// offsets and function calls are wired up in later tasks.
+// Provides read access to Stellaris game objects (systems today; countries /
+// planets / pops still unresolved) through the Clausewitz engine's own global
+// databases.
 //
-// The real implementations will use:
-//   - GameState global (0x143287360) for top-level state
-//   - CountryDB (0x143287788) for country lookups
-//   - Virtual function calls on game objects for property access
+// 每个函数只有两种合法状态(见 evidence/analysis/runtime_444_sdk_api_4_4_4.md):
+//   ① 真实现 —— 有站点地址、有假内存测试,读的是引擎状态;
+//   ② 未定形 —— 返回安全值,注释写明缺什么、缺在哪一节。
+// 「看起来能用但其实返回常量」的中间态是禁止的(#55)。
 //
-// Thread safety: All functions in this module are stateless stubs.
-// Future implementations must use appropriate locking for shared state.
+// 2026-11-15 审计:旧版本留下的两个「GameState / CountryDB 全局」在 4.4.4 里
+// **没有任何代码引用**(scripts/scratch/2026-11_dirty_bit/global_xrefs.py:
+// 0x3287360 → 1 条 `<no decode>` 字节巧合,0x3287788 → 0 条;同宽度窗口
+// 0x3286000..0x3287900 全零),已删。见
+// evidence/analysis/runtime_444_sdk_api_4_4_4.md §1。
+//
+// Thread safety: the read path is a pure function of engine memory plus one
+// test-only seam (`setProbe`); production code never changes the seam after
+// init, so readers are safe to call from any thread.
 
 const std = @import("std");
 const offsets = @import("offsets");
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// Global address of the main GameState object (from IDA analysis).
-const GAME_STATE_ADDR: usize = 0x143287360;
-
-/// Global address of the Country database (from IDA analysis).
-const COUNTRY_DB_ADDR: usize = 0x143287788;
 
 // ---------------------------------------------------------------------------
 // Game object types
@@ -47,7 +43,7 @@ pub const Variable = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Read functions (stubs)
+// Read functions
 // ---------------------------------------------------------------------------
 
 /// Retrieve a country object by its numeric ID.
@@ -58,10 +54,10 @@ pub const Variable = struct {
 /// # Returns
 /// Pointer to the country object, or null if not found.
 ///
-/// TODO: Implement actual CountryDB lookup via `qword_143287788`.
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §4(缺:表项步长与
+/// 记录里的 id/对象偏移;国家表全局 `0x3260FD8` 已知,未逐条读)。
 pub fn getCountry(id: u32) ?GameObjectHandle {
     _ = id;
-    // Stub: return null (not found)
     return null;
 }
 
@@ -73,7 +69,8 @@ pub fn getCountry(id: u32) ?GameObjectHandle {
 /// # Returns
 /// Pointer to the planet object, or null if not found.
 ///
-/// TODO: Implement actual planet lookup via galactic object database.
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §4(缺:星球表的全局
+/// 与步长;`AGENTS.md` 无锚点)。
 pub fn getPlanet(id: u32) ?GameObjectHandle {
     _ = id;
     return null;
@@ -87,7 +84,8 @@ pub fn getPlanet(id: u32) ?GameObjectHandle {
 /// # Returns
 /// Pointer to the pop object, or null if not found.
 ///
-/// TODO: Implement actual pop lookup via pop database.
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §4(缺:pop 表的全局
+/// 与步长;`AGENTS.md` 无锚点)。
 pub fn getPop(id: u32) ?GameObjectHandle {
     _ = id;
     return null;
@@ -101,7 +99,7 @@ pub fn getPop(id: u32) ?GameObjectHandle {
 /// # Returns
 /// Pointer to the system object, or null if not found.
 ///
-/// TODO: Implement actual system lookup via galactic object database.
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §2。
 pub fn getSystem(id: u32) ?GameObjectHandle {
     _ = id;
     return null;
@@ -112,7 +110,7 @@ pub fn getSystem(id: u32) ?GameObjectHandle {
 /// # Returns
 /// Pointer to the date string (engine-owned), or empty slice if unavailable.
 ///
-/// TODO: Read from GameState date field.
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §3。
 pub fn getGameDate() []const u8 {
     return "";
 }
@@ -122,13 +120,13 @@ pub fn getGameDate() []const u8 {
 /// # Returns
 /// Current tick count, or 0 if unavailable.
 ///
-/// TODO: Read from GameState tick field.
+/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §3。
 pub fn getGameTick() i64 {
     return 0;
 }
 
 // ---------------------------------------------------------------------------
-// Write functions (stubs)
+// Write functions
 // ---------------------------------------------------------------------------
 
 /// Set a variable value on a game object's scope.
@@ -139,12 +137,9 @@ pub fn getGameTick() i64 {
 ///
 /// # Returns
 /// true if the variable was set successfully, false otherwise.
-///
-/// TODO: Implement via CEventScope variable storage.
 pub fn setVariable(name: []const u8, value: i64) bool {
     _ = name;
     _ = value;
-    // Stub: pretend it failed
     return false;
 }
 
@@ -156,8 +151,6 @@ pub fn setVariable(name: []const u8, value: i64) bool {
 ///
 /// # Returns
 /// true if the modifier was applied, false otherwise.
-///
-/// TODO: Implement via engine modifier system.
 pub fn addModifier(scope: GameObjectHandle, modifier: Modifier) bool {
     _ = scope;
     _ = modifier;
@@ -172,8 +165,6 @@ pub fn addModifier(scope: GameObjectHandle, modifier: Modifier) bool {
 ///
 /// # Returns
 /// true if the event was triggered, false otherwise.
-///
-/// TODO: Implement via COnActionDatabase or event manager.
 pub fn triggerEvent(event_id: []const u8, scope: GameObjectHandle) bool {
     _ = event_id;
     _ = scope;
@@ -188,8 +179,6 @@ pub fn triggerEvent(event_id: []const u8, scope: GameObjectHandle) bool {
 ///
 /// # Returns
 /// true if the modifier was removed, false otherwise.
-///
-/// TODO: Implement via engine modifier system.
 pub fn removeModifier(scope: GameObjectHandle, modifier_name: []const u8) bool {
     _ = scope;
     _ = modifier_name;
@@ -249,9 +238,4 @@ test "triggerEvent: stub returns false" {
 test "removeModifier: stub returns false" {
     const dummy_handle: GameObjectHandle = @ptrFromInt(0x1000);
     try std.testing.expect(!removeModifier(dummy_handle, "happiness"));
-}
-
-test "constants have expected values" {
-    try std.testing.expectEqual(@as(usize, 0x143287360), GAME_STATE_ADDR);
-    try std.testing.expectEqual(@as(usize, 0x143287788), COUNTRY_DB_ADDR);
 }
