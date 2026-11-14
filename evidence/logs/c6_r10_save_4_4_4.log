@@ -1,0 +1,56 @@
+# R10 — 固定存档与分母（4.4.4，2026-11-14）
+
+本发只认**一份**存档：`SAVE_NAME = r10_base`，`SAVE_SHA` 见下。分母是这一场存档的
+`galactic_object` **条目数**，不是 `save_hypergraph.py` 的带边节点数（后者会少 1）。
+
+## 选档与固定
+
+```
+just win 'powershell ... Get-ChildItem -Recurse -Filter autosave_*.sav C:\Users\13229\Documents | Sort-Object LastWriteTime -Descending'
+=> C:\Users\13229\Documents\Paradox Interactive\Stellaris\save games\_1474567734\autosave_2331.01.01.sav  4108647  2026/11/14 21:46:13
+   ...\_1474567734\autosave_2330.07.01.sav  4087395  2026/11/14 21:45:05
+   ...\_1474567734\autosave_2330.01.01.sav  4073570  2026/11/14 21:39:36
+   ...\_1474567734\autosave_2329.07.01.sav  4059281  2026/11/13 18:20:31
+```
+
+固定方式（`scripts/scratch/2026-11_r10_contract/pin_save.ps1`，ASCII-only 是硬要求 ——
+这台机器把无 BOM 的 `.ps1` 按 cp936 读，中文注释会把下一行吞掉）：
+
+```
+Copy-Item autosave_2331.01.01.sav -> r10_base.sav
+[System.IO.File]::SetLastWriteTime(r10_base.sav, Get-Date)   # --continuelastsave 取最新 mtime
+=> NOW=2026-11-14T23:54:28  MTIME=2026-11-14T23:54:28
+   r10_base.sav 4108647 2026/11/14 23:54:28   ← 全目录最新
+```
+
+## 读数
+
+- `SAVE_NAME = r10_base`
+- `SAVE_SHA  = f6bfae78c7991f1ec25d148b44227659adbc36e27719c4aeb44090f4a02ddfa1`
+  （远端 `Get-FileHash` 与本地 `sha256sum` 逐字相等，4,108,647 B）
+- `SYSTEMS   = 788`（`galactic_object` 条目数；id 连续 `0..787`，`min=0` / `max=787`）
+
+取法（本地，`/mnt/cache/tmp/opencode/r10/r10_base.sav`）：
+
+```python
+s = zipfile.ZipFile('r10_base.sav').read('gamestate')
+m = re.search(r'(?m)^galactic_object=\s*$', s)          # 顶级块；`nebula` 里也有同名键
+start = s.index('{', m.end()); 括号配平到 depth==0
+entries = re.findall(r'(?m)^\t(\d+)=\n\t\{', blk)        # 条目 = 缩进 1 的 `N=` 且下一行是 `{`
+```
+
+**别用** `^\s*\d+=\s*\{`（计划草图里的那条）：Stellaris 的 `{` 在**下一行**，那条正则恒 0 命中；
+`galactic_object` 在 `nebula` 块里还出现 6 次/个（都是 `galactic_object=<id>` 引用，不是条目）。
+
+## 窗口前的两条核对
+
+- `r10flag` 在这份存档里出现 **0** 次 ⇒ 本战役从没出现过这个名字，`before=false → after=true`
+  才是有意义的读数（Review Focus 4）。
+- 同一份存档里 `neo_tier1` 出现 55 次 —— 上一轮 chokepoint tier 的残留，与本发的 flag 无关。
+
+## 判据挂在这个数上
+
+`c2_exec_caller_probe.py --systems 788`，判据是
+`coverage_distinct == container_raw_count == 788`。若 artifact 的 `container_raw_count` 与
+`SYSTEMS` 不等 ⇒ 记 **`dispatch_denominator_mismatch` = 环境档**，重开进程再打；
+**不许改判据、不许改 `--systems` 去凑**。
