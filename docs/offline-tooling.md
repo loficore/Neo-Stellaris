@@ -387,6 +387,57 @@ determined by its encoding (`mod=00, rm=101` + `disp32`), so a byte scan plus ar
 ~5 s; `find_refs.py` decodes 37 MB for the same list and needs ~15 min. `--verify` re-decodes each hit
 aligned to its `.pdata` start, because a byte match can land mid-instruction.
 
+### `scripts/global_xrefs.py <rva_hex> [<rva_hex> ...] [--limit N] [--json]`
+
+**给一个数据全局 RVA,列出 `.text` 里对它全部的 rip 相对引用,并给每个引用一个形态**:
+`set_bit`(`or dword [rip+d], 1`)/ `overwrite_imm`(整字写立即数)/ `overwrite_reg`(整字写寄存器)/
+`read_mask`(整字掩码读)/ `read_bit`(单 bit 读)/ `other`(确认是引用,但不在前五类)。
+4.4.4 上一次 **19 s**(`.text` 37,291,792 B)。每行 TSV `insn_rva \t fn_start \t fn_end \t form \t
+mnemonic \t op_str`,末行 `refs=N set_bit=.. overwrite_imm=.. overwrite_reg=.. read_mask=..
+read_bit=.. other=..`;`--json` 是一个对象,键是 RVA 十六进制串。
+
+**为什么不是 `find_refs.py`**:后者是**独立的慢通道** —— 线性 capstone 解码每个可执行段(5–10 分钟),
+而且**列表截在前 25 条**(`... N more`)。这条快通道就是为绕开这两点存在的:rip 相对操作数的目标由编码
+唯一确定(`target = insn_end + disp32`),所以对 `.text` 每个 4 字节位置取有符号 dword 反解出"指令末尾",
+落进窗口的才成为候选,再从候选处**真反汇编**确认。两者并存,**不一致是发现,不是 bug**;
+`find_refs.py` 不因为本工具而改动(改了就没有"两个独立实现互相校验"了)。
+
+**判读陷阱**
+
+1. **`p + 4 <= e <= p + 8` 两端都不是余量**。disp32 后面可能是 0 字节(load、`lea`,结束在 **p+4**)、
+   1 字节(`or dword [rip+d], imm8` —— §10.3 那 17 个置位点全是这一形,结束在 **p+5**)、或 4 字节
+   (`mov dword [rip+d], imm32`,结束在 **p+8**)。收小到 p+7 会漏掉带 imm32 的写点;放宽到 p+3 / p+9
+   开始把不是指令末尾的字节当候选。两端由 `scripts/test_global_xrefs.py` 的合成夹具逐端钉住
+   (改窗口任一方向都有测试变红),相邻地址也必须确认不过。
+2. **`.pdata` 是按链合并的,不是按块**。MSVC 会把一个逻辑函数拆成多个 RUNTIME_FUNCTION 片段,
+   每个片段的 UNWIND_INFO 用 `UNW_FLAG_CHAININFO` 指回父片段(§1.5 的删例程 = **7 块**:
+   `0x8bbc20` / `0x8bbc75` / `0x8bbcb4` / `0x8bbccc` / `0x8bbd11` / `0x8bbd23` / `0x8bbd2d`)。
+   只取首块会得到错误的 `fn_end`;本工具打印的是**合并后**的逻辑函数范围(`0x8bbc20..0x8bbd8a`),
+   而**反汇编仍从片段入口开始** —— 片段之间的字节不是这个函数的代码。
+   这跟 §10.2 的 `fn` 列(那一列写的是**原始块**,如 `0x8bbd2d..0x8bbd8a`)不同,但不是矛盾:
+   §10.2 的正文已经给出合并值(`0x8bbd90..0x8bbe63`、删例程 7 段)。合并也解释了 §10.2/§10.3 里
+   `0x259ca4` 与 `0x259a00` 两名并存 —— 它们是同一个函数的两个片段,合并后是 `0x259a00..0x25ac32`。
+3. **读形态靠消费者,不靠 load**。`mov eax,[rip+..]` 本身分不出 `read_mask` 与 `read_bit`,要看后面谁
+   用它:`and` / 整字 `test` ⇒ `read_mask`;`shr`/`sar`/`shl`/`bt` 族 / 单 bit `test` ⇒ `read_bit`。
+   复制链(`mov ecx,eax`)会跟,所以 §10.3 那句 `mov ecx,eax; shr ecx,1; test cl,1` 仍能分类;
+   换了别的寄存器就分不出。
+4. **`other` 是合法答案**,不要往邻近形态里塞。§10.2 那次 `other=0` 是读数,不是目标。
+5. **`?` 行是候选,不是站点**。候选过不了"恰好结束在 e 且 disp 相符"的确认时,会打一行
+   `other` / `?` / `<no decode>`:它计入 `refs`,但**不是**一个引用。看到 `?` 行说明那条只是字节窗口
+   的猜测(§10 那次一条都没有,`other=0`)。
+6. **默认不截断**。`--limit` 缺省 0 = 打印全部;只有显式给了 N 才截断,且末行一定写
+   `truncated=<被略掉的条数>`。别为了屏幕小去调它 —— §10 差一点因为 `find_refs.py` 的 25 条上限漏站点。
+7. **只读磁盘拷贝**(`NS_STELLARIS_EXE` 优先,否则 4.4.4 默认路径);换版本先按
+   `evidence/xrefs/anchors_4_4_4.md` 重锚。
+
+**与取证卷的关系**:`scripts/scratch/2026-11_dirty_bit/global_xrefs.py` 是 §10.1–§10.3 按 basename
+引用的**冻结版**(同名同算法,没有多 RVA、没有 `--limit`、`fn` 列是原始块)。本文件是维护中的那一份;
+**改这里不改那里** —— 改冻结版等于让取证记录的字节与结论脱钩。
+
+**验收**(`0x296CC68`,4.4.4):`refs=24 set_bit=17 overwrite_imm=4 overwrite_reg=1 read_mask=1
+read_bit=1 other=0`,与 §10.2 逐项相等;由 `scripts/test_global_xrefs.py` 的真 exe 集成测试守着
+(没有 exe 时 skip,不是 pass)。
+
 ### `scripts/createsites.py [--gap N]`
 
 who calls a function pointer that **never appears as an immediate**

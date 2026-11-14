@@ -45,6 +45,38 @@ test "graph_trigger: the fingerprint is position sensitive, so a degree migratio
     try std.testing.expect(gt.fingerprint(&[_]u32{ 1, 2 }) != gt.fingerprint(&[_]u32{ 1, 3 }));
 }
 
+test "graph_trigger: a neighbour swap is invisible to the count fingerprint" {
+    // 同一个系统:三条边,邻居从 {1,2,3} 换成 {1,2,4} —— 边数不变。
+    // 旧口径只拿得到每个系统的边数,两张图的计数数组是同一份 ⇒ 它必然算出同一个值。
+    // 这就是 issue #46 的漏格:缓存以为没变。
+    const counts_before = [_]u32{ 3, 0 };
+    const counts_after = [_]u32{ 3, 0 };
+    try std.testing.expectEqual(gt.fingerprint(&counts_before), gt.fingerprint(&counts_after));
+    // 新口径读的是引擎自己维护的内容哈希:必须不同。
+    const hashes_before = [_]u64{ 0xAAAA_0000_0001, 0 };
+    const hashes_after = [_]u64{ 0xBBBB_0000_0002, 0 };
+    try std.testing.expect(gt.fingerprintHashes(&hashes_before) != gt.fingerprintHashes(&hashes_after));
+}
+
+test "graph_trigger: the hash fingerprint is position sensitive" {
+    const a = [_]u64{ 0x11, 0 };
+    const b = [_]u64{ 0, 0x11 };
+    try std.testing.expect(gt.fingerprintHashes(&a) != gt.fingerprintHashes(&b));
+}
+
+test "graph_trigger: the hash fingerprint keeps 0 for empty and all-zero input" {
+    // Review Focus 4:全 0 输入 = 0,与「没读到」同值。这是**已知**行为(空图不该有系统被求值),
+    // 不是意外 —— 把它钉在这里,而不是留着让人踩。
+    try std.testing.expectEqual(@as(u64, 0), gt.fingerprintHashes(&[_]u64{}));
+    try std.testing.expectEqual(@as(u64, 0), gt.fingerprintHashes(&[_]u64{ 0, 0, 0 }));
+}
+
+test "graph_trigger: the hash fingerprint wraps instead of trapping on u64 overflow" {
+    // 出货字节是 Debug 构建:`+`/`*` 溢出即 trap,所以累加必须是 `+%`/`*%`。
+    const big = [_]u64{ std.math.maxInt(u64), std.math.maxInt(u64) };
+    _ = gt.fingerprintHashes(&big); // 不 panic 即通过
+}
+
 test "graph_trigger: only a non-zero, different fingerprint asks for a recompute" {
     try std.testing.expect(!gt.shouldRecompute(7, 7));
     try std.testing.expect(gt.shouldRecompute(7, 8));
