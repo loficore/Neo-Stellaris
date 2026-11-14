@@ -24,6 +24,7 @@ const offsets = @import("../shared/offsets.zig");
 const windows = @import("../hooking/windows.zig");
 
 const graph = offsets.graph;
+const country_table = offsets.country_table;
 
 // ---------------------------------------------------------------------------
 // Game object types
@@ -46,7 +47,7 @@ pub const Variable = struct {
 };
 
 // ---------------------------------------------------------------------------
-// System lookup — 读引擎状态的唯一一条通道(真实现)
+// Index-table lookup — 系统与国家共用的一条通道(真实现)
 // ---------------------------------------------------------------------------
 
 /// 读入口由 `source()` 装配:
@@ -94,15 +95,16 @@ pub const Memory = struct {
     read: *const fn (ctx: *anyopaque, addr: usize, len: usize, buf: []u8) bool,
 };
 
-/// 系统索引的读源。`global_slot` 是 `0x3260B98` 那个**全局槽自身**的绝对地址
-/// (生产 = 模块基址 + RVA;测试 = 合成镜像里的一格)。
+/// 索引表读源。`base` 是 stellaris.exe 的模块基址(生产 = `moduleFunction(0)`;
+/// 测试 = 合成镜像的基址),每张表自己再 `+RVA` 得到全局槽地址 —— 所以同一个读源
+/// 能同时服务系统(`0x3260B98`)与国家(`0x3260FD8`)两张表。
 pub const SystemSource = struct {
     mem: Memory,
-    global_slot: usize,
+    base: usize,
 };
 
 /// 测试专用注入口(生产恒为 `null`)。仅测试用它把合成镜像接进来。
-/// 生产路径在 `getSystem` 里经 `productionSource()` 走 `windows.moduleFunction(0)` +
+/// 生产路径在 `source()` 里走 `windows.moduleFunction(0)` +
 /// `windows.readProcessMemory` —— 本变量不是能力开关,也不对外暴露。
 var test_source: ?SystemSource = null;
 
@@ -123,8 +125,38 @@ fn prodRead(_: *anyopaque, addr: usize, len: usize, buf: []u8) bool {
 fn source() ?SystemSource {
     if (test_source) |s| return s;
     const base = @intFromPtr(windows.moduleFunction(0) catch return null);
-    const global_slot = addAddr(base, graph.RVA_SYSTEM_INDEX_GLOBAL) orelse return null;
-    return .{ .mem = .{ .ctx = undefined, .read = &prodRead }, .global_slot = global_slot };
+    return .{ .mem = .{ .ctx = undefined, .read = &prodRead }, .base = base };
+}
+
+/// 读一张「系统 / 国家同形」的索引表,失败一律 `null`(绝不 panic):
+/// `[base+global_rva]` 全局槽 → 表对象(`+0x18` 表基址、`+0x20` 槽数)→ 槽号
+/// `id & 0xFFFFFF` 越界即 null → `qword[表 + slot*16 + 8]` → 复核
+/// `dword[对象 + id_off] == id`。
+/// 系统与国家共用这条形状(offsets.zig 的测试钉住四个公共表偏移相等),唯一不同的是
+/// 全局 RVA 与对象内的 id 偏移(系统 `+0x08` / 国家 `+0x20`)。
+fn lookupTable(src: SystemSource, global_rva: usize, id_off: usize, id: u32) ?GameObjectHandle {
+    const gslot = addAddr(src.base, global_rva) orelse return null;
+    const table_obj = readPtr(src, gslot) orelse return null;
+    if (table_obj == 0) return null;
+
+    const bound = readDword(src, addAddr(table_obj, graph.INDEX_BOUND_OFF) orelse return null) orelse return null;
+    if (bound == 0 or @as(usize, bound) > graph.MAX_TABLE_SLOTS) return null;
+    const table = readPtr(src, addAddr(table_obj, graph.INDEX_TABLE_OFF) orelse return null) orelse return null;
+    if (table == 0) return null;
+
+    const slot: usize = id & 0xFFFFFF;
+    if (slot >= bound) return null;
+
+    const entry = readPtr(
+        src,
+        elemAddr(table, slot, graph.TABLE_RECORD_SIZE, graph.TABLE_SLOT_PTR_OFF) orelse return null,
+    ) orelse return null;
+    if (entry == 0) return null;
+
+    const entry_id = readDword(src, addAddr(entry, id_off) orelse return null) orelse return null;
+    if (entry_id != id) return null;
+
+    return @ptrFromInt(entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -139,11 +171,13 @@ fn source() ?SystemSource {
 /// # Returns
 /// Pointer to the country object, or null if not found.
 ///
-/// 未定形 —— 见 evidence/analysis/runtime_444_sdk_api_4_4_4.md §4(缺:表项步长与
-/// 记录里的 id/对象偏移;国家表全局 `0x3260FD8` 已知,未逐条读)。
+/// **真实现**:与 `getSystem` 同一条查表形状(引擎自己的 `0x192c290` 与 `0x1e7b850`
+/// 两个独立读者逐条对上),差别只有两处:全局是 `0x3260FD8`(系统 `0x3260B98`),
+/// 对象自己的 id 字段是 `+0x20`(系统 `+0x08`)。取证:`country_scope_4_4_4.md` §7;
+/// 本卷 §4。读不到 / 越界 / id 不符一律 `null`,不返回引擎的空对象回退(那是伪造对象)。
 pub fn getCountry(id: u32) ?GameObjectHandle {
-    _ = id;
-    return null;
+    const src = source() orelse return null;
+    return lookupTable(src, country_table.RVA_GLOBAL, country_table.OBJECT_ID_OFF, id);
 }
 
 /// Retrieve a planet object by its numeric ID.
@@ -191,7 +225,7 @@ pub fn getPop(id: u32) ?GameObjectHandle {
 ///   槽表指针读不到 / 0 则 null;`slot = id & 0xFFFFFF` 且 `slot >= 槽数` 则 null;
 ///   表项 qword 读不到 / 0 则 null;`dword[对象+8] != id` 则 null;否则返回对象指针。
 ///
-/// **只覆盖系统**。国家 / 星球 / pop 的表还没有定形(本卷 §4),不共用这条查表;
+/// **只覆盖系统**。国家走 `getCountry`(本卷 §4);星球 / pop 的表仍未定形(§4)。
 /// 拿到错对象比返回 null 糟得多,所以 id 复核是硬条件,不是可选项。
 ///
 /// # Arguments
@@ -201,33 +235,7 @@ pub fn getPop(id: u32) ?GameObjectHandle {
 /// Pointer to the system object, or null if not found / not readable.
 pub fn getSystem(id: u32) ?GameObjectHandle {
     const src = source() orelse return null;
-
-    // 1. 全局槽 `RVA 0x3260B98` 存的是系统索引对象的指针;载入战役前是 0(BSS)。
-    const index = readPtr(src, src.global_slot) orelse return null;
-    if (index == 0) return null;
-
-    // 2. 头部:`+0x20` 槽数、`+0x18` 槽表指针。槽数 0 或超防御上限 ⇒ 容器损坏。
-    const bound = readDword(src, addAddr(index, graph.INDEX_BOUND_OFF) orelse return null) orelse return null;
-    if (bound == 0 or @as(usize, bound) > graph.MAX_TABLE_SLOTS) return null;
-    const table = readPtr(src, addAddr(index, graph.INDEX_TABLE_OFF) orelse return null) orelse return null;
-    if (table == 0) return null;
-
-    // 3. `slot = id & 0xFFFFFF`(引擎自己的掩码;§1.2),越界直接 null。
-    const slot: usize = id & 0xFFFFFF;
-    if (slot >= bound) return null;
-
-    // 4. 表项:步长 16 B,指针在记录的 `+8`(**不是**一个 8 B 的 qword 数组)。
-    const entry = readPtr(
-        src,
-        elemAddr(table, slot, graph.TABLE_RECORD_SIZE, graph.TABLE_SLOT_PTR_OFF) orelse return null,
-    ) orelse return null;
-    if (entry == 0) return null;
-
-    // 5. 复核:引擎用 `dword[entry+8] == id` 挡陈旧/别名表项 —— 我们也用同一条。
-    const entry_id = readDword(src, addAddr(entry, graph.SYSTEM_ID_OFF) orelse return null) orelse return null;
-    if (entry_id != id) return null;
-
-    return @ptrFromInt(entry);
+    return lookupTable(src, graph.RVA_SYSTEM_INDEX_GLOBAL, graph.SYSTEM_ID_OFF, id);
 }
 
 /// Retrieve the current game date as a string.
@@ -314,10 +322,48 @@ pub fn removeModifier(scope: GameObjectHandle, modifier_name: []const u8) bool {
 // Tests
 // =============================================================================
 
-test "getCountry: 未定形 —— 永远返回 null" {
+test "getCountry: 宿主构建没有可用的读入口时返回 null(fail closed)" {
+    defer clearSource();
     try std.testing.expectEqual(@as(?GameObjectHandle, null), getCountry(0));
     try std.testing.expectEqual(@as(?GameObjectHandle, null), getCountry(1));
-    try std.testing.expectEqual(@as(?GameObjectHandle, null), getCountry(42));
+}
+
+test "getCountry resolves through the country table and verifies the object id at +0x20" {
+    fake_mem.reset();
+    defer clearSource();
+
+    const module_base: usize = 0x1_4000_0000;
+    const index: usize = 0x1_5800_0000;
+    const table: usize = 0x1_6000_0000;
+    const c0: usize = 0x1_7800_0000;
+    const c7: usize = 0x1_7800_1000;
+
+    // 8 槽:槽 0 → C0(id 0)、槽 1 → C7(id 7,槽位与 id 不自洽)、槽 7 → C7(id 7)。
+    fake_mem.open(module_base + offsets.country_table.RVA_GLOBAL, 8);
+    fake_mem.open(index, 0x28);
+    fake_mem.open(table, 8 * offsets.country_table.RECORD_SIZE);
+    fake_mem.open(c0, 0x28);
+    fake_mem.open(c7, 0x28);
+
+    fake_mem.putQword(module_base + offsets.country_table.RVA_GLOBAL, index);
+    fake_mem.putQword(index + offsets.country_table.TABLE_OFF, table);
+    fake_mem.putDword(index + offsets.country_table.BOUND_OFF, 8);
+
+    fake_mem.putQword(table + 0 * offsets.country_table.RECORD_SIZE + offsets.country_table.SLOT_PTR_OFF, c0);
+    fake_mem.putQword(table + 1 * offsets.country_table.RECORD_SIZE + offsets.country_table.SLOT_PTR_OFF, c7);
+    fake_mem.putQword(table + 7 * offsets.country_table.RECORD_SIZE + offsets.country_table.SLOT_PTR_OFF, c7);
+    fake_mem.putDword(c0 + offsets.country_table.OBJECT_ID_OFF, 0);
+    fake_mem.putDword(c7 + offsets.country_table.OBJECT_ID_OFF, 7);
+
+    installFakeSource(module_base);
+
+    try std.testing.expectEqual(@as(?GameObjectHandle, @ptrFromInt(c0)), getCountry(0));
+    try std.testing.expectEqual(@as(?GameObjectHandle, @ptrFromInt(c7)), getCountry(7));
+    // 槽 1 里对象 id 是 7 —— 复核读的是对象 `+0x20`(不是系统的 `+0x08`),挡掉它。
+    try expectNull(getCountry(1));
+    // 空槽 / 越界。
+    try expectNull(getCountry(2));
+    try expectNull(getCountry(8));
 }
 
 /// 假内存(测试专用):按「区域」服务读请求。
@@ -397,7 +443,7 @@ fn fakeRead(_: *anyopaque, addr: usize, len: usize, buf: []u8) bool {
 fn installFakeSource(module_base: usize) void {
     setSystemSourceForTest(.{
         .mem = .{ .ctx = undefined, .read = &fakeRead },
-        .global_slot = module_base + offsets.graph.RVA_SYSTEM_INDEX_GLOBAL,
+        .base = module_base,
     });
 }
 

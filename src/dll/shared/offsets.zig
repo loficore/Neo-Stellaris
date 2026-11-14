@@ -466,6 +466,41 @@ pub const country = struct {
     pub const SCOPE_ID_MASK: u32 = 0x00FF_FFFF;
 };
 
+/// 国家对象表 `0x3260FD8`。[VERIFIED 4.4.4 STATIC] `evidence/analysis/country_scope_4_4_4.md`
+/// §7;两个独立读者逐条对上:`0x192c290`(国家 id 收集器)与 `0x1e7b850`(另一个按 id
+/// 取国家的函数)。形状与系统索引(`graph` 段 / 解析器 `0x3939f0`)**相同**,只有两处不同:
+/// 全局 RVA,以及**对象自身**的 id 字段偏移(国家 `+0x20`,系统 `+0x08`)。
+/// 公共的四个表结构偏移复用 `graph.*`,由本文件底部的测试断言逐一相等,防两者漂移。
+pub const country_table = struct {
+    /// `0x192c2d0 mov rbx,[rip+…]` / `0x1e7b8a0 mov rax,[rip+…]` — 全局槽,存表对象的绝对地址。
+    pub const RVA_GLOBAL: usize = 0x3260FD8; // [VERIFIED 4.4.4 STATIC]
+    /// `0x192c2e5 cmp eax,[rbx+0x20]` — 槽数上界。
+    pub const BOUND_OFF: usize = 0x20;
+    /// `0x192c2ea mov rbx,[rbx+0x18]` — 记录数组基址。
+    pub const TABLE_OFF: usize = 0x18;
+    /// `0x192c2ee add rax,rax` + `0x192c2f1 [rbx+rax*8+8]` ⇒ 16 B 记录、对象指针在 `+8`。
+    pub const RECORD_SIZE: usize = 16;
+    pub const SLOT_PTR_OFF: usize = 0x08;
+    /// `0x192c2fb cmp dword [rbx+0x20],ecx` / `0x1e7b8cd cmp [rcx+0x20],edx` — 国家对象自己的
+    /// id 字段(**不是**系统对象的 `+0x08`)。
+    pub const OBJECT_ID_OFF: usize = 0x20;
+};
+
+test "country_table shares the system index record shape, with a different id field" {
+    // 两个独立读者(§7)读到的是同一条形状;这里把「同形」钉死,免得日后一边改了另一边没改。
+    try std.testing.expectEqual(@as(usize, 0x3260FD8), country_table.RVA_GLOBAL);
+    try std.testing.expectEqual(graph.INDEX_BOUND_OFF, country_table.BOUND_OFF);
+    try std.testing.expectEqual(graph.INDEX_TABLE_OFF, country_table.TABLE_OFF);
+    try std.testing.expectEqual(graph.TABLE_RECORD_SIZE, country_table.RECORD_SIZE);
+    try std.testing.expectEqual(graph.TABLE_SLOT_PTR_OFF, country_table.SLOT_PTR_OFF);
+    // 唯一必须不同的那一格:国家对象 id 在 +0x20,系统对象 id 在 +0x08。
+    try std.testing.expectEqual(@as(usize, 0x20), country_table.OBJECT_ID_OFF);
+    try std.testing.expect(country_table.OBJECT_ID_OFF != graph.SYSTEM_ID_OFF);
+    // 两个全局不同;且都落在 .data(> .text 结束 0x2391710)。
+    try std.testing.expect(country_table.RVA_GLOBAL != graph.RVA_SYSTEM_INDEX_GLOBAL);
+    try std.testing.expect(country_table.RVA_GLOBAL > 0x2392000);
+}
+
 /// CEffect object offsets.
 /// [FALSIFIED 3.x] 4.4.4 has NO central dispatch switch — effects are polymorphic
 /// CEffect::Execute via vtable call (evidence/analysis/runtime_444_structures.md).
