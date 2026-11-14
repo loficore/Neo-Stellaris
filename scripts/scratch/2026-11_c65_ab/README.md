@@ -10,9 +10,18 @@
 | `c65_probe/` | 探针 mod：`on_monthly_pulse → event → random_system → every_system → log = "C65_HIT"`。每月一次，一次一行 marker。**只**用官方 `log` 效果。 |
 | `lw_launch.py` | 趟 A（base）的裸启动器：`stellaris.exe --continuelastsave`，`cwd` 设在 exe 旁边。 |
 | `c65_window.py` | 把一趟的 `game.log` 裁成 marker 窗口、把 `error.log` 整份拷走，并打印 sha / 字节偏移。 |
-| `c65_boot.py` | 趟 B 的**原子启动段**：固定存档回位 + sha 校验 + `c2_boot_inject.py` 启动期注入 + `BOOT` 回执落盘（`C:/temp/c65_B_boot.txt`）。 |
+| `c65_boot.py` | 趟 B 的**原子启动段**：固定存档回位 + sha 校验 + 「目录里没有更新的存档」守卫 + `c2_boot_inject.py` 启动期注入 + `BOOT` 回执落盘（`C:/temp/c65_B_boot.txt`）。 |
+| `c65_hold_saves.py` | 把「比固定存档更新」的 autosave 移出战役目录（`C:\temp\c65_saves_hold\`）——`--continuelastsave` 不按 mtime 选存档，见下。 |
 | `c65_close.py` | 一趟的**原子收尾段**：切窗口 → `--uninstall` → `taskkill`，回执落 `C:/temp/c65_<trip>_close.txt`。 |
 | `c65_count.py` | 一次读数：`COUNT=<n> LAST=<游戏日期>`。窗口长度按游戏月算，弹窗会暂停模拟，所以要反复读它。 |
+| `c65_modules.py` | 一次读数：某个 pid 里有没有 `sqjs*` 模块（C6-5 的「两趟只差装没装」靠它，不靠流程自述）。 |
+
+## `--continuelastsave` 不按 mtime 选存档（2026-11-14 实测）
+
+把固定存档（`2329.07.01`）拷成 `autosave_9999.01.01.sav` 并把 mtime 刷成 now，趟 B 仍然载入
+**`2331.01.01`** —— 也就是**趟 A 自己写出来的**那份 autosave。于是「同一份存档字节」这个对照组前提
+不能靠 mtime 保，只能靠「目录里没有更新的存档」保：`c65_hold_saves.py` 负责移走，`c65_boot.py`
+在启动前**再复查一遍**，有就更早地 `BOOT FAIL newer_saves`。
 
 ## 为什么要 `c65_boot.py` / `c65_close.py` 这两个壳
 
