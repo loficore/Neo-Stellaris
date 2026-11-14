@@ -89,7 +89,7 @@ $ python3 scripts/disrva.py 0x1893b30 60          # 计划里的 set_owner facto
 
 | 槽 | 偏移 | 触发类(trigger) | 效果类(effect) |
 |---|---|---|---|
-| slot[1] | `+0x08` | 无 | **parse**:把脚本文本解析进 `self` 的成员 |
+| slot[1] | `+0x08` | 无 | **parse / 语法校验**:把脚本文本解析进 `self` 的成员 |
 | slot[3] | `+0x18` | **subject resolver**:从 scope 取「被比较的那个值」 | — |
 | slot[4] | `+0x20` | **evaluator**:把 subject 与参数(`+0x80`)比较 | — |
 | slot[5] | `+0x28` | `0x1A91A80` 共用包装,尾跳 slot[4](`pinned(§77)`) | — |
@@ -215,6 +215,11 @@ $ python3 scripts/disrva.py 0x1893b30 60
   不是 owner。§2.2 会看到 slot[1] 把解析结果 copy-assign 进这一格。
 
 ### §2.2 slot[1] 是 parse,不是执行
+
+> `AGENTS.md` 的 RVA 表把 donor `hidden_effect` 的 `[vptr+0x08]` 记作「Execute 覆写」。
+> 本卷对 `join_alliance` 的 slot[1] = `0x3afd30` 只读到「参数语法校验 + 报错串」形状
+> (`Expected "` / ` = {", but got "`),**没有**读到它转调 slot[9];两者措辞的差异本卷
+> 不解,也不需要解 —— §2 只需要「写点不在 slot[1]」这一条。
 
 ```text
 $ python3 scripts/vtable.py 0x2607df8 --slots 30        # 摘录
