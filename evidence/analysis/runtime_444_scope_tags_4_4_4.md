@@ -165,8 +165,8 @@ $ python3 scripts/strfind.py planet pop
 | | | `0x392b70` `lea rdx,[rip+0x20f2cb5]`(函数 `0x3927b0`) | 报错串拼装(§2.3 逐条) |
 | | | `0x42546f` `lea rbx,[rip+0x20603b6]`(函数 `0x4250d0`) | 字面量比较 |
 
-（对照:同一个扫描对 `system` `0x247a4a8` 给出 **19** 条,其中 `0x196833e` / `0x1968352` /
-`0x19684a5` / `0x19684b8` / `0x19685ef` / `0x1968603` 六条全在 `0x19682f0`(§80.1 的注册函数)里。
+（对照:同一个扫描对 `system` `0x247a4a8` 给出 **19** 条,其中 `0x196833b` / `0x196834f` /
+`0x19684a2` / `0x19684b5` / `0x19685ec` / `0x1968600` 六条全在 `0x19682f0`(§80.1 的注册函数)里。
 `planet` / `pop` **一条这样的也没有**。)
 
 ⇒ **两个结论**(本卷 §3 的起点):
@@ -236,7 +236,7 @@ mint 站点总数                 567      (与 runtime_444_keyword_pipeline.md 
 `class_info` qword[1] = `create`;`create` 是同一个模板:
 
 ```text
-$ python3 scripts/disrva.py 0x1a70a60 --len=0x50        ; class_info 0x2666b70 → create(system_planet)
+$ python3 scripts/disrva.py 0x1a70a60 --len=0x50        ; class_info 0x2666b70 → create(`random_system_planet` 那一份)
   01a70a60  push    rbx
   01a70a66  mov     ecx, 0x1c8
   01a70a6b  call    0x142185218  ; -> 0x2185218        ; operator new(0x1c8)
@@ -329,7 +329,7 @@ $ python3 scripts/disrva.py 0x1a1b0e0 --len=0x1d0         ; system_planet 与 ow
 2. **`planet` = `0x2`,而且 `moon` 也是 `0x2`**(卫星是行星类对象);**`owned_planet` 不是 `0x2`,
    是 `1<<40`**(与 `owned_colony` **同一个 create** `0x1a71260`,见下表),也就是说
    `every_owned_planet` 轮内下发的 scope 标签是 **colony** 而不是 planet。
-3. **`scope+0x08` 是 64 位位空间**:`1<<40` / `1<<41` / `1<<42` 都是实读数,不是我的推测。
+3. **`scope+0x08` 是 64 位位空间**:`1<<33`(cosmic_storm)到 `1<<41`(mission)全是实读数,不是我的推测。
    同卷 §2.0 的 `qword` 比较宽度在这一条上兑现。
 
 关键 mint 行(探针 TSV 原样,列 = `mint / 注册函数 / 基础名 / class_info / create / tag / tag 站点 / ctor`):
@@ -534,11 +534,13 @@ mask `0x10` 的 getter(`0x3941b6`–`0x3941bd`),和迭代循环里的 `cmp rax, 
    与整数 id 一致」(同卷 §4.4 第 4 条仍未解)。
 2. **`0x2` / `0x10` 的语义都**不是**从「表里存了什么对象」读出来的。** 本卷没有读任何一张表的
    元素、也没有读任何一个对象类的 vtable 语义;两条路线都只读「常数」。
-3. **28 个掩码里有一格是空缺**:`0x200000`(bit 21)在 1,583 条静态 keyword 里没有任何一条
+3. **`1 .. 0x40000000` 这个位段里有一格是空缺**:`0x200000`(bit 21)在 1,583 条静态 keyword 里没有任何一条
    恰好用它,迭代器侧也没有。它可能**未使用**,也可能是一个没有 keyword 的 scope 类型 ——
    本卷判 `tag_unresolved`,不猜。
-4. **`1<<40` 以上只有路线 1。** `cosmic_storm`(bit 33)等七个高位标签没有 getter,
-   所以它们的「读哪张表」这一格**空着**;§3.2 给的只是名字 + 常数。
+4. **八个高位标签只有路线 1(其中 `colony` 例外)。** `astral_rift`(bit 31)、`cosmic_storm`(33)、
+   `storm_influence_field`(34)、`exhibit`(35)、`pop_job`(37)、`species_trait`(38)、`colony`(40)、
+   `mission`(41)都没有 getter(28 个掩码止于 `0x40000000`),所以它们的「读哪张表」这一格**空着**;
+   §3.2 给的只是名字 + 常数。`colony` 是唯一有路线 2 的一个(`colony_event`)。
 
 ---
 
@@ -555,9 +557,9 @@ mask `0x10` 的 getter(`0x3941b6`–`0x3941bd`),和迭代循环里的 `cmp rax, 
 
 判词的**确切含义**(防误读):`tags_named_all` 指**工单的六个标签 + `planet` / `pop`** 全部有判词
 (§1 的表)。它**不**指「64 位空间里每一位都命名了」—— `0x200000` 判 `tag_unresolved`,
-`1<<40` 以上七位只有名字、没有表。
+8 个高位标签(bit 31/33/34/35/37/38/40/41)只有名字、没有表。
 
-`evidence/xrefs/scope_tags_4_4_4.tsv` 的 29 条里 `tag_unresolved` **只有 1 条**(`0x200000`)。
+`evidence/xrefs/scope_tags_4_4_4.tsv` 的 37 条里 `tag_unresolved` **只有 1 条**(`0x200000`)。
 
 **慢通道(`find_refs.py`)自证**:本卷共**调用 2 次**,都是
 `python3 scripts/find_refs.py 0x24839d0 0x248582c`(问:`planet` 与 `pop` 两个字面在全 `.text`
@@ -581,8 +583,8 @@ rip 相对那一半,且**不按指令解码**,所以三种形态全收):`planet`
    `owned_planet` = `1<<40`)。**不要把「同一个字段」读成「同一套语义」**:`0x2` 与 `1<<40`
    都是「一个 scope 类型位」,但 `1<<40` 的类(`colony_event`)有**自己的** docstring 与 create。
 4. **`.rdata` 里同名有多份副本时,本卷只对「被注册函数 `lea` 的那一份」负责。**
-   `planet` / `pop` 各只有一份(§2.2),但 `system` 有 19 条引用、名字池是被 `every_`/`random_`/`ordered_` 这些前缀在运行时**拼**出来的 —— 那些都不是字面量。若下一份计划要引用某个字面量的
-   RVA,必须用 §2.2 的表。
+   `planet` / `pop` 各只有一份(§2.2);`system` 有 19 条引用,而名字池里那些 `every_*` 名
+   是前缀在运行时**拼**出来的、不是字面量。下一份计划要引用某个字面量的 RVA,必须用 §2.2 的表。
 5. **两条路线的一致不是「同一个证据被数了两次」,但它也不是实机。** 它们共享的只有
    **二进制作者那一个意图**(同一个 enum);若那个 enum 在 4.4.4 之外还有别的解释
    (例如 DLC/版本开关),本卷看不见 —— 本卷只有一份 exe 的一个 sha256。
