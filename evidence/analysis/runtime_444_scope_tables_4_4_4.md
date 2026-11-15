@@ -556,3 +556,420 @@ scanning .text (0x2390800 bytes) ...
 4. **`0x1a9bd10`(`is_owned_by`)之外的用途没有抽样。** 本节每条只读**一个**用途调用点
    (计划 Task 1 Step 2 的口径),49–303 个调用点里其余部分未读 —— 所以「返回对象怎么用」
    在本卷是「至少有一种用法是这样」,不是「只有这一种用法」。
+
+---
+
+## §3 三张表的形状(2026-11-15,零 shot,结论:`0x3260ff0` / `0x3261030` / `0x3261068` 全部 `table_named`)
+
+§8.2 点名的三张表,在 §3.1–§3.3 逐条读;**工单之外还有四张**同族的表在 §2 的链路里出现过
+(`0x3260ff8` / `0x3261010` / `0x325ef00` / `0x3260f18`),它们不在 8 条候选里,但下一份计划要用
+(不是「顺手加的」:五张表里**四张**是 getter 自己读的那一张,漏了它们就等于只知道一半链路),
+所以 §3.4 一并定形。§3.6 记一张**单读者**表(不进 §3.4 的 `table_named` 名单)。
+
+### §3.0 全景(一页)
+
+`global_xrefs.py` 的计数口径:一个全局槽的**读点站点数**与**不同函数数**(`pdata` 函数起点)。
+`界 / 表指针 / 步长 / 对象指针 / 对象内 id` 五格全部来自 §3.1–§3.4 的逐指令读数。
+
+| 全局槽 | 读点站点 | 独立函数 | 界 | 表指针 | 记录步长 | 对象指针 | 对象内 id | 判词 |
+|---|---|---|---|---|---|---|---|---|
+| `0x3260ff0` | 502 | 375 | `+0x20` | `+0x18` | 16 B | `+8` | **`+0x10`** | `table_named` |
+| `0x3260ff8` | 138 | 113 | `+0x20` | `+0x18` | 16 B | `+8` | **`+0x10`** | `table_named` |
+| `0x3260f18` | 64 | 56 | `+0x20` | `+0x18` | 16 B | `+8` | **未读**(§3.4 第 2 条) | `unresolved` |
+| `0x3261010` | 203 | 152 | `+0x20` | `+0x18` | 16 B | `+8` | **`+0x8`** | `table_named` |
+| `0x3261030` | 126 | 94 | `+0x20` | `+0x18` | 16 B | `+8` | **`+0x8`** | `table_named` |
+| `0x3261068` | 1554 | 1134 | `+0x20` | `+0x18` | 16 B | `+8` | **`+0x10`** | `table_named` |
+| `0x325ef00` | 2143 | 1416 | `+0x20` | `+0x18` | 16 B | `+8` | **`+0x30`** | `table_named` |
+| `0x3260fd0` | 1237 | —(§3.6) | `+0x20` | `+0x18` | 16 B | `+8` | `+0x18`(单读者) | `single_reader` |
+
+**七张表五格全同,只有「对象内 id」那一格分流**:`+0x8` / `+0x10` / `+0x18` / `+0x30` 四种。
+这条不是巧合而是**判据**:同一个 `id → 对象` 容器被七类对象共用,「哪一类对象」只体现在
+`entry` 指向的那个对象的 id 字段偏移上 —— 与国家表(`+0x20`)、系统索引(`+0x8`)的先例同构。
+
+### §3.1 `0x3260ff0` —— `table_named`
+
+四个事实,来自**三个互不相干的函数**(不是同一个函数的重复读点):
+
+**(a) getter `0x2b6470` 自己**(§2.2 已列全文,这里只列五格):
+
+```text
+  002b64a2  mov     rax, qword ptr [rip + 0x2faab47]  ; -> 0x3260ff0
+  002b64bd  cmp     ecx, dword ptr [rax + 0x20]                 ; 界
+  002b64c2  mov     rax, qword ptr [rax + 0x18]                 ; 表指针
+  002b64c6  add     rcx, rcx                                    ; 槽号翻倍 => 16 B
+  002b64c9  mov     rax, qword ptr [rax + rcx*8 + 8]            ; 对象指针在 +8
+  002b64d3  cmp     dword ptr [rax + 0x10], edx                 ; 对象内 id 在 +0x10
+```
+
+**(b) `is_owned_by` 的 mask `0x10` 分支**(`0x1a9beba`,§2.1 已列;同一组五格,`cmp [rax+0x10], edx` 在
+`0x1a9bef1`)。它读这张表时**不经过 getter** —— 调用者自己 `mov r9,[rip+…]` 直接读全局槽,
+这是「同一条形状的第二个读者」。
+
+**(c) `0x263bdd`(另一支 `.text`,与 `is_owned_by` 无关)**:
+
+```text
+$ python3 scripts/disrva.py 0x263bdd --len=0x38
+  00263bdd  mov     r8, qword ptr [rip + 0x2ffd40c]  ; -> 0x3260ff0
+  00263be4  test    r8, r8
+  00263be7  je      0x140263c0e
+  00263be9  mov     eax, edx
+  00263beb  and     eax, 0xffffff
+  00263bf0  cmp     eax, dword ptr [r8 + 0x20]
+  00263bf4  jae     0x140263c0e
+  00263bf6  mov     ecx, eax
+  00263bf8  add     rcx, rcx
+  00263bfb  mov     rax, qword ptr [r8 + 0x18]
+  00263bff  mov     rbx, qword ptr [rax + rcx*8 + 8]
+  00263c04  test    rbx, rbx
+  00263c07  je      0x140263c0e
+  00263c09  cmp     dword ptr [rbx + 0x10], edx
+  00263c0c  je      0x140263c15
+```
+
+**(d) `0x251a10`(第三个函数;id 从 `[[obj+0xd0]+rsi*4]` 来,不是 scope)**:
+
+```text
+$ python3 scripts/disrva.py 0x251a10 --len=0x38
+  00251a10  mov     rdx, qword ptr [rip + 0x300f5d9]  ; -> 0x3260ff0
+  00251a17  test    rdx, rdx
+  00251a1a  je      0x140251a4d
+  00251a1c  mov     rax, qword ptr [rbx + 0xd0]
+  00251a23  mov     r8d, dword ptr [rax + rsi*4]
+  00251a27  mov     eax, r8d
+  00251a2a  and     eax, 0xffffff
+  00251a2f  cmp     eax, dword ptr [rdx + 0x20]
+  00251a32  jae     0x140251a4d
+  00251a34  mov     ecx, eax
+  00251a36  add     rcx, rcx
+  00251a39  mov     rax, qword ptr [rdx + 0x18]
+  00251a3d  mov     rcx, qword ptr [rax + rcx*8 + 8]
+  00251a42  test    rcx, rcx
+  00251a45  je      0x140251a4d
+  00251a47  cmp     dword ptr [rcx + 0x10], r8d
+  00251a4b  je      0x140251a54
+  00251a4d  mov     rcx, qword ptr [rip + 0x300e094]  ; -> 0x325fae8
+```
+
+⇒ 四件事逐项相同(界 `+0x20`、表指针 `+0x18`、`add rcx,rcx` + `[rax+rcx*8+8]`、`cmp [obj+0x10]`),
+三个函数不是同一段代码的复制(一个在 `0x2b6***`、一个在 `0x1a9b***`、一个在 `0x263***`)。判 `table_named`。
+
+### §3.2 `0x3261030` —— `table_named`
+
+**(a) `0x265660`**:
+
+```text
+$ python3 scripts/disrva.py 0x265660 --len=0x40
+  00265660  mov     rdx, qword ptr [rip + 0x2ffb9c9]  ; -> 0x3261030
+  00265667  test    rdx, rdx
+  0026566a  je      0x140265695
+  0026566c  mov     r8d, dword ptr [r14]
+  0026566f  mov     eax, r8d
+  00265672  and     eax, 0xffffff
+  00265677  cmp     eax, dword ptr [rdx + 0x20]
+  0026567a  jae     0x140265695
+  0026567c  mov     ecx, eax
+  0026567e  mov     rax, qword ptr [rdx + 0x18]
+  00265682  add     rcx, rcx
+  00265685  mov     rbp, qword ptr [rax + rcx*8 + 8]
+  0026568a  test    rbp, rbp
+  0026568d  je      0x140265695
+  0026568f  cmp     dword ptr [rbp + 8], r8d
+  00265693  je      0x14026569c
+  00265695  mov     rbp, qword ptr [rip + 0x2ffaea4]  ; -> 0x3260540
+```
+
+**(b) `0x288882`(另一个函数)**:
+
+```text
+$ python3 scripts/disrva.py 0x288882 --len=0x38
+  00288882  mov     rdx, qword ptr [rip + 0x2fd87a7]  ; -> 0x3261030
+  00288889  test    rdx, rdx
+  0028888c  je      0x1402888b2
+  0028888e  mov     eax, esi
+  00288890  and     eax, 0xffffff
+  00288895  cmp     eax, dword ptr [rdx + 0x20]
+  00288898  jae     0x1402888b2
+  0028889a  mov     ecx, eax
+  0028889c  mov     rax, qword ptr [rdx + 0x18]
+  002888a0  add     rcx, rcx
+  002888a3  mov     rdi, qword ptr [rax + rcx*8 + 8]
+  002888a8  test    rdi, rdi
+  002888ab  je      0x1402888b2
+  002888ad  cmp     dword ptr [rdi + 8], esi
+  002888b0  je      0x1402888b9
+  002888b2  mov     rdi, qword ptr [rip + 0x2fd7c87]  ; -> 0x3260540
+```
+
+**(c) `0x394cd9`(第三个函数)**:
+
+```text
+$ python3 scripts/disrva.py 0x394cd9 --len=0x40
+  00394cd9  mov     edx, dword ptr [rip + 0x2ecc351]  ; -> 0x3261030
+  00394cdf  lea     rax, [rsp + 8]
+  00394ce4  test    rdx, rdx
+  00394ce7  je      0x140394d12
+  00394ce9  mov     r8d, dword ptr [rax]
+  00394cec  mov     eax, r8d
+  00394cef  and     eax, 0xffffff
+  00394cf4  cmp     eax, dword ptr [rdx + 0x20]
+  00394cf7  jae     0x140394d12
+  00394cf9  mov     ecx, eax
+  00394cfb  mov     rax, qword ptr [rdx + 0x18]
+  00394cff  add     rcx, rcx
+  00394d02  mov     rax, qword ptr [rax + rcx*8 + 8]
+  00394d07  test    rax, rax
+  00394d0a  je      0x140394d12
+  00394d0c  cmp     dword ptr [rax + 8], r8d
+  00394d10  je      0x140394d19
+```
+
+**(d) `0x397c3b`(第四个函数;先调 getter `0x394e60`)**:`call 0x140394e60` → `mov edx,[rax+0xac]` →
+同一组五格、`cmp [rcx+8], edx`(`0x397c72`)。
+
+⇒ 界 `+0x20`、表指针 `+0x18`、`add rcx,rcx`、`[rax+rcx*8+8]`、**对象内 id `+0x8`** 五项逐项相同,
+四个函数。判 `table_named`。§8.2 说「项 id `+0x8`」**对得上**。
+
+### §3.3 `0x3261068` —— `table_named`
+
+**(a) `0x192f90e`(与 `is_owned_by` 无关的一个函数)**:
+
+```text
+$ python3 scripts/disrva.py 0x192f90e --len=0x40
+  0192f90e  mov     r8, qword ptr [rip + 0x1931753]  ; -> 0x3261068
+  0192f915  test    r8, r8
+  0192f918  je      0x14192f94a
+  0192f91a  call    0x140393b70  ; -> 0x393b70
+  0192f91f  mov     edx, dword ptr [rax + 0xe0]
+  0192f925  mov     eax, edx
+  0192f927  and     eax, 0xffffff
+  0192f92c  cmp     eax, dword ptr [r8 + 0x20]
+  0192f930  jae     0x14192f94a
+  0192f932  mov     ecx, eax
+  0192f934  mov     rax, qword ptr [r8 + 0x18]
+  0192f938  add     rcx, rcx
+  0192f93b  mov     rax, qword ptr [rax + rcx*8 + 8]
+  0192f940  test    rax, rax
+  0192f943  je      0x14192f94a
+  0192f945  cmp     dword ptr [rax + 0x10], edx
+  0192f948  je      0x14192f951
+```
+
+**(b) `0x1a99f5a`(另一个函数;`is_owned_by` 的邻居但不是它)**:
+
+```text
+$ python3 scripts/disrva.py 0x1a99f5a --len=0x40
+  01a99f5a  mov     rdx, qword ptr [rip + 0x17c7107]  ; -> 0x3261068
+  01a99f61  test    rdx, rdx
+  01a99f64  je      0x141a99f93
+  01a99f66  mov     r8d, dword ptr [rbx + 0xe0]
+  01a99f6d  mov     eax, r8d
+  01a99f70  and     eax, 0xffffff
+  01a99f75  cmp     eax, dword ptr [rdx + 0x20]
+  01a99f78  jae     0x141a99f93
+  01a99f7a  mov     ecx, eax
+  01a99f7c  add     rcx, rcx
+  01a99f7f  mov     rax, qword ptr [rdx + 0x18]
+  01a99f83  mov     rbx, qword ptr [rax + rcx*8 + 8]
+  01a99f88  test    rbx, rbx
+  01a99f8b  je      0x141a99f93
+  01a99f8d  cmp     dword ptr [rbx + 0x10], r8d
+  01a99f91  je      0x141a99f9a
+  01a99f93  mov     rbx, qword ptr [rip + 0x17c5886]  ; -> 0x325f820
+```
+
+**(c) `is_owned_by` 的两处**(`0x1a9befd` mask `0x10` 的下一跳、`0x1a9be28` mask `0x20` 的下一跳,§2.1/§2.2 已列全文):
+两处 `cmp [obj+0x10]`(`0x1a9bf30` / `0x1a9be62`)。
+
+⇒ 界 `+0x20`、表指针 `+0x18`、`add rcx,rcx`、`[rax+rcx*8+8]`、**对象内 id `+0x10`** 五项逐项相同,
+四个函数(其中两个是 `is_owned_by` 自己的分支,两个在外)。判 `table_named`。§8.2 的「项 id `+0x10`」对得上。
+
+### §3.4 工单之外的四张:getter 自己读的那一张(下一份计划要用)
+
+这四张不在 8 条候选里,但 §2 的每个 getter 都**先**读它们。它们与 §3.0 的七张**同形**,只有
+「对象内 id」那一格不同。
+
+| 全局槽 | 谁读 | 五格 | 读数站点 |
+|---|---|---|---|
+| `0x3260ff8` | getter `0x394190`(mask `0x10`) | 界 `+0x20` / 表 `+0x18` / 16 B / ptr `+8` / **obj id `+0x10`** | getter 本体 `0x3941c2`–`0x3941ef`;第二读者 `0x23a1cd` |
+| `0x3261010` | getter `0x394870`(mask `1`) | 同上 / **obj id `+0x8`** | getter 本体 `0x3948a2`–`0x3948d3`;第二读者 `0x264870` |
+| `0x325ef00` | getter `0x393ec0`(mask `0x40`) | 同上 / **obj id `+0x30`** | getter 本体 `0x393ef2`–`0x393f23`;第二读者 `0x25570f` |
+| `0x3260f18` | getter `0x394e60`(mask `0x2000000`,§8.2 那一行的第一跳) | 界 `+0x20` / 表 `+0x18` / 16 B / ptr `+8` / obj id **未读** | getter 本体 `0x394e98`–`0x394ebb`;懒初始化 `0x2488ae` |
+
+```text
+$ python3 scripts/disrva.py 0x23a1cd --len=0x38
+  0023a1cd  mov     r8, qword ptr [rip + 0x3026e24]  ; -> 0x3260ff8
+  0023a1d4  test    r8, r8
+  0023a1d7  jne     0x14023a1e2
+  0023a1d9  mov     rax, qword ptr [rip + 0x3025920]  ; -> 0x325fb00
+  0023a1e0  jmp     0x14023a21e  ; -> 0x23a21e
+  0023a1e2  mov     eax, r9d
+  0023a1e5  and     eax, 0xffffff
+  0023a1ea  cmp     eax, dword ptr [r8 + 0x20]
+  0023a1ee  jb      0x14023a1f9
+  0023a1f0  mov     rax, qword ptr [rip + 0x3025909]  ; -> 0x325fb00
+  0023a1f7  jmp     0x14023a21e  ; -> 0x23a21e
+  0023a1f9  mov     ecx, eax
+  0023a1fb  mov     rax, qword ptr [r8 + 0x18]
+  0023a1ff  add     rcx, rcx
+```
+
+```text
+$ python3 scripts/disrva.py 0x264870 --len=0x38
+  00264870  mov     rdx, qword ptr [rip + 0x2ffc799]  ; -> 0x3261010
+  00264877  test    rdx, rdx
+  0026487a  je      0x1402648ad
+  0026487c  mov     rax, qword ptr [r14 + 0x730]
+  00264883  mov     r8d, dword ptr [rax + rdi*4]
+  00264887  mov     eax, r8d
+  0026488a  and     eax, 0xffffff
+  0026488f  cmp     eax, dword ptr [rdx + 0x20]
+  00264892  jae     0x1402648ad
+  00264894  mov     ecx, eax
+  00264896  add     rcx, rcx
+  00264899  mov     rax, qword ptr [rdx + 0x18]
+  0026489d  mov     rbx, qword ptr [rax + rcx*8 + 8]
+  002648a2  test    rbx, rbx
+  002648a5  je      0x1402648ad
+  002648a7  cmp     dword ptr [rbx + 8], r8d
+  002648ab  je      0x1402648b4
+  002648ad  mov     rbx, qword ptr [rip + 0x2ffb864]  ; -> 0x3260118
+```
+
+```text
+$ python3 scripts/disrva.py 0x25570f --len=0x34
+  0025570f  mov     r8, qword ptr [rip + 0x30097ea]  ; -> 0x325ef00
+  00255716  mov     rdx, qword ptr [rip + 0x300a303]  ; -> 0x325fa20
+  0025571d  nop     dword ptr [rax + rax]
+  00255720  test    r8, r8
+  00255723  je      0x14025574f
+  00255725  mov     r9d, dword ptr [rbx]
+  00255728  mov     eax, r9d
+  0025572b  and     eax, 0xffffff
+  00255730  cmp     eax, dword ptr [r8 + 0x20]
+  00255734  jae     0x14025574f
+  00255736  mov     ecx, eax
+  00255738  add     rcx, rcx
+  0025573b  mov     rax, qword ptr [r8 + 0x18]
+  0025573f  mov     rax, qword ptr [rax + rcx*8 + 8]
+  00255744  test    rax, rax
+  00255747  je      0x14025574f
+  00255749  cmp     dword ptr [rax + 0x30], r9d
+```
+
+```text
+$ python3 scripts/disrva.py 0x394e60 --len=0x60
+  00394e60  mov     rdx, qword ptr [rcx + 0x1c]
+  00394e64  test    rdx, rdx
+  00394e67  je      0x140394e7d
+  00394e69  cmp     qword ptr [rcx + 8], 0x2000000
+  00394e71  mov     rax, qword ptr [rip + 0x2ecb720]  ; -> 0x3260598
+  00394e78  cmove   rax, rdx
+  00394e7c  ret     
+  00394e7d  cmp     qword ptr [rcx + 8], 0x2000000
+  00394e85  jne     0x140394e90
+  00394e87  mov     eax, dword ptr [rcx + 0x10]
+  00394e8a  mov     dword ptr [rsp + 8], eax
+  00394e8e  jmp     0x140394e98  ; -> 0x394e98
+  00394e90  mov     dword ptr [rsp + 8], 0xffffffff
+  00394e98  mov     rdx, qword ptr [rip + 0x2ecc079]  ; -> 0x3260f18
+  00394e9f  lea     rax, [rsp + 8]
+  00394ea4  test    rdx, rdx
+  00394ea7  je      0x140394ed2
+  00394ea9  mov     r8d, dword ptr [rax]
+  00394eac  mov     eax, r8d
+  00394eaf  and     eax, 0xffffff
+  00394eb4  cmp     eax, dword ptr [rdx + 0x20]
+  00394eb7  jae     0x140394ed2
+  00394eb9  mov     ecx, eax
+  00394ebb  mov     rax, qword ptr [rdx + 0x18]
+```
+
+**三条附带读数**:
+
+1. **`0x3260ff8` 的表对象有一个「开关字节」在 `+0x34`。** 一个读者在用它之前先判
+   `cmp byte ptr [rsi + 0x34], 0` / `jne <跳过>`(`0x25281d`)。七张表里只有这一处读到 `+0x34` ——
+   **它属于表对象,不属于记录**;语义未读(§3.7 第 3 条)。
+2. **`0x3260f18` 的 id 偏移本卷没读到 `cmp`**:它的唯一直接读者是 getter `0x394e60`(上面那段),
+   而 getter 在 `0x394ebb` 之后才做 id 复核,窗口外;本卷**不**给这一格填「看起来像」的值。
+3. **`0x3260f18` 的懒初始化写作 `0x2488ae`**:`mov rax,[rip+…]; test rax,rax; …; cmove rax,rbx;
+   mov [rip+…],rax` —— 这就是 `global_xrefs.py` 里每张表那 `overwrite_reg=2` 的来源(一个初始化写手
+   + 一个 setter),不是「表被替换」。
+
+### §3.5 记录形状与表对象形状(七张表共用,证据在这里集中一次)
+
+**表对象**(全局槽指向它):`+0x18` = 记录数组基址、`+0x20` = 槽数上界、`+0x34` = 一个字节开关
+(只有 `0x3260ff8` 有一个读者判它)。**与国家表 / 系统索引逐格相同**(`offsets.zig` 的
+`country_table` 段:同一组 `+0x18`/`+0x20`/16 B/`+8`)。
+
+**记录**(16 B):`+0` 一个 u32(空槽时被写成 `0xffffff`)、`+4` 一个 u32、`+8` 对象指针。
+**空槽哨兵与 `+4` 的写入只在一段「删/紧缩」代码里读到**(`0x2468dd` 的
+`mov dword ptr [r9 + r8*8], 0xffffff`、`0x246937` 的 `mov dword ptr [r9 + r8*8], eax`、
+`0x246945` 的 `mov dword ptr [rax + rcx*8 + 4], edx`);**§3 的七张表的读路径一次都没读过 `+0`/`+4`**
+—— 它们只读 `+8` 的指针,再复核对象自己的 id 字段。
+
+**槽号就是索引**:七张表的每一处都是 `and eax,0xffffff` → 直接当槽号(`cmp [表+0x20]` 界检查),
+没有哈希、没有二次探测。这条对下一份计划很关键:它是「`id` 的低 24 位**就是**这张表的下标」
+(不是「需要再算一次哈希」)。
+
+### §3.6 一张单读者表:`0x3260fd0` —— `single_reader`
+
+`0xd3b4d0` 是 §2.1/§2.2 那条链上「`[obj+0xf78]` 的 qword 句柄 → 对象」的解析器。它按句柄
+**高 dword 的最低字节**分三支:
+
+```text
+$ python3 scripts/disrva.py 0xd3b4d0 --len=0x40
+  00d3b4d0  sub     rsp, 0x28
+  00d3b4d4  mov     rax, rcx
+  00d3b4d7  shr     rax, 0x20
+  00d3b4db  movsx   rax, al
+  00d3b4df  add     rax, 1
+  00d3b4e3  je      0x140d3b58c
+  00d3b4e9  cmp     rax, 1
+  00d3b4ed  je      0x140d3b53a
+  00d3b4ef  mov     rax, qword ptr [rip + 0x2525ada]  ; -> 0x3260fd0
+  00d3b4f6  test    rax, rax
+  00d3b4f9  je      0x140d3b51e
+  00d3b4fb  mov     edx, ecx
+  00d3b4fd  and     edx, 0xffffff
+  00d3b503  cmp     edx, dword ptr [rax + 0x20]
+  00d3b506  jae     0x140d3b51e
+  00d3b508  mov     rax, qword ptr [rax + 0x18]
+  00d3b50c  add     rdx, rdx
+  00d3b50f  mov     rax, qword ptr [rax + rdx*8 + 8]
+  00d3b514  test    rax, rax
+  00d3b517  je      0x140d3b51e
+  00d3b519  cmp     dword ptr [rax + 0x18], ecx
+  00d3b51c  je      0x140d3b525
+  00d3b51e  mov     rax, qword ptr [rip + 0x25244bb]  ; -> 0x325f9e0
+  00d3b525  xor     edx, edx
+  00d3b527  lea     rcx, [rax + 0x40]
+  00d3b52b  test    rax, rax
+  00d3b52e  cmove   rcx, rdx
+  00d3b532  mov     rax, rcx
+  00d3b535  add     rsp, 0x28
+  00d3b539  ret     
+```
+
+- **`tag == -1`**(高字节 `0xff`)→ `call 0x5d1000` 后 `int3`(不返回对象)。
+- **`tag == 0`** → 表 **`0x3260b78`**(`0x1a97992`/`0x1a98339` 已记过的那张),对象内 id `+0x18`,
+  返回 `对象+0x20`。
+- **其余 tag** → 表 `0x3260fd0`,对象内 id `+0x18`,返回 `对象+0x40`。
+
+`0x3260fd0` 的**直接读者只有这一个函数**(本卷读到的全部);`global_xrefs.py` 报 1237 个读点,
+但那些是别的函数直接读这张表,**不是**「第二个读者读到同一组五格 + 同一个返回偏移」。
+按计划 Task 2 Step 3 的口径,它判 `single_reader`,不进 §3.4 的 `table_named` 名单。
+
+### §3.7 §3 不能说的
+
+1. **「表身份」是从用它的函数推出来的,不是从符号。** 七张表全部没有名字、没有 RTTI 名可读:
+   表对象 +0 那个指针(初始化时写的 `0x24c3830` / `0x24c3868`)用 `rttibatch.py` 查是
+   `unreadable ('0xffffffc8')` —— 它**下面没有 CompleteObjectLocator**,所以「读 vtable 名字」
+   这条路对本卷的七张表是**关的**(这不排除别处有名字,只说明这两个地址没有)。
+2. **没有一次运行时读数。** `[全局槽]` 在活体里是否非空、槽数长到多少、哪几张表其实是**同一个
+   表对象**(两个全局槽可以指向同一块),本卷全部零读数;`global_xrefs.py` 每个全局那两处
+   `overwrite_reg` 只是初始化写手 + setter(§3.4 第 3 条)。
+3. **`+0x34` 那个开关字节的语义未读。** 一个读者在 `0x25281d` 判它,但它的写入方、以及
+   「关闭时这张表是不是就整体失效」都没有读数。
+4. **七个全局槽的相邻关系是 `.data` 布局,不是语义分组。** `0x3260ff0` / `0x3260ff8` /
+   `0x3261010` / `0x3261030` / `0x3261068` 只差 8 字节,而 `0x325ef00` / `0x3260f18` 在别处 ——
+   相邻**不能**用来推「同族」,`0x325ef00` 的存在就是反例。
