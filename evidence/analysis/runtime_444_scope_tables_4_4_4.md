@@ -1176,3 +1176,152 @@ $ python3 scripts/disrva.py 0x3941ff --len=0x14
 **抄之前必须读这一条**:上表的名字是**我按 B 套 mask 起的机械名**,`MASK_0x10` 这样的名字**故意**
 不含 `POP/FLEET/PLANET` —— 语义名本卷没有证据(§5 第 1 条)。下一份计划若要用语义名,得先补
 §4.4 的第 1 条。
+
+---
+
+## §7 `0x3260f18` 的对象内 id = `+0x8`(2026-11-15,零 shot,结论:`object_id_pinned`)
+
+§4.4 第 2 条的原话是「getter `0x394e60` 的 `0x394ebb` 之后 0x20 字节(本卷窗口刚好切在那儿)」。
+这一节把那个窗口读完。**上一节的 `obj_id=UNREAD` 行原样保留**(append-only),分叉以本节为准。
+
+### §7.1 先定边界:`0x394e60` 与它的兄弟都**没有 `.pdata` 条目**
+
+```
+$ python3 scripts/pdata.py 0x394e60 0x394ebb 0x394200 0x394190
+0x394e60 -> NOT IN ANY FUNCTION
+0x394ebb -> NOT IN ANY FUNCTION
+0x394200 -> NOT IN ANY FUNCTION
+0x394190 -> NOT IN ANY FUNCTION
+$ python3 scripts/pdata.py 0x1d08520     # 对照:有 unwind 的函数长什么样
+0x1d08520 -> func 0x1d08520..0x1d085b0 (0x90 bytes) unwind 0x271dd44
+```
+
+`.pdata` 全表 130,645 条,`0x393d20..0x395730` 这 6,672 B 里只有 2 条(`0x393c40`/`0x393d20`);
+`0x394e60` 之后最近的下一个 `.pdata` 起点是 **`0x395730`**(差 2,256 B)—— **不能拿它当边界**
+(那会把 §2 的整族 getter 并成一坨)。所以边界由解码自己给:`ret` + `int3` 填充 + 下一条非 `int3` 指令。
+
+⇒ `0x394e60` 的函数体 = **`0x394e60..0x394ed9`**(0x79 B,`ret` 在 `0x394ed9`),
+`0x394eda..0x394edf` 是 6 个 `int3`,下一个函数从 **`0x394ee0`** 开始。
+
+### §7.2 逐字窗口(`0x394e60..0x394f39`,盖住 `0x394ebb` 之后 0x7e B)
+
+```text
+$ python3 scripts/disrva.py 0x394e60 --len=0xe0
+  00394e60  mov     rdx, qword ptr [rcx + 0x1c]              ; ① 缓存槽
+  00394e64  test    rdx, rdx
+  00394e67  je      0x140394e7d
+  00394e69  cmp     qword ptr [rcx + 8], 0x2000000            ; ② 类型门
+  00394e71  mov     rax, qword ptr [rip + 0x2ecb720]  ; -> 0x3260598
+  00394e78  cmove   rax, rdx
+  00394e7c  ret
+  00394e7d  cmp     qword ptr [rcx + 8], 0x2000000
+  00394e85  jne     0x140394e90
+  00394e87  mov     eax, dword ptr [rcx + 0x10]              ; ③ id 来源(id 原值)
+  00394e8a  mov     dword ptr [rsp + 8], eax
+  00394e8e  jmp     0x140394e98  ; -> 0x394e98
+  00394e90  mov     dword ptr [rsp + 8], 0xffffffff
+  00394e98  mov     rdx, qword ptr [rip + 0x2ecc079]  ; -> 0x3260f18   ; ④ 表全局槽
+  00394e9f  lea     rax, [rsp + 8]
+  00394ea4  test    rdx, rdx
+  00394ea7  je      0x140394ed2
+  00394ea9  mov     r8d, dword ptr [rax]                     ; r8d = **原始** id(未掩码)
+  00394eac  mov     eax, r8d
+  00394eaf  and     eax, 0xffffff                            ; ⑤ 槽号 = id & 0xffffff
+  00394eb4  cmp     eax, dword ptr [rdx + 0x20]              ; ⑥ 界 +0x20
+  00394eb7  jae     0x140394ed2
+  00394eb9  mov     ecx, eax
+  00394ebb  mov     rax, qword ptr [rdx + 0x18]              ; ⑦ 记录数组 +0x18
+  00394ebf  add     rcx, rcx                                 ; 16 B 记录
+  00394ec2  mov     rax, qword ptr [rax + rcx*8 + 8]         ; ⑧ 对象指针在 +8
+  00394ec7  test    rax, rax
+  00394eca  je      0x140394ed2
+  00394ecc  cmp     dword ptr [rax + 8], r8d                 ; ⑨ **对象内 id = +0x8(dword),比原始 id**
+  00394ed0  je      0x140394ed9
+  00394ed2  mov     rax, qword ptr [rip + 0x2ecb6bf]  ; -> 0x3260598   ; ⑩ 回退空对象
+  00394ed9  ret
+  00394eda  int3
+  00394edb  int3
+  00394edc  int3
+  00394edd  int3
+  00394ede  int3
+  00394edf  int3
+```
+
+### §7.3 这一格的读数(§4.4 第 2 条那格的全部)
+
+| 格 | 读数 | 站点 |
+|---|---|---|
+| 类型门 | `[scope+8] == 0x2000000` | `0x394e69` / `0x394e7d` |
+| 缓存槽 | `[scope+0x1c]` | `0x394e60` |
+| id 来源 | `[scope+0x10]`(dword) | `0x394e87` |
+| 表全局槽 | `0x3260f18` | `0x394e98` |
+| 界 / 记录 / 对象指针 | `+0x20` / `add rcx,rcx`(16 B) / `[rec+8]` | `0x394eb4` / `0x394ebf` / `0x394ec2` |
+| **对象内 id** | **`+0x8`,宽 4 B(`cmp dword`)** | **`0x394ecc`** |
+| 比较的是**原始** id | `r8d = [rsp+8]` 未掩码;掩码副本只在 `eax`/`ecx` 里当槽号 | `0x394ea9` / `0x394ecc` |
+| 回退对象 | `0x3260598`(与 §3.4 记的「未读」不同:这一路**不是** `0x325fb00`) | `0x394e71` / `0x394ed2` |
+
+**判词:`object_id_pinned`** —— 前提:站点 `0x394ecc` 逐字、宽度 `dword`、比较对象是未掩码 id、
+且有**第二条独立读者**同格(§7.4)。这里的「pinned」是本卷口径的「**站点 + 宽度都读到**」,
+**不是** §5.3 那个「实机读数」档 —— 本卷仍然零 shot。
+
+### §7.4 第二条独立读者:`0x394ee0`(同表、同 `+0x8`、**没有**缓存槽)
+
+`0x394ee0` 是 `0x394e60` 的「无缓存」孪生体(`0x394e60..0x394ed9` 之后 6 个 `int3` 再开始):
+
+```text
+$ python3 scripts/disrva.py 0x394ee0 --len=0x60
+  00394ee0  cmp     qword ptr [rcx + 8], 0x2000000            ; 没有 [rcx+0x1c] 那一段
+  00394ee8  jne     0x140394ef3
+  00394eea  mov     eax, dword ptr [rcx + 0x10]
+  00394eed  mov     dword ptr [rsp + 8], eax
+  00394ef1  jmp     0x140394efb  ; -> 0x394efb
+  00394ef3  mov     dword ptr [rsp + 8], 0xffffffff
+  00394efb  mov     rax, qword ptr [rip + 0x2ecc016]  ; -> 0x3260f18
+  00394f02  lea     rcx, [rsp + 8]
+  00394f07  test    rax, rax
+  00394f0a  je      0x140394f31
+  00394f0c  mov     edx, dword ptr [rcx]
+  00394f0e  mov     ecx, edx
+  00394f10  and     ecx, 0xffffff
+  00394f16  cmp     ecx, dword ptr [rax + 0x20]
+  00394f19  jae     0x140394f31
+  00394f1b  mov     rax, qword ptr [rax + 0x18]
+  00394f1f  add     rcx, rcx
+  00394f22  mov     rax, qword ptr [rax + rcx*8 + 8]
+  00394f27  test    rax, rax
+  00394f2a  je      0x140394f31
+  00394f2c  cmp     dword ptr [rax + 8], edx                 ; ← 同格:+0x8 / dword / 原始 id
+  00394f2f  je      0x140394f38
+  00394f31  mov     rax, qword ptr [rip + 0x2ecb660]  ; -> 0x3260598
+  00394f38  ret
+```
+
+函数体 `0x394ee0..0x394f38`(0x59 B),`0x394f39..0x394f3f` 是 7 个 `int3`。
+**两条互不相干的函数读到同一组 `{界 +0x20, 表 +0x18, 16 B, ptr +8, id +0x8}`,同一张表 `0x3260f18`** ——
+这就是 §7.3 判词里的「第二条独立读者」。
+
+### §7.5 顺带:`0x394e60..0x3950a0` 这一窗是同一族的**高 mask**成员,对象 id 全是 `+0x8`
+
+同一个解码段里紧接着的四个 getter(都是叶子函数、都没有 `.pdata`),对象 id 复核**逐字同形**:
+
+| 函数 | 类型门 | 表 | 对象 id 站点 |
+|---|---|---|---|
+| `0x394e60` | `0x2000000` | `0x3260f18` | `0x394ecc` |
+| `0x394ee0`(无缓存孪生) | `0x2000000` | `0x3260f18` | `0x394f2c` |
+| `0x394f40` | `0x4000000` | `0x3260550`(缓存路)/ `0x3261028`(查表路) | `0x394fac` |
+| `0x394fc0` | `0x10000000` | `0x3260f10` | `0x39502c` |
+| `0x395040`(无缓存孪生) | `0x10000000` | `0x3260f10` | `0x39508c` |
+
+⇒ 「B 套高 mask 这一族,对象内 id 在 `+0x8`」是**五次读数**,不是一次。这几张表不在本卷工单里,
+本节只记「同族同格」,不替它们出判词。
+
+### §7.6 §7 不能说的
+
+1. **零 shot。** 「对象内 id 在 `+0x8`」是**代码读出来的字段偏移**,不是「活体里那个字段装着什么」。
+2. **`+0x8` 的语义未读。** 它是「对象自己的 id」还是「id 的低 32 位 + 别的位」,本节不判;
+   `0x394ecc` 只证明「拿它与**未掩码** id 比」。
+3. **§4.4 第 4 条(raw vs masked)没有被本节回答。** 这里读到的是「引擎自己比的是原始 id」,
+   它**不**等于「我们把 `saved_id` 原样喂进 `getPlanet` 就能过这一关」—— 那一格仍然是 shot。
+4. **`0x3260f18` 与 `0x3261030`(§3.2,mask 0x2000000 那张四读者表)是不是同一张表的两个全局槽,
+   本节没有判。** 两者 mask 相同、obj id 相同(`+0x8`),但界/基/回退都读不出「同一对象」的证据;
+   这一格要靠 §5.2 第 4 条那次 shot(读全局槽是否非空)。

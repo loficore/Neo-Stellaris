@@ -19,3 +19,6 @@
 0x325ef00	table	readers=2143 sites/1416 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x30; verdict=table_named (工单外:getter 0x393ec0 的表)	0x393ef2,0x25570f,0x25015e,§3.4
 0x3260f18	table	readers=64 sites/56 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=UNREAD; verdict=unresolved (工单外:getter 0x394e60 的表)	0x394e98,0x2488ae,§3.4
 0x3260fd0	table	readers=1 fn verified (0xd3b4d0); bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x18; verdict=single_reader	0xd3b4ef,0xd3b519,§3.6
+0x394e60	getter	B-mask=0x2000000; cache=[scope+0x1c]; id=[scope+0x10]; table=0x3260f18; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x8(dword,比未掩码 id); fallback=0x3260598; verdict=getter_named	0x394e60,0x394ec2,0x394ecc,0x394ed2,§7
+0x394ee0	getter	B-mask=0x2000000; cache=none; id=[scope+0x10]; table=0x3260f18; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x8(dword,比未掩码 id); fallback=0x3260598; verdict=getter_named (0x394e60 的无缓存孪生体) 	0x394efb,0x394f22,0x394f2c,§7
+0x3260f18	table	obj_id=+0x8 (dword,与未掩码 id 比); 两条独立读者 = getter 0x394e60 + 无缓存孪生 0x394ee0; 上面 §3.4 那行 obj_id=UNREAD 是历史读数,不改; verdict=object_id_pinned	0x394ecc,0x394f2c,§7
