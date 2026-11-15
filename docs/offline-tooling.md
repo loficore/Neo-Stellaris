@@ -1925,6 +1925,102 @@ resident` 并 exit 2);它与 `--mutate` / `--mutate-collide` / `--rewire` 不冲
 源码围栏)、保度 switch 与五个 rewire 判词、`rewire_expected` / `graph_matches`、`parse_live` /
 `pulse_progress`、expect 对账与「rewire 不带 attach 被拒」、`parse_artifact`,无游戏、无 Windows API。
 
+### `scripts/c46_field_read.py [dll] (--systems A,B,C[,U] | --probe SUBJECT:OFF:LEN ...) [--probe-kind 1|2|3] [--out C:/temp/c46_n1.tsv]` / `--plan n1`
+
+#46 的**字段读通道**(导出 `C3FieldLayout` / `C3FieldReadInto`)的驱动:一次调用读回一块
+`[对象 + 偏移]` 的原始字节,**判据留在 Python**。**只读**:不注入(模块必须已经在进程里)、
+不挂钩子、不写引擎内存、不改页保护。**必须经 `session_bridge.py` 跑**(SSH 落 session 0 时
+门读不到窗口,shots 驱动同一条规矩)。
+
+**① 用法**
+
+```text
+python C:\temp\c46_field_read.py <dll> --systems A,B,C,U --out C:/temp/c46_n1.tsv   # N1 一发
+python C:\temp\c46_field_read.py <dll> --probe 7:0x1370:4 --probe 7:0x1374:6         # 单点原始读数(可重复)
+python C:\temp\c46_field_read.py <dll> --probe 0x7ff000000:0:8 --probe-kind 3        # 裸地址(kind=3)
+python3 scripts/c46_field_read.py --plan n1                                        # 零进程:表达式链 + 判词
+```
+
+- `--systems` 的第 1–3 个 id 是 A/B/C(三个**已知归属不同**的星系),第 4 个是 U(无主)。
+  只给 3 个时 `#meta unowned=absent` —— U 那一行**没测**,不是测过。
+- `--probe SUBJECT:OFF:LEN` 是单点原始读数,`kind` 由 `--probe-kind` 给(默认 1 = 系统 id;
+  2 = 国家 id;3 = 裸地址)。
+- 驱动**只挂不注入**:模块必须先由 `c2_boot_inject.py` 那一类步骤装载;驱动只解析基址 +
+  验 `MZ` 头 + 验两个导出。这是「只读通道」在驱动侧的落地,不是省一步。
+- `--plan n1` 不 import `c2_harness`、不起进程、不需要 DLL。
+
+**② 协议**(契约在 `src/dll/api/field_read.zig` 的 `LAYOUT`;三处必须逐字一致 —— 这里、
+驱动的 `EXPECTED_LAYOUT`、Zig 源码;改一处就要同时改 `PROTOCOL_VERSION`)
+
+一块缓冲 **296 B** = 40 B 头 + 256 B 数据:
+
+| 偏移 | 宽 | 字段 | 含义 |
+|---|---|---|---|
+| 0 | u64 | `kind` | 1 = 系统 id / 2 = 国家 id / 3 = 裸地址(其余 ⇒ `-5`) |
+| 8 | u64 | `subject` | 按 `kind` 解释;`kind=3` 时是绝对地址(0 ⇒ `-2`) |
+| 16 | u32 | `off` | 对象内偏移 |
+| 20 | u32 | `len` | 1..256(`0` 或 `>256` ⇒ `-3`,**不截断**) |
+| 24 | i32 | `status` | 六个状态码之一,必须等于导出返回值 |
+| 28 | u32 | `got` | 成功时 == `len`;失败时 0 |
+| 32 | u64 | `resolved` | 解析到的对象地址(诊断用;失败时也可能非 0) |
+| 40 | 256 B | data | 前 `got` 字节有效,其余恒 0 |
+
+layout 八个词,顺序即 `EXPECTED_LAYOUT`:
+
+```text
+0x1,0x128,0x28,0x100,0x3,0x1370,0x1374,0xffffff
+= [PROTOCOL_VERSION, BUF_SIZE, OFF_DATA, MAX_LEN, MAX_KIND, owner_off, owner_lock_off, id_mask]
+```
+
+六个状态码:`0` 成功 / `-1` 模块基址取不到(不在游戏进程里)/ `-2` 对象解析不上 /
+`-3` 长度越界 / `-4` 读不到 / `-5` kind 非法。**`header.status == rc` 是硬条件**:不等 ⇒
+`protocol_desync` —— 那块缓冲里的字节不是这一发写的。
+
+**③ 四条判读陷阱**
+
+1. **半途读数**:远程序列只给一个寄存器,所以每次调用前整块 296 B 先清零再写请求;
+   回读后先比 `header.status == rc`。「成功却 `got != len`」是截断,「失败却 `got != 0`」是
+   部分数据,两个都按 `protocol_desync` 处理 —— 都是伪造证据。
+2. **`len` 由请求方给**:`0` 与 `> 256` 一律 `-3`,DLL 不截断。要 4 B 就写 4,不要写 256 再自己截。
+3. **主菜单期两张表全局是 0** ⇒ `-2`,不是「无主 / 没有国家」。`country_domain` 的 `bound=0`
+   是仪器档(值域未知),不是「值域为空 ⇒ 判负」。
+4. **值域判据要 raw 与 masked 两列**:国家 id 带高位(存档里 `0x06000014`),`& 0xffffff`
+   才是表索引。artifact 的 `owner_raw` / `owner_masked` 两列为此分开;只留 masked 会把
+   那个带高位的 id 判成越界。
+
+**④ N1 照单**(判据与判词逐字抄 `evidence/analysis/runtime_444_transitability_4_4_4.md` §6.2)
+
+```text
+N1(一次 install → 读 → uninstall;引擎一进程只许 install 一次)
+人先挑 4 个系统 id(从游戏里看,不从存档推 —— §5.1:存档没有 galactic_object.owner):
+  A/B/C = 三个**不同国家**的星系(尽量挑相距远的,便于人复核)
+  U     = 一个**无主**系统(期望 0xffffffff)
+命令: python C:\temp\c46_field_read.py <dll> --systems A,B,C,U --out C:/temp/c46_n1.tsv
+判据: A/B/C 的 [sys+0x1370] 三值互不相同,且 (值 & 0xffffff) 全在 --systems 同趟读出的国家 id 集合内;
+      U 的值 == 0xffffffff;
+      [sys+0x1374] 与 [sys+0x1378..0x1379] 呈现「锁 + 两旗标」形状(同一趟读出)。
+判词: owner_named / owner_constant / owner_out_of_domain / owner_lock_shape_mismatch
+```
+
+判词的先后就是失败时先说的那句:三值相同 ⇒ `owner_constant`;掩码后不在国家 id 集合内
+(或 U 行不是哨兵)⇒ `owner_out_of_domain`;锁/旗标不是同一次 6 B 读回、或旗标字节不是 0/1
+⇒ `owner_lock_shape_mismatch`。**U 的非哨兵读数归到 `owner_out_of_domain`**:§6.2 没有第五个词,
+artifact 里不许出现证据卷未定义的判词。
+
+**N2–N5 的输入从哪来**(本计划不做,单列前置)
+
+| 发 | 需要的输入 | 现在有吗 |
+|---|---|---|
+| N2 战争 / 闭边界 | 2 对已知交战国 + 1 对非交战国 | **没有**:存档里 `war` 是顶层独立块(§5.2 `war_blocks=3`),提取参与国要单独一个解析器 ⇒ 本计划不做,单列前置 |
+| N3 写侧 `set_owner` | 一个能触发 `set_owner` 的 mod | **没有**:要 mod 侧改动,且它会给「写」面开口 ⇒ 与 #46 §6.3 的能力开关一起裁 |
+| N4 竞争 / 敌对 | 一对已知宿敌 | **没有**:同上,来自人读外交界面 |
+| N5 联邦 | 同联邦的两国 | **没有**:`§5.4-3` 这份存档 `federation_blocks=0` |
+
+判读纯函数由 `python3 -m pytest scripts/test_c46_field_read.py -q` 覆盖(**18 passed**):
+layout 三方一致(DLL 源码 / 驱动 / 本节)、四档通道判词、值域三步、
+N1 的四个判词、`--plan n1` 的零进程性(连 `c2_harness` 都不 import)、编解码往返与两个
+参数解析器,无游戏、无 Windows API。
+
 ### `scripts/c2_graph_reconcile.py --log PATH --windows PATH --edges-base PATH --edges-add PATH [--name-map PATH] [--scores-dir DIR]`
 
 §7.7 的**唯一**同时看见两边的程序:引擎侧读 mod 的分档回执(`NEO_T0/T1/T2 [This.GetName]`),

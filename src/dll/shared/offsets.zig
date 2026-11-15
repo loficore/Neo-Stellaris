@@ -956,3 +956,34 @@ test "graph: §1/§2 read-path offsets are pinned to the disasm sites" {
     // <= 0xFFFF (the edge endpoints are u16), so a live slot index is < 2^16.
     try std.testing.expectEqual(@as(usize, 1 << 16), graph.MAX_TABLE_SLOTS);
 }
+
+// ---------------------------------------------------------------------------
+// #46 字段读通道读的那几格:`[系统对象 + 0x1370]` 的 owner,与紧随它的锁/两旗标。
+//
+// **整段是 `静态推断(未验证)`** —— 静态执行体与 store 路径都已读通,但**一次活体读数都没有**:
+//   * 读侧 `0x8bc870` / `0x1a97650`、写侧 `0x8c2b70`、ctor `0x8ae8b0`;
+//   * `set_owner` 的 store 路径 `0x816dd0` → `0x8c2ca0` → `0x8c2b70` 落在**同一格**。
+// 取证:`evidence/analysis/runtime_444_transitability_4_4_4.md` §6.1(owner 行)/ §7(store 路径)。
+// 哨兵与掩码口径同卷 §5.1(`owner=0x00FFFFFF` 是**索赔**记录里的无人哨兵,不是系统主人)/ §5.2
+// (国家 id 带高位,`& 0xffffff` 才是表索引)。
+//
+// **给它标 `[VERIFIED]` 的唯一条件是 N1 那一发打出来的读数**(三条互不相同且掩码后在国家 id 集合内)。
+// 在那之前,任何调用方都必须把这里的数字当**待验证的候选**,不是契约(§6.3)。
+// ---------------------------------------------------------------------------
+pub const system_owner = struct {
+    /// 系统 → 所属国家 id(u32)。静态推断(未验证) — runtime_444_transitability_4_4_4.md
+    /// §6.1(owner 行)/ §7(store 路径同一格)。
+    pub const OWNER_OFF: usize = 0x1370;
+    /// 紧随 owner 的锁字(u32):N1 的「锁 + 两旗标」形状判据的第一格。
+    /// 静态推断(未验证) — runtime_444_transitability_4_4_4.md §6.2 N1 判据。
+    pub const OWNER_LOCK_OFF: usize = 0x1374;
+    /// 旗标 A(1 B)。静态推断(未验证) — runtime_444_transitability_4_4_4.md §6.2 N1 判据。
+    pub const OWNER_FLAG_A_OFF: usize = 0x1378;
+    /// 旗标 B(1 B)。静态推断(未验证) — runtime_444_transitability_4_4_4.md §6.2 N1 判据。
+    pub const OWNER_FLAG_B_OFF: usize = 0x1379;
+    /// 无主哨兵(§6.1 owner 行:「无主 = `0xFFFFFFFF`」)。
+    /// 注意它**不是** §5.1 那个 `0x00FFFFFF`(那是索赔记录里的哨兵,另一回事)。
+    pub const NO_OWNER: u32 = 0xFFFF_FFFF;
+    /// 国家 id 的表索引掩码(`& 0xffffff`,§5.2:41 个 id 里有一个带高位 `0x06000014`)。
+    pub const ID_MASK: u32 = 0x00FF_FFFF;
+};
