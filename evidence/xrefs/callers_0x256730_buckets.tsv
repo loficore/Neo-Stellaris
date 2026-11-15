@@ -1,0 +1,2 @@
+# caller_count	func_start	func_end	src_files	sites	ref_strings
+1	0xa78d80	0xa794c5	gamestate_global.h	0xa78fb1	0x24b5e98:Illegal call to AccessCurrentGameState! | 0x24b5e98:Illegal call to AccessCurrentGameState! | 0x24b5e98:Illegal call to AccessCurrentGameState! | 0x252f408:Fast Forwarding:  | 0x252f41c: Ticks | 0x24b5e98:Illegal call to AccessCurrentGameState!

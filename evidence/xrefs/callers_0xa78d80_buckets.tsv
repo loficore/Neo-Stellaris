@@ -1,0 +1,3 @@
+# caller_count	func_start	func_end	src_files	sites	ref_strings
+1	0x988db0	0x98b782	ingameidler.cpp	0x98b6fa	0x24c5fe0:standard_font | 0x259b658:waroverview_list | 0x259adb8:alliance_button_window | 0x25a47b0:saving_window | 0x25a72e0:sector_edit_view | 0x2567708:galactic_community_button_window | 0x25a8ea0:assign_leader_widget_view | 0x25a9720:the_tempest_invocator_view | 0x2561200:debug_stats | 0x24a1cc8:portrait | 0x25a9b98:nec12 | 0x25aa5f8:select_ship_role
+1	0xf27570	0xf278c2		0xf27683	0x25582f0:observe | 0x2558260:Fast Forwarded  | 0x2558268:warded  | 0x25582f8: Days | 0x25582d0:Please specify amount of days | 0x25582e0:mount of days | 0x25582e8: days

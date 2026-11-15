@@ -1,0 +1,25 @@
+# caller_count	func_start	func_end	src_files	sites	ref_strings
+4	0x89bce0	0x89c865	event_country_module.cpp	0x89c028,0x89c3fb,0x89c5fd,0x89c80c	0x2517cf0:C %u, %d events to fire | 0x2517c50:country.queued_events | 0x2517c60:vents | 0x2517c80:country.faction_events | 0x2517c90:events | 0x2517c68:country.ship_events | 0x2517c98:country.fleet_events
+2	0xf65f40	0xf66d16	consolecmdimpl.cpp	0xf664c4,0xf6686a	0x2487700:random | 0x255a030:Invalid Country ID:  | 0x255a040:ID:  | 0x255bde0:Country  | 0x255cb58: doesn't have a Superstitious Beliefs cycle. | 0x255cb98:Started the  | 0x255cb88: for country  | 0x255cb98:Started the  | 0x2557e80: for  | 0x255d5f8: countr | 0x255d600:Rolled a new random Superstitious Beliefs cycle for  | 0x255d5f8: countr
+2	0x1703ee0	0x1704ab5	paragons_imgui.cpp	0x17046dc,0x17049f0	0x25e4400:Paragons View | 0x24ee460:Event  | 0x25e4410:<no_events_added> | 0x25e43e8:Spawn## | 0x25e43f0:( %d events )
+1	0x406fdd	0x4070e1	onaction.cpp	0x4070c5	0x24eeb68:Perform OnAction %s Trigger Event %s
+1	0x4070fd	0x40718c	onaction.cpp	0x407171	0x24eeb38:Perform OnAction %s Trigger Random Event %s
+1	0x5bde60	0x5be075		0x5be04b	0x24ffc38:.execute | 0x24ffc48:patron.first_contact_event. | 0x24ffc58:tact_event.
+1	0x5be080	0x5be287		0x5be25d	0x24ffc38:.execute | 0x24ffc68:patron.covenant_event. | 0x24ffc78:event.
+1	0x801bb0	0x801bf5		0x801beb	
+1	0x8612c0	0x861a37	gamestate_global.h,technology_status.cpp	0x8615cb	0x24b5e98:Illegal call to AccessCurrentGameState! | 0x2515e80:MESSAGE_TECHNOLOGY_RESEARCH_FINISH | 0x2515e90:GY_RESEARCH_FINISH | 0x2515ea8:TECHNOLOGY_ORDER_FINISH_MESSAGE_TYPE | 0x2515eb8:_FINISH_MESSAGE_TYPE | 0x2515ec8:TYPE | 0x2515ed0:TECHNOLOGY | 0x24b5e98:Illegal call to AccessCurrentGameState!
+1	0x88f2c0	0x88f48f		0x88f465	0x24ffc38:.execute | 0x2517418:anomaly.
+1	0x9314f0	0x931be3	first_contact.cpp	0x931b30	0x251cec8:first_contact. | 0x251ced0:ntact. | 0x24efa10:.weight
+1	0x9bba10	0x9bbc14	onaction.cpp	0x9bbbbe	0x2522cf8:on_operation_chapter_finished | 0x2522d08:pter_finished | 0x2522d10:ished | 0x24eeb90:Could not find on action '%s'
+1	0x9bfc20	0x9c0444	gamestate_global.h,onaction.cpp	0x9c0096	0x24b5e98:Illegal call to AccessCurrentGameState! | 0x2522dc8:MESSAGE_ARCHAEOLOGY_SITE_FINISHED_DESC | 0x2522dd8:OGY_SITE_FINISHED_DESC | 0x2522de8:D_DESC | 0x2522e08:MESSAGE_ARCHAEOLOGY_SITE_FINISHED | 0x2522e18:OGY_SITE_FINISHED | 0x2522df0:on_arch_site_finished | 0x2522e00:ished | 0x24eeb90:Could not find on action '%s'
+1	0xb08a5a	0xb08ab9		0xb08aa0	
+1	0xcd0130	0xcd07fc	fleet.cpp	0xcd0617	
+1	0xdccab0	0xdcd05e	astral_rift.cpp	0xdccedd	
+1	0xe0c760	0xe0ceea		0xe0cc04	
+1	0xe7bc50	0xe7c352		0xe7c27d	
+1	0xf35270	0xf35d73	consolecmdimpl.cpp,gamestate_global.h	0xf35c49	0x2558f10:Please specify event id | 0x2558f20:vent id | 0x2558e30:Could not find event | 0x2558e40:vent | 0x2558e48:There is no event with ID # | 0x2558e58:t with ID # | 0x24b5e98:Illegal call to AccessCurrentGameState! | 0x24874c4:from | 0x24874c4:from | 0x2559858:Event fired on wrong scope. Got  | 0x2559848:, expected  | 0x2558ec0:Unrecognized scope type '
+1	0xf66d20	0xf677a2	consolecmdimpl.cpp	0xf67537	0x255d568:Usage: random_sb_cycle_event | 0x255d578:_cycle_event | 0x255d580:vent | 0x255b6b0:Cannot be invoked in observer mode | 0x255b6c0:d in observer mode | 0x255cb58: doesn't have a Superstitious Beliefs cycle. | 0x255d588:Launched random common event. | 0x255d4f0:Fortune | 0x255d4f8:Omens | 0x255d500:Launched random  | 0x255d5a8: event.
+1	0x17fc440	0x17fc818		0x17fc668	
+1	0x18d7630	0x18d79a1		0x18d78cf	
+1	0x1911d90	0x191270e		0x1912485	0x2481e70:finish_current_stage
+1	0x1912a10	0x19133ee		0x1913124	0x2481e60:finish_site
