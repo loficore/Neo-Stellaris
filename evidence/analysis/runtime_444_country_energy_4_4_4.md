@@ -195,6 +195,7 @@ call [rax+0x90](rcx, &vec, 0)        ; 取整张向量
 4. **`0x1B2F30` 没有 `.pdata` 记录**,所以「+0x80 恒真」是字节读数(`mov al,1; ret`),不是符号读数。
 
 ---
+
 ## §2 存量 vs 收入,以及判决
 
 ### §2.1 `+0x2530` / `+0x2570` 那个冲突的处置
@@ -291,8 +292,8 @@ slot `+0xF0` 是取值体),再由 `riprefs.py` 反查到 factory `0x1B24500`/`0x
 |---|---|---|---|
 | `COUNTRY_RESOURCE_VECTOR_OFF` | `0x2C68` | B(运行期两次读数,静态写点不可见) | §1.8、§12、§1.6 |
 | `RESOURCE_DB_GLOBAL` | `0x33746F0` | A | §1.6(旧卷)、本卷 §2.3 |
-| `DB_COUNT_OFF` | `0x14` | A | `0x437e2`/`0x1adf6bf`/`0x17607a9` |
-| `DB_ARRAY_OFF` | `0x08` | A | `0x438e6`/`0x843f0c` |
+| `DB_COUNT_OFF` | `0x14` | A | `0x8437e2`/`0x1adf6bf`/`0x17607a9` |
+| `DB_ARRAY_OFF` | `0x08` | A | `0x8438e6`/`0x843f0c` |
 | `DB_ENERGY_OFF` | `0x20` | A | `0x3b8640`(§1.6) |
 | `RESOURCE_INDEX_OFF` | `0x18` | A | `0x1adf774` / `0x843904` |
 | `RESOURCE_VECTOR_HOLDER_OFF` | `0x28` | A | `0x844215`、`0x1760795` |
@@ -327,3 +328,92 @@ slot `+0xF0` 是取值体),再由 `riprefs.py` 反查到 factory `0x1B24500`/`0x
 5. **标度 1e5 是存量路径的读数**,不是「所有 8 B 资源格都 1e5」的证明(收入向量没单独证,旧卷 §1.7)。
 
 ---
+## §3 存档交叉(只证伪)
+
+### §3.1 命令与偏差
+
+```bash
+# 计划里的写法(`--sav`)在本树跑不通:该工具是位置参数 + 必填 --edges。
+python3 scripts/save_hypergraph.py /mnt/cache/tmp/opencode/autosave_2327.01.01.sav \
+    --edges /mnt/cache/tmp/opencode/edges_2327.tsv --stats
+# systems=788 directed_entries=2446 undirected_edges=1219 components=1 isolates=0
+# self_loops=0 duplicate_entries=8 asymmetric_edges=0 conflicting_edges=0
+```
+
+`save_hypergraph.py` 只解星系邻接,与资源无关;它在本卷的作用只是**证明这份 `.sav` 能被读**。
+资源那一格要自己开 zip 读 `gamestate`:
+
+```python
+import zipfile, re
+txt = zipfile.ZipFile('/mnt/cache/tmp/opencode/autosave_2327.01.01.sav').read('gamestate').decode('utf-8','replace')
+i = txt.find('\ncountry='); m = re.search(r'\n\t1=\n', txt[i:]); c0 = txt[i:i+m.start()]
+b = c0.find('budget='); print(c0[b:b+400])
+j = c0.find('standard_economy_module'); print(c0[j:j+520])
+```
+
+### §3.2 读数
+
+`country.0` 的直接子键里**没有** `stockpile` / `resources` / `stored_resources` 任何一形
+(`txt.lower().count('stockpile') == 0`,整份 gamestate)。存量在**模块**里,而且是**名字键**:
+
+```
+modules = { standard_economy_module = { resources = {
+    energy=35.35433  minerals=25000  food=25000
+    physics_research=31401.34876  society_research=38183.0965  engineering_research=79278.37702
+    influence=1000  unity=101131.34147  trade=60000  consumer_goods=25000  alloys=25000 } } }
+```
+
+| 判定项 | 结论 |
+|---|---|
+| 存档里有「国家级资源存量」这一形? | **有**:`modules.standard_economy_module.resources`,11 个**名字**键 |
+| 这 11 个名字与库里的名字对得上? | **不矛盾**:`energy`/`minerals`/`food`/`physics_research`/`society_research`/`engineering_research`/`influence`/`trade`/`alloys` 都在 `0x3B7DA0` 那一段固定名里(§1.6 旧卷) |
+| 能不能从存档拿到**索引**? | **不能,本格存档无对应物**:存档是名字键,没有 `+0x18`、没有 26 格数组、没有步长 |
+| 能不能说「存量 = 向量」被存档**验证**? | **不能**。存档只证明「有一个名字键的存量块」,它与运行时向量是不是同一份数据,本卷零 shot 无法回答 |
+
+两条**只证伪**的收获:
+
+1. **「三个研究资源是例外」不矛盾**:存档把 `physics_research`/`society_research`/
+   `engineering_research` 与另 8 个资源放在**同一个**名字块里(序列化层面不区分),而运行时把它们
+   分开存(向量 vs 所有者 `+0x1900/8/10`)。这是**容器不同**,不是**语义不同** —— 存档侧看不出
+   运行时的存储分叉,所以它**既不能证、也不反驳** §2.4。
+2. **数值量级不矛盾**:`physics_research=31401.34876` 的 1e5 定点 = `3,140,134,876`,与
+   `stored_techpoints`(`29577.32007 35974.52781 74740.79081`,见同块 `technology` 段)是**不同**
+   的两个数 —— 所以「`+0x1900` 是 research 存量」不能靠存档数字推,只能靠 §2.4 的三方地址一致。
+
+---
+
+## §4 收口
+
+**这一卷能交出去的一句话:** 存量是**进程内的一个 8 B 格**,在 `[country+0x2c68]` 那个 0x48 B
+容器的内联向量里(`+0x30` data、`+0x3C` count、下标 = 资源索引);三个研究资源改读
+`[[country+0x2c68]+0x10]+0x1900/0x1908/0x1910`。⇒ **不需要调 vtable**,判 `cached_scalar_named`。
+
+**不能说的(汇总):**
+
+1. 本卷**零 shot**;`[country+0x2c68]+0x30` 这条表达式一次都没在活体上读过。
+2. `energy_idx = 0` 只在 `db_n = 26` 那一版成立;`[[0x33746F0]+8]+0x18` 的交叉(判据 4)本卷
+   做不了(BSS),仍然欠一次读数。
+3. 存档只对**名字**;索引与向量本身在存档里**没有对应物**。
+4. `[econ+0x10]` 是「具备 `+0x1900/8/10` 的对象」(B+),不是「已实机钉住的国家指针」。
+5. `+0x2530` / `+0x2570` 的「净/总」之分仍然 B,不进契约 —— 但它与存量无关(§2.1)。
+6. 写路径(`+0x98`)本卷只**读**了体,**没有**任何一行实现建议;`add_resource`、
+   `export_resource_stockpile_to_variable`、`0x843EC0` 的 clamp 语义都只作取证记录。
+
+**交给下一份计划的前置清单:**
+
+- [ ] 常量表(§2.5)按 `src/dll/shared/offsets.zig` 的 `country` 段落位,每条注释带站点 RVA;
+- [ ] 读法必须带三道门:`[country+0x2C68] != 0`、`idx < [+0x3C]`、`[+0x30] != 0`(每帧重取);
+- [ ] 三个研究资源走 `[[+0x10]+0x1900/8/10]`,并**显式拒绝**从向量里读它们;
+- [ ] 实机验收仍需一次读数(§2.6 第 1 条),判据 = 「我们读的格 == 官方 `has_country_resource`
+      的 `k/k+1` 翻转点」(旧卷 §3.2 判据 1,不需要新工具);
+- [ ] 权限位与双语文档按项目既有形状补,写路径照旧不开。
+
+**与计划的偏差(逐条):**
+
+1. 计划的存档命令 `save_hypergraph.py --sav <path>` 跑不通:该工具是**位置参数 + 必填 `--edges`**
+   (实测 `unrecognized arguments: --sav`)。本卷 §3.1 用真实接口跑通并记下读数。
+2. 计划要求「在 `country_fields_4_4_4.md` 那一行之后」插 AGENTS 文档地图行,但**文档地图里没有那一行**
+   (只有 §180 那张 RVA 表的 opinion 行引用了 `country_fields_4_4_4.md`)。新行插在**最后一条取证卷行之后**
+   (`runtime_444_game_date_4_4_4.md` 那行),`grep -c` = 1 满足。
+3. 计划把「容器布局」与「判决」拆成两个 Task;取证时这两件事是同一份反汇编的两个面,所以 §1/§2 的
+   内容一起成形 —— 提交仍按计划的三个消息拆(26e6cd6 / 7fb7345 / 7682a81)。
