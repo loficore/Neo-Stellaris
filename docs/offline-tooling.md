@@ -205,6 +205,12 @@ This is how §18's "byte-for-byte identical" claim became a measurement: **9,863
 把每个 `address` 节点判成四档之一，再把每条链折成 `green / yellow / red`，写
 `evidence/xrefs/chain_drift_<version>.tsv`（缺省路径；`--json` 打到 stdout 不写文件）。
 
+**覆盖率由围栏执行**（`scripts/test_scripts_layout.py` 的 `violates_unregistered_anchor`，规则名 `R-anchor`）：
+`src/dll/shared/offsets.zig` 里**每一个** `RVA_*` 常量，manifest 里必须有一行 `expect` 等于它的值 —— 按**值**
+匹配，不是按名字（`RVA_HOLDER` 与 `RVA_GALAXY_MAP_DB` 是同一个地址 0x3260bb0，一行代表两条；按名字会逼出第二行
+同一个数字）。`class=structure` 的行只有在 `expect` 写了落点时才算登记：`-` 的含义是「这一格不能用字节判」，
+不是「已登记」。豁免写在规则函数旁的 `ANCHOR_EXEMPTIONS`，理由只允许两类（同值别名 / 结构偏移）。
+
 ```bash
 NS_STELLARIS_EXE=/path/to/new/stellaris.exe python3 scripts/chain_drift.py \
     --chain register --chain dispatch --report /tmp/drift.tsv
@@ -259,9 +265,46 @@ python3 scripts/chain_drift.py --manifest /dev/null --bytes-at 0x1d13270 -n 24
 - **`green` 不等于「这一版能用」**：四档判决只能发现「地址还在不在」。4.4.4 上真实发生过两次「地址还在、语义变了」
   （`GetScriptedEffect` 不是 getter、3.x 的 effect dispatch switch 不存在），那种漂移只有语义证人能抓。
   v1 不跑证人，只把「本链证人 = X」写进 `# witness:` 行。
-- **manifest 只覆盖五条链实际依赖的 ~55 个节点**，不是 `AGENTS.md` RVA 索引的全量。
+- **manifest 覆盖 `offsets.zig` 的每一个 `RVA_*`**（2026-11-15 起；此前只覆盖五条链实际依赖的 ~55 个节点），
+  口径见下面的「覆盖率」。围栏是 `scripts/test_scripts_layout.py` 的 `R-anchor`：新加一个 `RVA_*` 而不登记，`just check` 就红。
 - 某些 `bytes:` 配方会**跨过函数结尾**（例如 `trigger_eval_slot`）：它的孪生函数体逐字节相同（只差一个被通配的
   `call rel32`），配方只能靠函数后的填充/下一函数开头收敛。这类节点在新版本上一律先报 `zero`，是重锚提示。
+- **manifest 不再只覆盖五条链,它覆盖 `offsets.zig` 的每一个 `RVA_*`**（见下面「覆盖率」）。
+
+**游戏更新了,怎么重新锚定**(2026-11-15 之后的流程;本节的三个数字都由 `R-anchor` 围栏执行)
+
+1. 拿新 exe 跑一遍:`NS_STELLARIS_EXE=/path/to/new/stellaris.exe python3 scripts/chain_drift.py --report /tmp/drift.tsv`。
+2. 只读 `moved` / `zero` / `ambiguous` 三类行,按行的 `locator` 配方重算落点:
+   - `bytes:` 行报 `zero` 是**预期**,不是链断了 —— 拿 `--bytes-at <新 RVA>` 重取配方,或改写成形状配方;
+   - `strref:` / `vtable:` / `global:` 行报 `zero` 才值得停下来查(它们在新 build 上本来就该收敛);
+   - `ambiguous` 一律先换更强配方(更长前缀 / `&bytes:` 确认 / 换 `@node:` 引用),不要挑一个候选当作答案。
+3. 只有 `structure` 行需要**人工复核**:它们没有配方(`skipped_structure`)或落点无法用字节判,
+   换版本时按 `expect` 列去核那个地址还在不在,以及 `depends_on` 指的消费者节点是否仍然成立。
+   一个 `structure` 行在新 build 上「没报错」不等于它还对 —— 这是 `green` 不等于「能用」的那条老规矩。
+
+**覆盖率**(本计划之后的口径):`src/dll/shared/offsets.zig` 里的**每一个** `RVA_*` 常量,在
+`evidence/xrefs/chain_manifest_4_4_4.tsv` 里都有一行,且该行的 `expect` 等于它的值 —— 由
+`scripts/test_scripts_layout.py` 的 `violates_unregistered_anchor` 按值匹配执行(不是按名字:
+`RVA_HOLDER` 与 `RVA_GALAXY_MAP_DB` 同为 `0x3260bb0`,一行代表两条)。豁免只写在规则函数旁的
+`ANCHOR_EXEMPTIONS`,当前四条,理由都是**结构偏移**(同一张名字哈希表的相邻槽)。
+一个 `structure` 行只有在 `expect` 写了落点时才算「已登记」:`-` 的含义是「这一格不能用字节判」,
+不是「登记过了」。
+
+**三条陷阱**(每一条都在这份 manifest 上真实踩过)
+
+- **`bytes:` 是自证的**:它匹配这份 build 的字节,所以新版本上报 `zero` 只说明「需要人工重锚」,
+  不说明链路断了。判断链路断没断,看 `strref`/`callshape`/`vtable`/`global` 节点的判决和
+  `structure_unverified` 列。同理,`vtable:slot<k>==0x<rva>` 里那个字面 RVA 也是自证的(它只在这份
+  build 上对),所以 `slot` 要挑一个**在 shape 候选集里唯一**的槽;102 张同形表(如 every_system)
+  一个这样的槽都没有 ⇒ 只能 `structure`。
+- **`.rdata` 里的 VA 数据不能用 `bytes:`**:vtable 与指针表烘的是 base-relative VA,新 build 一换布局就漂,
+  用 `bytes:` 抓它们等于自我欺骗 —— 走 `vtable:slot<k>==<rva>`,或者 `strref:`。但**纯 ASCII 串没有重定位**,
+  `bytes:` 对串是合法的:*四个字符串锚点*(两条 `__FILE__` 全路径 + 两条 overwrite 告警)就是这样登记的,
+  全镜像各只出现一次、落点就是串首。串文本本身若在新 build 改了,drift 报 needs-re-anchor 是**正确**行为。
+- **只读全局没有写者**:`global:` 配方要求读写两侧都能指名(`writes_by=` / `reads_by=` 是两次 rip 操作数
+  **交集**)。一个只有读者的全局,或者读者上千、写者有若干个的全局,都凑不出「唯一读写侧」——
+  那时的正确出口是 `class=structure` + `expect` 落点 + `depends_on @<消费者>`,**不是**编一个 `writes_by`
+  去指一个恰好也读它的函数。
 
 ## 离线重问实机 artifact(读已入库产物,不读 exe、不起进程、不需要 shot)
 

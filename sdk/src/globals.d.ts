@@ -21,3 +21,9 @@ declare function __neo_system_has_flag(id: number, name: string): boolean;
 declare function __neo_register_country(fn: (id: number) => void): void;
 declare function __neo_country_opinion(self: number, target: number): number | undefined;
 declare function __neo_country_their_opinion(self: number, target: number): number | undefined;
+// v1.2 (2026-11-15) global time. Both are read-only and need no permission bit;
+// the host answers `null` when the engine cannot be read (main menu, no campaign
+// loaded, before the epoch). `null` is deliberately distinct from `0`: `0` is a
+// valid absolute day index (the epoch day itself).
+declare function __neo_game_date(): string | null;
+declare function __neo_game_tick(): number | null;

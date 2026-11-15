@@ -932,3 +932,165 @@ def test_deploy_rule_flags_a_window_script_nothing_ships(tmp_path):
 def test_every_window_script_is_deployed():
     """The real tree: nothing on the window side is left behind."""
     assert violates_undeployed_windows_scripts(SCRIPTS, REPO / "justfile") == []
+
+
+# ---------------------------------------------------------------------------
+# R-anchor (plan 2026-11-15-chain-manifest-coverage, Task 0).
+#
+# `src/dll/shared/offsets.zig` is what the DLL actually calls; the chain
+# manifest is what survives a game update.  A constant registered in neither is
+# an address nobody will re-anchor — the next build keeps compiling against a
+# number that now means something else, and nothing says so.  Matching is by
+# **value**: `RVA_HOLDER` and `RVA_GALAXY_MAP_DB` are one address, so one row
+# represents both, and a by-name rule would demand a second row for the same
+# number.
+# ---------------------------------------------------------------------------
+
+OFFSETS_ZIG = REPO / "src" / "dll" / "shared" / "offsets.zig"
+CHAIN_MANIFEST = REPO / "evidence" / "xrefs" / "chain_manifest_4_4_4.tsv"
+
+#: The manifest's column order, duplicated on purpose: this fence must not import
+#: ``chain_drift`` (capstone) to read eight columns, but it must still refuse a
+#: reordered header — the ``expect`` column is located by position here.
+MANIFEST_COLUMNS = ("chain", "node", "class", "locator", "expect",
+                    "depends_on", "witness", "evidence")
+
+_RVA_CONST_RE = re.compile(r"pub const (RVA_[A-Z0-9_]+)(?:\s*:[^=]+)?\s*=\s*(0x[0-9A-Fa-f]+);")
+
+#: Constants allowed to stay unregistered, and why.  Only two reasons count:
+#: "same-value alias" (its partner holds the row) and "structural offset" (the
+#: anchor is a field of a struct whose base node carries the row, so a second
+#: recipe would be a second name for one address).  "Not done yet" is the state
+#: this fence exists to make visible, not an exemption.
+#:
+#: The four hash-table slots below are the one structural-offset entry: they are
+#: adjacent fields of the one table ``hash_map`` (``RVA_MAP 0x326d108``) and
+#: ``hash_load_factor`` (0x326d124) already carry that table's two ends, so a
+#: fifth/sixth/seventh/eighth row would be four more names for one structure —
+#: exactly the "don't invent a recipe per adjacent slot" ruling in the plan.
+ANCHOR_EXEMPTIONS: dict[str, str] = {
+    "RVA_BUCKETS": "结构偏移:同一张名字哈希表的相邻槽(manifest @node:hash_map),不单独配方",
+    "RVA_NEXT_ID": "结构偏移:同一张名字哈希表的相邻槽(manifest @node:hash_map),不单独配方",
+    "RVA_MASK": "结构偏移:同一张名字哈希表的相邻槽(manifest @node:hash_map),不单独配方",
+    "RVA_TAIL": "结构偏移:同一张名字哈希表的相邻槽(manifest @node:hash_map),不单独配方",
+}
+
+
+def rva_constants(offsets_path):
+    """``(name, value)`` for every ``pub const RVA_*`` in ``offsets_path``, file order."""
+    return [(name, int(value, 16))
+            for name, value in _RVA_CONST_RE.findall(_read(offsets_path))]
+
+
+def manifest_anchor_values(manifest_path):
+    """The 4.4.4 landing of every manifest row that has one; plus header problems.
+
+    ``-`` is not a landing: a ``structure`` row without an address says "this
+    anchor cannot be judged against bytes", which is honest for an unlocated
+    node but cannot stand in for registering a constant that *does* have one.
+    The header is validated because the ``expect`` column is read by position —
+    a renamed or reordered header would otherwise report every anchor missing.
+    """
+    values = set()
+    problems = []
+    header_seen = False
+    for line in _read(manifest_path).splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        fields = line.split("\t")
+        if not header_seen:
+            header_seen = True
+            if tuple(fields) != MANIFEST_COLUMNS:
+                problems.append(
+                    f"{manifest_path.name}: header must be "
+                    + "|".join(MANIFEST_COLUMNS)
+                    + " — the expect column is read by position")
+                return values, problems
+            continue
+        if len(fields) != len(MANIFEST_COLUMNS):
+            problems.append(f"{manifest_path.name}: expected "
+                            f"{len(MANIFEST_COLUMNS)} columns, got {len(fields)}")
+            continue
+        expect = fields[4].strip()
+        if expect and expect != "-":
+            values.add(int(expect, 16))
+    return values, problems
+
+
+def violates_unregistered_anchor(offsets_path, manifest_path):
+    """R-anchor: every ``RVA_*`` in ``offsets.zig`` must be registered in the manifest.
+
+    Violation strings are ``"<offsets basename>: <NAME> 0x<value> ..."`` so the
+    reader gets the constant name (what to add) and the value (what to search
+    for).  A malformed manifest is reported *instead of* an anchor list: with no
+    trustworthy column, an anchor list would be noise dressed as evidence.
+    """
+    registered, problems = manifest_anchor_values(manifest_path)
+    if problems:
+        return problems
+    out = []
+    for name, value in rva_constants(offsets_path):
+        if name in ANCHOR_EXEMPTIONS or value in registered:
+            continue
+        out.append(f"{offsets_path.name}: {name} 0x{value:x} is not registered in "
+                   f"{manifest_path.name}")
+    return out
+
+
+def _write_offsets(tmp_path, *pairs):
+    path = tmp_path / "offsets.zig"
+    path.write_text("".join(f"    pub const {name}: usize = {value};\n"
+                            for name, value in pairs), encoding="utf-8")
+    return path
+
+
+def _write_manifest(tmp_path, *rows):
+    path = tmp_path / "manifest.tsv"
+    path.write_text("# a comment row is not a node\n"
+                    + "\t".join(MANIFEST_COLUMNS) + "\n"
+                    + "".join("\t".join(row) + "\n" for row in rows), encoding="utf-8")
+    return path
+
+
+def test_anchor_rule_flags_an_rva_missing_from_the_manifest(tmp_path):
+    offsets = _write_offsets(tmp_path, ("RVA_FOO", "0x1000"), ("RVA_BAR", "0x2000"))
+    manifest = _write_manifest(tmp_path, (
+        "register", "node_a", "address", "bytes:90", "0x2000", "", "w", "e"))
+    assert violates_unregistered_anchor(offsets, manifest) == [
+        "offsets.zig: RVA_FOO 0x1000 is not registered in manifest.tsv"]
+
+
+def test_anchor_rule_accepts_a_value_registered_under_another_name(tmp_path):
+    offsets = _write_offsets(tmp_path, ("RVA_A", "0x1000"), ("RVA_B", "0x1000"))
+    manifest = _write_manifest(tmp_path, (
+        "register", "node_a", "address", "bytes:90", "0x1000", "", "w", "e"))
+    assert violates_unregistered_anchor(offsets, manifest) == []
+
+
+def test_anchor_rule_reads_the_expect_column_only(tmp_path, monkeypatch):
+    # A ``-`` structure row is "cannot be judged", not "registered"; the
+    # exemption hatch is what a same-value alias / structural offset uses, so it
+    # must actually suppress — an exemption table nothing reads is decoration;
+    # and a reordered header must be reported instead of an anchor list, because
+    # ``expect`` is read by position.
+    offsets = _write_offsets(tmp_path, ("RVA_FOO", "0x1000"), ("RVA_BAR", "0x2000"),
+                             ("RVA_BAZ", "0x3000"))
+    manifest = _write_manifest(tmp_path, (
+        "register", "node_a", "structure", "", "-", "", "w", "e"))
+    assert [v.split(" ")[1] for v in violates_unregistered_anchor(offsets, manifest)] == \
+        ["RVA_FOO", "RVA_BAR", "RVA_BAZ"]
+    manifest = _write_manifest(tmp_path, (
+        "register", "node_a", "address", "bytes:90", "0x2000", "", "w", "e"))
+    monkeypatch.setitem(ANCHOR_EXEMPTIONS, "RVA_BAZ", "same-value alias")
+    assert [v.split(" ")[1] for v in violates_unregistered_anchor(offsets, manifest)] == \
+        ["RVA_FOO"]
+    shifted = tmp_path / "shifted.tsv"
+    shifted.write_text("node\t" + "\t".join(MANIFEST_COLUMNS[1:]) + "\n",
+                       encoding="utf-8")
+    hits = violates_unregistered_anchor(offsets, shifted)
+    assert len(hits) == 1 and "header must be" in hits[0], hits
+
+
+def test_real_tree_has_no_unregistered_anchor():
+    """The real tree: every ``RVA_*`` in offsets.zig has a manifest row at its value."""
+    assert violates_unregistered_anchor(OFFSETS_ZIG, CHAIN_MANIFEST) == []

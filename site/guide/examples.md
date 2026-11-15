@@ -12,7 +12,7 @@ The shape that works for a runtime mod: **JavaScript writes an official state
 value, official script reads it back and fires a real event.**
 
 ```ts
-import { graph, log, onSystem } from "@neo/runtime";
+import { gameDate, gameTick, graph, log, onSystem } from "@neo/runtime";
 
 const DRIVER_SYSTEM = 82;
 const driver = { id: DRIVER_SYSTEM } as unknown as Parameters<typeof graph.betweenness>[0];
@@ -22,6 +22,7 @@ onSystem((s) => {
   const pick = betweenness >= 200 ? 2 : 1;
   s.setVariable("neo_event_pick", pick);
   if (s.id === DRIVER_SYSTEM) {
+    log(`NEO_DATE ${gameDate()} tick=${gameTick()}`);
     log(`NEO_EVENT_PICK source=js system=${s.id} pick=${pick} betweenness=${betweenness}`);
   }
 });
@@ -52,7 +53,10 @@ Two things are load-bearing here and both are easy to get wrong:
 monthly pulse. The option writes `NEO_EVENT_PICK <n>` to `game.log` and
 `neo_event_last = <n>` to the country; the other half of the pair is
 `NEO_EVENT_PICK source=js system=82 pick=<n>` in `C:/temp/neo_js.log`. The two
-numbers must agree — a mismatch is a real defect, not a demo quirk.
+numbers must agree — a mismatch is a real defect, not a demo quirk. The same
+block also logs one `NEO_DATE <YYYY.MM.DD> tick=<absolute day>` line per monthly
+pulse, which is what `gameDate()` / `gameTick()` are for (both `null` before a
+campaign is loaded).
 
 Build and check it:
 
