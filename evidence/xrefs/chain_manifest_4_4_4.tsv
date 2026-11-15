@@ -45,6 +45,9 @@ register	effect_overwrite_msg	address	bytes:73 63 72 69 70 74 65 64 20 65 66 66 
 register	trigger_overwrite_msg	address	bytes:73 63 72 69 70 74 65 64 20 74 72 69 67 67 65 72 20 25 73 20 69 73 20 6f 76 65 72 77 72 69 74 69 6e 67 20 61 6e 20 65 78 69 73 74 69 6e 67 20 74 72 69 67 67 65 72 2c 20 72 65 6e 61 6d 65 20 69 74	0x2518270		token_readback	pipeline §27; ASCII 无重定位 ⇒ bytes: 合法(全镜像仅 1 处,落点=串首)
 register	effect_source_file	address	bytes:43 3a 5c 6d 6e 74 5c 67 73 67 5c 73 74 65 6c 6c 61 72 69 73 5c 61 75 67 75 73 74 75 73 5c 61 75 67 75 73 74 75 73 5c 73 6f 75 72 63 65 5c 73 63 72 69 70 74 65 64 65 66 66 65 63 74 2e 63 70 70	0x25181d0		token_readback	pipeline §27; ASCII 无重定位 ⇒ bytes: 合法(全镜像仅 1 处,落点=串首)
 register	trigger_source_file	address	bytes:43 3a 5c 6d 6e 74 5c 67 73 67 5c 73 74 65 6c 6c 61 72 69 73 5c 61 75 67 75 73 74 75 73 5c 61 75 67 75 73 74 75 73 5c 73 6f 75 72 63 65 5c 73 63 72 69 70 74 65 64 74 72 69 67 67 65 72 2e 63 70 70	0x25182c0		token_readback	pipeline §27; ASCII 无重定位 ⇒ bytes: 合法(全镜像仅 1 处,落点=串首)
+register	log_emitter	address	bytes:48 89 54 24 10 4c 89 44 24 18 4c 89 4c 24 20 55	0x1c91c30		token_readback	pipeline §27
+register	class_info_deleter	address	bytes:40 53 48 83 ec 20 48 8d 05 cb bb 17	0x34c090		token_readback	pipeline §22
+register	trigger_instantiate	address	bytes:48 89 5c 24 10 4c 89 4c 24 20 48 89 4c 24 08 55 56 57 41 54 41 55 41 56 41 57 48 8d 6c 24 d9 48 81 ec d0 00 00 00 4d 8b e1 45 8b f8 4c 8b ea 48	0x349ae0		token_readback	pipeline §23
 dispatch	base_execute	address	bytes:48 89 5c 24 08 57 48 83 ec 20 8b 42 08 48 8b da 48 8b f9 85 c0 78 32 ba 10 00 00 00 48 8b cb e8 ?? ?? ?? ?? 48 8b cb e8 ?? ?? ?? ?? ba 03 00 00 00 48 8b cb e8 ?? ?? ?? ?? ba 10 00 00 00 48 8b cb e8 ?? ?? ?? ?? 8b 43 08 ff c0 48 8b d3 89 43 08 48 8b cf 48 8b 07 ff 50 10 ff 4b 08 48 8b cb	0x1d08520		c6_log_lines	structures §10 §14
 dispatch	dispatch_point	address	callshape:callptr+0x48&bytes:48 89 5c 24 18 55 56 57 41 56 41 57 48 83 ec 20 48 8b ea 48	0x3b0f80		c6_log_lines	c1_validation §91.6 §91.7
 dispatch	donor_execute	address	strref:Expected "@reads=0x88	0x3afd30		c6_log_lines	c1_validation §52; '" in file: "' 12 函数共享 ⇒ 改用同函数内 'Expected "'(2 函数)+@reads=0x88
@@ -56,6 +59,7 @@ dispatch	trigger_eval_slot	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 
 dispatch	out_of_family_dispatch	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08	0xcc4220		c6_log_lines	c1_validation §72
 dispatch	every_system_consumer	address	bytes:40 53 48 83 ec 20 b9 88 01 00 00 e8 58 03 71 00 48 8b d8 48 89 44 24 38 ba 80 00 00 00 48 8b c8 e8 8b 29 d8 ff 48 8d 05 f4 13 be 00 48 89 03 48	0x1a74eb0		c6_log_lines	c1_validation §90; 唯一 lea 到 0x26562d0 的站点(0x1a74ed5)所在函数
 dispatch	every_system_vtable	structure		0x26562d0	every_system_consumer	c6_log_lines	c1_validation §90; 102 张同形 every_system 表,槽 0..39 无一唯一(slot14=0x1a76130 有 202 个候选),⇒ 无 vtable: 配方;靠 @node:every_system_consumer 的 lea 保活
+dispatch	log_effect_exec	address	bytes:48 89 5c 24 10 48 89 74 24 18 48 89 7c 24 20 55 41 56 41 57 48 8d ac 24 b0 f3 ff ff 48 81 ec 50 0d 00 00 48 8b da 48 8b f9 45 33 ff 44 89 bd 70 0c 00 00 48 8d 8d 50 02 00 00 e8 ?? ?? ?? ?? 90 48 8d 8d 50 02 00 00 e8 ?? ?? ?? ?? 48 89 9d 68 0b 00 00 44 89 bd 58 02 00 00 48 89 9d 60 02 00 00 8b 8f e0 00 00 00 48 8d 87 d0 00 00 00 48 83 78 18 10 72 03 48 8b 00 48 89 44 24 60 89 4c 24	0x185bf60		c6_log_lines	c1_validation §90; 孪生 0x1af5690 前 96 B 逐字节相同,判别字节在 96..128
 state_write	set_variable_create	address	bytes:40 53 48 83 ec 20 b9 18 03 00 00 e8 ?? ?? ?? ?? 48 8b d8 48 89 44 24 38 33 d2 41 b8 18 03 00 00 48 8b c8 e8 ?? ?? ?? ?? 48 8b cb e8 ?? ?? ?? ?? 48 8d 05 b9 3b d4 00 48 89 03 48 8d 05 cf 39 d4	0x18a6970		save_join	c1_validation §94 §95 §96
 state_write	set_variable_parser	address	bytes:48 89 5c 24 18 48 89 54 24 10 55 56 57 48 8d 6c 24 b9 48 81 ec c0 00 00 00 48 8b fa 48 8b d9 33 f6 89 75 c7 48 81 c1 f0	0x188e240		save_join	c1_validation §94 §96
 state_write	set_variable_body	address	bytes:48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20 48 8b f2 48 8b f9 4c 8b c2	0x188e1d0		save_join	c1_validation §94 §96
@@ -65,6 +69,12 @@ state_write	docstring_set_variable	structure		-		save_join	c1_validation §94
 state_write	field_name_string	structure		-		save_join	c1_validation §94
 state_write	field_value_cell	structure		-		save_join	c1_validation §94
 state_write	field_parse_state	structure		-		save_join	c1_validation §94
+state_write	map_emplace	address	bytes:48 89 5c 24 08 48 89 74 24 10 48 89 7c 24 20 44 89 44 24 18 55 41 54 41 55 41 56 41 57 48 8b ec 48 81 ec 80 00 00 00 48 63 0d be e0 69 01 40 b7	0x1bcf030		save_join	pipeline §30
+state_write	name_append	address	bytes:40 53 56 57 48 83 ec 20 48 63 41 14 48 8b f9 8b 49 10 49 8b d8 48 63 f2 3b c1 0f 85 ?? ?? ?? ?? 66 0f 6e c1 48 89 6c 24 40 8d 68 01 0f 5b c0 4c 89 64 24 48 4c 89 74 24 50 4c 89 7c 24 58 f3 0f 59 05 7a 9e 5a 02 f3 0f 2c c0 3b e8 ?? ?? ?? ??	0x158300		save_join	pipeline §30; 孪生 0x1dede70 的判别字节越过 0x24 B 的 .pdata 函数体 ⇒ 无 &bytes: 可用
+state_write	name_hash	address	bytes:40 53 48 83 ec 20 41 8b d8 89 4c 24	0x1c9e350		save_join	pipeline §30
+state_write	game_date_year	address	bytes:8b 11 b8 ab aa aa 2a 81 ea c0 55 9c 02 f7 ea 44 8b c2 41 c1	0x9af340		game_date §2	game_date §2; 叶子无 .pdata,与 0x9af2c0 只差一个 modrm 字节(0xc2/0xca)
+state_write	game_date_day_of_year	address	bytes:8b 11 b8 ab aa aa 2a 81 ea c0 55 9c 02 f7 ea 44 8b ca 41 c1	0x9af2c0		game_date §2	game_date §2; 同上,与 0x9af340 构成本对
+state_write	game_date_day_index	address	bytes:48 83 ec 28 4c 8b d9 e8 ?? ?? ?? ?? 49 8b cb 44	0x9af3b0		game_date §2	game_date §2
 graph	system_resolver	address	bytes:48 81 79 08 80 00 00 00 75 09 8b 41 10 89 44 24 08 eb 08 c7 44 24 08 ff ff ff ff 48 8b 05 86 d1	0x3939f0		zero_diff	graph_runtime §1.2 §1.11
 graph	edge_add	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 50 48 8b f2 48 8b f9 48 8d 4a	0x8bbaa0		zero_diff	graph_runtime §1
 graph	edge_remove	address	bytes:40 53 57 41 54 48 83 ec 20 48 63 81 9c 05 00 00 33 db 4c 8b	0x8bbc20		zero_diff	graph_runtime §1
