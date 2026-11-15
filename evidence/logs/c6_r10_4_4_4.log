@@ -185,3 +185,52 @@ python3 -m pytest scripts/test_scripts_layout.py scripts/test_c6_acceptance_doc.
   这套 smoke **不是** `neo check`：它不跑 tsc/esbuild、不跑真 QuickJS。
 
 **进程数仍为 0**；主机仍离线（本节的每一条都不依赖主机）。
+
+## 实机窗口(2026-11-15,Windows_Jiaolong)—— 读数
+
+**预算 2/2 用完,第三个进程没有开。**
+
+- **进程 A**(pid 1240,`--allow-window` 启动期注入):`BOOT … effect_id=19343 set_id=19344 install_rc=0 alive=1`。
+  跑了 **20 个月度脉冲**(原计划 3 个月;最快速度下超了),`R10_NBR` / `R10_FLAG` 各 15,760 行
+  = 20 × 788,每个 id 恰好 20 次、`n == deg` 零失配;`game.log` 的 `Neo: system <id>` 15,760 行,
+  每月恰好 788 个不同 id。`NEO_JS_TIMEOUT` 1 行(`r10timeout`)、`NEO_JS_ERROR` 1 行
+  (`r10throw` + `R10_INTENTIONAL`)、`NEO_JS_DISABLED 1 行(reason=budget)`;坏 mod 被禁之后好 mod
+  仍继续跑(`R10_NBR` 在 `NEO_JS_DISABLED` 之后还有 15,759 行)。`--stats`:`calls=matched=log_calls=writes=13396`
+  = 17 × 788、`installed=1 verify=0`。`UNINSTALL rc=0 verify=0 alive=1`,随后 `taskkill` → 进程数 0。
+- **进程 B**(pid 16164):`c2_exec_caller_probe` 判 **`dispatch_named`**,
+  `coverage_distinct=container_raw_count=systems=788`、`recorded_callers=1`、`unrecorded_callers=683`、
+  `install_rc=0 uninstall_rc=0 verify_rc=0 host_alive=1`、`--rule 0:0`。
+  **`#meta gate=world_state`** —— 它走的是自己的真门,不是进程 A 的 `operator_override` 豁免。
+- 台帐:`evidence/logs/c6_acceptance_r10_4_4_4.tsv` = `C6-1 pass / C6-2 pass / C6-6 pass`,
+  `C6-3/4/5 cannot_say`(本发没产出那三门的输入),`SUMMARY pass=3 fail=0 cannot_say=3`。
+
+## 实机窗口 —— 与 runbook 的偏差(每条都是现场修正,逐条留证)
+
+1. **`zig build` 重建出的字节与部署字节不同**:重建 = `6963de88…`(7,910,912 B),部署 = `2e1ba6d9…`
+   (7,911,936 B)。整文件 sha 每次重链都会变,不是代码身份;本发沿用 runbook 已记录、远端
+   `Get-FileHash` 逐字相等的那份,没有覆盖。**这不是「当前树 = 已验字节」的证明** —— 要那条结论,
+   下一发得把重建产物部署上去重跑。
+2. **session_bridge 不吃前导 `python`**:它的契约是「第一个位置参数 = 脚本路径」
+   (`session_bridge.py:210-214`)。runbook §2.1/§2.2 的
+   `session_bridge.py --timeout-s N python C:/temp/x.py …` 会把 `python` 当脚本,
+   报 `can't open file 'C:\Windows\System32\python'`、`EXIT=2`。正确形式去掉 `python`。
+3. **`--stats` 与 `--launch` 互斥**:`c2_boot_inject.py` 的 main 先判 `--pred/--stats/--uninstall`,
+   `--stats` 只读一个已在跑的进程。runbook §2.2 那条带 `--stats` 的启动命令会抛
+   `RuntimeError: 'stellaris.exe' is not running`;`--stats` 是 §2.5 的单独一发(已按此执行)。
+4. **进程 B 需要一次启动期注入,runbook §3 漏了这一步**:`neo_ps_probe` 的官方半边在
+   `every_system` 里调 `neo_action`,而我们注册的 keyword 只在 DLL 载入时进 token DB ⇒
+   存档载入前必须有我们的 DLL,否则该事件解析失败、`log` 也不会逐系统下发。做法与 R8 相同:
+   用**同字节的第二份文件名** `C:/temp/sqjs_r10b.dll` 做启动期注入,再让探针注入
+   `C:/temp/sqjs_r10.dll`(`refuse_if_resident` 按模块名拒绝同名的第二份)。
+   探针自己那道 `gate_install` 没有被豁免(`gate=world_state`)。
+5. **`just game status` 起初报 `no_game`**:监督器守护进程没在跑(读到的是 34,522 s 前的旧心跳)。
+   先 `just game start` 才有真心跳。
+6. **`win-desktop` 的 `Shortcut("enter"/"space")` 对游戏无效**:两次都没关掉事件窗、也没解暂停
+   (VK 路线;游戏只认 scancode)。`just game unpause`(SetForegroundWindow + scancode Space)
+   一次成功,`STATUS=playing note=ok`。事件窗留着不影响月度脉冲(20 个月照常下发)。
+7. **`NEO_JS_FLAG_REJECT … reason=no_flag_token` 恰好 1 行**是良性首用顺序:进程内第一次
+   `hasStarFlag` 早于第一次写,读不会铸名;紧随其后的写铸出名字,`after=true`。判据(首读 false →
+   写后 true)成立,不是失败。
+8. **`c6_acceptance.py` 的 `parse_uninstall` 会把整份文件按空白切成 `k=v`**,后出现的同名键覆盖
+   前面的 ⇒ 卸载回执文件的正文里不许再出现 `rc=` / `verify=` 这样的空白分隔记号,否则真回执被
+   正文覆盖成字符串、门读成 `missing_input`(本发第一次就撞上,改正文后 `C6-6 pass`)。

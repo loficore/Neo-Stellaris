@@ -1,0 +1,51 @@
+BOOT dll=sqjs_r10.dll sha=2e1ba6d94bb392b4 effect_id=19343 set_id=19344 install_rc=0 alive=1
+# R10 进程 A —— 启动期注入回执(Stellaris 4.4.4, 2026-11-15, Windows_Jiaolong)
+#
+# 台帐的 parse_boot 只认行首的 BOOT,所以回执在第一行,说明在它后面。
+#
+# 归属: Windows_Jiaolong, 会话 1(经 C:/temp/session_bridge.py), pid 1240
+# 授权: 2026-11-14「我需要你选择一个需要实际调试的,还有一个可以离线调试的。然后用Orca派发出去。」
+#       + 2026-11-15 启动期注入放行原话(逐字,见 evidence/logs/c6_r10_4_4_4.log 头注):
+#       「2026-11-15,我当场放行 c6_r10 的启动期注入:ns_world 的 IN_GAME_RUNNING 门对启动期注入
+#        结构上不可能满足(注入必须早于存档载入),同意该发以 --allow-window 放行;预算仍是 2 个进程。」
+# DLL:  C:/temp/sqjs_r10.dll sha256=2e1ba6d94bb392b477404652a1be520f7f1be54a3344313e4d1f30e7ffee8068
+#       (远端 Get-FileHash 与本地 sha256sum 逐字相等;本工作树 `zig build` 重建出的是另一份字节
+#        6963de88…,没有部署 —— 本发判的是已记录的那份出货字节,见「与 runbook 的偏差」第 1 条)
+# 安装参数: --act write --allow-window --launch D:/…/stellaris.exe --launch-args=--continuelastsave
+# 存档: r10_base.sav sha256=f6bfae78c7991f1ec25d148b44227659adbc36e27719c4aeb44090f4a02ddfa1 (788 系统)
+# 驱动 mod: mod/r10good.mod(官方半边)+ C:/temp/neo_mods/{r10good,r10timeout,r10throw}(运行时半边)
+#
+# 门的读数(先跑,原样):
+#   python C:/temp/session_bridge.py --timeout-s 300 C:/temp/ns_world.py assert-ready --action install --guard c6r10
+#   => STATE=NO_GAME EVIDENCE=reason=no game window: the premise cannot be proven so the action is refused
+#      EXIT=2
+#   (拒绝理由是 NO_GAME —— 与放行原话说的「结构上不可能满足」一致;不是 blocked/wedged)
+#
+# [boot] 回执原文:
+#   [boot] dll=C:/temp/sqjs_r10.dll sha16=2e1ba6d94bb392b4
+#   [boot] launched pid=1240 argv=['D:/SteamLibrary/steamapps/common/Stellaris/stellaris.exe', '--continuelastsave']
+#   [boot] pid=1240
+#   [boot] gate skipped by operator override (--allow-window)
+#   BOOT dll=sqjs_r10.dll sha=2e1ba6d94bb392b4 effect_id=19343 set_id=19344 install_rc=0 alive=1
+#   EXIT=0
+#
+# C6-1 判据(engine 侧): effect_id=19343 / set_id=19344 均非 0;install_rc=0;alive=1。
+# 引擎自己的 `Neo: system <id>` 行(game.log,effect_impl.cpp:21978)在窗口内 15,760 行
+# = 20 个月 × 788 系统,每个月恰好 788 个不同 id ⇒ 引擎按星系调到了我们注册的 effect。
+#
+# 与 runbook 的偏差(离线 prep 时主机不在线,命令没跑过;现场修正):
+#   1. `zig build` 重建出的字节(sha256 6963de88…, 7,910,912 B)与本发部署的 2e1ba6d9…(7,911,936 B)不同。
+#      整文件 sha 每次重链都会变,不是代码身份;本发沿用 runbook 已记录、远端 Get-FileHash 逐字相等的那份字节,
+#      没有把重建产物覆盖上去(窗口还没产出任何读数,不存在「读数作废」)。
+#   2. session_bridge 的契约是「第一个位置参数 = 脚本路径」,**不吃**前导的 `python`:
+#      runbook §2.1/§2.2 写的 `session_bridge.py --timeout-s N python C:/temp/x.py …` 会把 "python"
+#      当脚本名,报 `can't open file 'C:\\Windows\\System32\\python'`、EXIT=2。正确形式去掉 `python`。
+#   3. `--stats` 与 `--launch` 互斥(`c2_boot_inject.py` 的 main:先判 --pred/--stats/--uninstall)。
+#      runbook §2.2 那条带 `--stats` 的命令只会去读一个已在跑的进程并抛
+#      `RuntimeError: 'stellaris.exe' is not running`;`--stats` 是 §2.5 的单独一发。
+#   4. `just game status` 起初报 `STATUS=no_game`(age=34522s 的旧心跳)—— 监督器守护进程没在跑。
+#      先 `just game start` 才有真心跳(pid=1240 hwnd=132970)。
+#   5. 存档载入后有一个事件窗(「人类觉醒灵能能力」)并自动暂停。`win-desktop` 的
+#      `Shortcut("enter")` / `Shortcut("space")` 对游戏无效(VK 路线,游戏只认 scancode);
+#      `just game unpause`(SetForegroundWindow + scancode Space)一次成功:STATUS=playing note=ok。
+#      事件窗本身留着不影响月度脉冲(20 个月照常下发)。

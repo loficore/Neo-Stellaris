@@ -1,0 +1,15 @@
+UNINSTALL rc=0 verify=0 alive=1
+# R10 进程 A —— 卸载回执(Stellaris 4.4.4, 2026-11-15, pid 1240)
+#
+# 命令: python C:/temp/session_bridge.py --timeout-s 300 C:/temp/c2_boot_inject.py C:/temp/sqjs_r10.dll --uninstall
+# 原文:
+#   UNINSTALL rc=0 verify=0 alive=1
+#   EXIT=0
+#
+# C6-6 判据: 回执里 rc 与 verify 都是 0(拆干净、装拆字节校验一致), alive 为 1(宿主存活)。
+# 之后 `taskkill /F /IM stellaris.exe` → 进程数 0(下一发必须是干净进程)。
+# 铁律未变: 永不 FreeLibrary(AGENTS.md 约束 5);本发只 kill 宿主。
+#
+# 判读陷阱: c6_acceptance.py 的 parse_uninstall 会把**整份文件**按空白切成 k=v,
+# 后出现的同名键覆盖前面的。所以这份文件的正文里不许再出现 `rc=` / `verify=` 这样的
+# 空白分隔记号 —— 否则真回执被正文覆盖成字符串,门会读成 missing_input。
