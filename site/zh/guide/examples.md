@@ -9,7 +9,7 @@
 对运行时 mod 来说可行的形状是:**JavaScript 写一个官方状态值,官方脚本读回来并触发真事件。**
 
 ```ts
-import { graph, log, onSystem } from "@neo/runtime";
+import { gameDate, gameTick, graph, log, onSystem } from "@neo/runtime";
 
 const DRIVER_SYSTEM = 82;
 const driver = { id: DRIVER_SYSTEM } as unknown as Parameters<typeof graph.betweenness>[0];
@@ -19,6 +19,7 @@ onSystem((s) => {
   const pick = betweenness >= 200 ? 2 : 1;
   s.setVariable("neo_event_pick", pick);
   if (s.id === DRIVER_SYSTEM) {
+    log(`NEO_DATE ${gameDate()} tick=${gameTick()}`);
     log(`NEO_EVENT_PICK source=js system=${s.id} pick=${pick} betweenness=${betweenness}`);
   }
 });
@@ -47,6 +48,8 @@ on_monthly_pulse                       (common/on_actions/neo_events_on_actions.
 **你应该看到什么:** 一个带单一可点击选项的事件窗口,每月脉冲一次。选项把 `NEO_EVENT_PICK <n>` 写进
 `game.log`、把 `neo_event_last = <n>` 写给国家;另一半是 `C:/temp/neo_js.log` 里的
 `NEO_EVENT_PICK source=js system=82 pick=<n>`。两个数字必须一致——不一致是真缺陷,不是演示的小毛病。
+同一个分支还每月记录一行 `NEO_DATE <YYYY.MM.DD> tick=<绝对天序号>`,这正是 `gameDate()` /
+`gameTick()` 的用途(战役未载入时两者都是 `null`)。
 
 构建并检查它:
 
