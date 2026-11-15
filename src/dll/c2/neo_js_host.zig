@@ -91,7 +91,7 @@ const offsets = @import("../shared/offsets.zig");
 const opinion_table = @import("opinion_table.zig");
 const country_probe = @import("country_probe.zig");
 const capability = @import("capability.zig");
-/// 日期 / tick 的**唯一实现**(读法、`360`/`30`/纪元常数都在那里;本文件只做 JS 边界)。
+/// 日期 / tick 的**唯一实现**(读法、天数分解与纪元常数都在那里;本文件只做 JS 边界)。
 const gamestate = @import("../api/gamestate.zig");
 
 const is_windows = builtin.os.tag == .windows;
