@@ -9,6 +9,8 @@
 //
 // v1.1 is additive: `neighbors`, `setStarFlag` and `hasStarFlag` are the only new
 // members.  `API_VERSION` stays 1, so a Phase 1 bundle keeps running unchanged.
+// v1.2 adds `gameDate` / `gameTick` (world-clock reads; no permission bit, both
+// `null` when the engine cannot be read) — additive for the same reason.
 // `setStarFlag` writes through the official `set_star_flag` body (never engine
 // memory) and its name must be a string literal — `neo check` enforces that at
 // build time and rejects names that collide with an official keyword.
@@ -112,6 +114,40 @@ export function onCountry(fn: (c: Country) => void): void {
 /** A refused read comes back as `undefined`; the SDK's contract is `null`. */
 function intOrNull(v: unknown): number | null {
   return typeof v === "number" ? v : null;
+}
+
+/**
+ * The engine's current date as `"YYYY.MM.DD"`.
+ *
+ * `null` = not readable: main menu / no campaign loaded / read failure / before
+ * the epoch. Deliberately **not** `""` and not `"0000.00.00"`.
+ *
+ * Month and day are **1-based** (the engine's internal calendar is 0-based; the
+ * `+1` is the display convention and already applied by the host). Do not add
+ * one again. The year is the engine's own calendar year (`2200` in a normal
+ * campaign start), and a year is 360 days of 30-day months.
+ *
+ * Needs no permission bit: it is read-only global time, like `apiVersion`.
+ */
+export function gameDate(): string | null {
+  const v = __neo_game_date();
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+/**
+ * The **absolute day index** since the epoch (`0` = the epoch's own day).
+ *
+ * `null` = not readable (same fail-closed cases as {@link gameDate}). `0` is a
+ * valid answer, so it is never used as "unavailable".
+ *
+ * **This is not a frame counter and not a millisecond clock.** It advances once
+ * per game day (the engine's daily tick), so it is safe for "days since X"
+ * arithmetic and wrong for interpolation between frames. Needs no permission
+ * bit, like `apiVersion`.
+ */
+export function gameTick(): number | null {
+  const v = __neo_game_tick();
+  return typeof v === "number" && v >= 0 ? v : null;
 }
 
 export function log(message: string): void {

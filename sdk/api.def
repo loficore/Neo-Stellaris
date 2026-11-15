@@ -13,6 +13,8 @@
     {"name": "__neo_system_has_flag", "params": ["u32", "string"], "returns": "bool"},
     {"name": "__neo_register_country", "params": ["function"], "returns": "void"},
     {"name": "__neo_country_opinion", "params": ["u32", "u32"], "returns": "i32|null"},
-    {"name": "__neo_country_their_opinion", "params": ["u32", "u32"], "returns": "i32|null"}
+    {"name": "__neo_country_their_opinion", "params": ["u32", "u32"], "returns": "i32|null"},
+    {"name": "__neo_game_date", "params": [], "returns": "string|null"},
+    {"name": "__neo_game_tick", "params": [], "returns": "i64|null"}
   ]
 }
