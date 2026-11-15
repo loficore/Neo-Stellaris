@@ -87,6 +87,7 @@ onSystem((s) => {
 | `Country.id` | `number` | 本次调用的引擎国家 id:被派发作用域 `+0x10` 的**低 24 位**(高 8 位是引擎的类型标签——C3 读数 `0x01000002 → 2`)。SDK 唯一留存的句柄。 |
 | `Country.opinionOf` | `(targetId: number) => number \| null` | 引擎 `opinion` keyword:矩阵里的一个 `int32` 格,键是 `target * n + self`(两个 id 都掩到低 24 位——常量是 `offsets.country` 的 `SCOPE_ID_MASK`;宿主自己掩,引擎不替我们掩;直接传 `Country.id`)。**`null` = fail-closed**,绝不是 `0`:未计算(引擎哨兵 `0x7fffffff`)、任一 id 越界、矩阵没建(主菜单/没有战役)、会话没有 `opinion.read`,或 id 与被派发的国家不符。每次拒绝还会记 `NEO_JS_OPINION_REJECT … reason=<tag>`。**只读:**这一格是惰性填充的引擎缓存,宿主从不调它的计算器。 |
 | `Country.theirOpinionOf` | `(targetId: number) => number \| null` | 引擎 `their_opinion` keyword——`opinionOf` 的**转置**(`self * n + target`)。同样的 fail-closed 规则。哪一个才表示「我们对他们的看法」**尚未确立**;见[已知限制](/zh/guide/known-limits)。 |
+| `Country.resource` | `(index: number) => number \| null` | 引擎**资源索引** `index` 上的存量(`energy` 在原版 4.4.4 里是 `0`)。数值 = 引擎那个 8 B 定点格 **÷ `1e5`**(引擎自己的标度),所以 `12.34567` 就是 12.34567 单位。**`null` = fail-closed,绝不是 `0`**:没有读源(主菜单 / 战役未载入——最常见的一档)、国家对象解析失败、存量容器为 0、向量的 holder/data 为 0、`index` 越过资源条数,或三个研究资源那一路的所有者对象为 0。会话缺 `resource.read` 同样答 `null`,而且是**唯一**会记日志的一档(`NEO_JS_RESOURCE_REJECT … reason=no_permission`)。**`0` 是合法存量**(「这个国家真的一点都没有」),绝不当「不可用」。三个研究资源(`physics` / `society` / `engineering_research`)**是支持的**:引擎把它们放在国家对象上而不是向量里,宿主走的就是引擎自己那条路,不读向量里那三个陈旧的格。**只读:**没有 setter,也不调任何 vtable 槽。与 `opinionOf` 不同,这里刻意**没有** `scope_mismatch` 门——opinion 矩阵对另一向有转置格,存量没有,读别国的存量是合法的只读用法。 |
 | `graph.betweenness` | `(s: System) => number` | 该星系的图分数(与交通要道打分同源)。 |
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200`——一个固定阈值,不是 v1 里的可调参数。 |
 | `log` | `(message: string) => void` | 往 `C:/temp/neo_js.log` 追加 `NEO_JS_LOG <text>`。 |
@@ -107,10 +108,28 @@ onSystem((s) => {
 两者都不需要权限位(`apiVersion` 是另一个这样的成员):它们是只读的全局时间,不碰任何
 campaign 对象。
 
+### 国家资源存量
+
+`c.resource(index)` 返回一格存量,普通的 number:引擎那个 8 B 定点格 **÷ `1e5`**,
+与引擎内部用的标度一致。`index` 是引擎的资源编号(原版 4.4.4 里 `energy` = `0`),
+不是国家 id,也不是表槽位。
+
+`null` 是 fail-closed 的答案,最常见的一档是主菜单:战役没载入就没有可读的东西。其余几档是
+国家对象解析失败、存量容器为 0、向量的 holder/data 为 0、`index` 越过资源条数,或三个研究资源
+那一路的所有者对象为 0。会话缺 `resource.read` 也答 `null`,而这是唯一会记日志的一档。
+
+`0` 是合法存量(「这个国家一点都没有」),绝不当「不可用」。
+
+三个研究资源(`physics_research`、`society_research`、`engineering_research`)**是覆盖的**:
+引擎把它们放在国家对象上而不是向量里,宿主读的就是这第二条路,而不是向量里那三个陈旧的格。
+这条路上没有任何写入口;并且与 `opinionOf` 不同,这里没有作用域门:读别国的存量是合法的只读用法。
+
+读链是静态推出来的;它证了什么、没证什么见[已知限制](/zh/guide/known-limits)。
+
 ## native 契约
 
-SDK 是宿主装的十五个全局对象之上的薄封装。`sdk/api.def` 是唯一权威;TypeScript 界面、mock 宿主
-与 Zig 宿主都必须与它一致。v1 的七个名字在前,原样不变;v1.1 与 v1.2 的追加项按宿主自己的
+SDK 是宿主装的十六个全局对象之上的薄封装。`sdk/api.def` 是唯一权威;TypeScript 界面、mock 宿主
+与 Zig 宿主都必须与它一致。v1 的七个名字在前,原样不变;v1.1、v1.2 与 v1.3 的追加项按宿主自己的
 顺序排在后面。
 
 | native | 参数 | 返回 |
@@ -130,9 +149,11 @@ SDK 是宿主装的十五个全局对象之上的薄封装。`sdk/api.def` 是�
 | `__neo_country_their_opinion` | `u32`、`u32` | `i32 \| null`(`undefined` = 被拒绝) |
 | `__neo_game_date` | — | `string \| null`(`null` = 引擎读不到) |
 | `__neo_game_tick` | — | `i64 \| null`(`null` = 引擎读不到;`0` 合法) |
+| `__neo_country_resource` | `u32`、`u32` | `f64 \| null`(`undefined` = 被拒绝) |
 
-system 那些 native 的 `u32` 就是**星系 id**;国家那一对取 `(self, target)`。「被拒绝」是宿主的
-fail-closed 答案,刻意与「算出来的 `0`」区分开。
+system 那些 native 的 `u32` 就是**星系 id**;opinion 那一对取 `(self, target)`,
+`__neo_country_resource` 取 `(country, resourceIndex)`。「被拒绝」是宿主的 fail-closed 答案,
+刻意与「算出来的 `0`」区分开。
 
 ## 清单
 
@@ -155,9 +176,10 @@ fail-closed 答案,刻意与「算出来的 `0`」区分开。
 - `scope`——`"system"`、`"country"`,或 `["system","country"]`(字符串形式与 1–2 元素数组形式都接受,
   每个名字最多一次)。bundle 只会收到它声明的作用域。必填。
 - `permissions`——`graph.read`、`variable.write`、`variable.read`、`flag.read`、`flag.write`、`log`、
-  `opinion.read` 任选。缺权限的 native 会被宿主拒绝,未知权限则在加载时禁用该 mod。`degree`、
+  `opinion.read`、`resource.read` 任选。缺权限的 native 会被宿主拒绝,未知权限则在加载时禁用该 mod。`degree`、
   `neighbors`、`betweenness`、`isChokepoint` 属于 `graph.read`;`setStarFlag` 属于 `flag.write`;
-  `hasStarFlag` 属于 `flag.read`;`opinionOf` / `theirOpinionOf` 属于 `opinion.read`。
+  `hasStarFlag` 属于 `flag.read`;`opinionOf` / `theirOpinionOf` 属于 `opinion.read`;`resource`
+  属于 `resource.read`(与 `opinion.read` 一样**只有读**,两者都没有写位)。
 - `engine` / `runtime`——兼容性字符串;不匹配会记一行日志并禁用该 mod。
 - `flags`——**可选**(没有它的旧清单照样能加载)。它是**构建期撞名门**,不是运行期权威:`neo build`
   把 bundle 里 `setStarFlag("…")` 的字面量记在这里,`neo check` 拒绝不再匹配的列表,这样作者就不会
