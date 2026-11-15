@@ -263,3 +263,30 @@ def test_systems_and_probe_argument_parsing():
         except ValueError:
             continue
         raise AssertionError(f"parse_probe accepted {bad!r}")
+
+
+# --- 文档三方一致(README + offline-tooling)-----------------------------------------
+
+DOC = REPO / "docs" / "offline-tooling.md"
+README = REPO / "scripts" / "README.md"
+
+
+def test_doc_section_quotes_the_same_layout_row():
+    doc = DOC.read_text(encoding="utf-8")
+    assert "### `scripts/c46_field_read.py" in doc
+    # 三方一致的第三处:文档里的 layout 行必须**逐字**等于驱动自己的 EXPECTED_LAYOUT。
+    assert mod.format_layout(mod.EXPECTED_LAYOUT) in doc
+    for token in ("296", "protocol_desync", "owner_named", "session_bridge.py",
+                  "--plan n1", "header.status == rc", "0x1370", "0x1374",
+                  "0x1378", "0x1379", "0xffffff"):
+        assert token in doc, token
+    # N1 照单与 N2–N5 的输入缺口表是这一节的交付物,不是附注。
+    for token in ("N1", "N2", "N3", "N4", "N5"):
+        assert token in doc, token
+
+
+def test_readme_lists_the_tool_and_its_fence():
+    readme = README.read_text(encoding="utf-8")
+    assert "c46_field_read.py" in readme
+    assert "test_c46_field_read.py" in readme
+    assert "17 passed" in readme
