@@ -84,6 +84,100 @@ pub const LAYOUT: [8]u32 = .{
 };
 
 // ---------------------------------------------------------------------------
+// 读逻辑(纯函数面:Linux 单测直接调,生产导出在后面接上)
+// ---------------------------------------------------------------------------
+
+/// 一个只读内存抽象,与 `galaxy_graph.zig` / `graph_probe.zig` 的 `Memory` 同形:
+/// `ctx` 由读者自己解释(合成镜像在测试侧,进程内 `ReadProcessMemory` 在生产侧)。
+pub const Reader = struct {
+    ctx: *anyopaque,
+    /// 读 `addr` 起 `len` 字节;不可读返回 false(与 `readProcessMemory` 的
+    /// `got == out.len` 契约同形 —— 少读一个字节就是没读到)。
+    read: *const fn (ctx: *anyopaque, addr: usize, len: usize, buf: []u8) bool,
+};
+
+/// `kind + subject` → 对象绝对地址。解析不上返回 null(→ -2)。
+/// **生产实现只查表**(`gamestate.getSystem` / `getCountry`);本模块不做任何引擎语义判断。
+pub const Resolver = *const fn (kind: u64, subject: u64) ?usize;
+
+/// 解一块协议缓冲的**请求头**。缓冲装不下整个头(含 `status`/`got`/`resolved`)⇒ null:
+/// 一个连回复头都放不下的缓冲不是协议缓冲,serve 会在它上面越界写。
+pub fn decode(buf: []const u8) ?Request {
+    if (buf.len < OFF_DATA) return null;
+    return .{
+        .kind = std.mem.readInt(u64, buf[OFF_KIND..][0..8], .little),
+        .subject = std.mem.readInt(u64, buf[OFF_SUBJECT..][0..8], .little),
+        .off = std.mem.readInt(u32, buf[OFF_OFF..][0..4], .little),
+        .len = std.mem.readInt(u32, buf[OFF_LEN..][0..4], .little),
+    };
+}
+
+/// 把 `addr` 起 `out.len` 字节读进 `out`。`0 = StatusOk`、`-4 = StatusUnreadable`。
+/// 失败时把 `out` 抹成 0:调用方拿到的永远是「这一次读到的」或「什么都没有」,
+/// 不是上一发留下的字节。
+pub fn plainRead(r: Reader, addr: usize, out: []u8) i32 {
+    if (addr == 0 or out.len == 0) return StatusUnreadable;
+    if (!r.read(r.ctx, addr, out.len, out)) {
+        @memset(out, 0);
+        return StatusUnreadable;
+    }
+    return StatusOk;
+}
+
+/// 就地服务一块 `BUF_SIZE` 缓冲:请求头进 → 解析 → 回填同一块缓冲 → 返回状态码。
+///
+/// 顺序是契约(Review Focus #1,半途读数):
+///   ① 先把请求四格**拷出来**(否则下面的清零会把它自己抹掉);
+///   ② 整块清零 —— 上一发的读数不可能活到这一次;
+///   ③ 校验 `len`(`0` / `> MAX_LEN` ⇒ -3,**不截断**);
+///   ④ `kind=3` 拿 `subject` 当地址;`kind=1/2` 走 `resolve`;其余 -5;
+///   ⑤ 读失败 -4;
+///   ⑥ 回填头 + 数据并返回 `status`。
+///
+/// 失败分支只回填**头**(`status`/`got = 0`/`resolved` 诊断值),数据区保持全 0:
+/// 「部分成功」不是这个协议的合法输出。
+pub fn serve(buf: []u8, r: Reader, resolve: Resolver) i32 {
+    if (buf.len < BUF_SIZE) return StatusBadLen;
+    const req = decode(buf) orelse return StatusBadLen;
+    @memset(buf, 0);
+
+    if (req.len == 0 or req.len > MAX_LEN) return reply(buf, req, StatusBadLen, 0, 0);
+
+    var base: usize = undefined;
+    if (req.kind == KIND_RAW) {
+        if (req.subject == 0) return reply(buf, req, StatusUnresolved, 0, 0);
+        if (req.subject > std.math.maxInt(usize)) return reply(buf, req, StatusUnresolved, 0, 0);
+        base = @intCast(req.subject);
+    } else if (req.kind == KIND_SYSTEM or req.kind == KIND_COUNTRY) {
+        base = resolve(req.kind, req.subject) orelse return reply(buf, req, StatusUnresolved, 0, 0);
+    } else {
+        return reply(buf, req, StatusBadKind, 0, 0);
+    }
+    const resolved: u64 = @intCast(base);
+
+    // 地址回绕不是「读到别处」:相加溢出 ⇒ 读不到(Debug 构建里未检查的 `+` 会 panic)。
+    const addr = std.math.add(usize, base, @as(usize, req.off)) catch
+        return reply(buf, req, StatusUnreadable, 0, resolved);
+
+    const data = buf[OFF_DATA..][0..@as(usize, req.len)];
+    const st = plainRead(r, addr, data);
+    if (st != StatusOk) return reply(buf, req, st, 0, resolved);
+    return reply(buf, req, StatusOk, req.len, resolved);
+}
+
+/// 回填头(请求四格原样回显 + 状态三格)。数据由 `serve` 自己写好了。
+fn reply(buf: []u8, req: Request, status: i32, got: u32, resolved: u64) i32 {
+    std.mem.writeInt(u64, buf[OFF_KIND..][0..8], req.kind, .little);
+    std.mem.writeInt(u64, buf[OFF_SUBJECT..][0..8], req.subject, .little);
+    std.mem.writeInt(u32, buf[OFF_OFF..][0..4], req.off, .little);
+    std.mem.writeInt(u32, buf[OFF_LEN..][0..4], req.len, .little);
+    std.mem.writeInt(i32, buf[OFF_STATUS..][0..4], status, .little);
+    std.mem.writeInt(u32, buf[OFF_GOT..][0..4], got, .little);
+    std.mem.writeInt(u64, buf[OFF_RESOLVED..][0..8], resolved, .little);
+    return status;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -107,4 +201,163 @@ test "协议常量与 offsets 的 owner 段互相对得上" {
     for (codes, 0..) |a, i| {
         for (codes[i + 1 ..]) |b| try std.testing.expect(a != b);
     }
+}
+
+// ---------------------------------------------------------------------------
+// 合成镜像(无引擎、无 Windows API):一块 8 KiB 的内存 + 一个固定偏移的「对象」
+// ---------------------------------------------------------------------------
+//
+// **为什么是 8 KiB 而不是计划里写的 4 KiB**:`+0x1379` 是**真实**偏移(4,985),
+// 4 KiB 镜像里连 owner 那一格都装不下。宁可放大镜像,也不把测试用的偏移改成假数字 ——
+// 否则测试证明的是「假偏移能读」,不是「我们那一格能读」。
+
+const testing = std.testing;
+
+const IMAGE_BASE: usize = 0x1_0000_0000;
+const IMAGE_LEN: usize = 0x2000;
+/// 「系统对象」在镜像里的位置。`OBJECT_OFF + OWNER_FLAG_B_OFF` 必须落在镜像内。
+const OBJECT_OFF: usize = 0x200;
+
+var image: [IMAGE_LEN]u8 = @splat(0);
+
+fn imageRead(_: *anyopaque, addr: usize, len: usize, buf: []u8) bool {
+    if (addr < IMAGE_BASE) return false;
+    const off = addr - IMAGE_BASE;
+    if (off > IMAGE_LEN or len > IMAGE_LEN - off) return false;
+    @memcpy(buf, image[off..][0..len]);
+    return true;
+}
+
+fn imageReader() Reader {
+    return .{ .ctx = undefined, .read = &imageRead };
+}
+
+/// `kind=1` 的 id 7 → 镜像里的那个对象;其他一律解析不上(测试要能看见 -2)。
+fn imageResolve(kind: u64, subject: u64) ?usize {
+    if (kind == KIND_SYSTEM and subject == 7) return IMAGE_BASE + OBJECT_OFF;
+    return null;
+}
+
+fn armRequest(buf: []u8, kind: u64, subject: u64, off: u32, len: u32) void {
+    @memset(buf, 0xA5); // 先用非零铺满:serve 必须自己清零,不能留上次的读数
+    std.mem.writeInt(u64, buf[OFF_KIND..][0..8], kind, .little);
+    std.mem.writeInt(u64, buf[OFF_SUBJECT..][0..8], subject, .little);
+    std.mem.writeInt(u32, buf[OFF_OFF..][0..4], off, .little);
+    std.mem.writeInt(u32, buf[OFF_LEN..][0..4], len, .little);
+}
+
+fn replyField(comptime T: type, buf: []const u8, off: usize) T {
+    return std.mem.readInt(T, buf[off..][0..@sizeOf(T)], .little);
+}
+
+test "kind=1: 解析到对象后按 off/len 回填,状态与 got 一致" {
+    image = @splat(0);
+    const owner_addr = OBJECT_OFF + offsets.system_owner.OWNER_OFF;
+    std.mem.writeInt(u32, image[owner_addr..][0..4], 0x0000_0007, .little);
+
+    var buf: [BUF_SIZE]u8 = undefined;
+    armRequest(&buf, KIND_SYSTEM, 7, @intCast(offsets.system_owner.OWNER_OFF), 4);
+    const rc = serve(&buf, imageReader(), &imageResolve);
+
+    try testing.expectEqual(StatusOk, rc);
+    try testing.expectEqual(@as(i32, 0), replyField(i32, &buf, OFF_STATUS));
+    try testing.expectEqual(@as(u32, 4), replyField(u32, &buf, OFF_GOT));
+    try testing.expectEqual(@as(u64, IMAGE_BASE + OBJECT_OFF), replyField(u64, &buf, OFF_RESOLVED));
+    try testing.expectEqualSlices(u8, &.{ 7, 0, 0, 0 }, buf[OFF_DATA..][0..4]);
+    // 请求头原样回显:驱动靠它判「这块缓冲是这一发的」(Review Focus #1)。
+    try testing.expectEqual(@as(u64, KIND_SYSTEM), replyField(u64, &buf, OFF_KIND));
+    try testing.expectEqual(@as(u64, 7), replyField(u64, &buf, OFF_SUBJECT));
+    try testing.expectEqual(@as(u32, 0x1370), replyField(u32, &buf, OFF_OFF));
+    try testing.expectEqual(@as(u32, 4), replyField(u32, &buf, OFF_LEN));
+    // 数据区之外一个字节都不许动(否则上一次的读数会从缝里漏出来)。
+    try testing.expect(std.mem.allEqual(u8, buf[OFF_DATA + 4 ..], 0));
+}
+
+test "kind=3: 裸地址直读;subject=0 判 -2" {
+    image = @splat(0);
+    image[0x300] = 0xDE;
+    image[0x301] = 0xAD;
+
+    var buf: [BUF_SIZE]u8 = undefined;
+    armRequest(&buf, KIND_RAW, IMAGE_BASE + 0x300, 0, 2);
+    const rc = serve(&buf, imageReader(), &imageResolve);
+    try testing.expectEqual(StatusOk, rc);
+    try testing.expectEqual(@as(u32, 2), replyField(u32, &buf, OFF_GOT));
+    try testing.expectEqualSlices(u8, &.{ 0xDE, 0xAD }, buf[OFF_DATA..][0..2]);
+    try testing.expectEqual(@as(u64, IMAGE_BASE + 0x300), replyField(u64, &buf, OFF_RESOLVED));
+
+    // subject == 0 不是一个可读地址,是「没给地址」:判 -2,不许回退去读 0 页。
+    armRequest(&buf, KIND_RAW, 0, 0, 4);
+    const rc0 = serve(&buf, imageReader(), &imageResolve);
+    try testing.expectEqual(StatusUnresolved, rc0);
+    try testing.expectEqual(@as(i32, -2), replyField(i32, &buf, OFF_STATUS));
+    try testing.expectEqual(@as(u32, 0), replyField(u32, &buf, OFF_GOT));
+    try testing.expectEqual(@as(u64, 0), replyField(u64, &buf, OFF_RESOLVED));
+    try testing.expect(std.mem.allEqual(u8, buf[OFF_DATA..], 0));
+}
+
+test "len=0 与 len=257 都判 -3:header.status 回填、got=0、数据区全 0" {
+    image = @splat(0);
+    var buf: [BUF_SIZE]u8 = undefined;
+
+    for ([_]u32{ 0, MAX_LEN + 1 }) |bad_len| {
+        armRequest(&buf, KIND_SYSTEM, 7, 0x1370, bad_len);
+        const rc = serve(&buf, imageReader(), &imageResolve);
+        try testing.expectEqual(StatusBadLen, rc);
+        try testing.expectEqual(@as(i32, -3), replyField(i32, &buf, OFF_STATUS));
+        try testing.expectEqual(@as(u32, 0), replyField(u32, &buf, OFF_GOT));
+        // 截断后的「成功读数」是伪造证据:失败分支不许回填任何数据字节。
+        try testing.expect(std.mem.allEqual(u8, buf[OFF_DATA..], 0));
+    }
+    try testing.expectEqual(@as(u32, 257), MAX_LEN + 1);
+
+    // 短缓冲是**拒读**,不是一个可以部分服务的请求:一个字节都不写。
+    var short: [BUF_SIZE - 1]u8 = @splat(0x5A);
+    try testing.expectEqual(StatusBadLen, serve(&short, imageReader(), &imageResolve));
+    try testing.expect(std.mem.allEqual(u8, &short, 0x5A));
+}
+
+test "越界地址判 -4,header.status 与返回值相等" {
+    image = @splat(0);
+    var buf: [BUF_SIZE]u8 = undefined;
+    armRequest(&buf, KIND_SYSTEM, 7, 0x7FFF_FFF0, 4);
+    const rc = serve(&buf, imageReader(), &imageResolve);
+    try testing.expectEqual(StatusUnreadable, rc);
+    try testing.expectEqual(rc, replyField(i32, &buf, OFF_STATUS));
+    try testing.expectEqual(@as(u32, 0), replyField(u32, &buf, OFF_GOT));
+    // 解析成功、读失败:`resolved` 仍然回填 —— 它是诊断,不是数据。
+    try testing.expectEqual(@as(u64, IMAGE_BASE + OBJECT_OFF), replyField(u64, &buf, OFF_RESOLVED));
+    try testing.expect(std.mem.allEqual(u8, buf[OFF_DATA..], 0));
+
+    // 解析不上 ⇒ -2(与 -4 分开:一个是「哪个对象」,一个是「读不到」)。
+    armRequest(&buf, KIND_SYSTEM, 8, 0x1370, 4);
+    try testing.expectEqual(StatusUnresolved, serve(&buf, imageReader(), &imageResolve));
+}
+
+test "kind=9 判 -5;decode 对 24 字节的短缓冲返回 null" {
+    image = @splat(0);
+    var buf: [BUF_SIZE]u8 = undefined;
+    armRequest(&buf, 9, 7, 0x1370, 4);
+    const rc = serve(&buf, imageReader(), &imageResolve);
+    try testing.expectEqual(StatusBadKind, rc);
+    try testing.expectEqual(@as(i32, -5), replyField(i32, &buf, OFF_STATUS));
+    try testing.expectEqual(@as(u64, 9), replyField(u64, &buf, OFF_KIND));
+
+    // decode 只认能装下整个头的缓冲:24 B(只有请求四格)与 39 B 都不算协议缓冲。
+    var tiny: [24]u8 = @splat(0);
+    std.mem.writeInt(u64, tiny[OFF_KIND..][0..8], KIND_RAW, .little);
+    try testing.expectEqual(@as(?Request, null), decode(&tiny));
+    var almost: [OFF_DATA - 1]u8 = @splat(0);
+    try testing.expectEqual(@as(?Request, null), decode(&almost));
+
+    var full: [OFF_DATA]u8 = @splat(0);
+    std.mem.writeInt(u64, full[OFF_KIND..][0..8], KIND_COUNTRY, .little);
+    std.mem.writeInt(u64, full[OFF_SUBJECT..][0..8], 41, .little);
+    std.mem.writeInt(u32, full[OFF_OFF..][0..4], 0x1e88, .little);
+    std.mem.writeInt(u32, full[OFF_LEN..][0..4], 4, .little);
+    const req = decode(&full).?;
+    try testing.expectEqual(KIND_COUNTRY, req.kind);
+    try testing.expectEqual(@as(u64, 41), req.subject);
+    try testing.expectEqual(@as(u32, 0x1e88), req.off);
+    try testing.expectEqual(@as(u32, 4), req.len);
 }
