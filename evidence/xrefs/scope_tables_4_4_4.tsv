@@ -1,0 +1,15 @@
+# scope tables / scope getters audit — 2026-11-15, offline, read-only exe (零实机)
+# stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56
+# columns: candidate<TAB>kind<TAB>reading<TAB>source
+#   candidate = RVA (§8.2 的原数值,未改)
+#   kind      = getter | table
+#   reading   = 定形读数(见 evidence/analysis/runtime_444_scope_tables_4_4_4.md 的 §N;`-` 表示未读)
+#   source    = 读数出处(站点 RVA),`-` 表示只有 §8.2 的转述
+0x394190	getter	-	-
+0x2b6470	getter	-	-
+0x393ec0	getter	-	-
+0x394870	getter	-	-
+0x393970	getter	-	-
+0x3260ff0	table	-	-
+0x3261030	table	-	-
+0x3261068	table	-	-
