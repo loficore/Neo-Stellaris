@@ -421,14 +421,27 @@ def test_dispatch_chain_is_green_on_the_pinned_4_4_4_binary():
     img = load_image(find_exe_or_none())
     color, results, unverified = evaluate_chain(nodes, Resolver(img, pdata_index(img)))
     assert color == "green", [r for r in results if r.verdict not in ("found", "skipped_structure")]
-    assert unverified == ["donor_vtable"]
+    # every_system_vtable 进这张清单是因为 102 张同形 every_system 表:槽 0..39 里没有一个
+    # (槽,值) 组合在 rttibatch 的 shape 候选集里唯一(slot14==0x1a76130 有 202 个候选),
+    # 所以它没有 vtable: 配方,只能靠 @node:every_system_consumer 的 lea 保活。
+    assert unverified == ["donor_vtable", "every_system_vtable"]
 
 
 @pytest.mark.skipif(find_exe_or_none() is None, reason="stellaris.exe not available")
 @pytest.mark.parametrize("chain,expected_unverified", [
+    # 2026-11-15(chain-manifest-coverage):名单后面的五个全局槽是这次补登记的 structure。
+    # 它们为什么只能 structure:实测读写面 — galaxy_map_db 5647 ref/4099 函数/8 写者、
+    # country_table 6000/3683/2、name_vector 39/36/1、hash_map 7/4/0 写点(全是 lea)、
+    # hash_load_factor 34/34/0 — 没有一个有唯一读写侧,global: 只能靠「挑两个函数」凑,
+    # 那不是唯一读写侧。落点都写在 manifest 的 expect 列里。
     ("state_write", ["class_info_set_variable", "docstring_set_variable",
-                     "field_name_string", "field_value_cell", "field_parse_state"]),
-    ("graph", ["edge_table_global", "edge_container_offsets", "dirty_mask_global"]),
+                     "field_name_string", "field_value_cell", "field_parse_state",
+                     "galaxy_map_db", "country_table", "name_vector",
+                     "hash_map", "hash_load_factor"]),
+    # system_index 1859 ref/1142 函数/2 写者、fallback_system 2015/1187/2:同样是只读口径,
+    # 靠 @node:system_resolver(解析器自己读这两个全局)保活。
+    ("graph", ["edge_table_global", "edge_container_offsets", "dirty_mask_global",
+               "system_index", "fallback_system"]),
     ("scope", ["scope_mask_field", "scope_id_field", "country_scope_vtable",
                "dispatch_passes_scope_in_rdx"]),
 ])
