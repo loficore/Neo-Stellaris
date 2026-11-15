@@ -9,11 +9,11 @@
 //
 // v1.1 is additive: `neighbors`, `setStarFlag` and `hasStarFlag` are the only new
 // members.  `API_VERSION` stays 1, so a Phase 1 bundle keeps running unchanged.
-// v1.2 adds `gameDate` / `gameTick` (world-clock reads; no permission bit, both
-// `null` when the engine cannot be read) — additive for the same reason.
 // `setStarFlag` writes through the official `set_star_flag` body (never engine
 // memory) and its name must be a string literal — `neo check` enforces that at
 // build time and rejects names that collide with an official keyword.
+// v1.2 adds `gameDate` / `gameTick` (world-clock reads; no permission bit, both
+// `null` when the engine cannot be read) — additive for the same reason.
 
 export const API_VERSION = 1;
 
