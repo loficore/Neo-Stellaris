@@ -1,0 +1,236 @@
+# R10 — 出货字节复基线 + v1 合同实机覆盖（4.4.4，2026-11-14）
+
+> **授权原话（逐字）**：2026-11-14，用户指令：
+> 「我需要你选择一个需要实际调试的，还有一个可以离线调试的。然后用Orca派发出去。」
+>
+> **本发预算 = 2 个游戏进程**（进程 A = 主钩 + 三个探针 mod；进程 B = C6-2 逐系统派发）。
+> **第三个进程必须由协调者/人类另行授权**；一进程一 install，`install_rc=-2` / 「already installed」
+> 说明复用了进程 ⇒ 该发读数作废，不许拿来判门。
+>
+> ---
+>
+> ### 启动期注入的放行授权（用户 2026-11-15 采纳以下句子作为授权原话（逐字））
+>
+> 「2026-11-15,我当场放行 c6_r10 的启动期注入:ns_world 的 IN_GAME_RUNNING 门对启动期注入结构上不可能满足(注入必须早于存档载入),同意该发以 --allow-window 放行;预算仍是 2 个进程。」
+>
+> **用法边界（协调者随授权一同给出，逐字）**：只管启动期注入这一发；仍要先跑 `ns_world assert-ready`
+> 并把它的读数抄进日志（证明门确实是因为 NO_GAME 而不是别的原因），再以 `--allow-window` 放行；
+> 进程 B（`c2_exec_caller_probe`）走它自己的 `gate_install`，不许拿这句当通用豁免。
+>
+> **放行前的门读数（原样，2026-11-15 00:0x，游戏进程数 = 0）**：
+>
+> ```
+> # (a) 计划里的原样命令（SSH 落 session 0）
+> just win "python C:/temp/ns_world.py assert-ready --action install --guard c6r10"
+> => STATE=NO_GAME EVIDENCE=reason=no game window: the premise cannot be proven so the action is refused
+>    （ns_world 自己的退出码 = 2）
+>
+> # (b) 经 session_bridge 落 session 1（文档要求：状态机要读真窗口）
+> just win "python C:/temp/session_bridge.py --timeout-s 300 C:/temp/ns_world.py assert-ready --action install --guard c6r10"
+> => STATE=NO_GAME EVIDENCE=reason=no game window: the premise cannot be proven so the action is refused
+>    EXIT=2
+> ```
+>
+> 两条读数的**拒绝理由都是 NO_GAME**（没有游戏窗口可读），不是 `blocked`（预算/证据挡着）、
+> 不是 `wedged`（锁僵死）、也不是 `IN_GAME_PAUSED_CLEAN` / `WINDOW_UNSTABLE` —— 这正是放行原话
+> 所说的「结构上不可能满足」。锁屏那一档已用双证据排除：`win-desktop Screenshot` 非黑、
+> `Get-Process LogonUI` 计数 = 0（见「环境门」一节）。
+
+## 归属与字节
+
+- 主机：`Windows_Jiaolong`（SSH 落 session 0；需要窗口/注入的动作一律经 `C:/temp/session_bridge.py` 进 session 1）
+- 本地 DLL：`zig-out/bin/stellaris_quickjs.dll`
+  `sha256 = 2e1ba6d94bb392b477404652a1be520f7f1be54a3344313e4d1f30e7ffee8068`
+  （7,911,936 B；Debug 构建 —— `zig build` 本次无输出 = 全部命中缓存，字节即当前树）
+- 远端部署名：`C:/temp/sqjs_r10.dll`，`Get-FileHash` 复读 = 同一哈希（逐字相等，见下）
+- 构建/部署命令：
+
+```
+zig build                                    # rc=0，无输出（全缓存）
+sha256sum zig-out/bin/stellaris_quickjs.dll
+scp zig-out/bin/stellaris_quickjs.dll Windows_Jiaolong:C:/temp/sqjs_r10.dll
+ssh Windows_Jiaolong 'powershell -NoProfile -Command "(Get-FileHash C:\temp\sqjs_r10.dll -Algorithm SHA256).Hash.ToLower()"'
+=> 2e1ba6d94bb392b477404652a1be520f7f1be54a3344313e4d1f30e7ffee8068
+```
+
+## 环境门（Task 0，不占 shot）
+
+- `win-desktop Screenshot`：非黑，桌面可见（`Default Desktop`，无 LogonUI）；`LogonUI` 进程数 = 0。
+- `just awake check` → `STATE=serving DESKTOP=unlocked`，rc=0。
+- `Get-Process stellaris` 计数 = 0。
+- `just deploy` rc=0；`C:/temp/world_state.py --help` rc=0。
+
+## 本发要回答的三条（计划目标）
+
+1. **出货字节重新挂到 C6-1 / C6-2 / C6-6 三道 auto 门**（`c6_acceptance.py` 的台帐）。
+2. `System.neighbors` 的**第一次**实机读数（`R10_NBR` 行，判据 `n == deg`）。
+3. `NEO_JS_TIMEOUT` / `NEO_JS_ERROR` 的落盘形状（各恰好 1 行、mod 名对上、异常文本对上），
+   以及 `hasStarFlag` 的**第二次**独立读数（另一个战役/另一个 flag 名，`before=false → after=true`）。
+
+## 读数的组织
+
+| 产物 | 内容 |
+|---|---|
+| `c6_r10_save_4_4_4.log` | 固定存档 + 分母（`galactic_object` 条目数） |
+| `c6_r10_boot_4_4_4.log` | `BOOT` 回执（C6-1） |
+| `c6_r10_neo_js_4_4_4.log` | `C:/temp/neo_js.log` 原件（三条路径 + `R10_*` 行） |
+| `c6_r10_stats_4_4_4.log` | `--stats` 一行（C6-6 前置） |
+| `c6_r10_uninstall_4_4_4.log` | `UNINSTALL` 回执（C6-6） |
+| `c6_r10_exec_caller_4_4_4.tsv` | C6-2 artifact（`#meta` + 行） |
+| `c6_acceptance_r10_4_4_4.tsv` | 台帐（只判拿得到输入的三门） |
+
+## 世界状态门（Task 4 Step 3）—— 读数与判定
+
+计划：先 `ns_world assert-ready --action install --guard c6r10`，退出码非 0 ⇒ 停、写 `gate_blocked`，
+**不许**自行加 `--allow-window`。两条读法都打了（此时按 Task 0 Step 3，游戏进程数 = 0）：
+
+```
+# (a) 计划里的原样命令（SSH 落 session 0）
+just win "python C:/temp/ns_world.py assert-ready --action install --guard c6r10"
+=> STATE=NO_GAME EVIDENCE=reason=no game window: the premise cannot be proven so the action is refused  (退出码 2)
+
+# (b) 经 session_bridge 落 session 1（文档要求：状态机要读真窗口）
+just win "python C:/temp/session_bridge.py --timeout-s 300 C:/temp/ns_world.py assert-ready --action install --guard c6r10"
+=> STATE=NO_GAME EVIDENCE=reason=no game window ...  EXIT=2
+```
+
+**判定**：这不是环境故障，是这道门的**结构**：`assert_ready` 要求 `infer_state == IN_GAME_RUNNING`
+（`world_state.py:1196`），而 C6-1 要求注入**早于脚本解析**、解析发生在存档载入时 ——
+启动期那一刻窗口是加载屏，读不出 `pause=playing`。上一次窗口的同类读数在这里：
+
+- R1 attempt#2：`assert-ready` exit 2（屏幕采样把前台浏览器/dock 读成 dialog）；
+- R1 attempt#4 / R8 / R9：全部用 `--allow-window` + **人当场授权**做启动期注入
+  （`evidence/logs/c6_r1_boot_4_4_4.log`、`c6_r8_boot_4_4_4.log`、`c6_r9_boot_4_4_4.log`）。
+
+**锁屏那一档已经用双证据排掉**（Review Focus 1）：`win-desktop Screenshot` 非黑、桌面可见；
+`Get-Process LogonUI` 计数 = 0。缺一即停 —— 两条都在。
+
+**结论**：进程 A（启动期注入）要么拿到人类当场放行（`--allow-window`，原话逐字抄进本文件），
+要么本发的实机部分按 `gate_blocked` 停。二者都不许由我自行选。
+
+## 阻塞（2026-11-15 00:05 起）—— `Windows_Jiaolong` 失联，本发进程数仍为 0
+
+```
+00:11:38  ping 10.66.0.7  100% packet loss
+00:12:41  ping 10.66.0.7  100% packet loss
+00:16:32..00:18:05  ssh -o ConnectTimeout=6 Windows_Jiaolong "echo ALIVE" -> connect to host 10.66.0.7 port 22: Connection timed out
+本机侧：ping 1.1.1.1 = 0% loss（互联网正常）；wg0 = 10.66.0.1/24 在，网关 10.66.0.1 可达
+```
+
+最后一次成功的实机动作是 00:03 左右（`Get-ChildItem C:\temp\neo_mods`，两份坏 mod 的运行时半边已就位）。
+
+**状态（都停在安全点上，没有半装的东西）**：
+
+- 游戏进程：**0**（从未启动；本发用掉的进程数 = **0**）。
+- 远端产物已就位：`C:/temp/sqjs_r10.dll`（sha 逐字相等）、`C:/temp/neo_mods/{r10good,r10timeout,r10throw}/neo/`、
+  `C:/temp/r10_contract/`、`C:/temp/r10_pin_save.ps1`。
+- `dlc_load.json` 现状：`enabled_mods = ["mod/neo_ps_probe.mod", "mod/r10good.mod"]`
+  （**进程 A 之前要改**：`lw_set_mods.py r10good.mod`，否则 `neo_ps_probe` 的 `neo_action`
+  会让每系统每月多派发一次，`R10_NBR` 行数会翻倍）。
+- 固定存档 `r10_base.sav` 已是全目录最新 mtime（`--continuelastsave` 会载它）。
+
+**等协调者/人类两件事**：① 把主机恢复上线；② 进程 A 启动期注入的 `--allow-window` 放行原话
+（见上一节的门读数；没有放行就按 `gate_blocked` 停）。
+
+## 协调者裁定（2026-11-15 00:2x，逐字摘录）
+
+> HOLD. 协调者已独立复核 (1): 从本机 ping 10.66.0.7 = 100% loss、ssh :22 timeout，主机确实不在线，
+> 不是你的隧道问题；…（2）`--allow-window` 的放行原话我正在向人类要，拿到后逐字转给你，你把它抄进
+> `evidence/logs/c6_r10_4_4_4.log` 头注再动手。
+> 现在到放行为止：不要启动任何游戏进程（不要用掉进程 B 的额度），不要改计划，不要自己拼 `dlc_load.json`。
+> 放行 + 主机恢复后我会发一条 START，里面带：授权原话逐字、以及「主机已在线」的复核命令输出。
+> 收到 START 再跑 Task 4/5。
+> 另外一条：你报的 manifest 严格 7 字段 + 权限必须带 `flag.read`，与 `sdk/api.def` 的现有形状一致，已记；
+> 不需要回滚。
+
+本发在收到 START 之前**不启动任何进程**（进程数仍为 0）。离线围栏已跑：
+
+```
+python3 -m pytest scripts/test_scripts_layout.py scripts/test_c6_acceptance_doc.py -q
+=> 42 passed
+```
+
+## 与计划的偏差（离线发现；下一发会踩，逐条各一行）
+
+1. **manifest 不能写 `name` / `version`。** `src/dll/c2/neo_js_loader.zig:168-194` 的字段集是**严格 7 个**
+   （`id`/`entry`/`scope`/`permissions`/`engine`/`runtime`/`flags`），第 8 个键 = `error.UnknownField`
+   → `NEO_JS_BAD_MANIFEST`，**整个 mod 不载入**。计划草图的 `{"name":"R10 Good","version":"0.1.0"}`
+   会让好 mod 直接缺席；`examples/chokepoint/neo/mod.json` 也没有这两个键。
+2. **权限必须带 `flag.read`（不只是 `flag.write`）。** `s.hasStarFlag` 走
+   `canReadFlag`（`src/dll/c2/neo_js_host.zig:1188`）；缺这一位不是「读回 false」这么轻 ——
+   该分支先落一行 `NEO_JS_FLAG_REJECT … reason=no_permission`，再 `disableCurrent()`
+   **把这个 session 整个禁用**。于是 `R10_FLAG` 只会出现一次（`before=false`），
+   `after=true` 永远不会出现，好 mod 也会在第一个系统之后停止干活。
+3. **分母的取法：`galactic_object` 的 `{` 在下一行，不是同一行。** 计划草图的
+   `^\s*\d+=\s*\{` 在真存档上恒 0 命中（本机 `r10_base.sav` 实测 0，见
+   `c6_r10_save_4_4_4.log`）；要用 `(?m)^\t(\d+)=\n\t\{`，且必须取**顶级** `^galactic_object=$`
+   那一块（`nebula` 里也有 6 个/组的 `galactic_object=<id>` 引用）。
+
+## 离线 prep（2026-11-15，协调者 GO-for-offline 四条）
+
+- **(a) 头注**：授权原话（用户 2026-11-15 采纳的句子）+ 放行前的 `assert-ready` 两条读数（都是
+  `STATE=NO_GAME`，退出码 2）已写进本文件头注，逐字。
+- **(b) runbook**：`scripts/scratch/2026-11_r10_contract/run_window.md` —— 顺序 / 命令 / expected /
+  fail 判词 / 必须停的步骤，命令里用 `<SYSTEMS>` / `<SAVE_NAME>` / `<DLL_SHA>` / `<SAVE_SHA>` 占位；
+  占位符的**已测得**填值单列一张表（出处指向本目录的 `c6_r10_save_4_4_4.log`），没有一条是凭印象写的。
+- **(c) 与计划的偏差**：三条（manifest 严格 7 字段 / 权限必须带 `flag.read` / 分母正则）见上一节；
+  runbook §7 另记了两条计划命令缺的参数（C6-2 的 `--rule 0:0`）与一条 JS 写路径的判读提示（`--act`）。
+- **(d) SDK 侧检查**：`neo check` **未跑** —— 它要 authoring project（`tsconfig.json` + `src/main.ts`，
+  `sdk/src/build.ts:17`）并跑 tsc+esbuild，而这三份是手写 `neo/main.js`；且 `sdk/node_modules` 未安装
+  （`npm ls` 四个 `UNMET DEPENDENCY`）。替代复核（自建、零依赖、不进 `src/`）：
+  `node scripts/scratch/2026-11_r10_contract/bundle_smoke.mjs .` → **`SMOKE ok`**，32 项，含
+  manifest 严格 7 字段、`neo check` 第 2 层同五条 forbidden 模式（`require(`/`process.`/`window.`/
+  `document.`/`import(`）、以及 `R10_NBR id=7 deg=3 n=3 first=1` / `R10_FLAG id=7 before=false after=true`
+  的**逐字相等**、`r10throw` 抛 `R10_INTENTIONAL`。
+  这套 smoke **不是** `neo check`：它不跑 tsc/esbuild、不跑真 QuickJS。
+
+**进程数仍为 0**；主机仍离线（本节的每一条都不依赖主机）。
+
+## 实机窗口(2026-11-15,Windows_Jiaolong)—— 读数
+
+**预算 2/2 用完,第三个进程没有开。**
+
+- **进程 A**(pid 1240,`--allow-window` 启动期注入):`BOOT … effect_id=19343 set_id=19344 install_rc=0 alive=1`。
+  跑了 **20 个月度脉冲**(原计划 3 个月;最快速度下超了),`R10_NBR` / `R10_FLAG` 各 15,760 行
+  = 20 × 788,每个 id 恰好 20 次、`n == deg` 零失配;`game.log` 的 `Neo: system <id>` 15,760 行,
+  每月恰好 788 个不同 id。`NEO_JS_TIMEOUT` 1 行(`r10timeout`)、`NEO_JS_ERROR` 1 行
+  (`r10throw` + `R10_INTENTIONAL`)、`NEO_JS_DISABLED 1 行(reason=budget)`;坏 mod 被禁之后好 mod
+  仍继续跑(`R10_NBR` 在 `NEO_JS_DISABLED` 之后还有 15,759 行)。`--stats`:`calls=matched=log_calls=writes=13396`
+  = 17 × 788、`installed=1 verify=0`。`UNINSTALL rc=0 verify=0 alive=1`,随后 `taskkill` → 进程数 0。
+- **进程 B**(pid 16164):`c2_exec_caller_probe` 判 **`dispatch_named`**,
+  `coverage_distinct=container_raw_count=systems=788`、`recorded_callers=1`、`unrecorded_callers=683`、
+  `install_rc=0 uninstall_rc=0 verify_rc=0 host_alive=1`、`--rule 0:0`。
+  **`#meta gate=world_state`** —— 它走的是自己的真门,不是进程 A 的 `operator_override` 豁免。
+- 台帐:`evidence/logs/c6_acceptance_r10_4_4_4.tsv` = `C6-1 pass / C6-2 pass / C6-6 pass`,
+  `C6-3/4/5 cannot_say`(本发没产出那三门的输入),`SUMMARY pass=3 fail=0 cannot_say=3`。
+
+## 实机窗口 —— 与 runbook 的偏差(每条都是现场修正,逐条留证)
+
+1. **`zig build` 重建出的字节与部署字节不同**:重建 = `6963de88…`(7,910,912 B),部署 = `2e1ba6d9…`
+   (7,911,936 B)。整文件 sha 每次重链都会变,不是代码身份;本发沿用 runbook 已记录、远端
+   `Get-FileHash` 逐字相等的那份,没有覆盖。**这不是「当前树 = 已验字节」的证明** —— 要那条结论,
+   下一发得把重建产物部署上去重跑。
+2. **session_bridge 不吃前导 `python`**:它的契约是「第一个位置参数 = 脚本路径」
+   (`session_bridge.py:210-214`)。runbook §2.1/§2.2 的
+   `session_bridge.py --timeout-s N python C:/temp/x.py …` 会把 `python` 当脚本,
+   报 `can't open file 'C:\Windows\System32\python'`、`EXIT=2`。正确形式去掉 `python`。
+3. **`--stats` 与 `--launch` 互斥**:`c2_boot_inject.py` 的 main 先判 `--pred/--stats/--uninstall`,
+   `--stats` 只读一个已在跑的进程。runbook §2.2 那条带 `--stats` 的启动命令会抛
+   `RuntimeError: 'stellaris.exe' is not running`;`--stats` 是 §2.5 的单独一发(已按此执行)。
+4. **进程 B 需要一次启动期注入,runbook §3 漏了这一步**:`neo_ps_probe` 的官方半边在
+   `every_system` 里调 `neo_action`,而我们注册的 keyword 只在 DLL 载入时进 token DB ⇒
+   存档载入前必须有我们的 DLL,否则该事件解析失败、`log` 也不会逐系统下发。做法与 R8 相同:
+   用**同字节的第二份文件名** `C:/temp/sqjs_r10b.dll` 做启动期注入,再让探针注入
+   `C:/temp/sqjs_r10.dll`(`refuse_if_resident` 按模块名拒绝同名的第二份)。
+   探针自己那道 `gate_install` 没有被豁免(`gate=world_state`)。
+5. **`just game status` 起初报 `no_game`**:监督器守护进程没在跑(读到的是 34,522 s 前的旧心跳)。
+   先 `just game start` 才有真心跳。
+6. **`win-desktop` 的 `Shortcut("enter"/"space")` 对游戏无效**:两次都没关掉事件窗、也没解暂停
+   (VK 路线;游戏只认 scancode)。`just game unpause`(SetForegroundWindow + scancode Space)
+   一次成功,`STATUS=playing note=ok`。事件窗留着不影响月度脉冲(20 个月照常下发)。
+7. **`NEO_JS_FLAG_REJECT … reason=no_flag_token` 恰好 1 行**是良性首用顺序:进程内第一次
+   `hasStarFlag` 早于第一次写,读不会铸名;紧随其后的写铸出名字,`after=true`。判据(首读 false →
+   写后 true)成立,不是失败。
+8. **`c6_acceptance.py` 的 `parse_uninstall` 会把整份文件按空白切成 `k=v`**,后出现的同名键覆盖
+   前面的 ⇒ 卸载回执文件的正文里不许再出现 `rc=` / `verify=` 这样的空白分隔记号,否则真回执被
+   正文覆盖成字符串、门读成 `missing_input`(本发第一次就撞上,改正文后 `C6-6 pass`)。

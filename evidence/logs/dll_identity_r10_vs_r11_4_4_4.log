@@ -1,0 +1,54 @@
+# r10 与 r11 出货字节是不是同一个程序(4.4.4,2026-11-15,零实机)
+
+**问的是什么。** r10 部署的是 `2e1ba6d9…`(Orca 工作树构建),r11 部署的是 `6963de88…`
+(本仓库工作树 `loficore/live-contract` 的 `zig build` 产物,源 = 该分支的 `src/`)。整文件 sha 每次重链都变,
+所以两个 sha 不同**不能**说明代码不同;本卷用指令级比对回答「是不是同一个程序」。
+
+**方法。** `scripts/scratch/2026-11_r11_identity/dll_identity.py`:capstone 反汇编两份 `.text`,
+在同一条 VA 上逐指令比较 —— 助记符、寄存器操作数、非 RIP 的内存操作数(base/index/scale/disp)
+按值比;立即数按值比,但落在镜像地址范围内的(call/jmp 目标)记成标记 `A`;`[rip+…]` 的位移
+记成 `M:rip`(它必然随 `.rdata` 移动)。
+
+```
+$ python3 scripts/scratch/2026-11_r11_identity/dll_identity.py r10.dll r11.dll --sections
+insns r10.dll = 1317332
+insns r11.dll = 1317332
+differing positions = 0
+DIFF .buildid   A=(512, '21331d341e792bef') B=(512, '32cb3cd3f9aeea43')
+DIFF .data      A=(1133568, '8246dd2d21a1fafc') B=(1133568, '7c9a5ea087f275ec')
+DIFF .pdata     A=(71168, 'f9dc00be57763487') B=(71168, '0655d9836e959da7')
+DIFF .rdata     A=(926208, '778f0a5601e87cb6') B=(925184, '0a8f4b3fe4c429d6')
+DIFF .reloc     A=(145408, '4b39e5cf70a162c3') B=(145408, '5e59e00f5a9334c9')
+DIFF .text      A=(5633536, '0c7f53fec85e8bb9') B=(5633536, 'c4e5b069a704b0f7')
+SAME .tls       A=(512, '076a27c79e5ace2a') B=(512, '076a27c79e5ace2a')
+data pointer check: {'differing_words': 36980, 'kinds': {'both_pointers': 36980}, 'top_deltas': [(-16, 14892), (-752, 2281), (-720, 2060), (-320, 1626), (-160, 1168), (-832, 984)]}
+VERDICT instruction_stream_identical
+rc=0
+```
+
+输入:`r10.dll` = `C:/temp/sqjs_r10.dll` 拉回本地,sha256 `2e1ba6d9…`;`r11.dll` =
+`zig-out/bin/stellaris_quickjs.dll`,sha256 `6963de88…`(与 `C:/temp/sqjs_r11.dll` 逐字相等)。
+
+## 判读
+
+1. **指令流完全一致**:1,317,332 条指令逐条相等,零差异。⇒ 两份 DLL 是**同一个程序**。
+2. **`.rdata` 大小差 1,024 B 来自构建目录字符串**:差异起点 `0x2b39`,r10 是
+   `home/lofiba…s/orca/workspac…s/Neo-Stellar…`,r11 是 `var/lofibas…_ssd/code/zig/N…o-Stellaris/l…`
+   —— 与 `docs/offline-tooling.md` 记的机制(路径字符串进 `.rdata`、目录名长度改变段布局)一致。
+3. **`.data` 的 36,980 个差异字全是镜像内指针**(两份都指向镜像内),差值都是小的布局位移
+   (−16 / −752 / −720 / …),没有语义常量变化。
+4. `.text` / `.pdata` / `.reloc` / `.buildid` 的段 sha 不同是上面的布局与重定位结果,**不是**代码变化。
+
+## 结论(用它收口的那一格)
+
+r10 那份 `hasStarFlag` 读数(`before=false → after=true`,788 个系统)是在**同一份指令流**上得到的,
+所以它也适用于 r11 部署的字节。r11 窗口读到的 `before=true` 只说明**载入的存档里 flag 已存在**
+(存档状态),不是代码差异。
+
+⇒ **不需要为了「重建字节上的 flag 铸名」再打一发。** 若将来要的是一份「新存档上的端到端读数」,
+那是存档状态的重采,不是代码验证;或者换一个本战役没出现过的 flag 名。
+
+## 这份卷不能说什么
+
+- 它不证明两份 DLL 的**数据**逐字节相同(它们本来就不相同);它证明的是**代码相同、差异是布局**。
+- 它不覆盖运行时行为:同一份指令流仍然可能因为宿主状态不同而表现不同(本卷不涉及)。

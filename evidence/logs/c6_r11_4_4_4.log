@@ -1,0 +1,93 @@
+# R11 — 重建字节(当前树)重跑一发窗口(Stellaris 4.4.4,2026-11-15)
+
+> **授权原话(逐字)**:用户在本轮先说「重开」,随后在选项里选定:
+> 「部署重建字节重跑一发窗口 —— 把 zig build 重建出的 6963de88… 部署成新文件名,重跑
+>  C6-1/C6-2/C6-6 + 三条合同路径,让「当前树 = 已验字节」这一格落地(2 个进程,需你确认预算)」。
+> ⇒ **本发预算 = 2 个游戏进程**;第三个必须另行授权。
+>
+> 启动期注入仍按 2026-11-15 的放行原话(逐字,见 `c6_r10_4_4_4.log` 头注)执行:先跑
+> `ns_world assert-ready` 并把 `STATE=NO_GAME` 的读数抄进来,再以 `--allow-window` 放行;
+> 进程 B 的探针仍走它自己的 `gate_install`。
+
+## 归属与字节
+
+- 主机:`Windows_Jiaolong`(SSH 落 session 0;窗口/注入一律经 `C:/temp/session_bridge.py` 进 session 1)
+- 本地 DLL:`zig-out/bin/stellaris_quickjs.dll`
+  `sha256 = 6963de88ac49ed02aa45d926dcecd54675422ead8730a1ac623e56610c58bb94`(7,910,912 B)
+  —— 这是**当前工作树**(`loficore/live-contract` @ `d7b2eee`)的 `zig build` 产物;
+  r10 部署的是另一份字节(`2e1ba6d9…`,7,911,936 B),本发就是为了消掉这个差。
+- 远端部署名:`C:/temp/sqjs_r11.dll`,`Get-FileHash` = 同一哈希(逐字相等)。
+- 进程 B 的启动期副本:`C:/temp/sqjs_r11b.dll`(同字节,不同文件名;`refuse_if_resident` 按模块名拒绝同名第二份)。
+- 存档:`r10_base.sav` sha256 `f6bfae78c7991f1ec25d148b44227659adbc36e27719c4aeb44090f4a02ddfa1`,788 系统。
+- 驱动 mod:`mod/r10good.mod`(官方半边)+ `C:/temp/neo_mods/{r10good,r10timeout,r10throw}`(运行时半边)。
+
+## 与 r10 的关系
+
+r10 已判 C6-1/C6-2/C6-6 `pass`,但那份字节与本工作树的重建产物不同。本发用**同一份 runbook、
+同一份存档、同一组 mod**,只换 DLL 字节,判据与判词口径完全不变 —— 目标是让
+「当前树 = 已验字节」成立,不是换判据重判。
+
+## 实机窗口(2026-11-15 14:45–15:10)—— 读数
+
+**预算 2/2 用完。**
+
+- **进程 A**(pid 2492,`sqjs_r11.dll`,`--allow-window` 启动期注入):`BOOT … effect_id=19343 set_id=19344
+  install_rc=0 alive=1`;16 个月度脉冲,`R10_NBR`/`R10_FLAG` 各 12,608 行 = 16×788、每 id 16 次、
+  `n == deg` 零失配;`game.log` 的 `Neo: system <id>` 12,608 行 = 16×788。`NEO_JS_TIMEOUT` /
+  `NEO_JS_ERROR` 各恰好 1 行。`--stats`:`calls=matched=log_calls=writes=12608`、`installed=1 verify=0`。
+  `UNINSTALL rc=0 verify=0 alive=1`。
+- **进程 B**(pid 10556,启动期副本 `sqjs_r11b.dll`):`c2_exec_caller_probe` 判 **`dispatch_named`**,
+  `coverage_distinct=container_raw_count=systems=788`、`recorded_callers=1`、`unrecorded_callers=683`、
+  `#meta gate=world_state`、`install/uninstall/verify=0`、`host_alive=1`、`--rule 0:0`。
+  58 个月度脉冲里 `n == deg` 仍是零失配;`NEO_JS_TIMEOUT`/`NEO_JS_ERROR` 各 1 行。
+- 台帐:`evidence/logs/c6_acceptance_r11_4_4_4.tsv` = `C6-1 pass / C6-2 pass / C6-6 pass`,
+  `SUMMARY pass=3 fail=0 cannot_say=3`。**三门的判据与 r10 完全同口径,换的只是 DLL 字节**
+  (r10 = `2e1ba6d9…`,r11 = `6963de88…` = 当前工作树的重建产物)⇒ **「当前树 = 已验字节」这一格成立**。
+
+## 本窗口读不到的一格(如实记录,不判 pass)
+
+**`hasStarFlag` 的 `before=false → after=true` 这一发没读到**:两次进程载入的存档里 `r10flag` 已经
+在全部 788 个系统上(r10 窗口写进去的),所以首读就是 `true`(`flag_first_obs={('true','true'):788}`,
+两段日志一致)。写路径本身跑了 12,608 / 45,704 次、读回恒 `true` ⇒ **写+读通路在重建字节上仍然工作**,
+但「这个名字是本次写入铸出来的」这半句只剩 r10 那份读数(`c6_r10_neo_js_4_4_4.log`,788 个系统首读
+`false`)。要补这一格:换一个本战役没出现过的 flag 名,或先把 r10 之后新生成的 autosave 移开再载
+`r10_base.sav`。
+
+## 与 runbook 的偏差(现场修正)
+
+1. **`--continuelastsave` 不按 mtime 选档**。r10 窗口把 `autosave_2333.01.01 / 2334.01.01` 写到了
+   `r10_base.sav` 之后;本发把 `r10_base.sav` 的 mtime 重钉到 14:53:42(全目录最新)后启动,
+   载入的仍是 `autosave_2334.01.01`(存档内日期最新,首月 2333.10.1 / 2334.x)。⇒ 想固定某一份存档,
+   得把更新的 autosave 移出目录(或换 flag 名),**钉 mtime 不够**。r10 那次「钉 mtime 生效」是
+   因为当时它同时也是日期最新的那份,两者分不开。
+2. **探针的门会因事件窗拒绝**:第一次跑 `c2_exec_caller_probe` 得到
+   `REFUSED: state is WINDOW_UNSTABLE … pause=paused console=closed window=dialog`(事件窗
+   「联合的犯罪头目被逮捕」开着,游戏自动暂停)。处理:`win-desktop Shortcut("enter")` 这次**成功**
+   关掉事件窗(监督器已把游戏窗口置前;r10 那次失败是焦点问题,不是 VK 路线不可用),
+   再 `just game unpause`,第二次门的读数为 `gate=world_state` 放行。
+3. **进程 B 的 `--poll-s` 从 240 降到 120**:最快速度下事件窗频繁自动暂停,240 s 窗里可能只有
+   1–2 个月;而一个完整月 = 788 次下发,足够 `coverage_distinct == 788`。这是缩短窗口,不是改判据。
+4. **两段 neo_js 日志落在同一个主机文件里**(进程 A 结束后没有清 `C:/temp/neo_js.log`)。证据按
+   第二个 `NEO_CAP` 切开:进程 A 全文入 `c6_r11_neo_js_4_4_4.log`(50,440 行),
+   进程 B 只留 34 行节选 `c6_r11b_neo_js_excerpt_4_4_4.log`(全文 182,824 行 / ~7.3 MB 不入库)。
+   下一发:每个进程启动前先删日志。
+5. **进程 B 的运行时 bundle 集合里还留着 r10good 与两个坏 mod**(A 阶段铺的)。C6-2 的仪器是
+   `log` 效果的调用者钩子,与 JS bundle 无关;这一格不受影响,但记录在案。
+
+## 补记(2026-11-15,零实机):flag 那一格**不需要再打一发**
+
+离线指令级比对(`scripts/scratch/2026-11_r11_identity/dll_identity.py`,结论卷
+`evidence/logs/dll_identity_r10_vs_r11_4_4_4.log`)显示:r10 的 `2e1ba6d9…` 与 r11 的 `6963de88…`
+**1,317,332 条指令逐条相等**,零差异;两段字节的差别是 `.rdata` 里嵌的构建目录字符串(r10 是 Orca
+工作树路径,r11 是本仓库路径,段大小差 1,024 B)以及由此产生的 `.data` 指针位移
+(36,980 个差异字全是镜像内指针,差值 −16/−752/−720/…)。⇒ **两份 DLL 是同一个程序**,
+r10 那份 `hasStarFlag` 读数(788 个系统 `before=false → after=true`)适用于 r11 部署的字节;
+本窗口读到的 `before=true` 只是存档状态(flag 已存在),不是代码差异。
+
+## 补记 2(2026-11-15,收口后):本卷读数按**当时**的工作树计
+
+R11 窗口结束、台账提交之后,`loficore/live-contract` 被 rebase 到 `origin/main`(`#87`)。
+main 侧 `src/` 有实质变化(`dll/api/gamestate.zig`、`dll/scripted/graph_trigger.zig`、
+`dll/shared/offsets.zig` 等),所以 **rebase 之后重建出的 DLL 不再是 `6963de88…`**:
+本卷的 `6963de88…` = rebase 前那棵树(分支基点 `#80` 的 `src/`)的产物。
+「当前树 = 已验字节」这句**只对那棵树成立**;要验证 main 现在的字节,需要另开一发。

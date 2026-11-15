@@ -26,7 +26,7 @@ Two more things follow from the same shape: the DLL is **injection-only** and is
 never unloaded, because patched engine objects would jump into an unmapped page
 after a `FreeLibrary`. Do not try to unload it.
 
-## Star flags have one live reading (2026-11-10)
+## Star flags have two live readings (2026-11-15)
 
 `System.setStarFlag` and `System.hasStarFlag` are in the contract, and the
 build-time gate around them is real: `neo check` refuses a computed flag name
@@ -48,14 +48,57 @@ So, today:
   successful write;
 - names are 1–15 lowercase bytes and must be string literals.
 
-One live reading now exists (2026-11-10, a probe mod carrying both halves in one
-campaign): the official script wrote `neo_probe` and read it back, the runtime
-wrote `neo_probe2` and read it back, the official script then saw `neo_probe2`,
-and both names were in the autosave — verdict `FLAG_VERIFY flags_end_to_end`
-(`evidence/logs/flag_store_verify_4_4_4.log`).
+Two live readings now exist.
 
-Treat the two flag calls as **verified once, on one campaign**: the reading covers
-the keyspace, not every engine version, save or mod combination.
+1. **2026-11-10** (a probe mod carrying both halves in one campaign): the
+   official script wrote `neo_probe` and read it back, the runtime wrote
+   `neo_probe2` and read it back, the official script then saw `neo_probe2`,
+   and both names were in the autosave — verdict `FLAG_VERIFY flags_end_to_end`
+   (`evidence/logs/flag_store_verify_4_4_4.log`).
+2. **2026-11-15** (campaign `r10_base`, 788 systems, 20 monthly pulses,
+   `evidence/logs/c6_r10_neo_js_4_4_4.log`): for **every** system the first
+   `hasStarFlag` read was `false`, the write followed, and the immediate read
+   was `true`; all 19 later months read `true` (788 × 19). The process logged
+   exactly one `NEO_JS_FLAG_REJECT … reason=no_flag_token` — on the very first
+   read, before that process had written the name. That is the documented shape
+   (a read never mints an id), not a failure: the write that followed minted it.
+
+Treat the two flag calls as **verified on two campaigns**: the readings cover the
+keyspace and the lazy-minting order, not every engine version, save or mod
+combination.
+
+One more boundary, measured the same day: **flags live in the save**. A later
+window on the rebuilt bytes loaded a newer autosave of the same campaign, where
+that name was already set on every system, so the very first `hasStarFlag` call
+read `true` and the `false → true` transition could not be observed at all
+(`flag_first_obs={('true','true'): 788}` on both processes). The write path still
+ran thousands of times and reads came back `true`, but the "this name was minted
+by this write" half needs a save where the name has never existed. Use a fresh
+flag name per campaign, or a save from before the write.
+
+## Hyperlane degree and neighbours have two live readings (2026-11-15)
+
+`System.degree` and `System.neighbors` are in the contract, but until this
+window `neighbors` was covered only by offline tests. One live reading now
+exists: campaign `r10_base` (788 systems), a probe bundle calling both natives
+on every system for 20 monthly pulses (15,760 calls,
+`evidence/logs/c6_r10_neo_js_4_4_4.log`):
+
+- `n === deg` on every call, zero mismatches;
+- every neighbour id was inside the system-id range (0..787); the first element
+  ranged 3..786 and no call returned the empty-array sentinel;
+- the largest degree observed was 8, so the 64-element cap was never reached;
+- the degrees summed to 2,446 — 1,223 undirected edges if each edge is stored on
+  both of its systems.
+
+What it does **not** prove: the *set* of neighbour ids was not reconciled
+against the save's edge list — the probe logged the count, the degree and the
+first id only. The count agrees with the engine's own degree; the identity of
+every neighbour is still an offline-only claim.
+
+A second window on the rebuilt bytes (2026-11-15) re-read the same agreement on
+a later autosave of that campaign: 788 systems, `n === deg` with zero mismatches
+across 16 and 58 monthly pulses in two separate processes.
 
 ## Country scope is read-only, and its direction is only half known
 

@@ -1,0 +1,34 @@
+# R11 进程 B(pid 10556)的 neo_js 日志 —— **节选**,不是全文
+# 全文 182,824 行(~7.3 MB)留在主机 C:/temp/neo_js.log;这里只留判据需要的三样:
+#   ① 每类行的计数与逐系统聚合、② 单例行逐字、③ 首月与末月的前 6 行样本。
+# 切法:主机日志里有两个 NEO_CAP(两次进程启动),取第二个起的那一段。
+#
+# lines=182824
+# counts=NEO_CAP=1 NEO_JS_CALL=45704 NEO_JS_DISABLED=1 NEO_JS_ERROR=1 NEO_JS_INIT_OK=3 NEO_JS_LOG=91408 NEO_JS_MODS=1 NEO_JS_TIMEOUT=1 NEO_JS_WRITE=45704
+# months=58 distinct_ids=788 per_id_counts=[58] mismatch_lines=0
+# flag_first_obs={('true', 'true'): 788} flag_ids=788
+#
+# --- 单例/头部行(逐字) ---
+NEO_CAP scope=ok token=ok descriptor=ok graph=ok state=ok vtable=ok fingerprint=ok
+NEO_JS_MODS n=3
+NEO_JS_INIT_OK id=r10good api=1
+NEO_JS_INIT_OK id=r10throw api=1
+NEO_JS_INIT_OK id=r10timeout api=1
+NEO_JS_ERROR id=0 mod=r10throw Error: R10_INTENTIONAL
+NEO_JS_TIMEOUT id=0 mod=r10timeout
+NEO_JS_DISABLED mod=r10timeout reason=budget
+#
+# --- 首月样本(前 6 行) ---
+NEO_CAP scope=ok token=ok descriptor=ok graph=ok state=ok vtable=ok fingerprint=ok
+NEO_JS_MODS n=3
+NEO_JS_INIT_OK id=r10good api=1
+NEO_JS_INIT_OK id=r10throw api=1
+NEO_JS_INIT_OK id=r10timeout api=1
+NEO_JS_CALL id=0
+# --- 末月样本(前 6 行) ---
+NEO_JS_LOG R10_NBR id=0 deg=4 n=4 first=490
+NEO_JS_WRITE id=0 name=r10flag kind=flag
+NEO_JS_LOG R10_FLAG id=0 before=true after=true
+NEO_JS_CALL id=1
+NEO_JS_LOG R10_NBR id=1 deg=4 n=4 first=145
+NEO_JS_WRITE id=1 name=r10flag kind=flag

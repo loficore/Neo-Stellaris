@@ -1,0 +1,15 @@
+UNINSTALL rc=0 verify=0 alive=1
+# R11 —— 两次卸载回执(Stellaris 4.4.4, 2026-11-15)
+#
+# 进程 A(pid 2492,主钩来自 sqjs_r11.dll):
+#   python C:/temp/session_bridge.py --timeout-s 300 C:/temp/c2_boot_inject.py C:/temp/sqjs_r11.dll --uninstall
+#   => UNINSTALL rc=0 verify=0 alive=1 / EXIT=0
+#
+# 进程 B(pid 10556,主钩来自启动期副本 sqjs_r11b.dll;探针自己那道钩另有一次 uninstall_rc=0):
+#   python C:/temp/session_bridge.py --timeout-s 300 C:/temp/c2_boot_inject.py C:/temp/sqjs_r11b.dll --uninstall
+#   => UNINSTALL rc=0 verify=0 alive=1 / EXIT=0
+#
+# C6-6 判据(按进程 A 那份回执):rc 与 verify 都是 0,alive 为 1。两次都只 kill 宿主,永不 FreeLibrary。
+#
+# 判读陷阱: c6_acceptance.py 的 parse_uninstall 把整份文件按空白切 k=v,后出现的同名键覆盖前面的;
+# 所以正文里不许出现 `rc=` 或 `verify=` 这类空白分隔记号(本文件刻意只写中文标点与数字)。

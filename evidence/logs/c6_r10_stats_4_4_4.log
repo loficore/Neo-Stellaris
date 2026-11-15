@@ -1,0 +1,19 @@
+# R10 进程 A —— C2NeoStatsInto 读数(Stellaris 4.4.4, 2026-11-15, pid 1240)
+#
+# 命令(§2.5,经 session_bridge 落会话 1):
+#   python C:/temp/session_bridge.py --timeout-s 300 C:/temp/c2_boot_inject.py C:/temp/sqjs_r10.dll --stats
+# 读数时刻: 窗口内第 17 个月度脉冲之后(该进程最终跑到 20 个月;最终行数见 c6_r10_neo_js_4_4_4.log)。
+#
+# 原文:
+calls=13396 matched=13396 log_calls=13396 last_id=787 rule_hits=64 installed=1 verify=0 dispatched=33629 null_scope=0 mask_odd=0 writes=13396 skipped=0 score_writes=13379 score_skipped=17 set_calls=0 set_runs=0
+hash_rc=16 neo_hash=0000000000000000 neo_edges=0
+live_verify verified=0 verify_failed=0
+#
+# 判读:
+# - `installed=1 verify=0` —— C6-6 的**前置**(不是 C6-6 本身),成立。
+# - `calls=matched=log_calls=writes=13396` = 17 × 788:每系统每月一次,零失配、零 null scope。
+# - `score_writes=13379` / `score_skipped=17` = 17 个月各跳过一个系统:烘焙表只有 787 个 id,
+#   会话内新生成的那个系统(容器 id 787)没有表分数 ⇒ 跳过。与 roadmap 的「表 787 / 容器 788」
+#   是同一个已知差,不是新缺陷。
+# - `neo_hash=0` / `neo_edges=0` 是「本进程还没成功读过图」的哨兵(`hash_rc=16`),不是空图:
+#   本发 `--score-source` 默认 0(烘焙表),没有走活体重算路径。

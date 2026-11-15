@@ -1,0 +1,18 @@
+namespace = r10
+
+# 一次月度脉冲 = 每系统一次 `neo_action`，JS 三条路径（neighbors / flag）就在这一次派发里读。
+# `random_system` 是承重的：4.4.4 里 `every_system` 从无 scope 的事件只跑 1 次，进 system
+# scope 后才是逐系统（§89 的实机读数：784/月）。
+event = {
+	id = r10.1
+	hide_window = yes
+	is_triggered_only = yes
+
+	immediate = {
+		random_system = {
+			every_system = {
+				neo_action = { }
+			}
+		}
+	}
+}
