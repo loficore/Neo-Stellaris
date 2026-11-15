@@ -1045,38 +1045,7 @@ save=/mnt/cache/tmp/opencode/autosave_2257.07.01.sav
 
 ### §4.3 可直接抄成 `offsets.zig` 常量的表
 
-档一律是 `静态推断(未验证)` —— 本卷零 shot,没有一格是 `pinned`。**双读者**列指出该格有几个互不
-相干的函数读到同一组值(计划 Task 2 Step 3 的判据)。
-
-| 名字(建议) | 值 | 档 | 出处 § |
-|---|---|---|---|
-| `scope_gate.RVA_GETTER_MASK_0x10` | `0x394190` | `静态推断(未验证)`,49 调用点 | §2.1 |
-| `scope_gate.RVA_GETTER_MASK_0x20` | `0x2b6470` | `静态推断(未验证)`,102 调用点 | §2.2 |
-| `scope_gate.RVA_GETTER_MASK_0x40` | `0x393ec0` | `静态推断(未验证)`,150 调用点 | §2.3 |
-| `scope_gate.RVA_GETTER_MASK_1` | `0x394870` | `静态推断(未验证)`,42 调用点 | §2.4 |
-| `scope_gate.RVA_GETTER_MASK_0x80` | `0x393970` | `静态推断(未验证)`,303 调用点;同表 `0x3939f0` 见图卷 §1.2 | §2.5 |
-| `scope_gate.OBJ_CACHE_OFF` | `0x1c` | `静态推断(未验证)`,五个 getter 首指令 | §2.0 |
-| `scope_gate.INLINE_OBJ_OFF` | `0x14` | `静态推断(未验证)`,**只** mask `0x10` 那一份有 | §2.1 |
-| `scope_gate.SCOPE_ID_OFF` | `0x10` | `pinned(graph §1.2)` + 五个 getter 同口径 | §2.0 |
-| `scope_gate.SCOPE_MASK_OFF` | `0x08` | `pinned(country_scope §6)` + 五个 getter 同口径 | §2.0 |
-| `id_table.FLAG_BYTE_OFF` | `0x34` | `静态推断(未验证)`,单读者 `0x25281d` | §3.4 |
-| `id_table.EMPTY_KEY` | `0xffffff` | `静态推断(未验证)`,只在删/紧缩路径出现 | §3.5 |
-| `id_table.RVA_TABLE_MASK_0x10` | `0x3260ff8` | `静态推断(未验证)`,双读者;obj id `+0x10` | §3.4 |
-| `id_table.RVA_TABLE_MASK_0x20` | `0x3260ff0` | `静态推断(未验证)`,三读者;obj id `+0x10` | §3.1 |
-| `id_table.RVA_TABLE_MASK_0x40` | `0x325ef00` | `静态推断(未验证)`,双读者;obj id `+0x30` | §3.4 |
-| `id_table.RVA_TABLE_MASK_1` | `0x3261010` | `静态推断(未验证)`,双读者;obj id `+0x8` | §3.4 |
-| `id_table.RVA_TABLE_MASK_0x80` | `0x3260b98` | `pinned(graph §1.2)`(系统索引);obj id `+0x8` | §2.5 |
-| `id_table.RVA_TABLE_SECOND_HOP` | `0x3261068` | `静态推断(未验证)`,四读者;obj id `+0x10` | §3.3 |
-| `id_table.RVA_TABLE_MASK_0x2000000` | `0x3261030` | `静态推断(未验证)`,四读者;obj id `+0x8` | §3.2 |
-| `id_table.RVA_TABLE_MASK_0x2000000_FIRST_HOP` | `0x3260f18` | `未定形`(对象 id 未读) | §3.4 |
-| `id_table.RVA_TABLE_HANDLE_TAG0` | `0x3260b78` | `静态推断(未验证)`,作者卷 §3.5 + 本卷 `0xd3b53a` 两处独立读数;obj id `+0x18` | §3.6 |
-| `id_table.RVA_TABLE_HANDLE_OTHER` | `0x3260fd0` | `single_reader`,obj id `+0x18` | §3.6 |
-| `handle.RVA_RESOLVE` | `0xd3b4d0` | `静态推断(未验证)`,单读者 | §3.6 |
-| `handle.TAG_SHIFT` / `TAG_MASK` | `0x20` / `0xff` | `静态推断(未验证)`,`shr rax,0x20` + `movsx al` | §3.6 |
-
-**抄之前必须读这一条**:上表的名字是**我按 B 套 mask 起的机械名**,`MASK_0x10` 这样的名字**故意**
-不含 `POP/FLEET/PLANET` —— 语义名本卷没有证据(§5 第 1 条)。下一份计划若要用语义名,得先补
-§4.4 的第 1 条。
+**这张表在卷末 §6**(把它放在最后一节,是因为下一份计划的第一个动作就是抄它)。
 
 ### §4.4 `getPlanet` / `getPop` 还缺哪几格(= 下一份计划的第一前置)
 
@@ -1132,7 +1101,7 @@ $ python3 scripts/disrva.py 0x3941ff --len=0x14
 
 ---
 
-## §5 本卷与既有卷的关系、以及下一靶(2026-11-15,零 shot)
+## §5 本卷与既有卷的关系、以及下一靶(2026-11-15,零 shot,结论:七格与既有卷同形、三发下一靶离线可做、两发必须 shot)
 
 ### §5.1 与既有卷的读数对照
 
@@ -1169,3 +1138,41 @@ $ python3 scripts/disrva.py 0x3941ff --len=0x14
    落定后由下一份计划加,并按 `chain_manifest` 的围栏登记;本卷只提供**候选值与档**。
 3. **`handle.TAG_SHIFT`/`TAG_MASK` 只对 `0xd3b4d0` 一个函数成立**,不是「引擎所有句柄的编码」。
    同一份工作里至少还有两种不同的 id 编码(u32 的 `& 0xffffff`、qword 的 `>> 0x20`),不能互相套用。
+
+---
+
+## §6 常量速查:可直接抄成 `offsets.zig` 常量(2026-11-15,零 shot,结论:23 格候选值,档全部 ≤ 静态推断(未验证))
+
+档一律是 `静态推断(未验证)` —— 本卷零 shot,没有一格是 `pinned`。`档` 列里跟着的「N 调用点」
+是 getter 的静态 `call`/`jmp` 站点数(§2.6),「双读者/三读者/四读者」是该表有几个互不相干的
+函数读到同一组五格(计划 Task 2 Step 3 的判据)。
+
+| 名字(建议) | 值 | 档 | 出处 § |
+|---|---|---|---|
+| `scope_gate.RVA_GETTER_MASK_0x10` | `0x394190` | `静态推断(未验证)`,49 调用点 | §2.1 |
+| `scope_gate.RVA_GETTER_MASK_0x20` | `0x2b6470` | `静态推断(未验证)`,102 调用点 | §2.2 |
+| `scope_gate.RVA_GETTER_MASK_0x40` | `0x393ec0` | `静态推断(未验证)`,150 调用点 | §2.3 |
+| `scope_gate.RVA_GETTER_MASK_1` | `0x394870` | `静态推断(未验证)`,42 调用点 | §2.4 |
+| `scope_gate.RVA_GETTER_MASK_0x80` | `0x393970` | `静态推断(未验证)`,303 调用点;同表 `0x3939f0` 见图卷 §1.2 | §2.5 |
+| `scope_gate.OBJ_CACHE_OFF` | `0x1c` | `静态推断(未验证)`,五个 getter 首指令 | §2.0 |
+| `scope_gate.INLINE_OBJ_OFF` | `0x14` | `静态推断(未验证)`,**只** mask `0x10` 那一份有 | §2.1 |
+| `scope_gate.SCOPE_ID_OFF` | `0x10` | `pinned(graph §1.2)` + 五个 getter 同口径 | §2.0 |
+| `scope_gate.SCOPE_MASK_OFF` | `0x08` | `pinned(country_scope §6)` + 五个 getter 同口径 | §2.0 |
+| `id_table.FLAG_BYTE_OFF` | `0x34` | `静态推断(未验证)`,单读者 `0x25281d` | §3.4 |
+| `id_table.EMPTY_KEY` | `0xffffff` | `静态推断(未验证)`,只在删/紧缩路径出现 | §3.5 |
+| `id_table.RVA_TABLE_MASK_0x10` | `0x3260ff8` | `静态推断(未验证)`,双读者;obj id `+0x10` | §3.4 |
+| `id_table.RVA_TABLE_MASK_0x20` | `0x3260ff0` | `静态推断(未验证)`,三读者;obj id `+0x10` | §3.1 |
+| `id_table.RVA_TABLE_MASK_0x40` | `0x325ef00` | `静态推断(未验证)`,双读者;obj id `+0x30` | §3.4 |
+| `id_table.RVA_TABLE_MASK_1` | `0x3261010` | `静态推断(未验证)`,双读者;obj id `+0x8` | §3.4 |
+| `id_table.RVA_TABLE_MASK_0x80` | `0x3260b98` | `pinned(graph §1.2)`(系统索引);obj id `+0x8` | §2.5 |
+| `id_table.RVA_TABLE_SECOND_HOP` | `0x3261068` | `静态推断(未验证)`,四读者;obj id `+0x10` | §3.3 |
+| `id_table.RVA_TABLE_MASK_0x2000000` | `0x3261030` | `静态推断(未验证)`,四读者;obj id `+0x8` | §3.2 |
+| `id_table.RVA_TABLE_MASK_0x2000000_FIRST_HOP` | `0x3260f18` | `未定形`(对象 id 未读) | §3.4 |
+| `id_table.RVA_TABLE_HANDLE_TAG0` | `0x3260b78` | `静态推断(未验证)`,作者卷 §3.5 + 本卷 `0xd3b53a` 两处独立读数;obj id `+0x18` | §3.6 |
+| `id_table.RVA_TABLE_HANDLE_OTHER` | `0x3260fd0` | `single_reader`,obj id `+0x18` | §3.6 |
+| `handle.RVA_RESOLVE` | `0xd3b4d0` | `静态推断(未验证)`,单读者 | §3.6 |
+| `handle.TAG_SHIFT` / `TAG_MASK` | `0x20` / `0xff` | `静态推断(未验证)`,`shr rax,0x20` + `movsx al` | §3.6 |
+
+**抄之前必须读这一条**:上表的名字是**我按 B 套 mask 起的机械名**,`MASK_0x10` 这样的名字**故意**
+不含 `POP/FLEET/PLANET` —— 语义名本卷没有证据(§5 第 1 条)。下一份计划若要用语义名,得先补
+§4.4 的第 1 条。
