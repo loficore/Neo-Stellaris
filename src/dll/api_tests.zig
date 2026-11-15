@@ -7,8 +7,8 @@
 // `scripted_tests.zig` exist.
 //
 // The tests themselves live next to the code they exercise (`api/gamestate.zig`,
-// `api/field_read.zig`), as they did when this module was rooted there; this file
-// only has to make the files reachable.
+// and the C3-FIELD channel's own module), as they did when this module was rooted
+// there; this file only has to make the files reachable.
 
 const std = @import("std");
 

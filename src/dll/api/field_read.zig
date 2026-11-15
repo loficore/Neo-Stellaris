@@ -5,7 +5,7 @@
 // 回填**同一块**缓冲。**判据不在这里**:「这三格是不是 owner」「锁 + 两旗标形状对不对」
 // 全在 `scripts/c46_field_read.py`(纯函数,离线可测);Zig 侧只返回六个状态码。
 //
-// 只读:没有 hook、没有 `WriteProcessMemory`、没有 `VirtualProtect`、不建/删引擎对象。
+// 只读:没有 hook、不写引擎内存、不改任何页保护、不建/删引擎对象。
 // 冻结的契约 = 本文件的 `LAYOUT` 八个词 + 296 B 缓冲布局 + 六个状态码;
 // 驱动侧 `EXPECTED_LAYOUT` 与 `docs/offline-tooling.md` 的表格必须逐字一致
 // (改一处就要同时改 `PROTOCOL_VERSION`)。
@@ -178,6 +178,53 @@ fn reply(buf: []u8, req: Request, status: i32, got: u32, resolved: u64) i32 {
 }
 
 // ---------------------------------------------------------------------------
+// 生产侧:进程内读 + 两个查表解析器 + 两个导出用的入口
+// ---------------------------------------------------------------------------
+
+const windows = @import("../hooking/windows.zig");
+const gamestate = @import("gamestate.zig");
+
+/// 生产读实现:`ReadProcessMemory` 的薄包装。`len` 参数不用 —— 以 `buf.len` 为准,
+/// 与 `graph_probe.memRead` / `gamestate.prodRead` 同口径(两个长度不该有两种含义)。
+fn prodRead(_: *anyopaque, addr: usize, len: usize, buf: []u8) bool {
+    _ = len;
+    return windows.readProcessMemory(addr, buf);
+}
+
+fn prodReader() Reader {
+    return .{ .ctx = undefined, .read = &prodRead };
+}
+
+/// 生产解析器:`kind=1` 走系统表、`kind=2` 走国家表 —— **同一条** 16 B 记录查表
+/// (`gamestate.getSystem` / `getCountry`,站点与复核条件见那两处的 docstring)。
+/// id 超出 u32 一律解析不上:截断后去查表会安静地读到另一个对象。
+fn prodResolve(kind: u64, subject: u64) ?usize {
+    if (subject > std.math.maxInt(u32)) return null;
+    const id: u32 = @truncate(subject);
+    const obj = switch (kind) {
+        KIND_SYSTEM => gamestate.getSystem(id),
+        KIND_COUNTRY => gamestate.getCountry(id),
+        else => null,
+    };
+    return if (obj) |p| @intFromPtr(p) else null;
+}
+
+/// 就地服务一块 `BUF_SIZE` 缓冲,返回值 = header 的 `status`。
+///
+/// 模块基址取不到 ⇒ `-1`:那时我们不在游戏进程里,连 `kind=3` 的裸地址都不该读
+/// (读到的任何字节都不是引擎状态,而是一个看起来像读数的假证据)。
+pub fn readInto(buf: [*]u8) i32 {
+    _ = windows.moduleFunction(0) catch return StatusNoBase;
+    return serve(buf[0..BUF_SIZE], prodReader(), &prodResolve);
+}
+
+/// 写八个 layout 词,返回 `8`(驱动按这个数判断缓冲够不够)。
+pub fn layoutInto(out: *[8]u32) u32 {
+    out.* = LAYOUT;
+    return 8;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -332,6 +379,28 @@ test "越界地址判 -4,header.status 与返回值相等" {
     // 解析不上 ⇒ -2(与 -4 分开:一个是「哪个对象」,一个是「读不到」)。
     armRequest(&buf, KIND_SYSTEM, 8, 0x1370, 4);
     try testing.expectEqual(StatusUnresolved, serve(&buf, imageReader(), &imageResolve));
+}
+
+test "layoutInto 写八个词并返回 8(驱动按这个数判缓冲够不够)" {
+    var words: [8]u32 = @splat(0xDEAD_BEEF);
+    try testing.expectEqual(@as(u32, 8), layoutInto(&words));
+    try testing.expectEqualSlices(u32, &LAYOUT, &words);
+}
+
+test "readInto: 宿主构建取不到模块基址时返回 -1(fail closed)" {
+    // Linux 测试宿主上 `windows.moduleFunction` 直接 error.ModuleNotFound ⇒
+    // 我们不在游戏进程里 ⇒ 连 kind=3 的裸地址都不读(读到的不是引擎状态)。
+    var buf: [BUF_SIZE]u8 = @splat(0x5A);
+    try testing.expectEqual(StatusNoBase, readInto(&buf));
+    try testing.expect(std.mem.allEqual(u8, &buf, 0x5A));
+}
+
+test "prodResolve: 宿主的查表恒失败;id 超出 u32 一律解析不上" {
+    try testing.expectEqual(@as(?usize, null), prodResolve(KIND_SYSTEM, 7));
+    try testing.expectEqual(@as(?usize, null), prodResolve(KIND_COUNTRY, 41));
+    // 未定形的 kind 与超宽 id 都不许走查表(截断后查表会读到另一个对象)。
+    try testing.expectEqual(@as(?usize, null), prodResolve(KIND_RAW, 0x1_0000_0000));
+    try testing.expectEqual(@as(?usize, null), prodResolve(9, 7));
 }
 
 test "kind=9 判 -5;decode 对 24 字节的短缓冲返回 null" {

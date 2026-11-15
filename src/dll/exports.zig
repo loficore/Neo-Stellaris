@@ -302,6 +302,7 @@ export fn C2NeoVerifyStatsInto(out: [*]u8) callconv(.c) i32 {
 const c2_neo_dispatch = @import("c2/neo_dispatch.zig");
 const c2_capability = @import("c2/capability.zig");
 const c2_neo_effect = @import("c2/neo_effect.zig");
+const field_read = @import("api/field_read.zig");
 const c = @import("quickjs/bindings.zig");
 const offsets = @import("shared/offsets.zig");
 
@@ -1355,6 +1356,30 @@ export fn C3CapabilityStatsInto(out: [*]u8) callconv(.c) i32 {
 /// 清矩阵与 `ran`。不碰任何 hook(本模块没有 hook),也不重置引擎侧任何东西。
 export fn C3CapabilityReset() callconv(.c) void {
     c2_capability.reset();
+}
+
+// ---------------------------------------------------------------------------
+// C3-FIELD(#46 字段读通道)—— 一次调用读回一块 `[对象 + 偏移]` 的原始字节。
+//
+// ① 这是**只读**通道:`ReadProcessMemory` + 两个已验过的查表(`getSystem`/`getCountry`),
+//    **没有** detour、不写引擎内存、不建/删引擎对象。
+// ② 契约在 `src/dll/api/field_read.zig` 的 `LAYOUT`(八个词)+ 296 B 缓冲布局 + 六个状态码;
+//    返回值 = header 的 `status`,驱动必须对账(不等 ⇒ `protocol_desync`)。
+// ③ 用法与四条判读陷阱见 `docs/offline-tooling.md` 的 `### scripts/c46_field_read.py` 一节。
+//    这里**不**进 `sdk/api.def`:字段还是「静态推断(未验证)」,不许公开成 mod 契约(§6.3)。
+// ---------------------------------------------------------------------------
+
+/// 写八个 layout 词,返回 `8`。顺序 = 驱动 `EXPECTED_LAYOUT` 的顺序。
+export fn C3FieldLayout(out: [*]u32) callconv(.c) u32 {
+    const words: *[8]u32 = @ptrCast(out);
+    return field_read.layoutInto(words);
+}
+
+/// 就地服务一块 296 B 缓冲:请求头进(已先清零)、reply 出,返回值 = header 的 `status`。
+/// 六个码:`0` 成功 / `-1` 模块基址取不到 / `-2` 对象解析不上 / `-3` 长度越界 /
+/// `-4` 读不到 / `-5` kind 非法。
+export fn C3FieldReadInto(buf: [*]u8) callconv(.c) i32 {
+    return field_read.readInto(buf);
 }
 
 /// C2 diagnostic: step-by-step memory reads to find the exact crash point.
