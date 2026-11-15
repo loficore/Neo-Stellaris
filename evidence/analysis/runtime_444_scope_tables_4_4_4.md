@@ -973,3 +973,199 @@ $ python3 scripts/disrva.py 0xd3b4d0 --len=0x40
 4. **七个全局槽的相邻关系是 `.data` 布局,不是语义分组。** `0x3260ff0` / `0x3260ff8` /
    `0x3261010` / `0x3261030` / `0x3261068` 只差 8 字节,而 `0x325ef00` / `0x3260f18` 在别处 ——
    相邻**不能**用来推「同族」,`0x325ef00` 的存在就是反例。
+
+---
+
+## §4 交叉校验与判决(2026-11-15,零 shot,结论:8 条候选全部有判词;`getPlanet`/`getPop` 仍缺四格)
+
+### §4.1 存档侧:只能证伪
+
+探针:`scripts/scratch/2026-11_scope_tables/scope_id_domains.py`(一次性,只读 ZIP 里的
+`gamestate` 文本,按块键取 id,不解码、不改写)。两份 4.4.4 存档的逐字输出:
+
+```text
+$ python3 scripts/scratch/2026-11_scope_tables/scope_id_domains.py \
+      /mnt/cache/tmp/opencode/autosave_2327.01.01.sav /mnt/cache/tmp/opencode/autosave_2257.07.01.sav
+save=/mnt/cache/tmp/opencode/autosave_2327.01.01.sav
+  planets     count=8366 min=0 max=8365 max&0xffffff=8365 fits24=True hi8[0x00x8366]
+  pop         count=0 (本存档无此块或无 id 键)
+  pop_groups  count=1008 min=282 max=4261413684 max&0xffffff=820 fits24=False hi8[0x00x79 0x01x30 0x17x10 0x0cx9 0x4ax9 0x14x9]
+  ships       count=8474 min=0 max=134223156 max&0xffffff=5428 fits24=False hi8[0x00x6557 0x01x1395 0x02x330 0x03x114 0x04x54 0x05x15]
+  fleet       count=5968 min=0 max=150998274 max&0xffffff=3330 fits24=False hi8[0x00x4207 0x01x1184 0x02x365 0x03x114 0x04x57 0x05x25]
+  colony      count=145 min=0 max=144 max&0xffffff=144 fits24=True hi8[0x00x145]
+save=/mnt/cache/tmp/opencode/autosave_2257.07.01.sav
+  planets     count=8334 min=0 max=8333 max&0xffffff=8333 fits24=True hi8[0x00x8334]
+  pop         count=0 (本存档无此块或无 id 键)
+  pop_groups  count=562 min=282 max=4227859194 max&0xffffff=762 fits24=False hi8[0x00x80 0x01x15 0x02x13 0x07x13 0x10x11 0x0fx10]
+  ships       count=5978 min=0 max=50335362 max&0xffffff=3714 fits24=False hi8[0x00x5288 0x01x617 0x02x66 0x03x7]
+  fleet       count=3936 min=0 max=117441255 max&0xffffff=743 fits24=False hi8[0x00x3259 0x01x529 0x02x99 0x03x28 0x04x9 0x05x6]
+  colony      count=110 min=0 max=109 max&0xffffff=109 fits24=True hi8[0x00x110]
+```
+
+四条读数,逐条写清「能证什么、不能证什么」:
+
+1. **`planets` 与 `colony` 的 id 全在 24 位内**(`fits24=True`,`hi8` 只有一个 `0x00` 桶)⇒
+   「表槽号 = `id & 0xffffff`」对这两个块是**不矛盾**(它们甚至连掩码都不需要)。
+2. **`pop_groups` / `ships` / `fleet` 的键带高位标志**(`fits24=False`,`hi8` 有多个桶)⇒ 对这三个块,
+   **必须**先 `and 0xffffff` 才是索引;七张表每一处都这么干(§3.5)⇒ **不矛盾**。
+   注意 `hi8` **不能**当类型标签读:同一个块的 id 不共享一个高位字节(例如 `ships` 有
+   `0x00/0x01/0x02/0x03/0x04/0x05` 六个桶)。
+3. **`pop` 块在两份存档里都是空的**(`count=0`)⇒ 「pop 的 id 值域」这一格**本格存档无对应物,未交叉**。
+   这一条对 `getPop` 是**坏消息**,不是中性消息:本卷连「pop id 长什么样」都没有一个观测。
+4. **存档里没有 planet / pop 的**名字→id** 映射**(`planets` 块里 `name={key="NAME_…"}` 是本地化键,
+   不是 id 索引)⇒ 没有任何办法用存档把「哪张表是 planet 表」认出来。**这条是 §4.2 判词的边界。**
+
+**证伪用的那一条**(§5.3 的同一条规则):候选表在活体里若命中,`entry` 指向的对象其 id 字段必须
+落在上面的值域内。本卷**没有一次运行时命中**,所以这条规则在本卷**没有被使用过** —— 它只是
+下一份计划的判据。
+
+### §4.2 判决(8 条,一行一个)
+
+```text
+0x394190  getter_named    —— 前提:B 套 mask 0x10 的类型门 + 表 0x3260ff8 + 对象 id +0x10 是逐指令读数;
+                              49 个调用点里的用途读者 0x1a9beba 说明返回值是「有 +0x18 id 的中间对象」。
+0x2b6470  getter_named    —— 前提:B 套 mask 0x20 + 表 0x3260ff0 + 对象 id +0x10;102 个调用点里的
+                              0x1a9be28 说明 `+0x3a8` 是下一跳 id。
+0x393ec0  getter_named    —— 前提:B 套 mask 0x40 + 表 0x325ef00 + 对象 id +0x30;150 个调用点里的
+                              0x1a9bdee 说明 `+0x434` 直接是归属国 id。
+0x394870  getter_named    —— 前提:B 套 mask 1 + 表 0x3261010 + 对象 id +0x8;42 个调用点里的
+                              0x1a9bf53 说明 `+0x1b8` 直接是国家 id。
+0x393970  getter_named    —— 前提:B 套 mask 0x80 + 表 0x3260b98 + 对象 id +0x8;与图卷 §1.2 的
+                              0x3939f0 同表不同函数(带缓存的那个变体),互为第二次独立读数。
+0x3260ff0 table_named     —— 前提:三个互不相干的函数(0x2b6470 / 0x1a9beba 所在的 is_owned_by /
+                              0x263bdd / 0x251a10)读到同一组 {界 +0x20, 表 +0x18, 16 B, ptr +8, id +0x10}。
+0x3261030 table_named     —— 前提:四个函数(0x265660 / 0x288882 / 0x394cd9 / 0x397c3b)读到同一组
+                              {界 +0x20, 表 +0x18, 16 B, ptr +8, id +0x8}。
+0x3261068 table_named     —— 前提:四个函数(0x192f90e / 0x1a99f5a / is_owned_by 的两处)读到同一组
+                              {界 +0x20, 表 +0x18, 16 B, ptr +8, id +0x10}。
+```
+
+**三条判词以外的读数**(不在 8 条候选里,但影响上表怎么用):`0x3260ff8` / `0x3261010` / `0x325ef00`
+`table_named`;`0x3260f18` `unresolved`(对象 id 那一格没读到);`0x3260fd0` `single_reader`(§3.6)。
+
+### §4.3 可直接抄成 `offsets.zig` 常量的表
+
+档一律是 `静态推断(未验证)` —— 本卷零 shot,没有一格是 `pinned`。**双读者**列指出该格有几个互不
+相干的函数读到同一组值(计划 Task 2 Step 3 的判据)。
+
+| 名字(建议) | 值 | 档 | 出处 § |
+|---|---|---|---|
+| `scope_gate.RVA_GETTER_MASK_0x10` | `0x394190` | `静态推断(未验证)`,49 调用点 | §2.1 |
+| `scope_gate.RVA_GETTER_MASK_0x20` | `0x2b6470` | `静态推断(未验证)`,102 调用点 | §2.2 |
+| `scope_gate.RVA_GETTER_MASK_0x40` | `0x393ec0` | `静态推断(未验证)`,150 调用点 | §2.3 |
+| `scope_gate.RVA_GETTER_MASK_1` | `0x394870` | `静态推断(未验证)`,42 调用点 | §2.4 |
+| `scope_gate.RVA_GETTER_MASK_0x80` | `0x393970` | `静态推断(未验证)`,303 调用点;同表 `0x3939f0` 见图卷 §1.2 | §2.5 |
+| `scope_gate.OBJ_CACHE_OFF` | `0x1c` | `静态推断(未验证)`,五个 getter 首指令 | §2.0 |
+| `scope_gate.INLINE_OBJ_OFF` | `0x14` | `静态推断(未验证)`,**只** mask `0x10` 那一份有 | §2.1 |
+| `scope_gate.SCOPE_ID_OFF` | `0x10` | `pinned(graph §1.2)` + 五个 getter 同口径 | §2.0 |
+| `scope_gate.SCOPE_MASK_OFF` | `0x08` | `pinned(country_scope §6)` + 五个 getter 同口径 | §2.0 |
+| `id_table.FLAG_BYTE_OFF` | `0x34` | `静态推断(未验证)`,单读者 `0x25281d` | §3.4 |
+| `id_table.EMPTY_KEY` | `0xffffff` | `静态推断(未验证)`,只在删/紧缩路径出现 | §3.5 |
+| `id_table.RVA_TABLE_MASK_0x10` | `0x3260ff8` | `静态推断(未验证)`,双读者;obj id `+0x10` | §3.4 |
+| `id_table.RVA_TABLE_MASK_0x20` | `0x3260ff0` | `静态推断(未验证)`,三读者;obj id `+0x10` | §3.1 |
+| `id_table.RVA_TABLE_MASK_0x40` | `0x325ef00` | `静态推断(未验证)`,双读者;obj id `+0x30` | §3.4 |
+| `id_table.RVA_TABLE_MASK_1` | `0x3261010` | `静态推断(未验证)`,双读者;obj id `+0x8` | §3.4 |
+| `id_table.RVA_TABLE_MASK_0x80` | `0x3260b98` | `pinned(graph §1.2)`(系统索引);obj id `+0x8` | §2.5 |
+| `id_table.RVA_TABLE_SECOND_HOP` | `0x3261068` | `静态推断(未验证)`,四读者;obj id `+0x10` | §3.3 |
+| `id_table.RVA_TABLE_MASK_0x2000000` | `0x3261030` | `静态推断(未验证)`,四读者;obj id `+0x8` | §3.2 |
+| `id_table.RVA_TABLE_MASK_0x2000000_FIRST_HOP` | `0x3260f18` | `未定形`(对象 id 未读) | §3.4 |
+| `id_table.RVA_TABLE_HANDLE_TAG0` | `0x3260b78` | `静态推断(未验证)`,作者卷 §3.5 + 本卷 `0xd3b53a` 两处独立读数;obj id `+0x18` | §3.6 |
+| `id_table.RVA_TABLE_HANDLE_OTHER` | `0x3260fd0` | `single_reader`,obj id `+0x18` | §3.6 |
+| `handle.RVA_RESOLVE` | `0xd3b4d0` | `静态推断(未验证)`,单读者 | §3.6 |
+| `handle.TAG_SHIFT` / `TAG_MASK` | `0x20` / `0xff` | `静态推断(未验证)`,`shr rax,0x20` + `movsx al` | §3.6 |
+
+**抄之前必须读这一条**:上表的名字是**我按 B 套 mask 起的机械名**,`MASK_0x10` 这样的名字**故意**
+不含 `POP/FLEET/PLANET` —— 语义名本卷没有证据(§5 第 1 条)。下一份计划若要用语义名,得先补
+§4.4 的第 1 条。
+
+### §4.4 `getPlanet` / `getPop` 还缺哪几格(= 下一份计划的第一前置)
+
+按「缺一格就不能写 `getPlanet`」的顺序排:
+
+| # | 缺的格 | 为什么它挡路 | 下一靶(具体到指令/函数) |
+|---|---|---|---|
+| 1 | **B 套 mask 位 ↔ 语义类型的对应** | 本卷知道「mask `0x10` 走表 `0x3260ff8`」,不知道 `0x10` 是 planet 还是 pop 还是 fleet。`getPlanet(id)` 的第一件事就是**选对表** | 官方 scope-iterator 的**名字拼接器**(`0x195A580..0x19A7268`,104 个,`AGENTS.md`/§25.4):名字里带 `planet`/`pop` 的那个函数,它注册的 scope 类型值就是答案 —— 这条线**离线可做**,零 shot |
+| 2 | **`0x3260f18` 的对象内 id 偏移** | mask `0x2000000` 这一路(§8.2 的第 16 行)形状差最后一格,`unresolved` | getter `0x394e60` 的 `0x394ebb` 之后 0x20 字节(本卷窗口刚好切在那儿) |
+| 3 | **`[scope+0x1c]` 缓存槽的填充方** | 若缓存槽在活体里常非空,`getPlanet(id)` 走「现造 scope cell」时它会命中脏值或空值 —— 入口契约取决于这一格 | 写点:`0x394200` 那个兄弟函数只做**失效**(`mov [rcx+0x10],eax` 抄 id、`xor eax,eax` 后把 `[rcx+0x14]`/`[rcx+0x1c]` **双双清零**,见下),**填充**方仍未读。下一靶 = 全库 `mov [rcx+0x1c], reg` 形态的离线扫描 |
+| 4 | **调用方传进来的 id 是 raw 还是 masked** | 七张表都用 `id & 0xffffff` 当槽号,但**对象复核**比的是**原始 id**(`cmp [obj+0x10], eax`,eax 未掩码)。`getPlanet(saved_id)` 的 `saved_id` 来自存档,它带高位标志(§4.1 第 2 条)⇒ 必须先确定「传进去的是 raw 还是 masked」,否则对象复核那一关**静默落空**(回退到空对象,不崩) | 一个**运行时**读数:把一个已知 raw id 与它的 masked 值分别喂进去,看哪一次过 `cmp`。这是本卷唯一必须靠 shot 的一格 |
+
+其余「不难但不能省」的两格(不挡第一版,但要在实现里留口):
+
+- **`id_table.FLAG_BYTE_OFF = 0x34`** 的语义(关闭时表是否整体失效)。
+- **`0x3260fd0` 那张 `single_reader` 表**:mask `0x10`/`0x20` 的链尾要经过 `0xd3b4d0` → 它。若要
+  完整实现「取归属国」,这张表也要第二读者。
+
+§4.4 第 3 条那三条指令的逐字输出(它把「缓存槽怎么失效」这一格直接钉死了):
+
+```text
+$ python3 scripts/disrva.py 0x3941ff --len=0x14
+  003941ff  int3    
+  00394200  mov     eax, dword ptr [rdx + 0x10]
+  00394203  mov     dword ptr [rcx + 0x10], eax     ; 抄 id
+  00394206  xor     eax, eax
+  00394208  mov     qword ptr [rcx + 0x14], rax     ; 内联指针槽清零
+  0039420c  mov     qword ptr [rcx + 0x1c], rax     ; 缓存槽清零
+```
+
+⇒ 一个 scope cell 每换一次 id,两个指针槽就被清空一次。**「为什么要清」比「谁填」更容易先答**:
+指针槽跟着 id 走,换 id 必然失效。这也解释了五个 getter 为什么都先判指针非空、再判 mask ——
+**空**是常态,**非空**是已解析。
+
+**反过来说清一件事**:`getPop` 比 `getPlanet` **多**一条障碍 —— §4.1 第 3 条:两份存档的 `pop`
+块是空的,连 id 值域都没有存档侧观测。而 `getPlanet` 至少有 `planets` 块的 `0..8365` 那一段
+`fits24=True` 的值域可用。
+
+### §4.5 §4 不能说的(五条)
+
+1. **表身份是从「用它的函数」推出来的,不是从符号推出来的。** 七张表没有名字、没有可读的
+   RTTI(§3.7 第 1 条),身份判词的全部内容就是「这四个/三个函数读到同一组五格」。所以
+   `table_named` **不**等于「这张表叫 `CPlanetDatabase`」。
+2. **没有一次运行时读数。** 全局槽非空、槽数、哪两个全局槽其实指向同一张表、缓存槽是否常非空 ——
+   全部零读数。本卷所有判词都是**静态形状**判词。
+3. **A 套(`scope_types`)与 B 套(mask)是两套编号,本卷没有把它们对上。** 数值重合
+   (`POP=16=0x10`、`FLEET=32=0x20`)是**巧合还是同源,本卷不判**;而 `0x80` 在两套里含义直接冲突
+   (A `LEADER` / B 系统),足以证明不能互译。§4.3 的常量名因此是 `MASK_0xNN`,不是 `POP`。
+4. **就算形状全对,`getPlanet(id)` 还差一格语义与一格口径**(§4.4 第 1、4 条)。「表是 16 B 记录、
+   槽号 = `id & 0xffffff`」只解决「怎么查」,不解决「查哪张」和「传什么」。
+5. **存档这一侧只做了证伪,而且只证伪了两条**:「`fits24`」与「必须掩码」。它**没有**、也**不能**
+   把任何一张表指认成 planet/pop 表 —— 存档里没有名字→id 映射,`pop` 块还是空的。
+
+---
+
+## §5 本卷与既有卷的关系、以及下一靶(2026-11-15,零 shot)
+
+### §5.1 与既有卷的读数对照
+
+| 本卷读数 | 既有出处 | 关系 |
+|---|---|---|
+| `scope+0x08` = 类型门 / `scope+0x10` = id | `country_scope_4_4_4.md` §6(A)、`graph` 卷 §1.2(A) | 直接引用;五个 getter 是**第三次**同口径读数 |
+| 表对象 `+0x18` 基址 / `+0x20` 界 / 16 B 记录 / 对象指针 `+8` | `offsets.zig` 的 `country_table` 与 `graph`(两个独立读者) | **同形**:七张表没有一格与它们不同 |
+| `0x3260b98` 系统索引 + 回退 `0x325d880` + 对象 id `+0x8` | `graph` 卷 §1.2 | 本卷的 getter `0x393970` 是它的**第二个函数**(带缓存的变体),不是同一个函数 |
+| `0x3260b78` 表、对象 id `+0x18` | 作者卷 §3.5(`original_owner` 家族) | 本卷从 `0xd3b4d0` 的 `tag==0` 分支**独立**再读到同一组 ✓ |
+| `0x1a9bd10` 的 20 个叶子 | 作者卷 §8.2 | 本卷把其中 4 条的**第一跳**读成了函数体(mask `1` / `0x10` / `0x20` / `0x40`)+ mask `0x80` 的第二读者 |
+| `0xd3b4d0` 是「中继体,未读」(作者卷 §8.5 第 2 条) | — | 本卷**读了**:它是「qword 句柄 → 对象」的三支解析器(§3.6),其中一支正好用 `tag==0` 落 `0x3260b78` |
+
+### §5.2 下一靶(按「离线可做 / 必须 shot」分组)
+
+**离线可做(下一份计划的第一发)**:
+
+1. `0x195A580..0x19A7268` 的 104 个 scope-iterator **名字拼接器**里的 `planet` / `pop` 两支 ——
+   把 B 套 mask 与语义对上(§4.4 第 1 条)。这是唯一一条**不需要实机**就能给表起名的路。
+2. getter `0x394e60` 的 `0x394ebb` 之后那一格(§4.4 第 2 条),把 `0x3260f18` 从 `unresolved` 收掉。
+3. `scope cell` 的赋值/失效器 `0x394200` 那一段(`[rcx+0x10]` 抄 id、`[rcx+0x14]`/`[rcx+0x1c]` 清零)——
+   它已经回答了「换 id 就失效」,**填充**方仍是空白;而「raw/masked 哪个进 cell」要看调用它的那一侧(§4.4 第 3 条)。
+
+**必须 shot(一次 `install → 读 → uninstall`,沿用 `c2_scope_probe` 的口径)**:
+
+4. 读七张表各自的 `[全局槽]` 是否非空 + `[表对象+0x20]` 的槽数 —— 这一步就能把「哪两个全局槽
+   指向同一张表」判掉(静态永远判不了,BSS)。
+5. §4.4 第 4 条:同一个 id 的 raw / masked 两种喂法,看对象复核过不过。
+
+### §5.3 §5 不能说的
+
+1. **本卷没有把任何一格升到 `pinned`。** 连「七张表在活体里都存在」都没有读数 —— 静态只看得到
+   「这些指令存在」。
+2. **§4.3 的常量表现在还不能整体抄进 `offsets.zig`。** 计划 Global Constraints 第 2 条:常量等判决
+   落定后由下一份计划加,并按 `chain_manifest` 的围栏登记;本卷只提供**候选值与档**。
+3. **`handle.TAG_SHIFT`/`TAG_MASK` 只对 `0xd3b4d0` 一个函数成立**,不是「引擎所有句柄的编码」。
+   同一份工作里至少还有两种不同的 id 编码(u32 的 `& 0xffffff`、qword 的 `>> 0x20`),不能互相套用。
