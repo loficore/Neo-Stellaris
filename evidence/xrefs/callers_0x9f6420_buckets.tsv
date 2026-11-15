@@ -1,0 +1,7 @@
+# caller_count	func_start	func_end	src_files	sites	ref_strings
+1	0x11e2a50	0x11e2eeb		0x11e2d6d	0x257a950:selected_event_option | 0x24c5f40:save_game_id | 0x24c5fa8:game_year | 0x257a968:event_key | 0x257a930:option_id | 0x257a940:event_type | 0x249da60:archaeology
+1	0x11ed2a0	0x11ed73b		0x11ed5bd	0x257a950:selected_event_option | 0x24c5f40:save_game_id | 0x24c5fa8:game_year | 0x257a968:event_key | 0x257a930:option_id | 0x257a940:event_type | 0x249f620:first_contact
+1	0x11f5fa0	0x11f63d9		0x11f624e	0x257a950:selected_event_option | 0x24c5f40:save_game_id | 0x24c5fa8:game_year | 0x257a968:event_key | 0x257a930:option_id | 0x257a940:event_type | 0x24a4728:astral_rift
+1	0x13e3080	0x13e3527		0x13e3171	0x257a950:selected_event_option | 0x24c5f40:save_game_id | 0x24c5fa8:game_year | 0x257a968:event_key | 0x257a930:option_id | 0x257a940:event_type | 0x24a1128:espionage
+1	0x1451130	0x14516b0	diplomatic_eventwindow.cpp	0x14511e5	0x25b02f0:EVENT_DIPLO | 0x25b0370:option_list | 0x256c3d8:confirm_button | 0x256c3e0:button | 0x25b0498:Event ' | 0x25b0400:' with option # | 0x25b03c8: is tagged as dialog only but has no response text.
+1	0x168a460	0x168a638		0x168a50d	0x257a950:selected_event_option | 0x24c5f40:save_game_id | 0x24c5fa8:game_year | 0x257a968:event_key | 0x257a930:option_id | 0x257a940:event_type | 0x24a1ecc:leader
