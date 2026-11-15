@@ -1,0 +1,33 @@
+# `[country+0x2c68]` 容器与它的两个槽 —— 机器可读账(4.4.4,零 shot)
+# 卷:evidence/analysis/runtime_444_country_energy_4_4_4.md
+# 档:A=双侧证人 / B=单侧 / C=只有形状;"档"列后面的括号写证人条数或口径。
+读取点	表达式	含义候选	档
+0x2515458	`[country+0x2c68]` 对象的 vptr(base+0x2515458)	容器类标识;**只用于校验,不用于寻址**	B(运行期 2/2,NEO_C3_ECON;§12)
+0x844ae0	`new(0x48)`;`[+0]=0x2515458`;`[+0x10]=arg1`;`[+0x28]=&+0x30`	容器构造:0x48 B,所有者字段在 +0x10	A(构造/克隆/释放三处互钉)
+0x844890	`[new+0x28]=new+0x30`;复制 `+8/+0x10/+0x18/+0x20`;`[new+0x10]=arg2`	克隆体(vtable slot +0x88)	A
+0x844820	`[self+0x40]->vfn[+0x10]` 释放 `[self+0x30]`;`operator delete(self,0x48)`	释放体(slot +0x00)⇒ 对象 0x48 B	A
+0x1760770	容量 = `[0x33746F0]+0x14`;零填同样多格;`[+0x28]=&+0x30`;alloc=`0x2A03320`	内联向量初始化 ⇒ 长度 = 资源条数、下标 = 资源索引	A
+0x1760795	`[rcx] = rcx+8`(rcx = &self+0x28)	`+0x28` 是指向自己内联向量的指针	A
+0x1760780	`[vec+0x00] = 0`	data 指针格	A
+0x1760786	`[vec+0x08] = 0`	capacity 格	A
+0x176078a	`[vec+0x0C] = 0`	count 格	A
+0x1760791	`[vec+0x10] = 0x2A03320`	allocator(静态实例)	A
+0x241dbf	`cmp edx,[rcx+8]`	`+8` = capacity(不够才增长)	A
+0x241ddf	`[rdi+0x0C]` 参与 memcpy 长度	`+0xC` = count	A
+0x241df5	`[vec+0x10] -> vfn[+0x10]` 释放旧块	allocator 虚槽 A
+0x410060	`memcpy(*dst.data, *src.data, [src+0xC]*8)`;`[dst+0xC]=[src+0xC]`	向量赋值(方向由参数角色定)	A
+0x844200	`call 0x410060(rcx=arg2, rdx=self+0x28)`;`rdi=rdx` [+0x90] 把 `*[self+0x28]` 复制进调用方向量	**槽 +0x90 = 取(无写回)**	A
+0x84422b	`cmp ebx,1 ; je ret`	arg3==1 ⇒ 跳过三处研究覆盖	A
+0x844242	`[ [self+0x10] +0x1900 ] -> [arg2.data + [phys+0x18]*8]`	physics_research 覆盖源	A(两侧地址:0x1b3792c)
+0x84425c	同上,`+0x1908` / `society_research`	society 覆盖源	A(0x1b3777c)
+0x844279	同上,`+0x1910` / `engineering_research`	engineering 覆盖源	A(0x1b375cc)
+0x8442a0	`call 0x410060(rcx=self+0x28, rdx=arg2)`	**槽 +0x98 = 写回(改引擎状态)**	A
+0x84430c	`[ [self+0x10]+0x1900 ] = max(arg2.data[phys],0)`	写回 + 负数钳零	A
+0x844344	同上 `+0x1908`	A
+0x844374	同上 `+0x1910`	A
+0x1b2f30	`mov al,1; ret`	槽 +0x80 恒真门(3 B 叶子,无 .pdata 记录)	A
+0x844390	填向量后 `cmp vec[i], req[i]`;不够 → 0	槽 +0xB8 = 「至少这么多」(has_country_resource 的 >/>= 分支)	A
+0x8444c0	构造 `.rdata` 串 `LACKING_RESOURCES` 后 `call 0xa91970`	槽 +0xB0 = 消息/检查路径	C(只读形状)
+0x844630	填向量后 `call 0xa91970`	槽 +0xA8 = 消息/检查路径	C(只读形状)
+0x843f90	`[self+0x20]` 门;遍历 `*[self+0x28]` 的非零元素触发内层 effect	槽 +0x10 = ExecuteActual	C(只读形状;不影响本卷读法)
+0x8440a0	token 分支 {0x30db,0x3336,0x3778,0x3f88,0x45dc};未知 → `0x1D092C0`	槽 +0x20 = 参数 parse	C
