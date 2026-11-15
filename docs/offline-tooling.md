@@ -205,6 +205,12 @@ This is how §18's "byte-for-byte identical" claim became a measurement: **9,863
 把每个 `address` 节点判成四档之一，再把每条链折成 `green / yellow / red`，写
 `evidence/xrefs/chain_drift_<version>.tsv`（缺省路径；`--json` 打到 stdout 不写文件）。
 
+**覆盖率由围栏执行**（`scripts/test_scripts_layout.py` 的 `violates_unregistered_anchor`，规则名 `R-anchor`）：
+`src/dll/shared/offsets.zig` 里**每一个** `RVA_*` 常量，manifest 里必须有一行 `expect` 等于它的值 —— 按**值**
+匹配，不是按名字（`RVA_HOLDER` 与 `RVA_GALAXY_MAP_DB` 是同一个地址 0x3260bb0，一行代表两条；按名字会逼出第二行
+同一个数字）。`class=structure` 的行只有在 `expect` 写了落点时才算登记：`-` 的含义是「这一格不能用字节判」，
+不是「已登记」。豁免写在规则函数旁的 `ANCHOR_EXEMPTIONS`，理由只允许两类（同值别名 / 结构偏移）。
+
 ```bash
 NS_STELLARIS_EXE=/path/to/new/stellaris.exe python3 scripts/chain_drift.py \
     --chain register --chain dispatch --report /tmp/drift.tsv
