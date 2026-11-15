@@ -6,16 +6,18 @@
 // avoids main.zig's QuickJS C linkage — the same reason `c2_tests.zig` and
 // `scripted_tests.zig` exist.
 //
-// The tests themselves live next to the code they exercise (`api/gamestate.zig`),
-// as they did when this module was rooted there; this file only has to make the
-// file reachable.
+// The tests themselves live next to the code they exercise (`api/gamestate.zig`,
+// and the C3-FIELD channel's own module), as they did when this module was rooted
+// there; this file only has to make the files reachable.
 
 const std = @import("std");
 
 const gamestate = @import("api/gamestate.zig");
+const field_read = @import("api/field_read.zig");
 
 comptime {
     _ = gamestate;
+    _ = field_read;
 }
 
 test {
