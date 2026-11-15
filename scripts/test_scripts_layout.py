@@ -962,7 +962,18 @@ _RVA_CONST_RE = re.compile(r"pub const (RVA_[A-Z0-9_]+)(?:\s*:[^=]+)?\s*=\s*(0x[
 #: anchor is a field of a struct whose base node carries the row, so a second
 #: recipe would be a second name for one address).  "Not done yet" is the state
 #: this fence exists to make visible, not an exemption.
-ANCHOR_EXEMPTIONS: dict[str, str] = {}
+#:
+#: The four hash-table slots below are the one structural-offset entry: they are
+#: adjacent fields of the one table ``hash_map`` (``RVA_MAP 0x326d108``) and
+#: ``hash_load_factor`` (0x326d124) already carry that table's two ends, so a
+#: fifth/sixth/seventh/eighth row would be four more names for one structure —
+#: exactly the "don't invent a recipe per adjacent slot" ruling in the plan.
+ANCHOR_EXEMPTIONS: dict[str, str] = {
+    "RVA_BUCKETS": "结构偏移:同一张名字哈希表的相邻槽(manifest @node:hash_map),不单独配方",
+    "RVA_NEXT_ID": "结构偏移:同一张名字哈希表的相邻槽(manifest @node:hash_map),不单独配方",
+    "RVA_MASK": "结构偏移:同一张名字哈希表的相邻槽(manifest @node:hash_map),不单独配方",
+    "RVA_TAIL": "结构偏移:同一张名字哈希表的相邻槽(manifest @node:hash_map),不单独配方",
+}
 
 
 def rva_constants(offsets_path):
