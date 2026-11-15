@@ -87,7 +87,7 @@ onSystem((s) => {
 | `Country.id` | `number` | 本次调用的引擎国家 id:被派发作用域 `+0x10` 的**低 24 位**(高 8 位是引擎的类型标签——C3 读数 `0x01000002 → 2`)。SDK 唯一留存的句柄。 |
 | `Country.opinionOf` | `(targetId: number) => number \| null` | 引擎 `opinion` keyword:矩阵里的一个 `int32` 格,键是 `target * n + self`(两个 id 都掩到低 24 位——常量是 `offsets.country` 的 `SCOPE_ID_MASK`;宿主自己掩,引擎不替我们掩;直接传 `Country.id`)。**`null` = fail-closed**,绝不是 `0`:未计算(引擎哨兵 `0x7fffffff`)、任一 id 越界、矩阵没建(主菜单/没有战役)、会话没有 `opinion.read`,或 id 与被派发的国家不符。每次拒绝还会记 `NEO_JS_OPINION_REJECT … reason=<tag>`。**只读:**这一格是惰性填充的引擎缓存,宿主从不调它的计算器。 |
 | `Country.theirOpinionOf` | `(targetId: number) => number \| null` | 引擎 `their_opinion` keyword——`opinionOf` 的**转置**(`self * n + target`)。同样的 fail-closed 规则。哪一个才表示「我们对他们的看法」**尚未确立**;见[已知限制](/zh/guide/known-limits)。 |
-| `Country.resource` | `(index: number) => number \| null` | 引擎**资源索引** `index` 上的存量(`energy` 在原版 4.4.4 里是 `0`)。数值 = 引擎那个 8 B 定点格 **÷ `1e5`**(引擎自己的标度),所以 `12.34567` 就是 12.34567 单位。**`null` = fail-closed,绝不是 `0`**:没有读源(主菜单 / 战役未载入——最常见的一档)、国家对象解析失败、存量容器为 0、向量的 holder/data 为 0、`index` 越过资源条数,或三个研究资源那一路的所有者对象为 0。会话缺 `resource.read` 同样答 `null`,而且是**唯一**会记日志的一档(`NEO_JS_RESOURCE_REJECT … reason=no_permission`)。**`0` 是合法存量**(「这个国家真的一点都没有」),绝不当「不可用」。三个研究资源(`physics` / `society` / `engineering_research`)**是支持的**:引擎把它们放在国家对象上而不是向量里,宿主走的就是引擎自己那条路,不读向量里那三个陈旧的格。**只读:**没有 setter,也不调任何 vtable 槽。与 `opinionOf` 不同,这里刻意**没有** `scope_mismatch` 门——opinion 矩阵对另一向有转置格,存量没有,读别国的存量是合法的只读用法。 |
+| `Country.resource` | `(index: number) => number \| null` | 引擎**资源索引** `index` 上的存量(`energy` 在原版 4.4.4 里是 `0`)。数值 = 引擎那个 8 B 定点格 **÷ `1e5`**(引擎自己的标度),所以 `12.34567` 就是 12.34567 单位。**`null` = fail-closed,绝不是 `0`**:没有读源(主菜单 / 战役未载入——最常见的一档)、国家对象解析失败、存量容器为 0、向量的 holder/data 为 0、`index` 越过资源条数、三个研究资源那一路的所有者对象为 0,或**资源库读不到**(那时认不出 `index` 是不是那三个之一,答 `null` 而不是向量里的陈旧格)。会话缺 `resource.read` 同样答 `null`,而且是**唯一**会记日志的一档(`NEO_JS_RESOURCE_REJECT … reason=no_permission`)。**`0` 是合法存量**(「这个国家真的一点都没有」),绝不当「不可用」。三个研究资源(`physics` / `society` / `engineering_research`)**是支持的**:引擎把它们放在国家对象上而不是向量里,宿主走的就是引擎自己那条路,不读向量里那三个陈旧的格。**只读:**没有 setter,也不调任何 vtable 槽。与 `opinionOf` 不同,这里刻意**没有** `scope_mismatch` 门——opinion 矩阵对另一向有转置格,存量没有,读别国的存量是合法的只读用法。 |
 | `graph.betweenness` | `(s: System) => number` | 该星系的图分数(与交通要道打分同源)。 |
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200`——一个固定阈值,不是 v1 里的可调参数。 |
 | `log` | `(message: string) => void` | 往 `C:/temp/neo_js.log` 追加 `NEO_JS_LOG <text>`。 |
@@ -115,8 +115,9 @@ campaign 对象。
 不是国家 id,也不是表槽位。
 
 `null` 是 fail-closed 的答案,最常见的一档是主菜单:战役没载入就没有可读的东西。其余几档是
-国家对象解析失败、存量容器为 0、向量的 holder/data 为 0、`index` 越过资源条数,或三个研究资源
-那一路的所有者对象为 0。会话缺 `resource.read` 也答 `null`,而这是唯一会记日志的一档。
+国家对象解析失败、存量容器为 0、向量的 holder/data 为 0、`index` 越过资源条数、三个研究资源
+那一路的所有者对象为 0,或**资源库读不到**——那时宿主认不出 `index` 到底是不是那三个之一,
+于是答 `null` 而不是向量里的陈旧格。会话缺 `resource.read` 也答 `null`,而这是唯一会记日志的一档。
 
 `0` 是合法存量(「这个国家一点都没有」),绝不当「不可用」。
 

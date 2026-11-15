@@ -140,7 +140,11 @@ cell: the container at `[country+0x2c68]`, its inline vector (holder → data /
 count), `index` being the engine's resource numbering. The three research
 resources (`physics_research`, `society_research`, `engineering_research`) are
 **covered**, not skipped — the engine stores them on the country object instead
-of the vector, and the host reads that second path.
+of the vector, and the host reads that second path. When the resource database
+itself cannot be read, the host cannot tell whether the index *is* one of those
+three, so it answers `null`: it never falls back to the vector for them, because
+the vector cells of the three research resources are stale by construction
+(the engine overwrites them with the owning object's values).
 
 What that read has and has not got:
 

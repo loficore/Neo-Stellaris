@@ -69,12 +69,14 @@ export interface Country {
    * (the same scale the engine uses), so `12.34567` means 12.34567 units.
    * **Read-only** — `Country` has no setter and will not get one.
    *
-   * `null` = fail-closed. Six ways, all silent: no read source (main menu / no
-   * campaign loaded), the country object could not be resolved, its stockpile
+   * `null` = fail-closed. Seven ways, all silent: no read source (main menu /
+   * no campaign loaded), the country object could not be resolved, its stockpile
    * container is null, the vector's holder or data pointer is null, `index` is
-   * past the resource count, or — for the three research resources, which the
+   * past the resource count, — for the three research resources, which the
    * engine keeps on the owning object instead of the vector — that owner is
-   * null. A seventh way is logged by the host as
+   * null, or the resource database is unreadable (the host then cannot tell
+   * whether `index` is one of those three, so it answers `null` rather than the
+   * stale vector cell). An eighth way is logged by the host as
    * `NEO_JS_RESOURCE_REJECT … reason=no_permission`: the session lacks
    * `resource.read`. **`0` is a valid answer** ("this country has none"), never
    * a synonym for "unavailable".

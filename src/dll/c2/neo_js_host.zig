@@ -1422,11 +1422,12 @@ fn nativeCountryTheirOpinion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_in
 // `country_probe.zig` —— 本文件的 F4 围栏是「一个都不许出现」(偏移写第二遍就会
 // 在下一次引擎版本变更时只改一处)。
 //
-// `null` 的六种情况(与 `country_probe.stock` 一一对应):无读源(主菜单/未载入)、
+// `null` 的**七种**情况(与 `country_probe.stock` 一一对应):无读源(主菜单/未载入)、
 // 国家对象解析失败、存量容器为 0、向量 holder/data 为 0、`index >= count`、
-// 三个研究资源那一路的 owner 为 0。另有第七种,纯 JS 侧:**缺 `resource.read`**
-// —— 那一档答 `undefined`(opinion 同口径),SDK 把两档都映射成 `null`。
-// `0` 是「这个国家真有 0 单位」的合法读数,任何一档都不许退化成 0。
+// 三个研究资源那一路的 owner 为 0、**资源库读不到**(认不出 `index` 是不是那三个研究
+// 资源之一 ⇒ 不回落向量,2026-11-16 裁定)。另有第八种,纯 JS 侧:**缺
+// `resource.read`** —— 那一档答 `undefined`(opinion 同口径),SDK 把两档都映射成
+// `null`。`0` 是「这个国家真有 0 单位」的合法读数,任何一档都不许退化成 0。
 //
 // 与 opinion 的**权限口径差别**(Review Focus 5):这里**没有** `scope_mismatch`
 // 门。opinion 拒「读别人的行」是因为两向互为转置、读错边就是错数;存量是国家的
@@ -2863,8 +2864,10 @@ test "game tick: -1 映射成 null(0 是合法的纪元当天)" {
 // ---------------------------------------------------------------------------
 
 /// 合成读面:国家 1 → 对象 `0x2000` → 容器 `0x5000` → holder `0x5100`
-/// (count 26,data `0x5200`),第 0 格 = `1234567`。不模拟资源库(db = 0),于是
-/// 三个研究资源的分叉在这里不参与 —— 那一路由 `country_probe` 的镜像用例覆盖。
+/// (count 26,data `0x5200`),第 0 格 = `1234567`。资源库 `0x5400` → `0x5500`,三个
+/// 研究对象索引 `3 / 5 / 7`(与请求的 0 / 26 都不撞),于是这三个 index 都走向量 ——
+/// 研究资源那条分叉本身由 `country_probe` 的镜像用例覆盖。资源库**必须可读**:
+/// 读不到时 `stock()` 直接 `null`(2026-11-16 裁定)。
 const ResourceMirror = struct {
     const BASE: usize = 0x1000;
     const SIZE: usize = 0x8000;
@@ -2922,11 +2925,18 @@ const ResourceMirror = struct {
         self.putDword(0x5100 + @as(usize, @intCast(country_probe.RESOURCE_VECTOR_COUNT_OFF)), 26);
         self.putQword(0x5100 + @as(usize, @intCast(country_probe.RESOURCE_VECTOR_DATA_OFF)), 0x5200);
         self.putQword(0x5200, 1_234_567); // 下标 0
+        // 资源库:槽 → db → 三个研究对象(索引 3/5/6)。读不到就是 null,不是向量值。
+        self.putQword(0x5400, 0x5500);
+        for (country_probe.RESOURCE_DB_RESEARCH_OFF, 0..) |off, i| {
+            const resource = 0x5700 + i * 0x100;
+            self.putQword(0x5500 + @as(usize, @intCast(off)), resource);
+            self.putDword(resource + @as(usize, @intCast(country_probe.RESOURCE_INDEX_OFF)), @as(u32, @intCast(3 + 2 * i)));
+        }
     }
 
     fn addresses(self: *ResourceMirror) country_probe.Addresses {
         _ = self;
-        return .{ .country_table = 0x1000, .resource_db = 0 };
+        return .{ .country_table = 0x1000, .resource_db = 0x5400 };
     }
 };
 

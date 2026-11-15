@@ -69,7 +69,8 @@ trip 了安全检查就不是。
 `Country.resource(index)` 从引擎自己的 8 B 格读存量:容器在 `[country+0x2c68]`,里面是内联向量
 (holder → data / count),`index` 是引擎的资源编号。三个研究资源(`physics_research`、
 `society_research`、`engineering_research`)**是覆盖的**,不是跳过——引擎把它们放在国家对象上而不是
-向量里,宿主读的就是这第二条路。
+向量里,宿主读的就是这第二条路。资源库本身读不到时,宿主认不出 `index` 是不是那三个之一,于是答
+`null`:它绝不为这三个回落到向量,因为那三格按构造就是陈旧的(引擎会用所有者对象上的值把它们盖掉)。
 
 这条读法有与没有的东西:
 

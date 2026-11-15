@@ -154,7 +154,8 @@ fn countryObject(mem: Memory, addrs: Addresses, country_id: u32) ?u64 {
 ///
 /// `null` = fail-closed 之一（`0` 是「这个国家真有 0 单位」的合法读数，绝不用它
 /// 表示失败）：无读源 / 国家对象解析失败 / `[obj+0x2c68]` 为 0 / 向量持有者为 0 /
-/// 向量 data 为 0 / `index >= count` / 研究资源那一路的 owner 为 0。
+/// 向量 data 为 0 / `index >= count` / 研究资源那一路的 owner 为 0 /
+/// **资源库读不到**（见下一条）。
 ///
 /// **读链（Task 0 逐指令钉死，站点是 RVA，全在 `stellaris.exe` 4.4.4）：**
 ///
@@ -184,6 +185,11 @@ fn countryObject(mem: Memory, addrs: Addresses, country_id: u32) ?u64 {
 /// `[[container+0x10]+0x1900/0x1908/0x1910]` **覆盖** physics/society/engineering
 /// 三格 —— 向量里那三格不是引擎读的值。识别方式不写死索引：读
 /// `[db+0x48]/[db+0x50]/[db+0x58]` 三个资源对象各自的 `+0x18`，拿它比。
+///
+/// **资源库读不到 ⇒ `null`，绝不回落到向量**（2026-11-16 裁定）：认不出 `index`
+/// 是不是那三个研究资源之一时，「读向量」读到的是**陈旧值** —— 正是 §2.4 禁止的
+/// 写法。不确定的正确后果是不确定，不是「大概对的数」；`0` 都不许当「不可用」，
+/// 陈旧值更不能当读数。
 pub fn stock(mem: Memory, addrs: Addresses, country_id: u32, index: u32) ?i64 {
     const obj = countryObject(mem, addrs, country_id) orelse return null;
 
@@ -191,13 +197,18 @@ pub fn stock(mem: Memory, addrs: Addresses, country_id: u32, index: u32) ?i64 {
     const container = mem.read_u64(mem.ctx, container_addr) orelse return null;
     if (container == 0) return null;
 
-    if (researchFieldOffset(mem, addrs, index)) |owner_off| {
-        const owner_addr = add64(container, RESOURCE_OWNER_OFF) orelse return null;
-        const owner = mem.read_u64(mem.ctx, owner_addr) orelse return null;
-        if (owner == 0) return null;
-        const field_addr = add64(owner, owner_off) orelse return null;
-        const v = mem.read_u64(mem.ctx, field_addr) orelse return null;
-        return @bitCast(v);
+    switch (researchFieldOffset(mem, addrs, index)) {
+        // 认不出 index 的归属：fail-closed。走向量会把那三个陈旧格当成读数。
+        .unknown => return null,
+        .not_research => {},
+        .field => |owner_off| {
+            const owner_addr = add64(container, RESOURCE_OWNER_OFF) orelse return null;
+            const owner = mem.read_u64(mem.ctx, owner_addr) orelse return null;
+            if (owner == 0) return null;
+            const field_addr = add64(owner, owner_off) orelse return null;
+            const v = mem.read_u64(mem.ctx, field_addr) orelse return null;
+            return @bitCast(v);
+        },
     }
 
     const holder_addr = add64(container, RESOURCE_VECTOR_HOLDER_OFF) orelse return null;
@@ -218,25 +229,40 @@ pub fn stock(mem: Memory, addrs: Addresses, country_id: u32, index: u32) ?i64 {
     return @bitCast(v);
 }
 
+/// `index` 在三个研究资源里的**归属判定**（2026-11-16 裁定：认不出 ⇒ `null`）。
+const Research = union(enum) {
+    /// 是三个研究资源之一 ⇒ 读**所有者对象**上的这一格（引擎自己读的那一格）。
+    field: u64,
+    /// 资源库读得到，且 `index` 不在那三个里 ⇒ 走向量。
+    not_research,
+    /// **认不出来**：资源库读不到（槽地址为 0 / 读失败 / db 为 0），或三个研究资源
+    /// 对象里有任何一个读不到（于是不能排除 `index` 正是它）⇒ 调用方必须 fail-closed。
+    unknown,
+};
+
 /// 若 `index` 是三个研究资源之一，返回它在**所有者对象**上的字段偏移。
 ///
 /// 索引来自资源库自己的对象（`+0x18`），不写死 0/1/2：`energy_idx` 已经证过
-/// 会随 `db_n` 变（mod 加资源就改编号）。资源库读不到 ⇒ 认不出来 ⇒ 返回 null，
-/// 让调用方走向量那条（这时没有证据说它是研究资源）。
-fn researchFieldOffset(mem: Memory, addrs: Addresses, index: u32) ?u64 {
-    if (addrs.resource_db == 0) return null;
-    const db = mem.read_u64(mem.ctx, addrs.resource_db) orelse return null;
-    if (db == 0) return null;
+/// 会随 `db_n` 变（mod 加资源就改编号）。
+///
+/// **读不到就 `unknown`，绝不回落向量**（2026-11-16 裁定）：引擎读那三格时根本不读
+/// 向量（§2.4 的覆盖 —— 复制完缓存后用 owner 的值盖掉），所以向量里那三格是**陈旧值**。
+/// 认不出归属时给出陈旧值比给出 `null` 更坏：`null` 至少还是「不知道」，陈旧值是
+/// 「一个看着正常的错数」。`0` 都不许当「不可用」，陈旧值更不能当读数。
+fn researchFieldOffset(mem: Memory, addrs: Addresses, index: u32) Research {
+    if (addrs.resource_db == 0) return .unknown;
+    const db = mem.read_u64(mem.ctx, addrs.resource_db) orelse return .unknown;
+    if (db == 0) return .unknown;
 
     for (RESOURCE_DB_RESEARCH_OFF, 0..) |db_off, i| {
-        const slot = add64(db, db_off) orelse continue;
-        const resource = mem.read_u64(mem.ctx, slot) orelse continue;
-        if (resource == 0) continue;
-        const idx_addr = add64(resource, RESOURCE_INDEX_OFF) orelse continue;
-        const resource_idx = mem.read_u32(mem.ctx, idx_addr) orelse continue;
-        if (resource_idx == index) return OWNER_STORED_RESEARCH_OFF[i];
+        const slot = add64(db, db_off) orelse return .unknown;
+        const resource = mem.read_u64(mem.ctx, slot) orelse return .unknown;
+        if (resource == 0) return .unknown;
+        const idx_addr = add64(resource, RESOURCE_INDEX_OFF) orelse return .unknown;
+        const resource_idx = mem.read_u32(mem.ctx, idx_addr) orelse return .unknown;
+        if (resource_idx == index) return .{ .field = OWNER_STORED_RESEARCH_OFF[i] };
     }
-    return null;
+    return .not_research;
 }
 
 fn readResources(mem: Memory, addrs: Addresses, r: *Reading) void {
@@ -443,14 +469,28 @@ fn putVector(m: *Mirror, container: usize, holder: usize, data: usize, count: u3
     m.putDword(holder + 0xC, count);
 }
 
+/// 资源库（三个研究资源对象按 `RESOURCE_DB_RESEARCH_OFF` 排列）。**凡是要走向量的
+/// 用例都必须先填它**：资源库读不到时 `stock()` 直接 `null`，不回落向量（2026-11-16
+/// 裁定）。索引由调用方给，所有用例都故意让它们不是 0/1/2（证明读器不写死编号），
+/// 也要避开该用例自己请求的索引 —— 否则请求会走 owner 那条。
+fn putResourceDb(m: *Mirror, slot: usize, db: usize, indexes: [3]u32) void {
+    m.putQword(slot, db);
+    for (RESOURCE_DB_RESEARCH_OFF, 0..) |off, i| {
+        const resource = db + 0x200 + i * 0x100;
+        m.putQword(db + @as(usize, @intCast(off)), resource);
+        m.putDword(resource + 0x18, indexes[i]);
+    }
+}
+
 test "country_probe stock reads the container's vector cell" {
     var m = Mirror{};
     putCountry(&m, 2, 0x3000, 0x4000);
     putVector(&m, 0x4000, 0x4100, 0x4200, 4);
+    putResourceDb(&m, 0x6800, 0x6900, .{ 5, 6, 7 });
     m.putQword(0x4208, 1_234_567); // 下标 1
 
     const mem = m.memory();
-    const addrs: Addresses = .{ .country_table = 0x1000, .resource_db = 0 };
+    const addrs: Addresses = .{ .country_table = 0x1000, .resource_db = 0x6800 };
 
     try testing.expectEqual(@as(?i64, 1_234_567), stock(mem, addrs, 2, 1));
     // 0 是合法读数（这个国家真有 0 单位），**不是**「不可用」。
@@ -465,10 +505,11 @@ test "country_probe stock fails closed past the count and on a null data pointer
     var m = Mirror{};
     putCountry(&m, 1, 0x3000, 0x4000);
     putVector(&m, 0x4000, 0x4100, 0x4200, 4);
+    putResourceDb(&m, 0x6800, 0x6900, .{ 5, 6, 7 });
     m.putQword(0x4218, @bitCast(@as(i64, -5))); // 下标 3 = -5（i64 原样，不钳零：钳零是写路径的事）
 
     const mem = m.memory();
-    const addrs: Addresses = .{ .country_table = 0x1000, .resource_db = 0 };
+    const addrs: Addresses = .{ .country_table = 0x1000, .resource_db = 0x6800 };
 
     try testing.expectEqual(@as(?i64, -5), stock(mem, addrs, 1, 3));
     // count = 4 ⇒ 下标 4 越界，不是「读到 0」。
@@ -493,13 +534,7 @@ test "country_probe stock routes the three research resources around the vector"
     m.putQword(0x4300 + 0x1910, 7); // engineering
 
     // 资源库：三个研究对象的**索引不写死**，这里故意用 3 / 5 / 6。
-    m.putQword(0x6000, 0x6100);
-    m.putQword(0x6148, 0x6200); // [db+0x48] physics_research
-    m.putDword(0x6218, 3);
-    m.putQword(0x6150, 0x6300); // [db+0x50] society_research
-    m.putDword(0x6318, 5);
-    m.putQword(0x6158, 0x6400); // [db+0x58] engineering_research
-    m.putDword(0x6418, 6);
+    putResourceDb(&m, 0x6000, 0x6100, .{ 3, 5, 6 });
 
     const mem = m.memory();
     const addrs: Addresses = .{ .country_table = 0x1000, .resource_db = 0x6000 };
@@ -535,10 +570,40 @@ test "country_probe stock fails closed with no container or no research owner" {
     // 3) 不是研究资源、但 holder 为 0 ⇒ null。
     var m3 = Mirror{};
     putCountry(&m3, 1, 0x3000, 0x4000);
+    putResourceDb(&m3, 0x6800, 0x6900, .{ 3, 5, 6 });
     m3.putQword(0x4000 + 0x28, 0);
-    try testing.expectEqual(@as(?i64, null), stock(m3.memory(), addrs0, 1, 0));
+    try testing.expectEqual(@as(?i64, null), stock(m3.memory(), .{ .country_table = 0x1000, .resource_db = 0x6800 }, 1, 0));
 
     try testing.expectEqual(@as(usize, 0), m.escaped);
     try testing.expectEqual(@as(usize, 0), m2.escaped);
     try testing.expectEqual(@as(usize, 0), m3.escaped);
+}
+
+test "country_probe stock fails closed when the resource db is unreadable (no vector fallback)" {
+    // 2026-11-16 裁定的凭证：容器、向量、国家都填好，`index` 指向一个**非**研究资源，
+    // 只有资源库读不到 —— 于是「这个 index 是不是三个研究资源之一」**认不出来**。
+    // 引擎读那三格时根本不读向量（§2.4 的覆盖），向量里那格是陈旧值；正确后果是 null。
+    var m = Mirror{};
+    putCountry(&m, 1, 0x3000, 0x4000);
+    putVector(&m, 0x4000, 0x4100, 0x4200, 8);
+    m.putQword(0x4200, 999_999); // 向量第 0 格：一个看起来完全合理的陈旧值
+    m.putQword(0x6800, 0); // 资源库**全局槽**可读、值是 0（主菜单/未初始化）
+
+    const got = stock(m.memory(), .{ .country_table = 0x1000, .resource_db = 0x6800 }, 1, 0);
+    try testing.expectEqual(@as(?i64, null), got);
+    // 显式再钉一次：向量里的 999_999 **不许**当读数（陈旧值不是读数）。
+    try testing.expect(!std.meta.eql(got, @as(?i64, 999_999)));
+
+    // 槽地址本身就是 0（模块基址没解析到）是同一档：不是「表在 0 号地址」。
+    try testing.expectEqual(@as(?i64, null), stock(m.memory(), .{ .country_table = 0x1000, .resource_db = 0 }, 1, 0));
+    // 三个研究对象里有一个读不到（这里 db+0x50 的槽为 0）同样认不出来 ⇒ null。
+    var m2 = Mirror{};
+    putCountry(&m2, 1, 0x3000, 0x4000);
+    putVector(&m2, 0x4000, 0x4100, 0x4200, 8);
+    putResourceDb(&m2, 0x6800, 0x6900, .{ 3, 5, 6 });
+    m2.putQword(0x6900 + 0x50, 0);
+    try testing.expectEqual(@as(?i64, null), stock(m2.memory(), .{ .country_table = 0x1000, .resource_db = 0x6800 }, 1, 0));
+
+    try testing.expectEqual(@as(usize, 0), m.escaped);
+    try testing.expectEqual(@as(usize, 0), m2.escaped);
 }
