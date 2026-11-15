@@ -1,0 +1,2 @@
+# caller_count	func_start	func_end	src_files	sites	ref_strings
+1	0x256730	0x2579cc	gamestate.cpp	0x2571df	0x24c0bd8:It is a new day:  | 0x251f13c:Micro | 0x251f148:Week | 0x251f150:Month | 0x24c111c:Year | 0x24c0c30:Performance run took  | 0x24c0c48:Run Finished

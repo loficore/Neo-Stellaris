@@ -1,0 +1,14 @@
+# 全局 on_monthly 入口普查 —— 证据卷 evidence/analysis/runtime_444_onmonthly_4_4_4.md 的机器可读半边
+# 生产者: scripts/scratch/2026-11_onmonthly/onaction_field_readers.py(§1/§2 读数)+ scripts/disrva.py(§3 逐体)
+# 口径: 全部离线、只读 exe 拷贝;判词只许 global_entry_named / stub_required / unresolved(行内 entry_* 是位置判,不是判决)
+candidate	source	reading	verdict
+0x9F5750	AGENTS.md RVA 表	E8_callers=0(命令表);indirect=[+0x38]x2,[+8]x2,[+0xc0]x3,[+0x20],[rax];anchors=0;串=eventcommands.cpp「selecting option ... by human」	not_entry_event_option_command
+0x9F6420	AGENTS.md RVA 表	E8_callers=6(0x11e2d6d/0x11ed5bd/0x11f624e/0x13e3171/0x14511e5/0x168a50d;5 个遥测 + 1 个 diplomatic_eventwindow);indirect=[];anchors=0	not_entry_event_option_lookup_helper
+0x9F65E0	AGENTS.md RVA 表	E8_callers=0(命令表);indirect=[+0x38],[+8];anchors=0;串=eventcommands.cpp「removed from open player event」	not_entry_player_event_close_command
+0x18B7B70	c1_validation §83	indirect=[[vptr+0x70]]@0x18b7b9d;rdx=scope 原样转;E8_callers=0;§89 实机 calls=0	not_entry_needs_scope_plus_89_calls0
+0x18B7E30	c1_validation §83	indirect=[[vptr+0x70]]@0x18b7e5d;getter=0x18bebf0;E8_callers=0;§89 实机 calls=0	not_entry_needs_scope_plus_89_calls0
+0x407330	本卷 §2.2	唯一读 on_monthly_pulse(0x24eed00)/on_yearly_pulse(0x24eecf0) 真串;写 DB 固定字段 +0x28..+0x90(14 行);E8=0 / .rdata qword=0 / lea=0	entry_side_registration_not_dispatch
+0x265DD0	本卷 §2.3/§2.4	唯一读 [0x3374840]+0x28 的站点 0x266f6c;唯一 E8 调用点 0x2570df,门=「旧月 != 新月」(0x2570ba 比 [rsi+0x128]=day_of_year/30)	global_entry_named
+0x406F90	本卷 §2.5	Perform OnAction(onaction.cpp):[def+0x58] 事件 id 数组 → 0x93a780 门 → 0x402c50;random_events 走 0x406650	entry_side_performer_event_layer
+0x267870	本卷 §2.3	年变那条:读 +0x30..+0x58 与 +0x68..+0x90(不含 +0x28/+0x60);唯一 E8 调用点 0x2571df,门=年变	entry_side_yearly_boundary
+0x7348E0	本卷 §2.3	逐国家:读 +0x60(on_monthly_pulse_country),门=[country+0x48]>>2&1,再调 0x406f90;被 0x265dd0 在 0x266703 调用	entry_side_monthly_country_branch
