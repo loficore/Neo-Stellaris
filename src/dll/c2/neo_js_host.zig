@@ -22,6 +22,12 @@
 // read path),**不实现**。`sdk/api.def` 由 Track B 补齐;在那之前这 3 个名字只
 // 存在于本文件的加法表里(冻结合同表仍是 7 个,见 `native_names`)。
 //
+// v1.2(2026-11-15,**加法**,`API_VERSION` 仍为 1)的 native 同样在加法表尾部:
+//   __neo_game_date() -> string|null           `gamestate.getGameDate()`(唯一读法)
+//   __neo_game_tick() -> i64|null              `gamestate.getGameTick()`(绝对天序号,不是帧号)
+// 两个都是**纯只读的全局时间**:不碰 campaign 对象、不写引擎内存,所以与
+// `__neo_api_version` 同级 —— 没有权限位,也不该有。
+//
 // 多 mod(Task A3):每个 mod 一个 QuickJS runtime/context(`Session`),最多 8 个;
 // 一个 session 的异常/超时/越权只禁用**它自己**,其它 session 继续。
 //
@@ -85,6 +91,8 @@ const offsets = @import("../shared/offsets.zig");
 const opinion_table = @import("opinion_table.zig");
 const country_probe = @import("country_probe.zig");
 const capability = @import("capability.zig");
+/// 日期 / tick 的**唯一实现**(读法、`360`/`30`/纪元常数都在那里;本文件只做 JS 边界)。
+const gamestate = @import("../api/gamestate.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -187,6 +195,9 @@ const additive_native_table = [_]AdditiveEntry{
     .{ .js_name = "__neo_register_country", .func = nativeRegisterCountry, .length = 1 },
     .{ .js_name = "__neo_country_opinion", .func = nativeCountryOpinion, .length = 2 },
     .{ .js_name = "__neo_country_their_opinion", .func = nativeCountryTheirOpinion, .length = 2 },
+    // v1.2:全局时间,不需要权限位(见文件头)。
+    .{ .js_name = "__neo_game_date", .func = nativeGameDate, .length = 0 },
+    .{ .js_name = "__neo_game_tick", .func = nativeGameTick, .length = 0 },
 };
 
 pub const additive_names = blk: {
@@ -1387,6 +1398,51 @@ fn nativeCountryTheirOpinion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_in
 }
 
 // ---------------------------------------------------------------------------
+// v1.2 — 游戏日期 / tick(纯只读全局时间,**不要权限位**)
+// ---------------------------------------------------------------------------
+//
+// 契约(计划 Review Focus 1/2/3/4):
+//   * 读不到(主菜单 / 未载入战役 / 读失败 / 纪元之前)⇒ `null`。**不是** `0`
+//     也不是 `""` —— `0` 是纪元当天的合法天序号,把它当「不可用」会把「刚开局」
+//     和「读不到」混成一档(`gamestate.zig` 记过这次口径变更)。
+//   * 日期字符串在**本次调用内**交给 QuickJS(`JS_NewString` 自己拷贝),`date_buf`
+//     的指针不跨调用保留。
+//   * `YYYY.MM.DD` 的月/日是 **1 基显示口径**,由 `gamestate.getGameDate` 负责;JS 侧
+//     与 SDK 都**不**再 +1。
+//   * `tick` 是**绝对天序号**(纪元起算),不是帧号。
+
+/// `getGameTick` 的 `-1` = 不可用;`0` 是合法的纪元当天,所以只有负数是「没有」。
+fn tickOrNull(d: i64) ?i64 {
+    return if (d < 0) null else d;
+}
+
+fn nativeGameDate(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    _ = argc;
+    _ = argv;
+    if (charge(ctx)) |exc| return exc;
+    const text = gamestate.getGameDate(); // 空切片 = 读不到
+    if (text.len == 0) return c.JS_NULL;
+    // `date_buf` 是 `bufPrint` 的产物,**不保证** 0 结尾;`JS_NewString` 要
+    // NUL 结尾的串,所以拷进带哨兵的栈缓冲(与 v0 `bridge.zig` 同一写法)。
+    var buf: [16]u8 = undefined;
+    if (text.len >= buf.len) return c.JS_NULL;
+    @memcpy(buf[0..text.len], text);
+    buf[text.len] = 0;
+    return c.JS_NewString(ctx, @ptrCast(buf[0..text.len :0]));
+}
+
+fn nativeGameTick(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    _ = argc;
+    _ = argv;
+    if (charge(ctx)) |exc| return exc;
+    const days = tickOrNull(gamestate.getGameTick()) orelse return c.JS_NULL;
+    // JS number 是 double;绝对天序号远小于 2^53,所以这里精确(也避免 i32 收窄)。
+    return c.JSValue.float64(@floatFromInt(days));
+}
+
+// ---------------------------------------------------------------------------
 // Readouts
 // ---------------------------------------------------------------------------
 
@@ -2162,12 +2218,14 @@ test "the additive v1.1 natives are registered separately from the frozen seven"
         "__neo_register_country",
         "__neo_country_opinion",
         "__neo_country_their_opinion",
+        "__neo_game_date",
+        "__neo_game_tick",
     };
     try testing.expectEqual(expected.len, additive_names.len);
     for (expected, 0..) |name, i| try testing.expectEqualStrings(name, additive_names[i]);
     // The Phase 1 contract table stays exactly seven names.
     try testing.expectEqual(@as(usize, 7), native_names.len);
-    try testing.expectEqual(@as(usize, 6), additive_native_table.len);
+    try testing.expectEqual(@as(usize, 8), additive_native_table.len);
 }
 
 var host_flag_calls: usize = 0;
@@ -2705,4 +2763,38 @@ test "the capability self-test's write is authorized by the design, not by a mod
 
     try testing.expectEqual(WriteResult.no_permission, writeSystemVariable(currentPermissions(), 42, "neo_cap_probe", 0, scope_addr));
     try testing.expect(writeSystemVariable(.{ .variable_write = true }, 42, "neo_cap_probe", 0, scope_addr) != .no_permission);
+}
+
+test "game date/tick: 宿主上读不到引擎 ⇒ 两个 native 都返回 null" {
+    // Linux 宿主没有引擎模块基址(`gamestate.source()` 的 fail-closed 面),所以
+    // 这一条正好钉住「主菜单期 = null」—— 不许退化成 `0` / `""`。
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    const ok = startSession(.{
+        .id = "date",
+        .source = "__neo_register_system(function(id){" ++
+            "  if (__neo_game_date() !== null) throw new Error('date ' + __neo_game_date());" ++
+            "  if (__neo_game_tick() !== null) throw new Error('tick ' + __neo_game_tick());" ++
+            "});",
+        .permissions = .{},
+    });
+    try testing.expect(ok);
+
+    onSystem(7, 0);
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expectEqual(@as(u64, 0), timeouts());
+    // 两个 native 都不需要权限位:上面那个 session 的 `Permissions` 是空的。
+    try testing.expectEqual(@as(usize, 1), activeSessions());
+}
+
+test "game tick: -1 映射成 null(0 是合法的纪元当天)" {
+    // 口径在 `gamestate.getGameTick` 的 docstring:不可用 = -1,**不是** 0
+    // (0 = 纪元当天,合法的天序号)。映射在这一层做,于是 JS 侧只有 null 与数字两档。
+    try testing.expectEqual(@as(?i64, null), tickOrNull(-1));
+    try testing.expectEqual(@as(?i64, 0), tickOrNull(0));
+    try testing.expectEqual(@as(?i64, 792_000), tickOrNull(792_000));
+    try testing.expectEqual(@as(?i64, null), tickOrNull(-2));
 }
