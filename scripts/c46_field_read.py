@@ -375,6 +375,34 @@ def judge_n1(*, owned, unowned=None, domain=()):
         f"{LOCK_READ_LEN} B window; {unowned_note}")
 
 
+def build_readings(systems, replies):
+    """`replies` = `{system: (owner_reply, lock_reply)}` -> `(readings, missing)`.
+
+    A row enters the judgement only when **both** reads came back whole (4 B owner,
+    6 B lock+flags in one read). A torn row is named in `missing` and contributes
+    nothing: fabricating `owner = 0` would let `owner_constant` call "not read" a
+    "constant value" — exactly the false evidence this channel exists to prevent.
+    """
+    readings, missing = {}, []
+    for system in systems:
+        owner_reply, lock_reply = replies[system]
+        complete = (owner_reply["status"] == STATUS_OK and owner_reply["got"] == 4
+                    and lock_reply["status"] == STATUS_OK
+                    and lock_reply["got"] == LOCK_READ_LEN)
+        if not complete:
+            missing.append(system)
+            continue
+        readings[system] = {
+            "system": system,
+            "owner": int.from_bytes(owner_reply["data"], "little"),
+            "lock": int.from_bytes(lock_reply["data"][0:4], "little"),
+            "flag_a": lock_reply["data"][4],
+            "flag_b": lock_reply["data"][5],
+            "lock_len": lock_reply["got"],
+        }
+    return readings, missing
+
+
 # --- zero-process plan ------------------------------------------------------------
 
 
@@ -641,26 +669,30 @@ def run(dll_path, out_path, *, systems=(), probes=(), probe_kind=KIND_SYSTEM):
                   f"off={off:#x} len={length} — {detail}", file=sys.stderr)
         return reply, verdict, detail
 
+    replies = {}
     for system in systems:
         owner_reply, owner_channel, owner_detail = one(KIND_SYSTEM, system, OWNER_OFF, 4)
         lock_reply, lock_channel, lock_detail = one(KIND_SYSTEM, system,
                                                     OWNER_LOCK_OFF, LOCK_READ_LEN)
-        complete = owner_reply["status"] == STATUS_OK and owner_reply["got"] == 4
-        owner = int.from_bytes(owner_reply["data"], "little") if complete else 0
-        lock_ok = lock_reply["status"] == STATUS_OK and lock_reply["got"] == LOCK_READ_LEN
-        lock = int.from_bytes(lock_reply["data"][0:4], "little") if lock_ok else 0
-        flag_a = lock_reply["data"][4] if lock_ok else 0
-        flag_b = lock_reply["data"][5] if lock_ok else 0
+        replies[system] = (owner_reply, lock_reply)
+        # 读不全的那一格在 artifact 里写 `-`,不写 0:0 是一个**合法**的 owner。
+        owner = (int.from_bytes(owner_reply["data"], "little")
+                 if owner_reply["status"] == STATUS_OK and owner_reply["got"] == 4 else None)
+        lock_ok = (lock_reply["status"] == STATUS_OK
+                   and lock_reply["got"] == LOCK_READ_LEN)
+        lock = int.from_bytes(lock_reply["data"][0:4], "little") if lock_ok else None
+        flag_a = lock_reply["data"][4] if lock_ok else None
+        flag_b = lock_reply["data"][5] if lock_ok else None
         rows.append((system, "owner", f"{OWNER_OFF:#x}", 4, owner_reply["status"],
-                     owner_reply["got"], owner, f"{owner & ID_MASK:#x}", "-", "-", "-",
+                     owner_reply["got"], "-" if owner is None else owner,
+                     "-" if owner is None else f"{owner & ID_MASK:#x}", "-", "-", "-",
                      owner_channel, f"{owner_reply['resolved']:#x}", owner_detail))
         rows.append((system, "lock+flags", f"{OWNER_LOCK_OFF:#x}", LOCK_READ_LEN,
-                     lock_reply["status"], lock_reply["got"], "-", "-", lock,
-                     flag_a, flag_b, lock_channel,
+                     lock_reply["status"], lock_reply["got"], "-", "-",
+                     "-" if lock is None else lock,
+                     "-" if flag_a is None else flag_a,
+                     "-" if flag_b is None else flag_b, lock_channel,
                      f"{lock_reply['resolved']:#x}", lock_detail))
-        readings.append(OwnerReading(system=system, owner=owner, lock=lock,
-                                     flag_a=flag_a, flag_b=flag_b,
-                                     lock_len=lock_reply["got"]))
 
     for subject, off, length in probes:
         reply, verdict, detail = one(probe_kind, subject, off, length)
@@ -672,10 +704,21 @@ def run(dll_path, out_path, *, systems=(), probes=(), probe_kind=KIND_SYSTEM):
     for problem in problems:
         print(f"[field] domain: {problem}", file=sys.stderr)
 
+    readings, missing = build_readings(systems, replies)
+    if missing:
+        print(f"[field] incomplete rows (excluded from the judgement): {missing}",
+              file=sys.stderr)
+
+    owned = [OwnerReading(**readings[system]) for system in systems[:3]
+             if system in readings]
+    unowned = None
     if len(systems) > 3:
-        owned, unowned = readings[:3], readings[3]
+        row = readings.get(systems[3])
+        unowned = OwnerReading(**row) if row is not None else None
+        unowned_meta = (f"{unowned.system}:{unowned.owner:#x}" if unowned is not None
+                        else "attempted_but_incomplete")
     else:
-        owned, unowned = readings[:3], None
+        unowned_meta = "absent"
 
     try:
         harness.assert_game_alive(pid)
@@ -689,6 +732,10 @@ def run(dll_path, out_path, *, systems=(), probes=(), probe_kind=KIND_SYSTEM):
         verdict, detail = "environment", "the game process did not survive the shot"
     elif problems:
         verdict, detail = "instrument_broken", "; ".join(problems)
+    elif len(systems) > 3 and unowned is None:
+        verdict, detail = "instrument_broken", (
+            "the U (unowned) row did not come back whole — N1's sentinel check has "
+            "nothing to test; do not read this as 'no unowned system'")
     else:
         verdict, detail = judge_n1(owned=owned, unowned=unowned, domain=domain)
 
@@ -704,7 +751,7 @@ def run(dll_path, out_path, *, systems=(), probes=(), probe_kind=KIND_SYSTEM):
         "systems": ",".join(str(system) for system in systems),
         "domain_n": len(domain),
         "domain": ",".join(str(ident) for ident in domain),
-        "unowned": "absent" if unowned is None else f"{unowned.system}:{unowned.owner:#x}",
+        "unowned": unowned_meta,
         "host_alive": int(alive),
     }
     write_artifact(out_path, build_meta(meta), rows, ROW_HEADER)

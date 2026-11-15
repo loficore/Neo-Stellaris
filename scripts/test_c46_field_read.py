@@ -289,4 +289,34 @@ def test_readme_lists_the_tool_and_its_fence():
     readme = README.read_text(encoding="utf-8")
     assert "c46_field_read.py" in readme
     assert "test_c46_field_read.py" in readme
-    assert "17 passed" in readme
+    assert "18 passed" in readme
+
+
+# --- 读数装配(失败的那一格不许被伪造成 0)-------------------------------------------
+
+
+def test_build_readings_drops_a_torn_row_instead_of_faking_zero():
+    """读不全的系统**不进判据**:伪造一个 owner=0 会让 `owner_constant` 把「没读到」
+
+    说成「三个值相同」—— 那正是这条通道要防的假证据。
+    """
+    good_owner = mod.decode_reply(reply_blob(subject=11, status=0, got=4,
+                                             data=b"\x00\x00\x00\x00"))
+    good_lock = mod.decode_reply(reply_blob(subject=11, off=mod.OWNER_LOCK_OFF, length=6,
+                                            status=0, got=6,
+                                            data=b"\x00\x00\x00\x00\x00\x01"))
+    torn = mod.decode_reply(reply_blob(subject=12, off=mod.OWNER_LOCK_OFF, length=6,
+                                       status=mod.STATUS_UNREADABLE, got=0, data=b""))
+    unresolved = mod.decode_reply(reply_blob(subject=13, status=mod.STATUS_UNRESOLVED,
+                                             got=0, data=b""))
+
+    readings, missing = mod.build_readings(
+        [11, 12, 13], {11: (good_owner, good_lock), 12: (good_owner, torn),
+                       13: (unresolved, good_lock)})
+    assert set(readings) == {11}
+    assert missing == [12, 13]
+    assert readings[11]["owner"] == 0 and readings[11]["flag_b"] == 1
+    assert readings[11]["lock_len"] == mod.LOCK_READ_LEN
+    # 少一格就判不了 N1:这是仪器档,不是 owner 的三值判词。
+    assert mod.judge_n1(owned=[mod.OwnerReading(**readings[11])], domain=DOMAIN)[0] == \
+        "instrument_broken"

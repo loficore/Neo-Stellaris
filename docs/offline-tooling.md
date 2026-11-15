@@ -2016,7 +2016,7 @@ artifact 里不许出现证据卷未定义的判词。
 | N4 竞争 / 敌对 | 一对已知宿敌 | **没有**:同上,来自人读外交界面 |
 | N5 联邦 | 同联邦的两国 | **没有**:`§5.4-3` 这份存档 `federation_blocks=0` |
 
-判读纯函数由 `python3 -m pytest scripts/test_c46_field_read.py -q` 覆盖(**17 passed**):
+判读纯函数由 `python3 -m pytest scripts/test_c46_field_read.py -q` 覆盖(**18 passed**):
 layout 三方一致(DLL 源码 / 驱动 / 本节)、四档通道判词、值域三步、
 N1 的四个判词、`--plan n1` 的零进程性(连 `c2_harness` 都不 import)、编解码往返与两个
 参数解析器,无游戏、无 Windows API。

@@ -83,6 +83,13 @@ pub const LAYOUT: [8]u32 = .{
     offsets.system_owner.ID_MASK,
 };
 
+comptime {
+    // `kind=3` 把 u64 的 `subject` 当指针用,偏移也全按 64 位进程写死 —— 32 位构建会静默读错。
+    if (@sizeOf(usize) != 8) @compileError("field_read assumes a 64-bit target");
+    // 头 + 数据必须**恰好**铺满一块缓冲:多一个字节协议就漂了,少一个字节就是越界写。
+    if (BUF_SIZE != OFF_DATA + MAX_LEN) @compileError("field_read: OFF_DATA + MAX_LEN must equal BUF_SIZE");
+}
+
 // ---------------------------------------------------------------------------
 // 读逻辑(纯函数面:Linux 单测直接调,生产导出在后面接上)
 // ---------------------------------------------------------------------------
