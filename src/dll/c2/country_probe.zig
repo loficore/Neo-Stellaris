@@ -61,9 +61,12 @@ pub const RESOURCE_CONTAINER_OFF: u64 = 0x2C68;
 /// 容器里的**向量持有者**槽。`0x844215`（槽 `+0x90`）把它交给向量赋值
 /// `0x410060`；初始化器在 `0x1760795` 把它写成 `container+0x30`。
 pub const RESOURCE_VECTOR_HOLDER_OFF: u64 = 0x28;
-/// 向量对象的 data（`0x41007d`、`0x1760780`）。
+/// 向量对象的 data（`0x41007d`、`0x1760780`）。**基准是向量对象（holder）**，不是容器：
+/// 卷 §2.5 的常量表用容器相对口径，同一格写作 `+0x30`（初始化器 `0x1760795` 与克隆
+/// `0x8448fe` 都保证 `holder == container+0x30`，两个口径在正常容器上同址）。
 pub const RESOURCE_VECTOR_DATA_OFF: u64 = 0x00;
-/// 向量对象的 count（`0x410085`、`0x176078a`）。**不是**容量（那在 `+0x08`）。
+/// 向量对象的 count（`0x410085`、`0x176078a`）。**不是**容量（那在 `+0x08`）；
+/// 容器相对口径 = `+0x3C`（同上：基准不同，不是两个不同的格）。
 pub const RESOURCE_VECTOR_COUNT_OFF: u64 = 0x0C;
 /// 容器里的**所有者对象**：三个研究资源的覆盖源（`0x844237`、`0x8442dc`）。
 pub const RESOURCE_OWNER_OFF: u64 = 0x10;
@@ -156,7 +159,9 @@ fn countryObject(mem: Memory, addrs: Addresses, country_id: u32) ?u64 {
 /// **读链（Task 0 逐指令钉死，站点是 RVA，全在 `stellaris.exe` 4.4.4）：**
 ///
 ///     container = *(u64*)(obj + 0x2C68)     0x1adf73b（`has_country_resource` 取值体）
-///                                           0x843a9c（单资源 helper）
+///                                           单资源 helper `0x843A00`：容器由**调用方**经 rcx 传入，
+///                                           `0x843a9c` 是同一条惯用法里的 vtable 取值体
+///                                           （`mov rax,[rcx]`），不是容器取点
 ///     holder    = *(u64*)(container + 0x28) 0x844215  lea rdx,[rcx+0x28]  ← 槽 +0x90 的原地址
 ///     vector    = holder                    0x41006a  mov rax,[rdx]      ← 一次 deref 得到向量对象
 ///     data      = *(u64*)(vector + 0x00)    0x41007d  mov rbp,[rax]
