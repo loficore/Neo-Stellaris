@@ -62,6 +62,34 @@ export interface Country {
   opinionOf(targetId: number): number | null;
   /** Engine `their_opinion` keyword: the transpose of {@link opinionOf}. */
   theirOpinionOf(targetId: number): number | null;
+  /**
+   * Stockpile of the resource at **resource index** `index`, as a plain number.
+   *
+   * The engine keeps it as a fixed-point 8-byte cell; the host divides by `1e5`
+   * (the same scale the engine uses), so `12.34567` means 12.34567 units.
+   * **Read-only** — `Country` has no setter and will not get one.
+   *
+   * `null` = fail-closed. Six ways, all silent: no read source (main menu / no
+   * campaign loaded), the country object could not be resolved, its stockpile
+   * container is null, the vector's holder or data pointer is null, `index` is
+   * past the resource count, or — for the three research resources, which the
+   * engine keeps on the owning object instead of the vector — that owner is
+   * null. A seventh way is logged by the host as
+   * `NEO_JS_RESOURCE_REJECT … reason=no_permission`: the session lacks
+   * `resource.read`. **`0` is a valid answer** ("this country has none"), never
+   * a synonym for "unavailable".
+   *
+   * There is deliberately **no** `scope_mismatch` gate (unlike
+   * {@link opinionOf}): the opinion matrix has a transposed cell for the other
+   * direction, so reading another row would be the wrong number; a stockpile is
+   * one vector per country, and reading another country's is a legitimate
+   * read-only use.
+   *
+   * The index is the engine's own resource numbering (`resourceObject + 0x18`),
+   * not the country id and not a table slot: `energy` is `0` in an unmodded
+   * 4.4.4 game, and a mod that adds resources changes the numbering.
+   */
+  resource(index: number): number | null;
 }
 
 export function onSystem(fn: (s: System) => void): void {
@@ -107,6 +135,7 @@ export function onCountry(fn: (c: Country) => void): void {
       id,
       opinionOf: (targetId: number) => intOrNull(__neo_country_opinion(id, targetId)),
       theirOpinionOf: (targetId: number) => intOrNull(__neo_country_their_opinion(id, targetId)),
+      resource: (index: number) => numOrNull(__neo_country_resource(id, index)),
     });
   });
 }
@@ -114,6 +143,15 @@ export function onCountry(fn: (c: Country) => void): void {
 /** A refused read comes back as `undefined`; the SDK's contract is `null`. */
 function intOrNull(v: unknown): number | null {
   return typeof v === "number" ? v : null;
+}
+
+/**
+ * Same rule for the stockpile, plus one extra: `NaN`/`Infinity` are not
+ * readings either (a broken scale would produce them), so only finite numbers
+ * survive. `0` survives — it is a legal stockpile.
+ */
+function numOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 /**

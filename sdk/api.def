@@ -15,6 +15,7 @@
     {"name": "__neo_country_opinion", "params": ["u32", "u32"], "returns": "i32|null"},
     {"name": "__neo_country_their_opinion", "params": ["u32", "u32"], "returns": "i32|null"},
     {"name": "__neo_game_date", "params": [], "returns": "string|null"},
-    {"name": "__neo_game_tick", "params": [], "returns": "i64|null"}
+    {"name": "__neo_game_tick", "params": [], "returns": "i64|null"},
+    {"name": "__neo_country_resource", "params": ["u32", "u32"], "returns": "f64|null"}
   ]
 }

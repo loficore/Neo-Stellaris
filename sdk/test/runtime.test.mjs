@@ -34,9 +34,10 @@ test("api.def is v1 plus the v1.1 additive tail", () => {
       { name: "__neo_country_their_opinion", params: ["u32", "u32"], returns: "i32|null" },
       { name: "__neo_game_date", params: [], returns: "string|null" },
       { name: "__neo_game_tick", params: [], returns: "i64|null" },
+      { name: "__neo_country_resource", params: ["u32", "u32"], returns: "f64|null" },
     ],
   });
-  assert.equal(new Set(def.functions.map((f) => f.name)).size, 15);
+  assert.equal(new Set(def.functions.map((f) => f.name)).size, 16);
 });
 
 test("API_VERSION mirrors api.def", () => {
@@ -177,6 +178,59 @@ test("theirOpinionOf calls its own native, not opinion's", () => {
   assert.deepEqual(state.calls, [
     { fn: "__neo_country_their_opinion", id: 2, name: "5" },
   ]);
+});
+
+test("Country.resource returns the fixed-point stock divided by 1e5", () => {
+  const state = mockState();
+  const saved = state.resource;
+  try {
+    state.resource = 12.34567; // fixed-point 1234567 / 1e5, the host's own split
+    let got = "unset";
+    runtime.onCountry((c) => {
+      got = c.resource(3);
+    });
+    state.calls.length = 0;
+    state.countryHandler(7);
+    assert.equal(got, 12.34567);
+    assert.deepEqual(state.calls, [{ fn: "__neo_country_resource", id: 7, name: "3" }]);
+  } finally {
+    state.resource = saved;
+  }
+});
+
+test("Country.resource maps a refused read to null and keeps 0 a real answer", () => {
+  const state = mockState();
+  const saved = state.resource;
+  try {
+    // The native answers `undefined` when the session lacks `resource.read`.
+    state.resource = undefined;
+    let refused = "unset";
+    runtime.onCountry((c) => {
+      refused = c.resource(0);
+    });
+    state.countryHandler(7);
+    assert.equal(refused, null);
+
+    // A NaN/Infinity is not a reading either.
+    state.resource = Number.NaN;
+    let nan = "unset";
+    runtime.onCountry((c) => {
+      nan = c.resource(0);
+    });
+    state.countryHandler(7);
+    assert.equal(nan, null);
+
+    // 0 means "this country has none of it" — never "unavailable".
+    state.resource = 0;
+    let zero = "unset";
+    runtime.onCountry((c) => {
+      zero = c.resource(0);
+    });
+    state.countryHandler(7);
+    assert.equal(zero, 0);
+  } finally {
+    state.resource = saved;
+  }
 });
 
 test("gameDate / gameTick read the world clock through their own natives", () => {
