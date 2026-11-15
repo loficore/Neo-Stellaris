@@ -91,11 +91,27 @@ onSystem((s) => {
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200`——一个固定阈值,不是 v1 里的可调参数。 |
 | `log` | `(message: string) => void` | 往 `C:/temp/neo_js.log` 追加 `NEO_JS_LOG <text>`。 |
 | `apiVersion` | `() => number` | 返回宿主的契约版本;v1.x 是 `1`。 |
+| `gameDate` | `() => string \| null` | 引擎当前日期,形如 `"YYYY.MM.DD"`。引擎读不到时(主菜单 / 没有战役)是 `null`。月与日是 **1 基**。不需要权限。 |
+| `gameTick` | `() => number \| null` | 自纪元起的**绝对天序号**(`0` = 纪元当天)。引擎读不到时是 `null` —— 绝不拿 `0` 当「不可用」。不是帧号。不需要权限。 |
+
+### 世界时钟
+
+`gameDate()` 返回引擎当前日期 `"YYYY.MM.DD"` —— 月与日是 **1 基**(显示口径;`+1` 已由宿主
+加过,别再 +1 一次),一年是 12 个 30 天月、共 360 天。
+`gameTick()` 返回自纪元起的**绝对天序号**,`0` 就是纪元当天。
+
+两者都不是帧号,也不是墙上时钟:数值每个游戏日才前进一次,所以适合「距 X 过了几天」,
+不适合在帧之间插值。引擎读不到时(主菜单、战役未载入、读失败、或纪元之前)两者都返回
+`null`;`null` 刻意与 `0` 区分 —— `0` 是一个合法读数。
+
+两者都不需要权限位(`apiVersion` 是另一个这样的成员):它们是只读的全局时间,不碰任何
+campaign 对象。
 
 ## native 契约
 
-SDK 是宿主装的十三个全局对象之上的薄封装。`sdk/api.def` 是唯一权威;TypeScript 界面、mock 宿主
-与 Zig 宿主都必须与它一致。v1 的七个名字在前,原样不变;v1.1 的追加项按宿主自己的顺序排在后面。
+SDK 是宿主装的十五个全局对象之上的薄封装。`sdk/api.def` 是唯一权威;TypeScript 界面、mock 宿主
+与 Zig 宿主都必须与它一致。v1 的七个名字在前,原样不变;v1.1 与 v1.2 的追加项按宿主自己的
+顺序排在后面。
 
 | native | 参数 | 返回 |
 |---|---|---|
@@ -112,6 +128,8 @@ SDK 是宿主装的十三个全局对象之上的薄封装。`sdk/api.def` 是�
 | `__neo_register_country` | `function` | `void` |
 | `__neo_country_opinion` | `u32`、`u32` | `i32 \| null`(`undefined` = 被拒绝) |
 | `__neo_country_their_opinion` | `u32`、`u32` | `i32 \| null`(`undefined` = 被拒绝) |
+| `__neo_game_date` | — | `string \| null`(`null` = 引擎读不到) |
+| `__neo_game_tick` | — | `i64 \| null`(`null` = 引擎读不到;`0` 合法) |
 
 system 那些 native 的 `u32` 就是**星系 id**;国家那一对取 `(self, target)`。「被拒绝」是宿主的
 fail-closed 答案,刻意与「算出来的 `0`」区分开。
@@ -279,8 +297,8 @@ SDK 封装总是转发自己的参数,所以 native 调用在每个 bundle 里�
   延后的名字就是缺席,绝不猜。
 - **没有舰队、星球、人口作用域。** 带着任何其它作用域来的派发只会被记下来然后丢弃:
   `NEO_SCOPE_OTHER mask=0x<mm> id=<n>`(只读)。
-- **没有 `onMonthly`,也没有全局 tick 钩子。** 每月驱动是生成的 `on_action` + 隐藏 `event` 一对——
-  官方脚本路径。
+- **没有 `onMonthly`,也没有 tick 钩子。** 每月驱动是生成的 `on_action` + 隐藏 `event` 一对——
+  官方脚本路径。天序号是**可读的**(`gameTick()`),但没有任何东西在日界线上被触发。
 - **不解析 `dlc_load.json`,也没有 mod 之间的 JS 调用。** 宿主加载最多 8 个隔离会话,不是模块图。
 - **`log` 写 `C:/temp/neo_js.log`**,不是官方 `game.log`。
 - **SDK 以 TypeScript 源码分发**,不是 registry 包。

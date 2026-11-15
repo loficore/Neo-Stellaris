@@ -32,9 +32,11 @@ test("api.def is v1 plus the v1.1 additive tail", () => {
       { name: "__neo_register_country", params: ["function"], returns: "void" },
       { name: "__neo_country_opinion", params: ["u32", "u32"], returns: "i32|null" },
       { name: "__neo_country_their_opinion", params: ["u32", "u32"], returns: "i32|null" },
+      { name: "__neo_game_date", params: [], returns: "string|null" },
+      { name: "__neo_game_tick", params: [], returns: "i64|null" },
     ],
   });
-  assert.equal(new Set(def.functions.map((f) => f.name)).size, 13);
+  assert.equal(new Set(def.functions.map((f) => f.name)).size, 15);
 });
 
 test("API_VERSION mirrors api.def", () => {
@@ -175,4 +177,43 @@ test("theirOpinionOf calls its own native, not opinion's", () => {
   assert.deepEqual(state.calls, [
     { fn: "__neo_country_their_opinion", id: 2, name: "5" },
   ]);
+});
+
+test("gameDate / gameTick read the world clock through their own natives", () => {
+  const state = mockState();
+  state.calls.length = 0;
+  assert.equal(runtime.gameDate(), "2200.01.01");
+  assert.equal(runtime.gameTick(), state.tick);
+  // A campaign start is day 792,000 for 2200.01.01 (the host's own fixture), and
+  // 0 is reserved for the epoch — the pair has to agree.
+  assert.equal(state.tick, 792_000);
+  assert.deepEqual(state.calls, [
+    { fn: "__neo_game_date" },
+    { fn: "__neo_game_tick" },
+  ]);
+});
+
+test("gameDate / gameTick map an unreadable engine to null, never to 0 or \"\"", () => {
+  const state = mockState();
+  const savedDate = state.date;
+  const savedTick = state.tick;
+  try {
+    // What the host returns in the main menu / before a campaign is loaded.
+    state.date = null;
+    state.tick = null;
+    assert.equal(runtime.gameDate(), null);
+    assert.equal(runtime.gameTick(), null);
+
+    // Defensive: the host maps getGameTick()'s -1 (unavailable) to null, so a
+    // stray -1 must still surface as null — and 0 is a *valid* epoch-day reading.
+    state.tick = -1;
+    assert.equal(runtime.gameTick(), null);
+    state.tick = 0;
+    assert.equal(runtime.gameTick(), 0);
+    state.date = "";
+    assert.equal(runtime.gameDate(), null);
+  } finally {
+    state.date = savedDate;
+    state.tick = savedTick;
+  }
 });

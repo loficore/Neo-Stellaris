@@ -3,8 +3,15 @@
 # Columns: chain node class locator expect depends_on witness evidence
 #   class    address | structure   (version_drift_4_4_4.md §0 vocabulary)
 #   locator  strref: | callshape: | vtable: | global: | bytes:   (empty = register only)
-#   expect   the 4.4.4 landing (RVA) for address nodes; "-" for structure nodes
+#   expect   the 4.4.4 landing (RVA) for every node that has one; "-" only when the
+#            address itself is unlocated.  A structure row's expect is NOT judged against
+#            bytes (class=structure short-circuits decide) — it is what the R-anchor
+#            fence matches on, and what a human re-checks after a game update.
 #   rows     are in chain order and dependencies must precede dependents (@node:)
+#
+# Coverage: every `RVA_*` in src/dll/shared/offsets.zig has a row here whose expect
+# equals its value (fence: scripts/test_scripts_layout.py::violates_unregistered_anchor,
+# matched by VALUE — RVA_HOLDER and RVA_GALAXY_MAP_DB are one row at 0x3260bb0).
 #
 # A `bytes:` recipe is self-证: it matches this build's bytes, so it says "needs a
 # re-anchor" on a new build — never "the chain is broken".  Read strref/callshape/
@@ -16,11 +23,11 @@ register	get_scripted_trigger	address	strref:scriptedtrigger.cpp	0x8a0450		token
 register	get_or_add_token	address	strref:keywords may not start with a digit or '-'.	0x1d13270		token_readback	pipeline §18 §20
 register	token_db_singleton	address	bytes:48 83 ec 28 ba 14 00 00 00 65 48 8b 04 25 58 00 00 00 48 8b 08 8b 04 0a 39 05 12 1b	0x1d12c60		token_readback	pipeline §18
 register	id_name_rebuild	address	bytes:48 89 5c 24 18 48 89 6c 24 20 56 57 41 56 48 83 ec 20 e8 ??	0x1d12cd0		token_readback	pipeline §30.2
-register	token_db_object	structure		-		token_readback	pipeline §18; global unlocated: only token_db_singleton touches [0x37347a0] among chain nodes, and the writer 0x1d13570 is not a chain node
+register	token_db_object	structure		0x37347a0		token_readback	pipeline §18; 只读全局的登记形态:16 个 ref / 8 函数 / 1 写者(0x1d13570)——写入面唯一但读取面不唯一(8 个),⇒ 有 global: 可行(0x1d13570×@node:token_db_singleton 交集恰为它),但那一对是「挑出来的」不是一个唯一读写侧,故仍登记 structure
 register	descriptor_writer_static	address	bytes:48 89 4c 24 08 53 48 83 ec 20 48 8b d9 c6 41 04 00 0f 57 c0 0f 11 41 08 48 c7 41 18 00 01 00 00 48 8d 05 e1	0x1d15270		token_readback	pipeline §20
 register	descriptor_writer_dynamic	address	bytes:48 89 4c 24 08 53 48 83 ec 20 48 8b d9 c6 41 04 00 0f 57 c0 0f 11 41 08 48 c7 41 18 00 01 00 00 48 8d 05 81	0x1d152d0		token_readback	pipeline §20
 register	slot_writer	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec 20 41 8b e9 ?? ?? ??	0x1d158a0		token_readback	pipeline §20
-register	descriptor_array	structure		-		token_readback	pipeline §17 §20
+register	descriptor_array	structure		0x337b400		token_readback	pipeline §17 §20; 4 个 ref 全是 lea、0 个写点 ⇒ 只读全局(经指针写),无读写两侧
 register	effect_db_init	address	bytes:48 89 5c 24 18 48 89 4c 24 08 55 56 57 48 83 ec 20 48 8b f9 48 8d 05 cd	0x3aeba0		token_readback	pipeline §21
 register	trigger_db_ensure	address	bytes:48 89 5c 24 18 55 56 57 48 83 ec 20 b9 98 00 00 00 e8 ?? ??	0x347bd0		token_readback	pipeline §21
 register	bst_insert_effect	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec 50 49 8b e8 ?? ?? ?? ?? 79 18 48	0x3aef60	effect_db_init	token_readback	pipeline §21
@@ -35,6 +42,19 @@ register	class_info_trigger	structure		-		token_readback	c1_validation §24 §24
 register	class_info_effect	structure		-		token_readback	c1_validation §24 §24.6
 register	donor_docstring_trigger	structure		-		token_readback	c1_validation §24 §24.6
 register	donor_docstring_effect	structure		-		token_readback	c1_validation §24 §24.6
+register	effect_template_vtable	address	vtable:slot0==0x1b5360	0x24b1990		token_readback	structures §14 §17; slot0 在 174,597 张 shape 候选里唯一
+register	ref_vtable	address	vtable:slot0==0x89d5c0	0x25180a8		token_readback	c1_validation §27; slot0 唯一
+register	ref_ceffect_vtable	address	vtable:slot0==0x89f948	0x2518128		token_readback	c1_validation §27; slot0 唯一
+register	null_ref_vtable	address	vtable:slot0==0x1f7c00	0x24b9e80		token_readback	pipeline §23; slot0 唯一
+register	null_ceffect_vtable	address	vtable:slot0==0x22ff00	0x24b9e40		token_readback	pipeline §23; slot0 唯一
+register	cstr_vtable	address	vtable:slot0==0x1703d0	0x247b078		token_readback	pipeline §17; slot0 唯一
+register	effect_overwrite_msg	address	bytes:73 63 72 69 70 74 65 64 20 65 66 66 65 63 74 20 25 73 20 69 73 20 6f 76 65 72 77 72 69 74 69 6e 67 20 61 6e 20 65 78 69 73 74 69 6e 67 20 65 66 66 65 63 74 2c 20 72 65 6e 61 6d 65 20 69 74	0x2518190		token_readback	pipeline §27; ASCII 无重定位 ⇒ bytes: 合法(全镜像仅 1 处,落点=串首)
+register	trigger_overwrite_msg	address	bytes:73 63 72 69 70 74 65 64 20 74 72 69 67 67 65 72 20 25 73 20 69 73 20 6f 76 65 72 77 72 69 74 69 6e 67 20 61 6e 20 65 78 69 73 74 69 6e 67 20 74 72 69 67 67 65 72 2c 20 72 65 6e 61 6d 65 20 69 74	0x2518270		token_readback	pipeline §27; ASCII 无重定位 ⇒ bytes: 合法(全镜像仅 1 处,落点=串首)
+register	effect_source_file	address	bytes:43 3a 5c 6d 6e 74 5c 67 73 67 5c 73 74 65 6c 6c 61 72 69 73 5c 61 75 67 75 73 74 75 73 5c 61 75 67 75 73 74 75 73 5c 73 6f 75 72 63 65 5c 73 63 72 69 70 74 65 64 65 66 66 65 63 74 2e 63 70 70	0x25181d0		token_readback	pipeline §27; ASCII 无重定位 ⇒ bytes: 合法(全镜像仅 1 处,落点=串首)
+register	trigger_source_file	address	bytes:43 3a 5c 6d 6e 74 5c 67 73 67 5c 73 74 65 6c 6c 61 72 69 73 5c 61 75 67 75 73 74 75 73 5c 61 75 67 75 73 74 75 73 5c 73 6f 75 72 63 65 5c 73 63 72 69 70 74 65 64 74 72 69 67 67 65 72 2e 63 70 70	0x25182c0		token_readback	pipeline §27; ASCII 无重定位 ⇒ bytes: 合法(全镜像仅 1 处,落点=串首)
+register	log_emitter	address	bytes:48 89 54 24 10 4c 89 44 24 18 4c 89 4c 24 20 55	0x1c91c30		token_readback	pipeline §27
+register	class_info_deleter	address	bytes:40 53 48 83 ec 20 48 8d 05 cb bb 17	0x34c090		token_readback	pipeline §22
+register	trigger_instantiate	address	bytes:48 89 5c 24 10 4c 89 4c 24 20 48 89 4c 24 08 55 56 57 41 54 41 55 41 56 41 57 48 8d 6c 24 d9 48 81 ec d0 00 00 00 4d 8b e1 45 8b f8 4c 8b ea 48	0x349ae0		token_readback	pipeline §23
 dispatch	base_execute	address	bytes:48 89 5c 24 08 57 48 83 ec 20 8b 42 08 48 8b da 48 8b f9 85 c0 78 32 ba 10 00 00 00 48 8b cb e8 ?? ?? ?? ?? 48 8b cb e8 ?? ?? ?? ?? ba 03 00 00 00 48 8b cb e8 ?? ?? ?? ?? ba 10 00 00 00 48 8b cb e8 ?? ?? ?? ?? 8b 43 08 ff c0 48 8b d3 89 43 08 48 8b cf 48 8b 07 ff 50 10 ff 4b 08 48 8b cb	0x1d08520		c6_log_lines	structures §10 §14
 dispatch	dispatch_point	address	callshape:callptr+0x48&bytes:48 89 5c 24 18 55 56 57 41 56 41 57 48 83 ec 20 48 8b ea 48	0x3b0f80		c6_log_lines	c1_validation §91.6 §91.7
 dispatch	donor_execute	address	strref:Expected "@reads=0x88	0x3afd30		c6_log_lines	c1_validation §52; '" in file: "' 12 函数共享 ⇒ 改用同函数内 'Expected "'(2 函数)+@reads=0x88
@@ -44,6 +64,9 @@ dispatch	effect_pred_plus98	address	bytes:48 89 5c 24 08 57 48 83 ec 20 48 8b fa
 dispatch	trigger_pred_slot	address	bytes:48 89 5c 24 08 57 48 83 ec 20 48 8b fa 48 8b d9 48 85 d2 74 25 48 8b 01 ff 50 70 48	0x349230		c6_log_lines	c1_validation §75 §76
 dispatch	trigger_eval_slot	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 48 8b f9 49 8b f0 48 83 c1 78 48 8b da e8 ?? ?? ?? ?? 48 8b 07 48 8d 93 78 02 00 00 4c 8b c6 48 8b cf 48 8b 5c 24 30 48 8b 74 24 38 48 83 c4 20 5f 48 ff 60 20 cc cc cc cc cc cc cc cc cc cc cc cc 48 89 5c 24 10 48 89 74 24 18 57 48 81 ec e0 02	0x1a91a80		c6_log_lines	c1_validation §77; 68 B body + following bytes: twin 0x1a91a30 is byte-identical inside the body (differs only in a masked call rel32)
 dispatch	out_of_family_dispatch	address	bytes:48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 83 ec 20 0f b6 79 08	0xcc4220		c6_log_lines	c1_validation §72
+dispatch	every_system_consumer	address	bytes:40 53 48 83 ec 20 b9 88 01 00 00 e8 ?? ?? ?? ?? 48 8b d8 48 89 44 24 38 ba 80 00 00 00 48 8b c8 e8 ?? ?? ?? ?? 48 8d 05 f4 13 be 00 48 89 03 48	0x1a74eb0		c6_log_lines	c1_validation §90; 唯一 lea 到 0x26562d0 的站点(0x1a74ed5)所在函数
+dispatch	every_system_vtable	structure		0x26562d0	every_system_consumer	c6_log_lines	c1_validation §90; 102 张同形 every_system 表,槽 0..39 无一唯一(slot14=0x1a76130 有 202 个候选),⇒ 无 vtable: 配方;靠 @node:every_system_consumer 的 lea 保活
+dispatch	log_effect_exec	address	bytes:48 89 5c 24 10 48 89 74 24 18 48 89 7c 24 20 55 41 56 41 57 48 8d ac 24 b0 f3 ff ff 48 81 ec 50 0d 00 00 48 8b da 48 8b f9 45 33 ff 44 89 bd 70 0c 00 00 48 8d 8d 50 02 00 00 e8 ?? ?? ?? ?? 90 48 8d 8d 50 02 00 00 e8 ?? ?? ?? ?? 48 89 9d 68 0b 00 00 44 89 bd 58 02 00 00 48 89 9d 60 02 00 00 8b 8f e0 00 00 00 48 8d 87 d0 00 00 00 48 83 78 18 10 72 03 48 8b 00 48 89 44 24 60 89 4c 24	0x185bf60		c6_log_lines	c1_validation §90; 孪生 0x1af5690 前 96 B 逐字节相同,判别字节在 96..128
 state_write	set_variable_create	address	bytes:40 53 48 83 ec 20 b9 18 03 00 00 e8 ?? ?? ?? ?? 48 8b d8 48 89 44 24 38 33 d2 41 b8 18 03 00 00 48 8b c8 e8 ?? ?? ?? ?? 48 8b cb e8 ?? ?? ?? ?? 48 8d 05 b9 3b d4 00 48 89 03 48 8d 05 cf 39 d4	0x18a6970		save_join	c1_validation §94 §95 §96
 state_write	set_variable_parser	address	bytes:48 89 5c 24 18 48 89 54 24 10 55 56 57 48 8d 6c 24 b9 48 81 ec c0 00 00 00 48 8b fa 48 8b d9 33 f6 89 75 c7 48 81 c1 f0	0x188e240		save_join	c1_validation §94 §96
 state_write	set_variable_body	address	bytes:48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20 48 8b f2 48 8b f9 4c 8b c2	0x188e1d0		save_join	c1_validation §94 §96
@@ -53,6 +76,17 @@ state_write	docstring_set_variable	structure		-		save_join	c1_validation §94
 state_write	field_name_string	structure		-		save_join	c1_validation §94
 state_write	field_value_cell	structure		-		save_join	c1_validation §94
 state_write	field_parse_state	structure		-		save_join	c1_validation §94
+state_write	map_emplace	address	bytes:48 89 5c 24 08 48 89 74 24 10 48 89 7c 24 20 44 89 44 24 18 55 41 54 41 55 41 56 41 57 48 8b ec 48 81 ec 80 00 00 00 48 63 0d be e0 69 01 40 b7	0x1bcf030		save_join	pipeline §30
+state_write	name_append	address	bytes:40 53 56 57 48 83 ec 20 48 63 41 14 48 8b f9 8b 49 10 49 8b d8 48 63 f2 3b c1 0f 85 ?? ?? ?? ?? 66 0f 6e c1 48 89 6c 24 40 8d 68 01 0f 5b c0 4c 89 64 24 48 4c 89 74 24 50 4c 89 7c 24 58 f3 0f 59 05 7a 9e 5a 02 f3 0f 2c c0 3b e8 ?? ?? ?? ??	0x158300		save_join	pipeline §30; 孪生 0x1dede70 的判别字节越过 0x24 B 的 .pdata 函数体 ⇒ 无 &bytes: 可用
+state_write	name_hash	address	bytes:40 53 48 83 ec 20 41 8b d8 89 4c 24	0x1c9e350		save_join	pipeline §30
+state_write	game_date_year	address	bytes:8b 11 b8 ab aa aa 2a 81 ea c0 55 9c 02 f7 ea 44 8b c2 41 c1	0x9af340		game_date §2	game_date §2; 叶子无 .pdata,与 0x9af2c0 只差一个 modrm 字节(0xc2/0xca)
+state_write	game_date_day_of_year	address	bytes:8b 11 b8 ab aa aa 2a 81 ea c0 55 9c 02 f7 ea 44 8b ca 41 c1	0x9af2c0		game_date §2	game_date §2; 同上,与 0x9af340 构成本对
+state_write	game_date_day_index	address	bytes:48 83 ec 28 4c 8b d9 e8 ?? ?? ?? ?? 49 8b cb 44	0x9af3b0		game_date §2	game_date §2
+state_write	galaxy_map_db	structure		0x3260bb0		save_join	game_date §2; 游戏日期根 [[db]+0xC0];RVA_HOLDER 同值别名。5647 ref / 4099 函数 / 8 写者 ⇒ 无唯一读写侧,只能 structure
+state_write	country_table	structure		0x3260fd8		save_join	sdk_api §4; 国家表(id 在 +0x20)。6000 ref / 3683 函数 / 2 写者 ⇒ 无唯一读写侧
+state_write	name_vector	structure		0x2a00de0		save_join	pipeline §30; 39 ref / 36 函数 / 1 写者,读取面不唯一 ⇒ structure
+state_write	hash_map	structure		0x326d108	map_emplace	save_join	pipeline §30; 名字哈希表基址;7 ref / 4 函数 / 0 写点(全是 lea)⇒ 只读口径。同表相邻槽 BUCKETS/NEXT_ID/MASK/TAIL 在 ANCHOR_EXEMPTIONS 里(结构偏移,同一张表)
+state_write	hash_load_factor	structure		0x326d124	map_emplace	save_join	pipeline §30; 同表 +0x1c 的装载因子槽(与 @node:hash_map 同一张表,但 structure 节点不能互相 depends_on——DAG 只认 found/moved);34 ref / 34 函数 / 0 写点 ⇒ 只读
 graph	system_resolver	address	bytes:48 81 79 08 80 00 00 00 75 09 8b 41 10 89 44 24 08 eb 08 c7 44 24 08 ff ff ff ff 48 8b 05 86 d1	0x3939f0		zero_diff	graph_runtime §1.2 §1.11
 graph	edge_add	address	bytes:48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 50 48 8b f2 48 8b f9 48 8d 4a	0x8bbaa0		zero_diff	graph_runtime §1
 graph	edge_remove	address	bytes:40 53 57 41 54 48 83 ec 20 48 63 81 9c 05 00 00 33 db 4c 8b	0x8bbc20		zero_diff	graph_runtime §1
@@ -62,6 +96,8 @@ graph	read_path_c	address	bytes:44 89 4c 24 20 44 89 44 24 18 48 89 4c 24 08 55 
 graph	edge_table_global	structure		-		zero_diff	graph_runtime §1.11
 graph	edge_container_offsets	structure		-		zero_diff	graph_runtime §1
 graph	dirty_mask_global	structure		-		zero_diff	graph_runtime §1.4.1
+graph	system_index	structure		0x3260b98	system_resolver	zero_diff	graph_runtime §1.2; 系统 id→对象表的全局。1859 ref / 1142 函数 / 2 写者 ⇒ 无唯一读写侧;靠 @node:system_resolver 保活
+graph	fallback_system	structure		0x325d880	system_resolver	zero_diff	graph_runtime §1.2; 解析失败的回退全局。2015 ref / 1187 函数 / 2 写者 ⇒ 无唯一读写侧
 scope	scope_mask_field	structure		-		mask_id	c1_validation §80.2 §91.7
 scope	scope_id_field	structure		-		mask_id	c1_validation §80.2 §91.7
 scope	country_scope_vtable	structure		-		mask_id	runtime_js_c2_country_scope_4_4_4.log

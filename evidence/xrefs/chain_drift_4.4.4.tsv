@@ -2,9 +2,9 @@
 # exe=/var/lofibass_ssd/data/stellaris/4.4.4/stellaris.exe
 # exe_sha256=9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56
 # target_version=1.0.0.0
-# generated=2026-11-13
+# generated=2026-11-15
 # chains: register=green dispatch=green state_write=green graph=green scope=green
-# locators: strref=8 callshape=1 vtable=1 global=2 bytes=24 structure=19
+# locators: strref=8 callshape=1 vtable=7 global=2 bytes=39 structure=27
 # witness: register=token_readback dispatch=c6_log_lines state_write=save_join graph=zero_diff scope=mask_id
 chain	node	class	verdict	expect	got	delta	candidates	witness	note
 register	get_scripted_effect	address	found	0x89f960	0x89f960			token_readback	
@@ -12,11 +12,11 @@ register	get_scripted_trigger	address	found	0x8a0450	0x8a0450			token_readback
 register	get_or_add_token	address	found	0x1d13270	0x1d13270			token_readback	
 register	token_db_singleton	address	found	0x1d12c60	0x1d12c60			token_readback	
 register	id_name_rebuild	address	found	0x1d12cd0	0x1d12cd0			token_readback	
-register	token_db_object	structure	skipped_structure	-				token_readback	skipped: structure
+register	token_db_object	structure	skipped_structure	0x37347a0				token_readback	skipped: structure
 register	descriptor_writer_static	address	found	0x1d15270	0x1d15270			token_readback	
 register	descriptor_writer_dynamic	address	found	0x1d152d0	0x1d152d0			token_readback	
 register	slot_writer	address	found	0x1d158a0	0x1d158a0			token_readback	
-register	descriptor_array	structure	skipped_structure	-				token_readback	skipped: structure
+register	descriptor_array	structure	skipped_structure	0x337b400				token_readback	skipped: structure
 register	effect_db_init	address	found	0x3aeba0	0x3aeba0			token_readback	
 register	trigger_db_ensure	address	found	0x347bd0	0x347bd0			token_readback	
 register	bst_insert_effect	address	found	0x3aef60	0x3aef60			token_readback	
@@ -31,6 +31,19 @@ register	class_info_trigger	structure	skipped_structure	-				token_readback	skip
 register	class_info_effect	structure	skipped_structure	-				token_readback	skipped: structure
 register	donor_docstring_trigger	structure	skipped_structure	-				token_readback	skipped: structure
 register	donor_docstring_effect	structure	skipped_structure	-				token_readback	skipped: structure
+register	effect_template_vtable	address	found	0x24b1990	0x24b1990			token_readback	
+register	ref_vtable	address	found	0x25180a8	0x25180a8			token_readback	
+register	ref_ceffect_vtable	address	found	0x2518128	0x2518128			token_readback	
+register	null_ref_vtable	address	found	0x24b9e80	0x24b9e80			token_readback	
+register	null_ceffect_vtable	address	found	0x24b9e40	0x24b9e40			token_readback	
+register	cstr_vtable	address	found	0x247b078	0x247b078			token_readback	
+register	effect_overwrite_msg	address	found	0x2518190	0x2518190			token_readback	
+register	trigger_overwrite_msg	address	found	0x2518270	0x2518270			token_readback	
+register	effect_source_file	address	found	0x25181d0	0x25181d0			token_readback	
+register	trigger_source_file	address	found	0x25182c0	0x25182c0			token_readback	
+register	log_emitter	address	found	0x1c91c30	0x1c91c30			token_readback	
+register	class_info_deleter	address	found	0x34c090	0x34c090			token_readback	
+register	trigger_instantiate	address	found	0x349ae0	0x349ae0			token_readback	
 dispatch	base_execute	address	found	0x1d08520	0x1d08520			c6_log_lines	
 dispatch	dispatch_point	address	found	0x3b0f80	0x3b0f80			c6_log_lines	
 dispatch	donor_execute	address	found	0x3afd30	0x3afd30			c6_log_lines	
@@ -40,6 +53,9 @@ dispatch	effect_pred_plus98	address	found	0x3b1420	0x3b1420			c6_log_lines
 dispatch	trigger_pred_slot	address	found	0x349230	0x349230			c6_log_lines	
 dispatch	trigger_eval_slot	address	found	0x1a91a80	0x1a91a80			c6_log_lines	
 dispatch	out_of_family_dispatch	address	found	0xcc4220	0xcc4220			c6_log_lines	
+dispatch	every_system_consumer	address	found	0x1a74eb0	0x1a74eb0			c6_log_lines	
+dispatch	every_system_vtable	structure	skipped_structure	0x26562d0				c6_log_lines	skipped: structure
+dispatch	log_effect_exec	address	found	0x185bf60	0x185bf60			c6_log_lines	
 state_write	set_variable_create	address	found	0x18a6970	0x18a6970			save_join	
 state_write	set_variable_parser	address	found	0x188e240	0x188e240			save_join	
 state_write	set_variable_body	address	found	0x188e1d0	0x188e1d0			save_join	
@@ -49,6 +65,17 @@ state_write	docstring_set_variable	structure	skipped_structure	-				save_join	sk
 state_write	field_name_string	structure	skipped_structure	-				save_join	skipped: structure
 state_write	field_value_cell	structure	skipped_structure	-				save_join	skipped: structure
 state_write	field_parse_state	structure	skipped_structure	-				save_join	skipped: structure
+state_write	map_emplace	address	found	0x1bcf030	0x1bcf030			save_join	
+state_write	name_append	address	found	0x158300	0x158300			save_join	
+state_write	name_hash	address	found	0x1c9e350	0x1c9e350			save_join	
+state_write	game_date_year	address	found	0x9af340	0x9af340			game_date §2	
+state_write	game_date_day_of_year	address	found	0x9af2c0	0x9af2c0			game_date §2	
+state_write	game_date_day_index	address	found	0x9af3b0	0x9af3b0			game_date §2	
+state_write	galaxy_map_db	structure	skipped_structure	0x3260bb0				save_join	skipped: structure
+state_write	country_table	structure	skipped_structure	0x3260fd8				save_join	skipped: structure
+state_write	name_vector	structure	skipped_structure	0x2a00de0				save_join	skipped: structure
+state_write	hash_map	structure	skipped_structure	0x326d108				save_join	skipped: structure
+state_write	hash_load_factor	structure	skipped_structure	0x326d124				save_join	skipped: structure
 graph	system_resolver	address	found	0x3939f0	0x3939f0			zero_diff	
 graph	edge_add	address	found	0x8bbaa0	0x8bbaa0			zero_diff	
 graph	edge_remove	address	found	0x8bbc20	0x8bbc20			zero_diff	
@@ -58,6 +85,8 @@ graph	read_path_c	address	found	0x1b86e30	0x1b86e30			zero_diff
 graph	edge_table_global	structure	skipped_structure	-				zero_diff	skipped: structure
 graph	edge_container_offsets	structure	skipped_structure	-				zero_diff	skipped: structure
 graph	dirty_mask_global	structure	skipped_structure	-				zero_diff	skipped: structure
+graph	system_index	structure	skipped_structure	0x3260b98				zero_diff	skipped: structure
+graph	fallback_system	structure	skipped_structure	0x325d880				zero_diff	skipped: structure
 scope	scope_mask_field	structure	skipped_structure	-				mask_id	skipped: structure
 scope	scope_id_field	structure	skipped_structure	-				mask_id	skipped: structure
 scope	country_scope_vtable	structure	skipped_structure	-				mask_id	skipped: structure

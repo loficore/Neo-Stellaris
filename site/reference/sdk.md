@@ -98,13 +98,32 @@ onSystem((s) => {
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200` — a constant threshold, not a tuning knob in v1. |
 | `log` | `(message: string) => void` | Appends `NEO_JS_LOG <text>` to `C:/temp/neo_js.log`. |
 | `apiVersion` | `() => number` | Returns the host's contract version; v1.x is `1`. |
+| `gameDate` | `() => string \| null` | The engine's current date as `"YYYY.MM.DD"`. `null` when the engine cannot be read (main menu / no campaign). Month and day are **1-based**. Needs no permission. |
+| `gameTick` | `() => number \| null` | **Absolute day index** since the epoch (`0` = the epoch's own day). `null` when the engine cannot be read — never `0` as "unavailable". Not a frame counter. Needs no permission. |
+
+### World clock
+
+`gameDate()` returns the engine's current date as `"YYYY.MM.DD"` — month and day
+are **1-based** (the display convention; the host already applied the `+1`, do
+not add one again), and a year is 360 days of 30-day months.
+`gameTick()` returns the **absolute day index** since the epoch, `0` being the
+epoch's own day.
+
+Neither is a frame counter or a wall clock: the value advances once per game day,
+so it is right for "days since X" and wrong for interpolation between frames.
+Both return `null` when the engine cannot be read — main menu, no campaign
+loaded, a failed read, or before the epoch — and `null` is deliberately distinct
+from `0`, which is a valid reading.
+
+Neither needs a permission bit (`apiVersion` is the other such member): they are
+read-only global time and touch no campaign object.
 
 ## Native contract
 
-The SDK is a shim over thirteen globals installed by the host. `sdk/api.def` is
+The SDK is a shim over fifteen globals installed by the host. `sdk/api.def` is
 the single source of truth; the TypeScript surface, the mock host and the Zig
-host must all match it. The seven v1 names come first, unchanged; the v1.1
-additions are appended after them in the host's own order.
+host must all match it. The seven v1 names come first, unchanged; the v1.1 and
+v1.2 additions are appended after them in the host's own order.
 
 | Native | Params | Returns |
 |---|---|---|
@@ -121,6 +140,8 @@ additions are appended after them in the host's own order.
 | `__neo_register_country` | `function` | `void` |
 | `__neo_country_opinion` | `u32`, `u32` | `i32 \| null` (`undefined` = refused) |
 | `__neo_country_their_opinion` | `u32`, `u32` | `i32 \| null` (`undefined` = refused) |
+| `__neo_game_date` | — | `string \| null` (`null` = engine unreadable) |
+| `__neo_game_tick` | — | `i64 \| null` (`null` = engine unreadable; `0` is legal) |
 
 The `u32` in the first column of the system natives is the **system id**; the
 country pair takes `(self, target)`. "Refused" is the host's fail-closed answer
@@ -332,8 +353,9 @@ host" limitation.
   never guessed.
 - **No fleet, planet or pop scopes.** A dispatch with any other scope is logged
   and dropped: `NEO_SCOPE_OTHER mask=0x<mm> id=<n>` (read-only).
-- **No `onMonthly` and no global tick hook.** The monthly driver is a generated
-  `on_action` + hidden `event` pair — the official script path.
+- **No `onMonthly` and no tick hook.** The monthly driver is a generated
+  `on_action` + hidden `event` pair — the official script path. The day counter
+  is *readable* (`gameTick()`), but nothing fires on a day boundary.
 - **No `dlc_load.json` parsing and no inter-mod JS calls.** The host loads up to 8
   isolated sessions, not a module graph.
 - **`log` writes `C:/temp/neo_js.log`**, not the official `game.log`.

@@ -5,7 +5,8 @@ Phase 1 的 native 名字是冻结合同。TS 包、Zig host 和 mock host 三�
 
 Phase 2 的 v1.1 是**加法**：`api.def` 的头部仍是 v1 的七项，之后按 host 的注册顺序
 追加（neighbors → set_flag → has_flag → register_country → country_opinion →
-country_their_opinion）。围栏读 host 的两张表——冻结的
+country_their_opinion）。v1.2 的 `game_date` / `game_tick` 接在同一尾部之后。
+围栏读 host 的两张表——冻结的
 `native_table`（`.name =`）与加法的 `additive_native_table`（`.js_name =`）——
 要求 `api.def == FROZEN_V1 + ADDITIVE`，且两侧逐项同序。
 
@@ -43,6 +44,9 @@ ADDITIVE = [
     "__neo_register_country",
     "__neo_country_opinion",
     "__neo_country_their_opinion",
+    # v1.2（2026-11-15）：全局时间。纯只读，没有权限位，不可用 = null。
+    "__neo_game_date",
+    "__neo_game_tick",
 ]
 
 
