@@ -327,7 +327,9 @@ $ python3 scripts/disrva.py 0x1a1b0e0 --len=0x1d0         ; system_planet 与 ow
 
 1. **`0x10` 不在表里。** 203 个 mint 里**没有一个**标签常数是 `0x10`。这是本节最重要的负读数。
 2. **`planet` = `0x2`,而且 `moon` 也是 `0x2`**(卫星是行星类对象);**`owned_planet` 不是 `0x2`,
-   是 `1<<40`**(与 `owned_colony` **同一个 create** `0x1a71260`,见下表),也就是说
+   是 `1<<40`**(`owned_planet` 自己的 create = `0x1a71300`,见下表;**`0x1a71260` 不是同一个
+   create**,是同一个注册函数 `0x1954790` 也 `lea` 的另一份 `class_info 0x2666c30` —— 两者标签
+   都 `1<<40`,但 create、vtable 与对象大小都不同。2026-11-16 勘误,见 §4.1),也就是说
    `every_owned_planet` 轮内下发的 scope 标签是 **colony** 而不是 planet。
 3. **`scope+0x08` 是 64 位位空间**:`1<<33`(cosmic_storm)到 `1<<41`(mission)全是实读数,不是我的推测。
    同卷 §2.0 的 `qword` 比较宽度在这一条上兑现。
@@ -348,11 +350,14 @@ $ python3 scripts/disrva.py 0x1a1b0e0 --len=0x1d0         ; system_planet 与 ow
 ```text
 $ python3 scripts/disrva.py 0x1a71300 --len=0x30
   01a71300  push    rbx
-  01a71306  mov     ecx, 0x1c8
+  01a71302  sub     rsp, 0x20
+  01a71306  mov     ecx, 0x188
   01a7130b  call    0x142185218  ; -> 0x2185218
+  01a71310  mov     rbx, rax
+  01a71313  mov     qword ptr [rsp + 0x38], rax
   01a71318  movabs  rdx, 0x10000000000
   01a71322  mov     rcx, rax
-  01a71325  call    0x14192b260  ; -> 0x192b260
+  01a71325  call    0x1417f7860  ; -> 0x17f7860
 ```
 
 ### §3.3 第一条路线的名字只是「基础名」,不是 scope 类型名
@@ -568,6 +573,29 @@ mask `0x10` 的 getter(`0x3941b6`–`0x3941bd`),和迭代循环里的 `cmp rax, 
 为了不反复占慢通道,改用 §6 第 2 段的「逐 4 字节反解 `disp32`」扫描(等价于 `find_refs.py` 的
 rip 相对那一半,且**不按指令解码**,所以三种形态全收):`planet` 6 条、`pop` 3 条、`system` 19 条
 (§2.2)。**预算 4,用了 2,没有第 3 次。**
+
+### §4.1 勘误(2026-11-16,复核时补):`§3.2` 的两处数字
+
+收尾复核时把 `§3.2` 的每条读数重打了一遍。**判决与判词不变**(`tags_named_all`、`planet = 0x2`、
+`pop = 0x10`),改的是两处**转写**:
+
+1. **`0x1a71300` 的逐条反汇编块**(§3.2 末)原来抄成了 `0x1a70a60` 那一块的后半段:实际是
+   `mov ecx, 0x188`(不是 `0x1c8`)、`call 0x17f7860`(不是 `0x192b260`),且中间还有
+   `sub rsp, 0x20` / `mov rbx, rax` / `mov [rsp+0x38], rax` 三条。已按 `disrva.py` 的原文替换。
+   该行 `ctor` 列写的是 `0x17f7860`,**一直是对的** —— 错在块内注释。
+2. **「`owned_planet` 与 `owned_colony` 同一个 create `0x1a71260`」不成立。**
+   `class_info 0x2666c50` 的 qword[1] = `0x141a71300` ⇒ `owned_planet` 的 create 是 **`0x1a71300`**;
+   `0x1a71260` 是**另一份** create(`class_info 0x2666c30`、0x1c8 对象、ctor `0x192b260`、
+   vtable `0x265bee0`)。两者都由注册函数 `0x1954790..0x1955086` 里的 `lea rcx,[…]` 引到 —— 那个
+   函数引 `0x2666c30` / `0x2666c20` / `0x2666c50` / `0x2666c40` / `0x2666ca0` 五份 class_info,
+   并同时 `lea` 名字 `owned_planet`(`0x26690f0`)与它的 deprecated 别名 docstring
+   (`0x2669090`「Iterate through each colony owned by the current empire (Deprecated; use
+   owned_colony instead)」)。**所以「同一族、不同 create、同标签 `1<<40`」才是实况**,
+   §3.2 第 2 条那句「同一个 create」已改。
+
+复核用的工具:`scripts/disrva.py`(逐条)、`scripts/pestr.py`(字面)、`scripts/riprefs.py --verify`
+(找 `class_info` 的 `lea` 站点;秒级通道,**不计入** `find_refs.py` 预算 —— 本条把慢通道计数保持
+在**仍然 2 次**)。
 
 ---
 
