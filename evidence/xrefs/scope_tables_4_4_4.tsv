@@ -1,0 +1,21 @@
+# scope tables / scope getters audit — 2026-11-15, offline, read-only exe (零实机)
+# stellaris.exe 4.4.4 sha256 9242c40abb78b53e88039ead1270ad82eb003959fb2d413c856d280ea02b1a56
+# columns: candidate<TAB>kind<TAB>reading<TAB>source
+#   candidate = RVA (§8.2 的原数值,未改)
+#   kind      = getter | table
+#   reading   = 定形读数(见 evidence/analysis/runtime_444_scope_tables_4_4_4.md 的 §N;`-` 表示未读)
+#   source    = 读数出处(站点 RVA),`-` 表示只有 §8.2 的转述
+# 表行末尾的 §N 指向本卷小节;第 9 行起是工单外但链上必须的表(§3.4/§3.6)
+0x394190	getter	B-mask=0x10; cache=[scope+0x1c]; inline=[scope+0x14]; id=[scope+0x10]; table=0x3260ff8; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x10; fallback=0x325fb00; callers=49; verdict=getter_named	0x394190,0x3941c2,0x3941b6,0x3941ef,0x1a9beba,§2.1
+0x2b6470	getter	B-mask=0x20; cache=[scope+0x1c]; id=[scope+0x10]; table=0x3260ff0; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x10; fallback=0x325fae8; callers=102; verdict=getter_named	0x2b6470,0x2b64a2,0x2b64d3,0x1a9be28,§2.2
+0x393ec0	getter	B-mask=0x40; cache=[scope+0x1c]; id=[scope+0x10]; table=0x325ef00; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x30; fallback=0x325fa20; callers=150; verdict=getter_named	0x393ec0,0x393ef2,0x393f23,0x1a9bdee,§2.3
+0x394870	getter	B-mask=1; cache=[scope+0x1c]; id=[scope+0x10]; table=0x3261010; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x8; fallback=0x3260118; callers=42; verdict=getter_named	0x394870,0x3948a2,0x3948d3,0x1a9bf53,§2.4
+0x393970	getter	B-mask=0x80; cache=[scope+0x1c]; id=[scope+0x10]; table=0x3260b98; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x8; fallback=0x325d880; callers=303; verdict=getter_named	0x393970,0x3939a8,0x3939dc,0x1a9bdd6,§2.5
+0x3260ff0	table	readers=502 sites/375 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x10; verdict=table_named	0x2b64a2,0x1a9beba,0x263bdd,0x251a10,§3.1
+0x3261030	table	readers=126 sites/94 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x8; verdict=table_named	0x265660,0x288882,0x394cd9,0x397c3b,0x1a9c12c,§3.2
+0x3261068	table	readers=1554 sites/1134 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x10; verdict=table_named	0x192f90e,0x1a99f5a,0x1a9befd,0x1a9be28,§3.3
+0x3260ff8	table	readers=138 sites/113 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x10; flag_byte=+0x34; verdict=table_named (工单外:getter 0x394190 的表)	0x3941c2,0x23a1cd,0x3036e0,0x25281d,§3.4
+0x3261010	table	readers=203 sites/152 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x8; verdict=table_named (工单外:getter 0x394870 的表)	0x3948a2,0x264870,0x250bab,0x269450,§3.4
+0x325ef00	table	readers=2143 sites/1416 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x30; verdict=table_named (工单外:getter 0x393ec0 的表)	0x393ef2,0x25570f,0x25015e,§3.4
+0x3260f18	table	readers=64 sites/56 fns; bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=UNREAD; verdict=unresolved (工单外:getter 0x394e60 的表)	0x394e98,0x2488ae,§3.4
+0x3260fd0	table	readers=1 fn verified (0xd3b4d0); bound=+0x20; base=+0x18; rec=16B; ptr=+0x8; obj_id=+0x18; verdict=single_reader	0xd3b4ef,0xd3b519,§3.6

@@ -16,6 +16,17 @@ export const MOCK_CHOKEPOINT = true;
 export const MOCK_API_VERSION = 1;
 /** What `__neo_country_opinion` returns before a test overrides it. */
 export const MOCK_OPINION = 7;
+/**
+ * The world clock. `MOCK_DATE` is a normal campaign start (`2200.01.01`) and
+ * `MOCK_TICK` is its absolute day index (`0` would be the epoch itself, which is
+ * also a legal reading — see `gameTick`'s doc in `runtime.ts`).
+ *
+ * `null` (not `0` / `""`) is what the host returns when the engine cannot be read
+ * (main menu, no campaign). The host maps `getGameTick()`'s `-1` to `null` before
+ * JS ever sees it, so the mock stores `null` too.
+ */
+export const MOCK_DATE: string | null = "2200.01.01";
+export const MOCK_TICK: number | null = 792_000;
 
 export interface MockCall {
   fn: string;
@@ -45,6 +56,9 @@ export interface MockState {
    * the native returns `undefined` and the SDK must map it to `null`.
    */
   opinion: number | undefined;
+  /** World clock: `null` reproduces "engine unreadable" (main menu). */
+  date: string | null;
+  tick: number | null;
 }
 
 export interface MockHostOptions {
@@ -66,7 +80,9 @@ globalThis.__neo_mock = {
   betweenness: ${MOCK_BETWEENNESS},
   chokepoint: ${MOCK_CHOKEPOINT ? "true" : "false"},
   apiVersion: ${MOCK_API_VERSION},
-  opinion: ${MOCK_OPINION}
+  opinion: ${MOCK_OPINION},
+  date: ${JSON.stringify(MOCK_DATE)},
+  tick: ${JSON.stringify(MOCK_TICK)}
 };
 `;
 
@@ -173,6 +189,18 @@ globalThis.__neo_country_their_opinion = function (self, target) {
     name: String(target >>> 0)
   });
   return globalThis.__neo_mock.opinion;
+};
+`,
+  __neo_game_date: `
+globalThis.__neo_game_date = function () {
+  globalThis.__neo_mock.calls.push({ fn: "__neo_game_date" });
+  return globalThis.__neo_mock.date;
+};
+`,
+  __neo_game_tick: `
+globalThis.__neo_game_tick = function () {
+  globalThis.__neo_mock.calls.push({ fn: "__neo_game_tick" });
+  return globalThis.__neo_mock.tick;
 };
 `,
 };
