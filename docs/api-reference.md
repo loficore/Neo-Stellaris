@@ -1,5 +1,10 @@
 > **Legacy (2026-11-10).** 本文记录旧的 `Stellaris.*` 桥（v0 实验面），**不属于**运行时 JS SDK。
 > 现行契约见 `site/reference/sdk.md` 与 `sdk/api.def`；本文不随 SDK 更新。
+>
+> **其中六个入口在 4.4.4 仍是空桩**(`getPlanet` / `getPop` / `setVariable` / `addModifier` /
+> `triggerEvent` / `removeModifier`:返回 `null` / `false`,**不会**真的读写游戏状态)——
+> 缺什么、缺在哪一国见 `evidence/analysis/runtime_444_sdk_api_4_4_4.md` §4/§5。
+> 本文下面那些调用示例是**设计意图**,不是可用 API。
 
 # API Reference
 
