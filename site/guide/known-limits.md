@@ -67,7 +67,16 @@ Treat the two flag calls as **verified on two campaigns**: the readings cover th
 keyspace and the lazy-minting order, not every engine version, save or mod
 combination.
 
-## Hyperlane degree and neighbours have one live reading (2026-11-15)
+One more boundary, measured the same day: **flags live in the save**. A later
+window on the rebuilt bytes loaded a newer autosave of the same campaign, where
+that name was already set on every system, so the very first `hasStarFlag` call
+read `true` and the `false → true` transition could not be observed at all
+(`flag_first_obs={('true','true'): 788}` on both processes). The write path still
+ran thousands of times and reads came back `true`, but the "this name was minted
+by this write" half needs a save where the name has never existed. Use a fresh
+flag name per campaign, or a save from before the write.
+
+## Hyperlane degree and neighbours have two live readings (2026-11-15)
 
 `System.degree` and `System.neighbors` are in the contract, but until this
 window `neighbors` was covered only by offline tests. One live reading now
@@ -86,6 +95,10 @@ What it does **not** prove: the *set* of neighbour ids was not reconciled
 against the save's edge list — the probe logged the count, the degree and the
 first id only. The count agrees with the engine's own degree; the identity of
 every neighbour is still an offline-only claim.
+
+A second window on the rebuilt bytes (2026-11-15) re-read the same agreement on
+a later autosave of that campaign: 788 systems, `n === deg` with zero mismatches
+across 16 and 58 monthly pulses in two separate processes.
 
 ## Country scope is read-only, and its direction is only half known
 

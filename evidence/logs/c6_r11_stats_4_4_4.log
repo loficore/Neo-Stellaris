@@ -1,0 +1,15 @@
+# R11 进程 A —— C2NeoStatsInto 读数(Stellaris 4.4.4, 2026-11-15, pid 2492, sqjs_r11.dll)
+#
+# 命令: python C:/temp/session_bridge.py --timeout-s 300 C:/temp/c2_boot_inject.py C:/temp/sqjs_r11.dll --stats
+#
+# 原文:
+calls=12608 matched=12608 log_calls=12608 last_id=787 rule_hits=64 installed=1 verify=0 dispatched=32899 null_scope=0 mask_odd=0 writes=12608 skipped=0 score_writes=12592 score_skipped=16 set_calls=0 set_runs=0
+hash_rc=16 neo_hash=0000000000000000 neo_edges=0
+live_verify verified=0 verify_failed=0
+#
+# 判读:
+# - `installed=1 verify=0`(C6-6 的前置)成立。
+# - `calls=matched=log_calls=writes=12608` = 16 × 788;零失配、零 null scope。
+# - `score_writes=12592` / `score_skipped=16` = 16 个月各跳过 1 个系统(烘焙表 787 个 id,
+#   容器 788 个;会话内新生成的那个没有表分数)。与 r10 的 17/17 同一形状。
+# - `neo_hash=0` 是「本进程没读过图」的哨兵(本发 `--score-source` 默认 0 = 烘焙表),不是空图。
