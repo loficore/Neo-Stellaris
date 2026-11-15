@@ -83,3 +83,11 @@ r10 已判 C6-1/C6-2/C6-6 `pass`,但那份字节与本工作树的重建产物�
 (36,980 个差异字全是镜像内指针,差值 −16/−752/−720/…)。⇒ **两份 DLL 是同一个程序**,
 r10 那份 `hasStarFlag` 读数(788 个系统 `before=false → after=true`)适用于 r11 部署的字节;
 本窗口读到的 `before=true` 只是存档状态(flag 已存在),不是代码差异。
+
+## 补记 2(2026-11-15,收口后):本卷读数按**当时**的工作树计
+
+R11 窗口结束、台账提交之后,`loficore/live-contract` 被 rebase 到 `origin/main`(`#87`)。
+main 侧 `src/` 有实质变化(`dll/api/gamestate.zig`、`dll/scripted/graph_trigger.zig`、
+`dll/shared/offsets.zig` 等),所以 **rebase 之后重建出的 DLL 不再是 `6963de88…`**:
+本卷的 `6963de88…` = rebase 前那棵树(分支基点 `#80` 的 `src/`)的产物。
+「当前树 = 已验字节」这句**只对那棵树成立**;要验证 main 现在的字节,需要另开一发。
