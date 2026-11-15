@@ -316,6 +316,8 @@ fn parsePermissions(v: std.json.Value) ParseError!Permissions {
                     p.log = true;
                 } else if (std.mem.eql(u8, name, "opinion.read")) {
                     p.opinion_read = true;
+                } else if (std.mem.eql(u8, name, "resource.read")) {
+                    p.resource_read = true;
                 } else {
                     return error.UnknownPermission;
                 }
@@ -807,7 +809,7 @@ test "MAX_MODS is the frozen Phase 2 bound" {
 test "the Phase 2 permission bits parse from the manifest" {
     defer releaseManifest();
     const src =
-        \\{"id":"a","entry":"main.js","scope":["system"],"permissions":["graph.read","variable.write","variable.read","flag.write","flag.read","log","opinion.read"],"engine":"4.4.4","runtime":">=0.1"}
+        \\{"id":"a","entry":"main.js","scope":["system"],"permissions":["graph.read","variable.write","variable.read","flag.write","flag.read","log","opinion.read","resource.read"],"engine":"4.4.4","runtime":">=0.1"}
     ;
     const m = try parseManifest(src);
     try testing.expect(m.permissions.graph_read);
@@ -817,6 +819,7 @@ test "the Phase 2 permission bits parse from the manifest" {
     try testing.expect(m.permissions.flag_read);
     try testing.expect(m.permissions.log);
     try testing.expect(m.permissions.opinion_read);
+    try testing.expect(m.permissions.resource_read);
 }
 
 test "off Windows the multi-mod list has no filesystem either" {
