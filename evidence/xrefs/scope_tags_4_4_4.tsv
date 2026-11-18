@@ -1,0 +1,38 @@
+tag	name_candidate	table	evidence_section	verdict
+0x1	megastructure	0x3261010	§3.3 §3.4	tag_named:megastructure
+0x2	planet	0x3260b78	§3.3 §3.4 §3.6	tag_named:planet
+0x4	country	0x3260fd8	§3.3 §3.4	tag_named:country
+0x8	ship	0x3260fd0	§3.3 §3.4	tag_named:ship
+0x10	pop	0x3260ff8	§3.4 §3.5 §3.6	tag_named:pop
+0x20	pop_group	0x3260ff0	§3.3 §3.4	tag_named:pop_group
+0x40	fleet	0x325ef00	§3.3 §3.4	tag_named:fleet
+0x80	system	0x3260b98	§3.3 §3.4	tag_named:system
+0x100	leader	0x3260b70	§3.3 §3.4	tag_named:leader
+0x200	army	0x3260fe8	§3.3 §3.4	tag_named:army
+0x400	ambient_object	0x3261080	§3.3 §3.4	tag_named:ambient_object
+0x800	species	0x325ef10	§3.3 §3.4	tag_named:species
+0x1000	bypass	0x3261048	§3.3 §3.4	tag_named:bypass
+0x2000	design	0x325d868	§3.3 §3.4	tag_named:design
+0x4000	pop_faction	0x3260fe0	§3.3 §3.4	tag_named:pop_faction
+0x8000	war	0x3261090	§3.3 §3.4	tag_named:war
+0x10000	federation	0x3261018	§3.3 §3.4	tag_named:federation
+0x20000	starbase	0x3261008	§3.3 §3.4	tag_named:starbase
+0x40000	deposit	0x3261000	§3.3 §3.4	tag_named:deposit
+0x200000	(none)	-	§3.6	tag_unresolved
+0x100000	sector	0x3261038	§3.3 §3.4	tag_named:sector
+0x400000	archaeological_site	0x3260f00	§3.3 §3.4	tag_named:archaeological_site
+0x800000	first_contact	0x3260f20	§3.3 §3.4	tag_named:first_contact
+0x1000000	spynetwork	0x3261030	§3.3 §3.4	tag_named:spynetwork
+0x2000000	espionage_operation	0x3260f18	§3.3 §3.4	tag_named:espionage_operation
+0x4000000	espionage_asset	0x3261028	§3.3 §3.4	tag_named:espionage_asset
+0x10000000	agreement	0x3260f10	§3.3 §3.4	tag_named:agreement
+0x20000000	situation	0x3261020	§3.3 §3.4	tag_named:situation
+0x40000000	debris	0x3261058	§3.3 §3.4	tag_named:debris
+0x80000000	astral_rift	-	§3.3	tag_named:astral_rift
+0x200000000	cosmic_storm	-	§3.3	tag_named:cosmic_storm
+0x400000000	storm_influence_field	-	§3.3	tag_named:storm_influence_field
+0x800000000	exhibit	-	§3.3	tag_named:exhibit
+0x2000000000	pop_job	-	§3.3	tag_named:pop_job
+0x4000000000	species_trait	-	§3.3	tag_named:species_trait
+0x10000000000	colony	-	§3.3 §3.4	tag_named:colony
+0x20000000000	mission	-	§3.3	tag_named:mission
