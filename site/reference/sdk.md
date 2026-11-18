@@ -94,6 +94,7 @@ onSystem((s) => {
 | `Country.id` | `number` | The engine country id for this call: the **low 24 bits** of the dispatched scope's `+0x10` (the high 8 bits are an engine type tag — C3 read `0x01000002 → 2`). The only handle the SDK retains. |
 | `Country.opinionOf` | `(targetId: number) => number \| null` | Engine `opinion` keyword: one `int32` cell of the matrix, key `target * n + self` (both ids are masked to their low 24 bits — `SCOPE_ID_MASK` in `offsets.country`; the host masks them itself, the engine does not; pass `Country.id` as-is). **`null` = fail-closed**, never `0`: not computed (engine sentinel `0x7fffffff`), either id out of range, matrix not built (main menu / no campaign), session without `opinion.read`, or the id not matching the dispatched country. Every refusal also logs `NEO_JS_OPINION_REJECT … reason=<tag>`. **Read-only:** the cell is a lazily filled engine cache and the host never calls its calculator. |
 | `Country.theirOpinionOf` | `(targetId: number) => number \| null` | Engine `their_opinion` keyword — the **transpose** of `opinionOf` (`self * n + target`). Same fail-closed rules. Which of the two means "our opinion of them" is **not** established; see [Known limits](/guide/known-limits). |
+| `Country.resource` | `(index: number) => number \| null` | Stockpile of the resource at the engine's **resource index** (`energy` is `0` in an unmodded 4.4.4 game). The number is the engine's fixed-point 8-byte cell **divided by `1e5`** — the engine's own scale — so `12.34567` means 12.34567 units. **`null` = fail-closed, never `0`**: no read source (main menu / no campaign loaded — the common case), the country object could not be resolved, its stockpile container is null, the vector's holder or data pointer is null, `index` is past the resource count, the owning object of one of the three research resources is null, or the resource database is unreadable (the host then cannot tell whether `index` is one of those three, and answers `null` rather than the stale vector cell). A missing `resource.read` also answers `null`, and is the one case the host logs (`NEO_JS_RESOURCE_REJECT … reason=no_permission`). **`0` is a valid stockpile** ("this country has none"), never a synonym for "unavailable". The three research resources (`physics` / `society` / `engineering_research`) are **covered**: the engine keeps them on the country object instead of the vector, and the host follows the engine's own path for them rather than reading the stale vector cells. **Read-only:** no setter, no vtable call. Unlike `opinionOf` there is deliberately **no** `scope_mismatch` gate — the opinion matrix has a transposed cell for the other direction, a stockpile does not, so reading another country's stockpile is a legitimate read-only use. |
 | `graph.betweenness` | `(s: System) => number` | Graph score for the system (the same source as the chokepoint score path). |
 | `graph.isChokepoint` | `(s: System) => boolean` | `betweenness(s) >= 200` — a constant threshold, not a tuning knob in v1. |
 | `log` | `(message: string) => void` | Appends `NEO_JS_LOG <text>` to `C:/temp/neo_js.log`. |
@@ -118,12 +119,41 @@ from `0`, which is a valid reading.
 Neither needs a permission bit (`apiVersion` is the other such member): they are
 read-only global time and touch no campaign object.
 
+### Country stockpiles
+
+`c.resource(index)` returns one stockpile as a plain number: the engine's
+fixed-point 8-byte cell **divided by `1e5`** — the same scale the engine uses
+internally. `index` is the engine's resource numbering (`energy` is `0` in an
+unmodded 4.4.4 game), not the country id and not a table slot.
+
+`null` is the fail-closed answer, and the common case is the main menu: with no
+campaign loaded there is nothing to read. The others are the country object not
+resolving, its stockpile container being null, the vector's holder or data
+pointer being null, the index being past the resource count, the owning object
+of one of the three research resources being null, or the resource database
+being unreadable — then the host cannot tell whether the index *is* one of the
+three, and answers `null` instead of the stale vector cell. A session without
+`resource.read` gets `null` as well, and that is the only one the host logs.
+
+`0` is a valid stockpile ("this country has none") — never a synonym for
+"unavailable".
+
+The three research resources (`physics_research`, `society_research`,
+`engineering_research`) **are covered**: the engine keeps them on the country
+object instead of the vector, and the host reads that second path rather than
+the stale vector cells. There is no write path for any of this, and — unlike
+`opinionOf` — no scope gate: another country's stockpile is a legitimate
+read-only read.
+
+The read chain was derived statically; see [Known limits](/guide/known-limits)
+for what that does and does not prove.
+
 ## Native contract
 
-The SDK is a shim over fifteen globals installed by the host. `sdk/api.def` is
+The SDK is a shim over sixteen globals installed by the host. `sdk/api.def` is
 the single source of truth; the TypeScript surface, the mock host and the Zig
-host must all match it. The seven v1 names come first, unchanged; the v1.1 and
-v1.2 additions are appended after them in the host's own order.
+host must all match it. The seven v1 names come first, unchanged; the v1.1, v1.2
+and v1.3 additions are appended after them in the host's own order.
 
 | Native | Params | Returns |
 |---|---|---|
@@ -142,10 +172,12 @@ v1.2 additions are appended after them in the host's own order.
 | `__neo_country_their_opinion` | `u32`, `u32` | `i32 \| null` (`undefined` = refused) |
 | `__neo_game_date` | — | `string \| null` (`null` = engine unreadable) |
 | `__neo_game_tick` | — | `i64 \| null` (`null` = engine unreadable; `0` is legal) |
+| `__neo_country_resource` | `u32`, `u32` | `f64 \| null` (`undefined` = refused) |
 
 The `u32` in the first column of the system natives is the **system id**; the
-country pair takes `(self, target)`. "Refused" is the host's fail-closed answer
-and is deliberately distinct from a computed `0`.
+opinion pair takes `(self, target)` and `__neo_country_resource` takes
+`(country, resourceIndex)`. "Refused" is the host's fail-closed answer and is
+deliberately distinct from a computed `0`.
 
 ## Manifest
 
@@ -170,11 +202,13 @@ and is deliberately distinct from a computed `0`.
   and the 1–2-element array forms are both accepted; each name at most once). A
   bundle only receives the scopes it declares. Required.
 - `permissions` — any of `graph.read`, `variable.write`, `variable.read`,
-  `flag.read`, `flag.write`, `log`, `opinion.read`. A native whose permission is
-  absent is refused by the host, and an unknown permission disables the mod at
-  load. `degree`, `neighbors`, `betweenness` and `isChokepoint` are `graph.read`;
-  `setStarFlag` is `flag.write`; `hasStarFlag` is `flag.read`;
-  `opinionOf` / `theirOpinionOf` are `opinion.read`.
+  `flag.read`, `flag.write`, `log`, `opinion.read`, `resource.read`. A native whose
+  permission is absent is refused by the host, and an unknown permission disables
+  the mod at load. `degree`, `neighbors`, `betweenness` and `isChokepoint` are
+  `graph.read`; `setStarFlag` is `flag.write`; `hasStarFlag` is `flag.read`;
+  `opinionOf` / `theirOpinionOf` are `opinion.read`; `resource` is
+  `resource.read` (read-only, like `opinion.read` — there is no write bit for
+  either).
 - `engine` / `runtime` — compatibility strings; a mismatch disables the mod with
   a log line.
 - `flags` — **optional** (an old manifest without it still loads). A

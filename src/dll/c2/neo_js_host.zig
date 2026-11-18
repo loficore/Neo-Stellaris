@@ -68,14 +68,16 @@
 //   NEO_SCOPE_OTHER mask=0x<mm> … vtable_rva/6×u32  非 system scope 的只读指纹(前 3 次)
 //   NEO_SCOPE_OTHER_SEEN n=<n>                       之后每 500 次一行计数
 //   NEO_C3_ECON id=<id> holder=0x<x> vt_rva=0x<x> s90=0x<x> s98=0x<x>
-//       C3 国家侦察(前 3 个国家):[country+0x2c68] 经济持有者 + 两个槽目标(只读指针)
+//       C3 国家侦察(前 3 个国家):经济持有者(偏移在 `country_probe.zig`)+ 两个槽目标(只读指针)
 //   NEO_C3_RES db_n=<n> energy_obj=0x<x> energy_idx=<n|na>
-//       资源库条数 / `[[0x33746F0]+0x20]` / 能量索引(与 ECON 同一行组,只打 3 国)
+//       资源库条数 / 能量对象 / 能量索引(与 ECON 同一行组,只打 3 国)
 //   NEO_C3_OPINION self=<id> target=0 a=<n|na:t|na:o|na:n> b=<同左>
 //       na 的三档:t=table_null / o=out_of_range / n=not_computed(ids 已按 24 位掩过)
 //       opinion 双向(a = 引擎 `opinion`,b = `their_opinion`;前 40 个国家)
 //   NEO_JS_OPINION_REJECT self=<s> target=<t> reason=<tag>
 //       tag = no_permission | scope_mismatch | table_null | out_of_range | not_computed
+//   NEO_JS_RESOURCE_REJECT id=<id> index=<n> reason=no_permission
+//       资源存量读被拒(只读越权不处死 session;null 的其余六档是静默 fail-closed)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -116,6 +118,12 @@ pub const Permissions = packed struct {
     /// v1.1(2026-11-08):只读 opinion 矩阵。**只有读**,没有任何写位 ——
     /// 写路径不开(计划 Global Constraints)。
     opinion_read: bool = false,
+    /// v1.3(2026-11-15):只读国家资源**存量**(`Country.resource`)。
+    ///
+    /// 与 `opinion_read` 同一个理由**只有读**:存量是引擎自己的 8 B 缓存格
+    /// (`cached_scalar_named`),写它在引擎里是 `add_resource` 的 `+0x98` 路径,
+    /// 本 API 不碰。7 → 8 位仍在 `u8` 内(`packed struct` 的宽度由字段数决定)。
+    resource_read: bool = false,
 };
 
 /// 一个 bundle 声明要接哪几种派发。`packed struct` 与 `Permissions` 同一个理由:
@@ -198,6 +206,8 @@ const additive_native_table = [_]AdditiveEntry{
     // v1.2:全局时间,不需要权限位(见文件头)。
     .{ .js_name = "__neo_game_date", .func = nativeGameDate, .length = 0 },
     .{ .js_name = "__neo_game_tick", .func = nativeGameTick, .length = 0 },
+    // v1.3:国家资源存量(只读,`resource.read`)。
+    .{ .js_name = "__neo_country_resource", .func = nativeCountryResource, .length = 2 },
 };
 
 pub const additive_names = blk: {
@@ -391,6 +401,13 @@ pub fn canReadFlag(p: Permissions) bool {
 
 pub fn canReadOpinion(p: Permissions) bool {
     return p.opinion_read;
+}
+
+/// `Country.resource` 的门:`resource.read`。**只读** —— 与 opinion 不同,这里
+/// 没有 `scope_mismatch` 那道门:opinion 拒「读别人的行」是因为转置会读错格,
+/// 资源没有这个问题,读别国存量是合法的只读用法。
+pub fn canReadResource(p: Permissions) bool {
+    return p.resource_read;
 }
 
 /// `graph.betweenness(s)` 的来源 = C5-SCORE 的同一个 `scoreFor`(烘焙表或 live 源)。
@@ -1398,6 +1415,48 @@ fn nativeCountryTheirOpinion(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_in
 }
 
 // ---------------------------------------------------------------------------
+// v1.3 — 国家资源**存量**(只读,`resource.read`;fail-closed = null)
+// ---------------------------------------------------------------------------
+//
+// 读数 = 定点 ÷ `RESOURCE_SCALE`(1e5)。偏移、RVA 与标度**只有一份**,在
+// `country_probe.zig` —— 本文件的 F4 围栏是「一个都不许出现」(偏移写第二遍就会
+// 在下一次引擎版本变更时只改一处)。
+//
+// `null` 的**七种**情况(与 `country_probe.stock` 一一对应):无读源(主菜单/未载入)、
+// 国家对象解析失败、存量容器为 0、向量 holder/data 为 0、`index >= count`、
+// 三个研究资源那一路的 owner 为 0、**资源库读不到**(认不出 `index` 是不是那三个研究
+// 资源之一 ⇒ 不回落向量,2026-11-16 裁定)。另有第八种,纯 JS 侧:**缺
+// `resource.read`** —— 那一档答 `undefined`(opinion 同口径),SDK 把两档都映射成
+// `null`。`0` 是「这个国家真有 0 单位」的合法读数,任何一档都不许退化成 0。
+//
+// 与 opinion 的**权限口径差别**(Review Focus 5):这里**没有** `scope_mismatch`
+// 门。opinion 拒「读别人的行」是因为两向互为转置、读错边就是错数;存量是国家的
+// 一个格向量,读别国是合法的只读用法。
+
+fn resourceReject(country: u32, index: u32, reason: []const u8) void {
+    emit("NEO_JS_RESOURCE_REJECT id={d} index={d} reason={s}", .{ country, index, reason });
+}
+
+fn nativeCountryResource(ctx: ?*c.JSContext, this_val: c.JSValue, argc: c_int, argv: [*]c.JSValue) callconv(.c) c.JSValue {
+    _ = this_val;
+    if (charge(ctx)) |exc| return exc;
+    const country = argU32At(argc, argv, 0) orelse return c.JS_NULL;
+    const index = argU32At(argc, argv, 1) orelse return c.JS_NULL;
+
+    // 只读越权**不**处死 session(与写路径相反,同 opinion:一次读没有副作用)。
+    // 越权答 `undefined`(opinion 同口径 = 「被拒绝」),读不到答 `null`(fail-closed)。
+    // 两档在 SDK 里都映射成 `null`;native 侧保留区别是为了日志/调试能分辨。
+    if (!canReadResource(currentPermissions())) {
+        resourceReject(country, index, "no_permission");
+        return c.JS_UNDEFINED;
+    }
+
+    const raw = country_probe.stock(countryProbeMemory(), countryProbeAddresses(), country, index) orelse return c.JS_NULL;
+    const scale: f64 = @floatFromInt(country_probe.RESOURCE_SCALE);
+    return c.JSValue.float64(@as(f64, @floatFromInt(raw)) / scale);
+}
+
+// ---------------------------------------------------------------------------
 // v1.2 — 游戏日期 / tick(纯只读全局时间,**不要权限位**)
 // ---------------------------------------------------------------------------
 //
@@ -2220,12 +2279,13 @@ test "the additive v1.1 natives are registered separately from the frozen seven"
         "__neo_country_their_opinion",
         "__neo_game_date",
         "__neo_game_tick",
+        "__neo_country_resource",
     };
     try testing.expectEqual(expected.len, additive_names.len);
     for (expected, 0..) |name, i| try testing.expectEqualStrings(name, additive_names[i]);
     // The Phase 1 contract table stays exactly seven names.
     try testing.expectEqual(@as(usize, 7), native_names.len);
-    try testing.expectEqual(@as(usize, 8), additive_native_table.len);
+    try testing.expectEqual(@as(usize, 9), additive_native_table.len);
 }
 
 var host_flag_calls: usize = 0;
@@ -2797,4 +2857,142 @@ test "game tick: -1 映射成 null(0 是合法的纪元当天)" {
     try testing.expectEqual(@as(?i64, 0), tickOrNull(0));
     try testing.expectEqual(@as(?i64, 792_000), tickOrNull(792_000));
     try testing.expectEqual(@as(?i64, null), tickOrNull(-2));
+}
+
+// ---------------------------------------------------------------------------
+// v1.3 — `__neo_country_resource`(只读,`resource.read`)
+// ---------------------------------------------------------------------------
+
+/// 合成读面:国家 1 → 对象 `0x2000` → 容器 `0x5000` → holder `0x5100`
+/// (count 26,data `0x5200`),第 0 格 = `1234567`。资源库 `0x5400` → `0x5500`,三个
+/// 研究对象索引 `3 / 5 / 7`(与请求的 0 / 26 都不撞),于是这三个 index 都走向量 ——
+/// 研究资源那条分叉本身由 `country_probe` 的镜像用例覆盖。资源库**必须可读**:
+/// 读不到时 `stock()` 直接 `null`(2026-11-16 裁定)。
+const ResourceMirror = struct {
+    const BASE: usize = 0x1000;
+    const SIZE: usize = 0x8000;
+
+    buf: [SIZE]u8 = [_]u8{0} ** SIZE,
+
+    fn memory(self: *ResourceMirror) country_probe.Memory {
+        return .{ .ctx = @ptrCast(self), .read_u32 = read32, .read_u64 = read64 };
+    }
+
+    fn read32(ctx: *anyopaque, addr: u64) ?u32 {
+        var b: [4]u8 = undefined;
+        if (!readRange(ctx, addr, &b)) return null;
+        return std.mem.readInt(u32, &b, .little);
+    }
+
+    fn read64(ctx: *anyopaque, addr: u64) ?u64 {
+        var b: [8]u8 = undefined;
+        if (!readRange(ctx, addr, &b)) return null;
+        return std.mem.readInt(u64, &b, .little);
+    }
+
+    fn readRange(ctx: *anyopaque, addr: u64, out: []u8) bool {
+        const self: *ResourceMirror = @ptrCast(@alignCast(ctx));
+        if (addr < BASE) return false;
+        const off = addr - BASE;
+        if (off + out.len > SIZE) return false;
+        @memcpy(out, self.buf[@intCast(off)..][0..out.len]);
+        return true;
+    }
+
+    fn putQword(self: *ResourceMirror, addr: usize, v: u64) void {
+        var b: [8]u8 = undefined;
+        std.mem.writeInt(u64, &b, v, .little);
+        @memcpy(self.buf[addr - BASE ..][0..8], &b);
+    }
+
+    fn putDword(self: *ResourceMirror, addr: usize, v: u32) void {
+        var b: [4]u8 = undefined;
+        std.mem.writeInt(u32, &b, v, .little);
+        @memcpy(self.buf[addr - BASE ..][0..4], &b);
+    }
+
+    fn wire(self: *ResourceMirror) void {
+        self.putQword(0x1000, 0x1100); // 全局槽 → 表
+        self.putQword(0x1118, 0x1200); // root
+        self.putDword(0x1120, 4); // bound
+        self.putQword(0x1200 + 0 * 0x10 + 8, 0); // id 0：空条目
+        self.putQword(0x1200 + 1 * 0x10 + 8, 0x2000); // id 1 → 对象
+        self.putDword(0x2020, 1); // [obj+0x20] = id
+        self.putQword(0x2000 + @as(usize, @intCast(country_probe.RESOURCE_CONTAINER_OFF)), 0x5000);
+        // 容器 → holder → 向量对象；偏移全部取自 `country_probe` 的常量区。
+        const holder: usize = 0x5000 + @as(usize, @intCast(country_probe.RESOURCE_VECTOR_HOLDER_OFF));
+        self.putQword(holder, 0x5100);
+        self.putDword(0x5100 + @as(usize, @intCast(country_probe.RESOURCE_VECTOR_COUNT_OFF)), 26);
+        self.putQword(0x5100 + @as(usize, @intCast(country_probe.RESOURCE_VECTOR_DATA_OFF)), 0x5200);
+        self.putQword(0x5200, 1_234_567); // 下标 0
+        // 资源库:槽 → db → 三个研究对象(索引 3/5/6)。读不到就是 null,不是向量值。
+        self.putQword(0x5400, 0x5500);
+        for (country_probe.RESOURCE_DB_RESEARCH_OFF, 0..) |off, i| {
+            const resource = 0x5700 + i * 0x100;
+            self.putQword(0x5500 + @as(usize, @intCast(off)), resource);
+            self.putDword(resource + @as(usize, @intCast(country_probe.RESOURCE_INDEX_OFF)), @as(u32, @intCast(3 + 2 * i)));
+        }
+    }
+
+    fn addresses(self: *ResourceMirror) country_probe.Addresses {
+        _ = self;
+        return .{ .country_table = 0x1000, .resource_db = 0x5400 };
+    }
+};
+
+test "nativeCountryResource requires resource.read and does not disable the session" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    var mirror = ResourceMirror{};
+    mirror.wire();
+    setCountryProbeForTest(mirror.memory(), mirror.addresses());
+
+    // 读源是好的:拒绝必须来自权限门,而不是「读不到」。
+    try testing.expect(startSession(.{
+        .id = "noperm",
+        .source = "__neo_register_country(function(id){ if (__neo_country_resource(id, 0) !== undefined) throw new Error('value'); });",
+        .permissions = .{},
+        .scopes = .{ .country = true },
+    }));
+    const scope = countryScope(1);
+    onCountry(1, @intFromPtr(&scope));
+
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expectEqual(@as(usize, 1), activeSessions());
+    try testing.expect(cap.contains("NEO_JS_RESOURCE_REJECT id=1 index=0 reason=no_permission"));
+}
+
+test "nativeCountryResource answers the fixed-point value over 1e5, and null when unreadable" {
+    resetForTest();
+    defer resetForTest();
+    var cap = Capture{};
+    armCapture(&cap);
+
+    var mirror = ResourceMirror{};
+    mirror.wire();
+    setCountryProbeForTest(mirror.memory(), mirror.addresses());
+
+    // 1234567 / 1e5 = 12.34567;`null` 的每一档都**不许**变成 0。
+    try testing.expect(startSession(.{
+        .id = "stock",
+        .source = "__neo_register_country(function(id){" ++
+            "  var v = __neo_country_resource(id, 0);" ++
+            "  if (Math.abs(v - 12.34567) > 1e-9) throw new Error('v=' + v);" ++
+            "  if (__neo_country_resource(id, 26) !== null) throw new Error('oob=' + __neo_country_resource(id, 26));" ++
+            "  if (__neo_country_resource(9, 0) !== null) throw new Error('nocountry');" ++
+            "  if (__neo_country_resource(id) !== null) throw new Error('argc');" ++
+            "});",
+        .permissions = .{ .resource_read = true },
+        .scopes = .{ .country = true },
+    }));
+    const scope = countryScope(1);
+    onCountry(1, @intFromPtr(&scope));
+
+    try testing.expectEqual(@as(u64, 0), errors());
+    try testing.expectEqual(@as(usize, 1), activeSessions());
+    // 缺参数是 JS 侧的用法错,不落拒绝行(它没到权限门就已经返回 null)。
+    try testing.expect(!cap.contains("NEO_JS_RESOURCE_REJECT"));
 }

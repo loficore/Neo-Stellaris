@@ -47,6 +47,9 @@ ADDITIVE = [
     # v1.2（2026-11-15）：全局时间。纯只读，没有权限位，不可用 = null。
     "__neo_game_date",
     "__neo_game_tick",
+    # v1.3（2026-11-15）：国家资源存量。只读，权限位 `resource.read`，
+    # 不可用 = null（`0` 是合法读数）。
+    "__neo_country_resource",
 ]
 
 
