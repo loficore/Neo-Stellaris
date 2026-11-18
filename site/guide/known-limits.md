@@ -128,8 +128,48 @@ unreadable in both directions: every read returns `table_null`, because the
 matrix has not been built
 (`evidence/logs/runtime_js_country_id_mask_4_4_4.log`).
 
-Everything else country-side — resource stockpiles, income containers, the
-energy index — is not in the contract.
+Country-side, `Country.resource` is now in the contract too (next section), but
+the **income** containers and the net/gross split of `+0x2530` / `+0x2570` are
+not: which of the two is "net" and which is "gross" is still unresolved, so
+neither is exposed.
+
+## Country resource stockpiles are static-only so far
+
+`Country.resource(index)` reads the stockpile out of the engine's own 8-byte
+cell: the container at `[country+0x2c68]`, its inline vector (holder → data /
+count), `index` being the engine's resource numbering. The three research
+resources (`physics_research`, `society_research`, `engineering_research`) are
+**covered**, not skipped — the engine stores them on the country object instead
+of the vector, and the host reads that second path. When the resource database
+itself cannot be read, the host cannot tell whether the index *is* one of those
+three, so it answers `null`: it never falls back to the vector for them, because
+the vector cells of the three research resources are stale by construction
+(the engine overwrites them with the owning object's values).
+
+What that read has and has not got:
+
+- **Has:** the container layout is pinned four ways in the binary (constructor,
+  clone, destructor, vector initialiser), and the two engine-side readers agree
+  instruction for instruction with the chain the host reads. The index rule is
+  witnessed three times (`energy` = `0`).
+- **Has not:** **no live reading yet.** The chain was derived from the static
+  image only — `[country+0x2c68]+0x30` has never been read in a running game.
+  The value returned today is "what the engine's own code says the cell holds",
+  not "a number reconciled against the engine's `has_country_resource`". That
+  reconciliation is one read away and is not part of this API's offline gates.
+- The scale `1e5` is proven on the stockpile path only (not on the income
+  vectors), and `energy` = `0` holds only for the stock layout the reading was
+  taken from — a mod that adds resources renumbers everything.
+
+There is **no writer** and there will not be one: the write half of the same
+container (`+0x98`) is `add_resource`, which mutates engine state.
+
+Also unlike `opinionOf`, there is no `scope_mismatch` gate here: reading another
+country's stockpile is a legitimate read-only use, whereas the opinion matrix has
+a transposed cell for the other direction and reading the wrong one is a wrong
+number.
+
+`null` from `resource` is never `0`: `0` means "this country has none of it".
 
 ## No hot reload, no Workshop, no build-time script generation
 
@@ -198,6 +238,7 @@ Useful lines:
 | `NEO_JS_ERROR` | the handler threw; the session was disabled |
 | `NEO_JS_TIMEOUT` | the handler exceeded 10 ms; the session was disabled |
 | `NEO_JS_OPINION_REJECT … reason=<tag>` | a country opinion read was refused |
+| `NEO_JS_RESOURCE_REJECT … reason=no_permission` | a country stockpile read was refused (a failed read is silent `null`) |
 | `NEO_JS_FLAG_REJECT … reason=no_flag_token` | a flag name had no id in the flag table |
 
 ## What the offline gates do and do not prove

@@ -27,3 +27,7 @@ declare function __neo_country_their_opinion(self: number, target: number): numb
 // valid absolute day index (the epoch day itself).
 declare function __neo_game_date(): string | null;
 declare function __neo_game_tick(): number | null;
+// v1.3 (2026-11-15) country resource stock. Read-only, needs `resource.read`.
+// `undefined` = refused (no permission), `null` = fail-closed (unreadable engine,
+// unknown country/index, …) — the SDK maps both to `null`, never to `0`.
+declare function __neo_country_resource(country: number, index: number): number | null | undefined;

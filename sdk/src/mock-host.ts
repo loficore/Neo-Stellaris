@@ -27,6 +27,12 @@ export const MOCK_OPINION = 7;
  */
 export const MOCK_DATE: string | null = "2200.01.01";
 export const MOCK_TICK: number | null = 792_000;
+/**
+ * What `__neo_country_resource` returns before a test overrides it: the
+ * fixed-point cell `1234567` divided by the engine's own scale `1e5`. `undefined`
+ * reproduces a refused read (no `resource.read`), which the SDK maps to `null`.
+ */
+export const MOCK_RESOURCE: number | undefined = 12.34567;
 
 export interface MockCall {
   fn: string;
@@ -59,6 +65,11 @@ export interface MockState {
   /** World clock: `null` reproduces "engine unreadable" (main menu). */
   date: string | null;
   tick: number | null;
+  /**
+   * What `__neo_country_resource` returns. `undefined` reproduces a refused read
+   * (missing `resource.read`); the SDK maps it to `null`.
+   */
+  resource: number | undefined;
 }
 
 export interface MockHostOptions {
@@ -82,7 +93,8 @@ globalThis.__neo_mock = {
   apiVersion: ${MOCK_API_VERSION},
   opinion: ${MOCK_OPINION},
   date: ${JSON.stringify(MOCK_DATE)},
-  tick: ${JSON.stringify(MOCK_TICK)}
+  tick: ${JSON.stringify(MOCK_TICK)},
+  resource: ${JSON.stringify(MOCK_RESOURCE)}
 };
 `;
 
@@ -201,6 +213,16 @@ globalThis.__neo_game_date = function () {
 globalThis.__neo_game_tick = function () {
   globalThis.__neo_mock.calls.push({ fn: "__neo_game_tick" });
   return globalThis.__neo_mock.tick;
+};
+`,
+  __neo_country_resource: `
+globalThis.__neo_country_resource = function (country, index) {
+  globalThis.__neo_mock.calls.push({
+    fn: "__neo_country_resource",
+    id: country >>> 0,
+    name: String(index >>> 0)
+  });
+  return globalThis.__neo_mock.resource;
 };
 `,
 };
